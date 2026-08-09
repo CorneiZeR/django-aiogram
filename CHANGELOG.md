@@ -98,6 +98,19 @@
 - Access splits in two: `view_telegramevent` for the list and the detail page,
   and `view_telegramevent_payload` for message bodies and exception text, so
   support can see that a message went out without reading what it said.
+- `manage.py tgbot_prune_events` is what bounds the table. It deletes by
+  primary-key range in bounded chunks, one transaction each, so it never holds
+  a long lock and a range at the cold end cannot conflict with the inserts
+  still arriving at the hot end. `--sleep` paces it for replicas, `--max-chunks`
+  bounds a nightly run, `--dry-run` reports without deleting. With
+  `EVENT_LOG_RETENTION_DAYS` unset it deletes nothing and says so — guessing a
+  window would be a data-loss bug — and `W006` warns while it is unset. Two
+  things the wiki page spells out and that bite after the fact: on PostgreSQL
+  the space returns through autovacuum rather than immediately, so a large first
+  prune wants a plain `VACUUM` afterwards (never `FULL`, which takes an
+  exclusive lock); and attaching a `ForeignKey` to `TelegramEvent` disables
+  Django's fast-delete path, so every prune then has to fetch primary keys
+  first.
 - **This package now ships a migration.** Run `manage.py migrate` after
   upgrading whether or not you turn the log on: the table is created either way,
   and creating it later on a live database is the more expensive order. It
