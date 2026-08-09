@@ -1,6 +1,22 @@
 # Changelog
 
-## Unreleased
+## 3.0.0 - 2026-08-09
+
+Two kinds of change at once: the compatibility 2.0 shipped for 1.x is gone —
+the `telegram_bot` package name, `keyspace` delivery, and the string constants
+that aliased enum members — and the package can now record what it did to a
+table. The removals are mechanical and `manage.py check` names each one. The
+event log is opt-in and off by default.
+
+One piece of compatibility is **added** rather than removed: the consumer reads
+both the new envelope and the flat payload 2.x wrote, so a backlog drains
+across the upgrade.
+
+**Upgrade the bot container before the web tier.** Queued payloads now carry an
+envelope, and a 2.x consumer handed one loses the message.
+
+**Run `manage.py migrate`.** The package ships a table for the first time,
+created whether or not you turn the log on.
 
 ### Breaking
 
@@ -92,9 +108,10 @@
   runs on a thread nobody is watching.
 - **A read-only admin for the feed**, registered only when the flag is on and
   only when `django.contrib.admin` is installed. It is built for a table nobody
-  wants to count: no full result count, no date drilldown, exact-match search on
-  the two indexed columns, and a filter built from the kind registry rather than
-  from a `SELECT DISTINCT` over the table.
+  wants to count: paging counts at most ten thousand rows inside a `LIMIT` and
+  says when it stopped rather than reporting the cap as the answer, no date
+  drilldown, exact-match search on the two indexed columns, and a filter built
+  from the kind registry rather than from a `SELECT DISTINCT` over the table.
 - Access splits in two: `view_telegramevent` for the list and the detail page,
   and `view_telegramevent_payload` for message bodies and exception text, so
   support can see that a message went out without reading what it said.

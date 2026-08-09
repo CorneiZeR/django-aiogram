@@ -5,14 +5,17 @@ project down — including its test suite — whenever they were absent.
 """
 
 import os
+import re
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 
+import django_redis_aiogram
 from django_redis_aiogram import TelegramBot, bot, conf, redis_conn
 from django_redis_aiogram.settings import Settings, parse_bool
 
@@ -206,3 +209,23 @@ def test_dir_lists_the_lazy_exports():
     import django_redis_aiogram
 
     assert set(django_redis_aiogram.__all__) <= set(dir(django_redis_aiogram))
+
+
+def test_the_version_is_the_one_the_changelog_announces():
+    """`pyproject` reads the version from here, so this string is what a user
+    installs — and nothing pinned it, so a revert of the release bump would
+    have passed every test.
+
+    Asserted against the changelog rather than a literal, so a release edits one
+    place and this keeps checking that the other one followed.
+    """
+    changelog = (Path(__file__).resolve().parent.parent / 'CHANGELOG.md').read_text(encoding='utf-8')
+    # the first heading of any shape, not the first that looks like a version:
+    # searching for the latter would walk past a broken top entry to an older
+    # one and call the release good
+    heading = re.search(r'^## (.+)$', changelog, re.MULTILINE)
+
+    assert heading is not None, 'the changelog has no release headings'
+    announced = heading.group(1).split(' - ')[0].strip()
+    assert re.fullmatch(r'\d+\.\d+\.\d+', announced), f'the top changelog heading is not a version: {heading.group(1)}'
+    assert django_redis_aiogram.__version__ == announced

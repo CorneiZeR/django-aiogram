@@ -10,6 +10,7 @@ The checks read the syntax tree rather than the text: a regex could not tell
 """
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -239,3 +240,25 @@ def test_the_walk_refuses_a_logger_that_is_not_ours(source, tmp_path):
 
     assert use.package_loggers == set(), source
     assert [name for _, name in use.logger_names if name != PACKAGE_LOGGER], source
+
+
+def test_every_structured_field_is_documented():
+    """The Logging page exists to say what these mean, and it had fallen ten
+    fields behind — every one of them added by a release that documented the
+    feature and not the field it logs.
+
+    Both directions: a field the page describes and nothing emits is a reader
+    looking for something that will never appear.
+    """
+    emitted = set()
+    for path in MODULES:
+        # parsed rather than matched: a regex for one quote style lets the other
+        # through, and this test exists to catch what nobody noticed
+        for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.startswith('tg_'):
+                emitted.add(node.value)
+    page = (SOURCE.parent / 'docs' / 'wiki' / 'Logging.md').read_text(encoding='utf-8')
+    documented = set(re.findall(r'`(tg_[a-z_]+)`', page))
+
+    assert emitted - documented == set(), f'undocumented log fields: {sorted(emitted - documented)}'
+    assert documented - emitted == set(), f'documented but never logged: {sorted(documented - emitted)}'

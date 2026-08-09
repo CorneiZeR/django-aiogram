@@ -47,6 +47,14 @@ Project uses django-redis-aiogram 3.x. Rules:
   Use bot.send_raw with RAISE_EXCEPTION only when the caller must see the error.
 - `python manage.py check` validates the settings; treat its E0xx/W0xx output as
   the spec.
+- Run `python manage.py migrate` after upgrading. The package ships one table,
+  created whether or not you turn the event log on.
+- bot.send() returns a correlation id. Store it next to your own model if you
+  want to join your records to the event log later.
+- The event log is off by default (TELEGRAM_BOT['EVENT_LOG']). Turning it on
+  needs a retention job — `manage.py tgbot_prune_events` — or the table grows
+  without bound. Message bodies are not stored unless EVENT_LOG_PAYLOAD='full',
+  which is a personal-data decision, not a verbosity one.
 ```
 
 ## Prompts that work
@@ -67,6 +75,14 @@ from `django_redis_aiogram`, keep the ORM access async, and do not touch
 depending on redis, sharing the same image and `.env` as `back`. Leave
 `DJANGO_REDIS_AIOGRAM_ENABLED` unset on the other services — they queue
 messages."*
+
+**Turn on the event log.** *"Run `manage.py migrate` first, then enable
+`TELEGRAM_BOT['EVENT_LOG']` in django-redis-aiogram — a process that starts
+recording before the table exists drops everything it records until someone
+notices. Then set `EVENT_LOG_RETENTION_DAYS` and schedule
+`manage.py tgbot_prune_events` daily. Leave `EVENT_LOG_PAYLOAD` at its default
+so message bodies stay out of the table, and grant support only
+`view_telegramevent`."* See **[[Event-log|Event log]]**.
 
 **Migrate an older project.** *"This project imports `telegram_bot`, which
 django-redis-aiogram 3.0 removed. Move it to `django_redis_aiogram` 3.x
