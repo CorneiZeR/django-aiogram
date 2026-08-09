@@ -14,6 +14,7 @@ older than Redis 6.2 lack ``LMOVE``; there the consumer falls back to plain
 pops, which is the 1.x at-most-once behaviour, and says so in the log.
 """
 
+import hashlib
 import logging
 import threading
 import time
@@ -24,8 +25,10 @@ from typing import Any
 from redis.exceptions import ResponseError
 
 from django_redis_aiogram.api import check_function
-from django_redis_aiogram.enums import DeliveryKind
-from django_redis_aiogram.events import worker_identity
+from django_redis_aiogram.enums import DeliveryKind, EventKind
+from django_redis_aiogram.envelope import Envelope, UnknownEnvelopeVersionError, unpack
+from django_redis_aiogram.events import new_correlation_id, worker_identity
+from django_redis_aiogram.recorder import Event, as_identifier, recorder
 from django_redis_aiogram.redis import as_bytes, get_redis, read_timeout
 from django_redis_aiogram.serializers import PickleReadRefusedError, SerializationError, loads
 from django_redis_aiogram.settings import conf
@@ -156,17 +159,12 @@ class Delivery(ABC):
                 extra={'tg_key': self.processing_key},
             )
 
-    def dispatch(self, raw: bytes) -> bool:
-        """Decode one message and hand it to the handler.
+    def _read(self, raw: bytes) -> tuple['Envelope | None', bool]:
+        """Turn one message off the queue into an envelope, or into a verdict.
 
-        A bad payload is one message's problem, so everything short of a kill is
-        logged and dropped: the consumer has to survive it to deliver the rest.
-
-        Returns whether the message should be acknowledged. Only a pickle read
-        the configuration refuses says no: that payload is valid and the refusal
-        is the operator's to fix, so it stays in flight for a reclaim to retry
-        once ALLOW_PICKLE is set — acknowledging would silently destroy a 1.x
-        queue over a missing setting.
+        Everything here is untrusted input, so no failure may escape: what comes
+        back is either the envelope or `None` plus whether to acknowledge the
+        message that never became one.
         """
         try:
             payload = loads(raw)
@@ -175,29 +173,114 @@ class Delivery(ABC):
                 'leaving a refused pickle message in flight; set ALLOW_PICKLE to deliver it',
                 extra={'tg_key': self.processing_key},
             )
-            return False
+            return None, False
         except SerializationError:
+            self._record_undecodable(raw, 'serialization')
             logger.exception('dropping undecodable queued message')
-            return True
+            return None, True
         except Exception:
+            self._record_undecodable(raw, 'unknown')
             logger.exception('dropping queued message that failed to decode')
-            return True
+            return None, True
         try:
-            check_function(str(payload.get('function', '')))
+            return unpack(payload), True
+        except UnknownEnvelopeVersionError:
+            # written by a newer producer than this consumer understands, so
+            # leaving it in flight is what lets an upgrade deliver it
+            logger.exception('leaving a message from a newer version in flight')
+            return None, False
+        except Exception:
+            # MalformedEnvelopeError and whatever else a hostile payload can
+            # provoke: nothing will ever make sense of it, so it is
+            # acknowledged rather than left to come back for ever — and this
+            # reader is on the far side of a trust boundary, where an escaping
+            # exception would end the consumer for the life of the container
+            self._record_undecodable(raw, 'envelope')
+            logger.exception('dropping a queued message whose envelope cannot be read')
+            return None, True
+
+    def dispatch(self, raw: bytes) -> bool:
+        """Decode one message and hand it to the handler.
+
+        A bad payload is one message's problem, so everything short of a kill is
+        logged and dropped: the consumer has to survive it to deliver the rest.
+
+        Returns whether the message should be acknowledged. Two cases say no: a
+        pickle the configuration refuses, and an envelope from a newer version.
+        Both are valid payloads somebody else can deliver, so they stay in
+        flight — acknowledging would destroy them over a setting or a deploy
+        order.
+        """
+        envelope, acknowledge = self._read(raw)
+        if envelope is None:
+            return acknowledge
+        try:
+            check_function(envelope.function)
         except ValueError:
+            self._record(
+                EventKind.QUEUE_REJECTED,
+                envelope,
+                error='not a Telegram API method',
+            )
             logger.exception(
                 'dropping queued message naming a method that is not Telegram API',
-                extra={'tg_function': payload.get('function')},
+                extra={'tg_function': envelope.function},
             )
             return True
+        self._record(EventKind.OUTBOUND_CONSUMED, envelope)
         try:
-            self.handler(**payload)
+            # by keyword, the way 2.x splatted it: a handler taking **kwargs
+            # only — which every documented recipe does — refuses a positional
+            self.handler(
+                function=envelope.function,
+                correlation_id=envelope.correlation_id,
+                queued_at=envelope.queued_at,
+                **envelope.kwargs,
+            )
         except Exception:
             logger.exception(
                 'handler failed for queued message',
-                extra={'tg_function': payload.get('function')},
+                extra={'tg_function': envelope.function},
             )
         return True
+
+    def _record(self, kind: EventKind, envelope: Envelope, error: str = '') -> None:
+        """Record what the consumer did with one message."""
+        chat_id = envelope.kwargs.get('chat_id')
+        recorder.record(
+            Event(
+                kind=kind.value,
+                correlation_id=envelope.correlation_id or new_correlation_id(),
+                function=envelope.function,
+                chat_id=as_identifier(chat_id),
+                worker=worker_identity(),
+                error=error,
+                detail=self._queue_latency(envelope),
+            )
+        )
+
+    @staticmethod
+    def _queue_latency(envelope: Envelope) -> dict[str, Any]:
+        """How long the message waited, when the producer said when it was queued."""
+        if not envelope.queued_at:
+            return {}
+        return {'queue_ms': int((time.time() - envelope.queued_at) * 1000)}
+
+    def _record_undecodable(self, raw: bytes, reason: str) -> None:
+        """Record a payload nothing could read.
+
+        A fingerprint, never the bytes: an undecodable payload is by definition
+        untrusted input and may be a pickle, so putting it in a JSON column
+        would spread it into every log shipper and admin page downstream.
+        """
+        recorder.record(
+            Event(
+                kind=EventKind.QUEUE_UNDECODABLE.value,
+                worker=worker_identity(),
+                error=reason,
+                detail={'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()[:16]},
+            )
+        )
 
     def consume_pending(self) -> None:
         """Drain the queue without blocking, acknowledging each message."""
