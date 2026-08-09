@@ -19,6 +19,7 @@ from django.core.management import BaseCommand
 from django_redis_aiogram import bot
 from django_redis_aiogram.delivery import get_delivery
 from django_redis_aiogram.enums import UpdateMode
+from django_redis_aiogram.recorder import recorder
 from django_redis_aiogram.settings import conf
 from django_redis_aiogram.webhook import MODES, current_mode
 
@@ -120,7 +121,13 @@ class Command(BaseCommand):
             delivery.stop()
             for thread in threads:
                 thread.join(timeout=float(conf['BLPOP_TIMEOUT']) + 1)
-            bot.close()
+            try:
+                bot.close()
+            finally:
+                # after close(), never before: closing drains in-flight sends,
+                # and those are what produce the final rows. In its own finally
+                # because a close() that raises must not also lose the rows
+                recorder.stop()
             if previous is not None:
                 # the command may be called in-process; leaving our handler
                 # installed would turn a later SIGTERM into a stray interrupt
