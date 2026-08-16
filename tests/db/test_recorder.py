@@ -11,13 +11,14 @@ import threading
 import time
 
 import pytest
-from django.db import DatabaseError, OperationalError, connection, transaction
+from django.db import DatabaseError, OperationalError, connection, connections, transaction
 from django.db.models import QuerySet
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 
+from django_redis_aiogram.defaults import DEFAULTS
 from django_redis_aiogram.enums import EventKind
-from django_redis_aiogram.eventlog import ROW_BY_ROW, write_batch
+from django_redis_aiogram.eventlog import ROW_BY_ROW, EventLogRefusedError, write_batch
 from django_redis_aiogram.models import TelegramEvent
 from django_redis_aiogram.recorder import FAILURE_LIMIT, Event, EventRecorder
 
@@ -438,3 +439,251 @@ def test_a_batch_too_big_to_save_one_by_one_is_bisected(paused_writer):
 
     assert sizes == [ROW_BY_ROW * 2, ROW_BY_ROW, ROW_BY_ROW], sizes
     assert TelegramEvent.objects.count() == ROW_BY_ROW * 2, 'bisection lost rows'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_SYNC': True})
+def test_recording_does_not_doom_the_transaction_it_runs_inside(monkeypatch):
+    """The one bug here that destroyed the caller's own data.
+
+    `close_old_connections()` ran before every batch. Inside an `atomic()` block
+    the autocommit setting no longer matches the one in `DATABASES`, so
+    `close_if_unusable_or_obsolete()` takes its very first branch and closes —
+    and `BaseDatabaseWrapper.close()` sets `needs_rollback` when it closes inside
+    a transaction. Under `EVENT_LOG_SYNC`, with `ATOMIC_REQUESTS` or a plain
+    `atomic()`, recording an event therefore rolled back the writes the caller
+    made alongside it.
+
+    The suite could not see it: `tests/db_settings.py` is sqlite `:memory:`, and
+    the SQLite backend refuses to close an in-memory database at all. So this
+    reports itself as a file-backed one, and stubs the real close so nothing is
+    actually torn down.
+    """
+    monkeypatch.setattr(connection, 'is_in_memory_db', lambda: False)
+    monkeypatch.setattr(connection, '_close', lambda: None)
+    recorder = EventRecorder()
+
+    try:
+        with transaction.atomic():
+            recorder.record(an_event(chat_id=321))
+            doomed = connection.needs_rollback
+    finally:
+        connection.needs_rollback = False
+        connection.closed_in_transaction = False
+
+    assert doomed is False
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=ON)
+def test_a_batch_the_database_refuses_entirely_is_reported(monkeypatch):
+    """The ladder caught `DatabaseError` at every rung and returned normally.
+
+    The recorder read that as a written batch: its failure counter never moved,
+    so `FAILURE_LIMIT` and `FAILURE_BACKOFF` were unreachable and no
+    `log.dropped` row was ever written. A forgotten `migrate` meant a full batch
+    of statements and a full batch of tracebacks per flush interval, for ever.
+    """
+
+    def refuse(*args, **kwargs):
+        msg = 'no such table: django_redis_aiogram_event'
+        raise DatabaseError(msg)
+
+    monkeypatch.setattr(QuerySet, 'bulk_create', refuse)
+    monkeypatch.setattr(TelegramEvent, 'save', refuse)
+
+    with pytest.raises(EventLogRefusedError):
+        write_batch([an_event(chat_id=1), an_event(chat_id=2)])
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=ON)
+def test_a_partly_refused_batch_is_not_reported(monkeypatch):
+    """Only a wholesale refusal is a failed flush. One poison row is not."""
+    refused = []
+    # captured before the patch: Model.save inserts through _do_insert, not through
+    # bulk_create, so the good row still reaches the table
+    original_save = TelegramEvent.save
+
+    def one_bad_row(self, *args, **kwargs):
+        if self.chat_id == 2:
+            refused.append(self.chat_id)
+            msg = 'value too long'
+            raise DatabaseError(msg)
+        return original_save(self, *args, **kwargs)
+
+    def refuse_the_batch(*args, **kwargs):
+        msg = 'batch refused'
+        raise DatabaseError(msg)
+
+    monkeypatch.setattr(QuerySet, 'bulk_create', refuse_the_batch)
+    monkeypatch.setattr(TelegramEvent, 'save', one_bad_row)
+
+    write_batch([an_event(chat_id=1), an_event(chat_id=2)])
+
+    assert refused == [2]
+    # the point of bisecting: one poison row costs itself and nothing else
+    assert TelegramEvent.objects.filter(chat_id=1).count() == 1
+    assert TelegramEvent.objects.filter(chat_id=2).count() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=ON)
+def test_the_writer_suspends_itself_after_repeated_refusals(paused_writer, monkeypatch):
+    """What the changelog and Troubleshooting both promise, and what could not
+    happen while `write_batch` returned normally on a total failure."""
+
+    def refuse(*args, **kwargs):
+        msg = 'no such table: django_redis_aiogram_event'
+        raise DatabaseError(msg)
+
+    monkeypatch.setattr(QuerySet, 'bulk_create', refuse)
+    monkeypatch.setattr(TelegramEvent, 'save', refuse)
+    recorder = EventRecorder()
+
+    failures = 0
+    blocked_until = 0.0
+    for _ in range(FAILURE_LIMIT):
+        failures, blocked_until = recorder._flush([an_event(chat_id=5)], failures=failures)
+
+    assert blocked_until > time.monotonic()
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=ON)
+def test_events_left_by_a_dying_writer_are_written_not_lost(monkeypatch):
+    """A thread target that raises used to clear the slot and walk away, and
+    everything still queued went with it — no row, no counter, no gap marker.
+
+    The writer is killed for real rather than `_abandon` being called by hand:
+    what is under test is that `_run`'s finally reaches for it at all, and a test
+    that calls it directly passes with that line deleted.
+    """
+
+    def die(*args, **kwargs):
+        msg = 'the writer fell over'
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(EventRecorder, '_collect', die)
+    recorder = EventRecorder()
+    recorder.record(an_event(chat_id=11))
+    writer = recorder._thread
+
+    writer.join(timeout=5)
+
+    assert not writer.is_alive()
+    assert TelegramEvent.objects.filter(chat_id=11).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=ON)
+def test_events_racing_stop_are_still_written(paused_writer):
+    """stop() detaches the queue under the guard, but a record() that already
+    read it puts into the detached one, which nothing else will ever look at."""
+    recorder = EventRecorder()
+    recorder.record(an_event(chat_id=12))
+    buffer = recorder._queue
+
+    # exactly what a producer that lost the race leaves behind
+    recorder.stop(timeout=0.1)
+    buffer.put_nowait(an_event(chat_id=13))
+    recorder._abandon(buffer)
+
+    assert TelegramEvent.objects.filter(chat_id=13).count() == 1
+
+
+@pytest.mark.django_db(transaction=True, databases=['default', 'logs'])
+@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_DATABASE': 'logs'})
+def test_recording_to_another_alias_leaves_the_callers_connection_alone(monkeypatch):
+    """The guard has to be about the connection actually being closed.
+
+    `close_old_connections()` walks *every* initialized connection. Checking that
+    the log's own alias is not in a transaction says nothing about `default`,
+    which is exactly where the caller's transaction is — so with
+    EVENT_LOG_DATABASE pointing somewhere of its own, the log reached past its own
+    connection and doomed one it never writes to.
+    """
+    caller = connections['default']
+    monkeypatch.setattr(caller, 'is_in_memory_db', lambda: False)
+    monkeypatch.setattr(caller, '_close', lambda: None)
+
+    try:
+        with transaction.atomic(using='default'):
+            write_batch([an_event(chat_id=77)])
+            doomed = caller.needs_rollback
+    finally:
+        caller.needs_rollback = False
+        caller.closed_in_transaction = False
+
+    assert doomed is False
+    assert TelegramEvent.objects.using('logs').filter(chat_id=77).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(
+    TELEGRAM_BOT={
+        **ON,
+        'EVENT_LOG_BUFFER_SIZE': 'not a number',
+        'EVENT_LOG_BATCH_SIZE': None,
+        'EVENT_LOG_FLUSH_INTERVAL': 'soon',
+    }
+)
+def test_unreadable_writer_dials_fall_back_to_their_defaults():
+    """These are read on the writer thread, in a loop, outside `_flush`'s net.
+
+    A raise there ends the writer and takes the whole buffer with it, which is a
+    steep price for a typo. Checks E036-E038 still report the value at boot.
+
+    The real writer, not `drain_once()`: the batch size and the flush interval are
+    read in `_collect`, which only the writer loop runs, so a paused one would
+    leave two of the three dials untested.
+    """
+    recorder = EventRecorder()
+    try:
+        recorder.record(an_event(chat_id=8))
+        assert recorder._queue.maxsize == DEFAULTS['EVENT_LOG_BUFFER_SIZE']
+        recorder.flush(timeout=5)
+
+        assert TelegramEvent.objects.filter(chat_id=8).count() == 1
+    finally:
+        recorder.stop(timeout=5)
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=ON)
+def test_a_gap_reported_keeps_what_was_dropped_while_it_was_reported(paused_writer):
+    """`_record_gap` used to assign zero, so anything dropped during the write it
+    was reporting disappeared with it — and no later flush ever mentioned it."""
+    recorder = EventRecorder()
+    recorder._dropped = 5
+
+    recorder._record_gap(3)
+
+    assert recorder._dropped == 2
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=ON)
+def test_an_event_put_into_a_detached_queue_is_moved_to_the_live_one(paused_writer, monkeypatch):
+    """stop() detaches the queue under the guard; a record() that already read it
+    puts into the detached one, and nothing else will ever look at that queue.
+
+    Driven through `record()` rather than by calling `_rehome`: the wiring under
+    test is the queue-identity check, and calling the helper directly passes with
+    that check deleted. `_buffer` hands back the detached queue exactly once,
+    which is what a producer that read it before the swap is holding.
+    """
+    recorder = EventRecorder()
+    recorder.record(an_event(chat_id=21))
+    orphan = recorder._queue
+    recorder.stop(timeout=0.1)
+
+    stale = [orphan]
+    live = recorder._buffer
+    monkeypatch.setattr(recorder, '_buffer', lambda: stale.pop() if stale else live())
+
+    recorder.record(an_event(chat_id=22))
+
+    assert orphan.empty()
+    assert recorder.drain_once() == 1
+    assert TelegramEvent.objects.filter(chat_id=22).count() == 1

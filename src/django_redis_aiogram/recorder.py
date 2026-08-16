@@ -26,11 +26,14 @@ import queue
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from django.core.exceptions import ImproperlyConfigured
 from django.core.signals import setting_changed
 
+from django_redis_aiogram.defaults import DEFAULTS
 from django_redis_aiogram.enums import EventKind
 from django_redis_aiogram.events import known_kinds, new_correlation_id, worker_identity
 from django_redis_aiogram.settings import SETTINGS_NAME, coerce_bool, conf
@@ -101,6 +104,21 @@ class Event:
     detail: dict[str, Any] | None = None
 
 
+def _number(key: str, cast: Callable[[Any], float]) -> float:
+    """Read one of the writer's own dials, falling back to its default.
+
+    Checks E036-E038 report a value that cannot be read, at boot and once. This
+    runs on the writer thread, in a loop, on the far side of `_flush`'s net — a
+    raise here ends the writer and takes the whole buffer with it, which is a
+    steep price for a typo in a batch size.
+    """
+    try:
+        return cast(conf[key])
+    except (ImproperlyConfigured, KeyError, TypeError, ValueError):
+        # ImproperlyConfigured from resolving the settings, the rest from the cast
+        return cast(DEFAULTS[key])
+
+
 def _acknowledge(wakes: list[Wake]) -> None:
     """Release everything waiting on this batch."""
     for wake in wakes:
@@ -123,6 +141,9 @@ class EventRecorder:
         self._owner_pid = os.getpid()
         self._fork_hook = False
         self._dropped = 0
+        # its own lock, not _guard: _guard is held across starting a thread, and
+        # the counter is touched from inside paths that must not wait on that
+        self._counter = threading.Lock()
         # far enough back that the first drop always reports: monotonic() is
         # time since boot on Linux, so a fresh container starts it near zero
         self._reported_at = -DROP_REPORT_INTERVAL
@@ -177,12 +198,43 @@ class EventRecorder:
             if self._write_here():
                 self._write([event])
                 return
-            self._buffer().put_nowait(event)
+            buffer = self._buffer()
+            buffer.put_nowait(event)
+            if self._queue is not buffer:
+                # stop() detached this queue between the lookup and the put, and
+                # nothing will ever drain a detached one again
+                self._rehome(buffer)
         except queue.Full:
             self._drop(1)
         except Exception:
             # the recorder failing is not the caller's problem to handle
             logger.exception('could not record an event', extra={'tg_kind': event.kind})
+
+    def _rehome(self, orphan: 'queue.Queue[Event | Wake]') -> None:
+        """Move what is in a detached queue onto the live one.
+
+        Not "move my own event": ``get_nowait`` may hand back somebody else's, and
+        it does not matter which — what matters is that the detached queue ends up
+        empty and everything in it lands somewhere that will be drained. Two
+        producers doing this at once take disjoint items, and stop()'s own drain
+        competing with them is equally harmless.
+
+        Both halves are non-blocking, so :meth:`record`'s promise holds: an event
+        that cannot be rehomed because the live queue is full is counted, which is
+        what would have happened to it there anyway.
+        """
+        while True:
+            try:
+                item = orphan.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                self._buffer().put_nowait(item)
+            except queue.Full:
+                if isinstance(item, Wake):
+                    _acknowledge([item])
+                    continue
+                self._drop(1)
 
     @staticmethod
     def _write_here() -> bool:
@@ -201,15 +253,23 @@ class EventRecorder:
         return False
 
     def _drop(self, count: int) -> None:
-        """Count lost events, and say so at most once a minute."""
-        self._dropped += count
+        """Count lost events, and say so at most once a minute.
+
+        The counter is guarded because more than one thread reaches it: producers
+        on a full queue, the writer on a failed flush, and whichever thread called
+        stop() draining what the writer left. `+=` is a read and a write, so
+        without this a drop is silently swallowed by a concurrent one.
+        """
+        with self._counter:
+            self._dropped += count
+            dropped = self._dropped
         now = time.monotonic()
         if now - self._reported_at < DROP_REPORT_INTERVAL:
             return
         self._reported_at = now
         logger.error(
             'the event log is falling behind; events are being dropped',
-            extra={'tg_dropped': self._dropped},
+            extra={'tg_dropped': dropped},
         )
 
     def _buffer(self) -> queue.Queue[Event | Wake]:
@@ -226,7 +286,7 @@ class EventRecorder:
                 self._install_fork_hook()
                 self._stopping.clear()
                 self._owner_pid = os.getpid()
-                buffer = queue.Queue(maxsize=max(1, int(conf['EVENT_LOG_BUFFER_SIZE'])))
+                buffer = queue.Queue(maxsize=max(1, int(_number('EVENT_LOG_BUFFER_SIZE', int))))
                 thread = threading.Thread(target=self._run, args=(buffer,), name=WRITER_THREAD, daemon=True)
                 self._queue, self._thread = buffer, thread
                 try:
@@ -253,6 +313,7 @@ class EventRecorder:
         """Drop everything a fork invalidated, so the next event starts fresh."""
         # a new lock: the parent may have held this one at the moment of the fork
         self._guard = threading.Lock()
+        self._counter = threading.Lock()
         self._queue = None
         self._thread = None
         self._owner_pid = os.getpid()
@@ -291,12 +352,44 @@ class EventRecorder:
             with self._guard:
                 if self._queue is buffer:
                     self._queue = self._thread = None
+            # the slot is cleared above, so nothing will ever drain this queue
+            # again: without this, everything still in it disappears with no row
+            # and no counter, and the gap reads as quiet traffic
+            self._abandon(buffer)
             self._close_connections()
+
+    @staticmethod
+    def _empty(buffer: 'queue.Queue[Event | Wake]') -> tuple[list[Event], list[Wake]]:
+        """Take everything left in a queue, without waiting for more."""
+        events: list[Event] = []
+        wakes: list[Wake] = []
+        while True:
+            try:
+                item = buffer.get_nowait()
+            except queue.Empty:
+                return events, wakes
+            if isinstance(item, Wake):
+                wakes.append(item)
+            else:
+                events.append(item)
+
+    def _abandon(self, buffer: 'queue.Queue[Event | Wake]') -> None:
+        """Write what is left in a queue nobody will drain again, or count it lost."""
+        leftover, wakes = self._empty(buffer)
+        _acknowledge(wakes)
+        if not leftover:
+            return
+        with contextlib.suppress(Exception):
+            self._write(leftover)
+            return
+        # counted, not silent: the next flush that succeeds turns this into a
+        # log.dropped row, which is the only place the gap becomes visible
+        self._drop(len(leftover))
 
     def _collect(self, buffer: queue.Queue[Event | Wake]) -> tuple[list[Event], list[Wake]]:
         """Gather up to one batch, with any wake-ups that ended the wait."""
-        interval = max(0.01, float(conf['EVENT_LOG_FLUSH_INTERVAL']))
-        limit = max(1, int(conf['EVENT_LOG_BATCH_SIZE']))
+        interval = max(0.01, _number('EVENT_LOG_FLUSH_INTERVAL', float))
+        limit = max(1, int(_number('EVENT_LOG_BATCH_SIZE', int)))
         deadline = time.monotonic() + interval
         batch: list[Event] = []
         wakes: list[Wake] = []
@@ -340,8 +433,14 @@ class EventRecorder:
         return 0, 0.0
 
     def _record_gap(self, dropped: int) -> None:
-        """Put the gap in the feed, not only in the log: a silent hole reads as coverage."""
-        self._dropped = 0
+        """Put the gap in the feed, not only in the log: a silent hole reads as coverage.
+
+        Subtracts what it is about to report rather than assigning zero: the count
+        was snapshotted before the write, and anything dropped while that write was
+        in flight has to survive to be reported by the next one.
+        """
+        with self._counter:
+            self._dropped -= dropped
         with contextlib.suppress(Exception):
             self._write([Event(kind=EventKind.LOG_DROPPED.value, detail={'dropped': dropped})])
 
@@ -428,6 +527,12 @@ class EventRecorder:
                 thread.join(timeout)
             if thread.is_alive():
                 logger.warning('the event writer did not finish in time', extra={'tg_timeout': timeout})
+        # a record() that read self._queue before the swap above puts into a queue
+        # this method has already detached, and nothing else will ever look at it.
+        # Draining after the join is what keeps those events; the few instructions
+        # between this drain and the producer's put stay a gap, because closing it
+        # would mean a lock on the one path that may never wait
+        self._abandon(buffer)
 
     def reset(self) -> None:
         """Re-read the settings next time; used by override_settings.
