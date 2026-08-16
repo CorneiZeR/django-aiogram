@@ -14,6 +14,7 @@ from django.test import override_settings
 
 from django_redis_aiogram import TelegramBot, bot
 from django_redis_aiogram.client import Outbound, loop_lock
+from django_redis_aiogram.defaults import DEFAULTS
 from django_redis_aiogram.events import new_correlation_id
 from django_redis_aiogram.management.commands.start_tgbot import Command as StartCommand
 
@@ -379,3 +380,66 @@ def test_the_recorder_is_stopped_even_when_close_raises(monkeypatch, redis_serve
         command.handle(mode='webhook', idle=False)
 
     assert stopped, 'the recorder was not stopped when close() raised'
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_handoff_the_loop_never_stepped_is_drained_not_destroyed():
+    """The one `_register`'s docstring says shutdown must not lose.
+
+    A hand-off is a `call_soon_threadsafe` callback until the loop steps, and a
+    callback is not a task, so `_drain` could not see it. `close()` set `_closing`
+    first, `start()` refused on that flag, and the message — already gone from the
+    queue's in-flight list — died with the loop.
+
+    The runner is stopped *and joined* before the hand-off. The obvious recipe —
+    hand off, then `call_soon_threadsafe(loop.stop)` — passes on the old code,
+    because one `_run_once` batch runs both callbacks.
+    """
+    instance = TelegramBot()
+    sent = []
+    instance._bot = stub_bot(sent)
+
+    loop = instance.loop
+    ready = threading.Event()
+    loop.call_soon_threadsafe(ready.set)
+    runner = threading.Thread(target=loop.run_forever, daemon=True)
+    runner.start()
+    assert ready.wait(5), 'the event loop never started'
+    loop.call_soon_threadsafe(loop.stop)
+    runner.join(timeout=5)
+    assert not runner.is_alive(), 'the loop is still running'
+
+    instance._hand_off(instance.bot.send_message(chat_id=1, text='drained'), loop, an_outbound())
+    instance.close()
+
+    assert [call['chat_id'] for call in sent] == [1]
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'DRAIN_TIMEOUT': 9})
+def test_close_takes_its_drain_budget_from_the_setting():
+    """`start_tgbot` calls `bot.close()` bare, so the hardcoded five seconds was
+    the only budget a deployment could ever get — however long its
+    `stop_grace_period` said."""
+    instance = TelegramBot()
+    instance._bot = stub_bot()
+    seen = []
+    instance._drain = seen.append
+
+    instance.close()
+
+    assert seen == [9.0]
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'DRAIN_TIMEOUT': 'soon'})
+def test_an_unreadable_drain_budget_does_not_break_shutdown():
+    """E044 reports it at boot. Here the safe answer is the default: the drain sits
+    between stopping the consumer and flushing the event log, so raising costs the
+    rows that describe what the drain just did."""
+    instance = TelegramBot()
+    instance._bot = stub_bot()
+    seen = []
+    instance._drain = seen.append
+
+    instance.close()
+
+    assert seen == [float(DEFAULTS['DRAIN_TIMEOUT'])]

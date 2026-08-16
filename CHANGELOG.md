@@ -23,27 +23,20 @@
   `consume_pending()` had nothing to probe `LMOVE` support with — the consumer
   loop learns it from `reclaim()` — so the first pop raised `ResponseError`
   straight out of a documented helper instead of falling back to plain pops.
-
-### Added
-
-- Check `E043` refuses a `REDIS_URL` that sets `decode_responses` while
-  `ALLOW_PICKLE` is on. Decoding is otherwise supported and stays supported — one
-  URL is often shared with a cache backend — but a pickled payload is not valid
-  text, and redis-py decodes inside its own parser: the consumer raises *after*
-  the server has moved the message to the in-flight list, and every later reclaim
-  trips over the same message for ever. No restart recovers from it, which is why
-  this is an error and not a warning.
-
-### Changed
-
-- Redis commands are documented as deliberately un-retried. `Redis.from_url`
-  builds the pool before the client, so redis-py's client-level retry default
-  never reached the connection and every command already ran with zero retries;
-  that was an accident, and it is now a decision with a test behind it. Neither
-  `RPUSH` nor `BLMOVE` is idempotent, and redis-py retries the whole
-  send-and-read — a connection dropped after the server applied an `RPUSH` would
-  queue the message twice and a real person would receive two of them.
-
+- **A send handed to the loop just before shutdown is no longer destroyed.** A
+  hand-off is a `call_soon_threadsafe` callback until the loop steps, and a
+  callback is not a task — so the drain could not see it, and `close()` had
+  already set the flag its callback refuses on. The message was gone from the
+  queue's in-flight list by then, so nothing would ever redeliver it. `close()`
+  now runs one turn of the loop before draining, which is what turns those
+  callbacks into tasks it can wait for.
+- **The consumer's join deadline is derived from the bound that governs it.** It
+  was `BLPOP_TIMEOUT + 1` — six seconds at the defaults — while every call the
+  consumer makes is bounded by `REDIS_TIMEOUT`, ten. A consumer that outlived the
+  join went on to acknowledge a message `close()` had already refused, destroying
+  one message per shutdown. It is now `REDIS_TIMEOUT + 1`, and a thread still
+  alive after it says so in the log instead of leaving silence that reads as a
+  clean stop.
 - **Recording an event no longer rolls back the transaction it was recorded in.**
   The writer discarded stale connections before every batch, and inside an
   `atomic()` block Django closes the connection on the first check — which sets
@@ -71,6 +64,36 @@
   outside the net that contains a failed flush — so a value that could not be
   parsed ended the writer and took the whole buffer with it. Checks `E036`–`E038`
   still report it at boot.
+
+### Added
+
+- `DRAIN_TIMEOUT` sets how long `close()` gives in-flight sends before cancelling
+  them. It was hardcoded at five seconds and `start_tgbot` called `close()` bare,
+  so a deployment could raise `stop_grace_period` all it liked and never buy the
+  drain a second more. The Deployment page now has the arithmetic for sizing the
+  grace period against all three waits.
+- Check `E044` refuses a `DRAIN_TIMEOUT` that is not a finite number, or is
+  negative. `close()` reads it while shutting down, between stopping the consumer
+  and flushing the event log, so raising there would cost the rows describing what
+  the drain just did — it falls back to the default rather than refusing, and the
+  check is what tells you at boot.
+- Check `E043` refuses a `REDIS_URL` that sets `decode_responses` while
+  `ALLOW_PICKLE` is on. Decoding is otherwise supported and stays supported — one
+  URL is often shared with a cache backend — but a pickled payload is not valid
+  text, and redis-py decodes inside its own parser: the consumer raises *after*
+  the server has moved the message to the in-flight list, and every later reclaim
+  trips over the same message for ever. No restart recovers from it, which is why
+  this is an error and not a warning.
+
+### Changed
+
+- Redis commands are documented as deliberately un-retried. `Redis.from_url`
+  builds the pool before the client, so redis-py's client-level retry default
+  never reached the connection and every command already ran with zero retries;
+  that was an accident, and it is now a decision with a test behind it. Neither
+  `RPUSH` nor `BLMOVE` is idempotent, and redis-py retries the whole
+  send-and-read — a connection dropped after the server applied an `RPUSH` would
+  queue the message twice and a real person would receive two of them.
 
 ### Infrastructure
 
