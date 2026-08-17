@@ -7,10 +7,12 @@ behind. On servers without LMOVE it falls back to plain pops.
 
 import asyncio
 import threading
+from io import StringIO
 
 import pytest
 from aiogram import exceptions
 from aiogram.methods import SendMessage
+from django.core.management import CommandError, call_command
 from django.test import override_settings
 from redis.exceptions import ResponseError
 
@@ -534,6 +536,95 @@ def test_the_real_send_path_is_the_one_that_defers():
     assert defers_completion(TelegramBot().send_raw) is True
     # and the shape every documented recipe uses must not be mistaken for it
     assert defers_completion(lambda function=None, **kwargs: None) is False
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'gone'})
+def test_reclaim_requeues_a_dead_workers_messages(redis_server):
+    """A container with no fixed name gets a fresh one when it is replaced, so its
+    in-flight list is stranded where nothing will look for it again. This is the
+    way back, and it is manual because only a human knows the worker is dead."""
+    redis_server.rpush(f'{QUEUE}:processing:gone', payload(1), payload(2))
+    out = StringIO()
+
+    with override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'}):
+        call_command('tgbot_reclaim', worker='gone', stdout=out)
+
+    assert redis_server.llen(f'{QUEUE}:processing:gone') == 0
+    assert redis_server.llen(QUEUE) == 2
+    assert 'Requeued 2' in out.getvalue()
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+def test_reclaim_refuses_this_processs_own_worker(redis_server):
+    """A running consumer reclaims its own list when it starts. Taking messages
+    from underneath one that is mid-send is how you deliver them twice."""
+    redis_server.rpush(f'{QUEUE}:processing:alive', payload(1))
+
+    with pytest.raises(CommandError, match='own worker name'):
+        call_command('tgbot_reclaim', worker='alive')
+
+    assert redis_server.llen(f'{QUEUE}:processing:alive') == 1
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+def test_reclaim_dry_run_moves_nothing(redis_server):
+    redis_server.rpush(f'{QUEUE}:processing:gone', payload(1))
+    out = StringIO()
+
+    call_command('tgbot_reclaim', worker='gone', dry_run=True, stdout=out)
+
+    assert redis_server.llen(f'{QUEUE}:processing:gone') == 1
+    assert redis_server.llen(QUEUE) == 0
+    assert 'would requeue' in out.getvalue()
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+def test_reclaim_dry_run_counts_through_the_limit(redis_server):
+    """A rehearsal has to promise what the real run does.
+
+    Reporting the whole list while `--limit` would move one of it is read as the
+    plan, and the difference turns up later as messages left behind that nobody
+    went looking for — from the command whose whole job is finding those.
+    """
+    redis_server.rpush(f'{QUEUE}:processing:gone', payload(1), payload(2), payload(3))
+    rehearsal, real = StringIO(), StringIO()
+
+    call_command('tgbot_reclaim', worker='gone', limit=1, dry_run=True, stdout=rehearsal)
+    call_command('tgbot_reclaim', worker='gone', limit=1, stdout=real)
+
+    assert 'would requeue 1 of them' in rehearsal.getvalue(), rehearsal.getvalue()
+    assert 'Requeued 1' in real.getvalue(), real.getvalue()
+    # what the rehearsal promised is what the run did
+    assert redis_server.llen(f'{QUEUE}:processing:gone') == 2
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+def test_reclaim_stops_at_the_limit(redis_server):
+    """`--limit` is what bounds one run's blast radius."""
+    redis_server.rpush(f'{QUEUE}:processing:gone', payload(1), payload(2))
+
+    call_command('tgbot_reclaim', worker='gone', limit=1, stdout=StringIO())
+
+    assert redis_server.llen(f'{QUEUE}:processing:gone') == 1
+    assert redis_server.llen(QUEUE) == 1
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+def test_reclaim_refuses_a_negative_limit(redis_server):
+    """`max(0, ...)` read a negative limit as "no limit", which is the opposite
+    of what someone typing a limit is asking for."""
+    redis_server.rpush(f'{QUEUE}:processing:gone', payload(1), payload(2))
+
+    with pytest.raises(CommandError, match='cannot be negative'):
+        call_command('tgbot_reclaim', worker='gone', limit=-1)
+
+    # and under --dry-run too: the limit is an argument, so judging it after the
+    # dry run has reported and returned tells someone rehearsing the command that
+    # it is fine, and refuses only once they mean it
+    with pytest.raises(CommandError, match='cannot be negative'):
+        call_command('tgbot_reclaim', worker='gone', limit=-1, dry_run=True)
+
+    assert redis_server.llen(f'{QUEUE}:processing:gone') == 2
 
 
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'MAX_IN_FLIGHT': 1, 'HEARTBEAT_INTERVAL': 1})

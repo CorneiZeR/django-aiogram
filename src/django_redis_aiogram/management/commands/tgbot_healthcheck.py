@@ -5,16 +5,25 @@ thread can be dead while polling continues, or Redis can be unreachable, and the
 container stays "healthy" either way.
 """
 
+import logging
 import time
 from argparse import ArgumentParser
 from typing import Any
 
 from django.core.management import BaseCommand, CommandError
+from redis import Redis
+from redis.exceptions import RedisError, ResponseError
 
 from django_redis_aiogram import bot
-from django_redis_aiogram.delivery import get_delivery
+from django_redis_aiogram.delivery import Delivery, get_delivery
 from django_redis_aiogram.redis import get_redis
 from django_redis_aiogram.settings import conf
+
+logger = logging.getLogger('django_redis_aiogram')
+
+# round trips, not keys: MATCH filters on the server but SCAN walks the whole
+# keyspace either way, and this probe runs on a timer
+STRANDED_SCAN_ROUNDS = 20
 
 
 class Command(BaseCommand):
@@ -97,4 +106,84 @@ class Command(BaseCommand):
             msg = f'{queued} messages are queued, over the limit of {max_queue}'
             raise CommandError(msg)
 
-        self.stdout.write(self.style.SUCCESS(f'healthy: heartbeat {age}s old, {queued} queued'))
+        stranded, swept = self._stranded(connection, delivery)
+        guarantee = self._guarantee(connection, delivery)
+        self.stdout.write(self.style.SUCCESS(f'healthy: heartbeat {age}s old, {queued} queued, {guarantee}'))
+        if stranded:
+            # not a failure: another worker may be sending them right now. But an
+            # invisible pile is how a stranded list stays stranded
+            self.stdout.write(
+                self.style.WARNING(
+                    f'{stranded if swept else f"at least {stranded}"} message(s) are in flight under '
+                    'other worker names. If one of those workers is gone, '
+                    '`manage.py tgbot_reclaim --worker <name>` requeues them.'
+                )
+            )
+
+    @staticmethod
+    def _guarantee(connection: Redis, delivery: Delivery) -> str:
+        """Which delivery guarantee this Redis can actually give.
+
+        Asked, not assumed. This command builds its own `Delivery`, and a fresh
+        one reports `crash_safe` until something proves otherwise — the consumer
+        learns the truth from `reclaim()`, which this probe must not call, since
+        requeueing a running worker's in-flight list would send those messages
+        twice.
+
+        So it asks the same question `reclaim()` does, on a key that does not
+        exist: rotating an empty list is a no-op on a server that has `LMOVE`,
+        and `unknown command` on one that does not.
+        """
+        if not delivery.crash_safe:
+            return 'at-most-once'
+        probe = f'{delivery.queue_key}:lmove-probe'
+        try:
+            connection.lmove(probe, probe, 'LEFT', 'RIGHT')
+        except ResponseError as error:
+            if 'unknown command' in str(error).lower():
+                return 'at-most-once'
+            logger.warning('could not establish which delivery guarantee is in force')
+            return 'unknown'
+        except RedisError:
+            logger.warning('could not establish which delivery guarantee is in force')
+            return 'unknown'
+        return 'at-least-once'
+
+    @staticmethod
+    def _stranded(connection: Redis, delivery: Delivery) -> tuple[int, bool]:
+        """Count what is in flight under a worker name that is not this one.
+
+        Read rather than acted on: a message under another name may be one another
+        worker is sending this second, and taking it back would send it twice.
+
+        Bounded, and returns whether it finished. ``MATCH`` filters on the server
+        but ``SCAN`` still walks the whole keyspace, and the compose recipe runs
+        this probe every thirty seconds — on a Redis shared with a cache backend,
+        which the settings page suggests is common, an unbounded sweep is a full
+        pass over someone else's keys twice a minute. A partial answer is worth
+        having; one that pretends to be complete is not.
+        """
+        pattern = f'{delivery.queue_key}:processing:*'
+        mine = delivery.processing_key
+        # SCAN may return the same key more than once when the keyspace changes
+        # size mid-iteration, and counting one twice would invent a backlog
+        seen: set[str] = set()
+        total = 0
+        cursor = 0
+        try:
+            for _ in range(STRANDED_SCAN_ROUNDS):
+                cursor, keys = connection.scan(cursor=cursor, match=pattern, count=100)
+                for key in keys:
+                    name = key.decode() if isinstance(key, bytes) else key
+                    if name == mine or name in seen:
+                        continue
+                    seen.add(name)
+                    total += int(connection.llen(name) or 0)
+                if not cursor:
+                    return total, True
+        except RedisError:
+            # the probe answers about this worker; a scan it could not finish is
+            # not a reason to call a healthy container unhealthy
+            logger.warning('could not scan for stranded in-flight lists', extra={'tg_key': pattern})
+            return 0, False
+        return total, False

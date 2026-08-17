@@ -83,11 +83,39 @@ and the send loses that one message.
 
 The in-flight list is **per worker**: `<REDIS_MESSAGES_KEY>:processing:<name>`,
 where `<name>` is `WORKER_NAME` when it is set and the hostname (`HOSTNAME`, or
-what the host reports) otherwise. A restarted container keeps its name, which is
-what lets it reclaim its own interrupted messages and never pull one out from
-under a worker that is still sending it. If several workers share a host, give
-each its own `WORKER_NAME` — otherwise they share a list and can duplicate each
-other's sends.
+what the host reports) otherwise.
+
+**The name has to survive the container.** That is what lets a worker reclaim its
+own interrupted messages, and never pull one out from under a worker still
+sending. A container started without `hostname:` does *not* keep its name —
+Docker invents a fresh twelve-character one for each container it creates — so
+whenever one is replaced rather than restarted in place, whatever the last one
+was sending is stranded in a list nothing will look at again. `docker compose up`
+after a change, a rescheduled pod, a redeploy: each is a new container. Set
+`WORKER_NAME`, or give the container a fixed `hostname:`; check `W010` reports
+the case it can detect.
+
+The list is keyed on the resolved name, so the other half is the collision: two
+workers that resolve to the *same* name share one in-flight list, and each will
+reclaim what the other is still sending. Sharing a host is the common way to
+arrive there, but so is copying a `WORKER_NAME` or a fixed `hostname:` between
+services. Give each worker its own.
+
+`manage.py tgbot_reclaim --worker <name>` is the way back from a list that is
+already stranded. It is deliberately manual: naming a worker is a human saying it
+is gone, and nothing here probes for liveness, because a slow worker looks
+exactly like a dead one and taking its message back sends it twice.
+
+Two flags exist because that judgement can be wrong. `--dry-run` reports what is
+there and moves nothing, so you can name a worker before committing to the claim
+that it is gone — it applies `--limit` to its report, so what it says it would
+move is what a real run moves. `--limit <n>` bounds a single run, which keeps the
+blast radius of a mistaken name to `n` messages rather than a whole list.
+
+`manage.py tgbot_healthcheck` reports how many messages sit under other worker
+names, so a stranded pile stops being invisible. That count is a floor, not a
+total: the sweep behind it is bounded, because `SCAN` walks the whole keyspace
+and the probe runs on a timer. It says so when it stopped early.
 
 Handler errors are not crashes: a message whose send *failed* is acknowledged
 and logged, not redelivered forever.

@@ -10,6 +10,7 @@ from io import StringIO
 import pytest
 from django.core.management import CommandError, call_command
 from django.test import override_settings
+from redis.exceptions import RedisError, ResponseError
 
 from django_redis_aiogram.delivery import BlpopDelivery
 
@@ -247,3 +248,95 @@ def test_the_queue_limit_is_inclusive(redis_server):
     redis_server.rpush(QUEUE, b'{}')
     with pytest.raises(CommandError, match='4 messages are queued'):
         healthcheck()
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+def test_the_probe_says_which_guarantee_is_in_force(redis_server):
+    """A probe that only says "healthy" cannot tell at-least-once from
+    at-most-once, and the difference is whether a kill loses a message."""
+    redis_server.set(f'{QUEUE}:heartbeat:mine', str(int(time.time())))
+    out = StringIO()
+
+    call_command('tgbot_healthcheck', stdout=out)
+
+    assert 'at-least-once' in out.getvalue()
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+def test_messages_stranded_under_another_worker_are_reported(redis_server):
+    """A stranded list is invisible otherwise: nothing reads it and nothing
+    counts it, which is how it stays stranded."""
+    redis_server.set(f'{QUEUE}:heartbeat:mine', str(int(time.time())))
+    redis_server.rpush(f'{QUEUE}:processing:gone', b'{}', b'{}')
+    out = StringIO()
+
+    call_command('tgbot_healthcheck', stdout=out)
+
+    reported = out.getvalue()
+    assert '2 message(s) are in flight under other worker names' in reported
+    assert 'tgbot_reclaim' in reported
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+def test_an_old_server_is_not_reported_as_crash_safe(redis_server, monkeypatch):
+    """This command builds its own `Delivery`, and a fresh one says it is crash
+    safe until something proves otherwise — the consumer learns that from
+    `reclaim()`, which a probe must not call. Reporting the default would tell an
+    operator on a pre-6.2 Redis that messages survive a kill, which is the one
+    thing they need to know is untrue."""
+
+    def no_lmove(*args, **kwargs):
+        msg = "unknown command 'LMOVE'"
+        raise ResponseError(msg)
+
+    redis_server.set(f'{QUEUE}:heartbeat:mine', str(int(time.time())))
+    monkeypatch.setattr(redis_server, 'lmove', no_lmove)
+    out = StringIO()
+
+    call_command('tgbot_healthcheck', stdout=out)
+
+    reported = out.getvalue()
+    assert 'at-most-once' in reported, reported
+    assert 'at-least-once' not in reported, reported
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+def test_the_stranded_sweep_is_bounded_and_says_when_it_stopped_early(redis_server):
+    """`MATCH` filters on the server, but `SCAN` walks the whole keyspace.
+
+    The compose recipe runs this probe every thirty seconds, and the settings
+    page suggests sharing one Redis with a cache backend — so an unbounded sweep
+    is a full pass over someone else's keys twice a minute. It stops instead, and
+    a count it cannot stand behind is reported as a floor rather than a total.
+    """
+    redis_server.set(f'{QUEUE}:heartbeat:mine', str(int(time.time())))
+    redis_server.rpush(f'{QUEUE}:processing:gone', b'{}')
+    # more keys than the bound can reach at a hundred a round
+    for index in range(4000):
+        redis_server.set(f'unrelated:{index}', b'x')
+    out = StringIO()
+
+    call_command('tgbot_healthcheck', stdout=out)
+
+    reported = out.getvalue()
+    assert 'healthy' in reported
+    assert 'at least' in reported, reported
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+def test_a_scan_that_fails_does_not_make_the_container_unhealthy(redis_server, monkeypatch):
+    """The probe answers about this worker. A scan it could not finish is not a
+    reason to restart a container that is doing its job."""
+    redis_server.set(f'{QUEUE}:heartbeat:mine', str(int(time.time())))
+
+    def refuse(*args, **kwargs):
+        raise RedisError('NOPERM')
+
+    # the method the sweep actually calls: patching scan_iter left the handler
+    # below unexercised while the test went on passing
+    monkeypatch.setattr(redis_server, 'scan', refuse)
+    out = StringIO()
+
+    call_command('tgbot_healthcheck', stdout=out)
+
+    assert 'healthy' in out.getvalue()
