@@ -40,8 +40,9 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_crash_safe` | whether the consumer holds messages in flight; false on a Redis without `LMOVE` |
 | `tg_mode` | `polling` or `webhook` |
 | `tg_update` | the update id being handled |
+| `tg_correlation_id` | the id every event about one message carries |
 | `tg_router` | a router module autodiscovery imported |
-| `tg_pending` | in-flight sends at shutdown |
+| `tg_pending` | work still in flight at shutdown: sends, or the updates a webhook process is answering |
 | `tg_drain_timeout` | how long shutdown gave them |
 | `tg_kind` | the event log kind of a row |
 | `tg_count` | events in the batch being written |
@@ -57,6 +58,14 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `dropping undecodable queued message` | ERROR | a payload could not be deserialized |
 | `blocking pop failed, retrying` | ERROR | lost the Redis connection; it retries |
 | `the delivery consumer did not stop in time` | WARNING | the consumer outlived its join at shutdown; a message it holds may be redelivered |
+| `cancelling updates still in flight` | WARNING | a webhook update outlasted the drain at shutdown; its request is answered 503, so Telegram redelivers it rather than a worker hanging on a stopped loop |
+| `webhook refused an update` | WARNING | an update arrived while the process was shutting down; answered 503 so Telegram redelivers it |
+| `the event loop thread did not start in time` | WARNING | a webhook process cannot hand updates to its loop; every request is refused with 503 until a thread starts |
+| `the event loop thread is gone; starting another` | WARNING | that thread died and was replaced; the update that lost it was refused |
+| `the event loop thread did not stop in time` | WARNING | it outlived its join at shutdown, so the teardown was skipped and `close()` can be retried |
+| `skipping close` | WARNING | the loop was still running, so nothing was torn down; stop polling or the loop thread and call it again |
+| `skipping drain` | WARNING | the same, for the drain alone: in-flight sends were left rather than waited for |
+| `scheduling a send on a loop nothing in this process runs` | WARNING | nothing polls this process and no loop thread exists, so the send is created and never stepped |
 | `rate limited by telegram` | WARNING | refused and backing off |
 | `delivery started` | INFO | the consumer is up |
 | `message sent` | INFO | one call succeeded |

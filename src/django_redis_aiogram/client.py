@@ -6,6 +6,7 @@ jobs, the test suite — that only ever queue a message.
 """
 
 import asyncio
+import contextlib
 import logging
 import math
 import threading
@@ -14,6 +15,7 @@ import uuid
 import weakref
 from asyncio import AbstractEventLoop
 from collections.abc import Callable, Coroutine, Mapping
+from concurrent import futures
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,6 +36,7 @@ from django_redis_aiogram.defaults import DEFAULTS
 from django_redis_aiogram.enums import EventKind, StorageKind
 from django_redis_aiogram.envelope import pack
 from django_redis_aiogram.events import new_correlation_id
+from django_redis_aiogram.exceptions import LoopThreadNotStartedError, ShuttingDownError
 from django_redis_aiogram.instrumentation import install_instrumentation, instrumented
 from django_redis_aiogram.payloads import describe
 from django_redis_aiogram.recorder import Event, as_identifier, recorder
@@ -47,6 +50,11 @@ logger = logging.getLogger('django_redis_aiogram')
 #: how a scheduled send carries its correlation id, so shutdown can name what
 #: it cancelled without threading an argument through asyncio
 TASK_PREFIX = 'tgbot:'
+
+#: the loop thread a web process starts, so a log line or a test can name it
+LOOP_THREAD = 'tgbot-loop'
+#: how long starting or stopping that thread may take before it is worth saying so
+RUNNER_TIMEOUT = 5.0
 
 
 def resolve_correlation_id(supplied: uuid.UUID | str | None) -> uuid.UUID:
@@ -219,6 +227,14 @@ class TelegramBot:
         self._sends: dict[asyncio.Task[None], Outbound] = {}
         self._polling = False
         self._closing = False
+        #: the thread a web process gives the loop, so updates do not serialize
+        self._runner: threading.Thread | None = None
+        #: set once that thread is actually running the loop. Every caller waits
+        #: on it, not only the one that started the thread
+        self._runner_ready = threading.Event()
+        #: updates a request thread is blocked on. Stopping the loop under one of
+        #: these would leave that thread waiting on a future nothing will finish
+        self._updates: set[futures.Future[None]] = set()
         # only true while close() is flushing the loop, so the refusal below can tell
         # a hand-off queued before shutdown from one queued during it
         self._draining = False
@@ -338,20 +354,178 @@ class TelegramBot:
         or a failure would go unreported and the request would look successful.
         """
         self._attach_router()
+        owned = self._ensure_loop_runs()
 
         coroutine = self.dispatcher.feed_update(self.bot, update)
         loop = self.loop
         with loop_lock(loop):
+            if self._closing:
+                # decided under the same lock the shutdown snapshot is taken
+                # under, or an update submitted just after it would be neither
+                # waited for nor cancelled, and its request would never return
+                coroutine.close()
+                raise ShuttingDownError
             if not loop.is_running():
+                if owned:
+                    # our own thread owns this loop and was slow to start.
+                    # Driving it here would put two threads on one loop
+                    coroutine.close()
+                    raise LoopThreadNotStartedError(RUNNER_TIMEOUT)
+                # nothing could be started to run it, so drive it here — which is
+                # what every update did before, one at a time under this lock
                 loop.run_until_complete(coroutine)
                 return
-            # polling drives this loop, so hand the update over. Decided under
-            # the lock: a loop another request is driving looks running until it
-            # stops, and the update would then wait for ever
+            # something runs this loop — polling, or the thread started above —
+            # so hand the update over. Decided under the lock: a loop another
+            # request is driving looks running until it stops, and the update
+            # would then wait for ever
             future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+            self._updates.add(future)
 
-        # waiting outside the lock, so the next request is not held up by ours
-        future.result()
+        try:
+            # waiting outside the lock, so the next request is not held up by ours
+            future.result()
+        except (futures.CancelledError, asyncio.CancelledError) as cancelled:
+            # `_stop_runner` cancelled this one: no handler finished, so it is the
+            # same refusal a request arriving mid-shutdown gets, and the view has
+            # to answer it the same way. Left as a cancellation it reads as a
+            # handler that failed — a 200 telling Telegram to forget an update
+            # nothing handled. Both classes: they are one object on some versions
+            # and, where they are not, only one of them is an `Exception`
+            raise ShuttingDownError from cancelled
+        finally:
+            self._forget_update(future)
+
+    def _forget_update(self, future: 'futures.Future[None]') -> None:
+        """Drop a finished update from the set the shutdown snapshot reads.
+
+        Under the same lock it was added under. `_stop_runner` takes `list()` over
+        this set while holding that lock, and a `discard` from a request thread
+        mid-iteration raises `RuntimeError: Set changed size during iteration`
+        inside `close()` — aborting the shutdown before anything is torn down.
+        """
+        loop = self._loop
+        if loop is None:
+            self._updates.discard(future)
+            return
+        with loop_lock(loop):
+            self._updates.discard(future)
+
+    def _ensure_loop_runs(self) -> bool:
+        """Give this process's loop a thread of its own, once.
+
+        A web process serving the webhook drives nothing: every `feed_update`
+        took `run_until_complete` **under `loop_lock`**, so updates in one process
+        handled strictly one at a time, and a send a handler scheduled was not
+        stepped until the next update arrived — or until `close()`, or never.
+        Measured on four concurrent updates with a 200 ms handler: 0.81 s
+        serialized against 0.21 s with the loop running.
+
+        Not started in the polling process: `start_polling` runs the loop itself,
+        and `loop.is_running()` below is what says so.
+
+        Returns whether a thread of ours owns this loop — ready or not. A caller
+        that owns it must never fall back to driving the loop itself, even when
+        the thread was slow to start: the two would be running the same loop.
+        """
+        if self._closing:
+            return False
+        # judged under the guard the thread is also created under. `is_alive()` is
+        # false *before* `start()` too, so a check outside it can read a runner
+        # registered a moment ago as dead and start a second one — two threads on
+        # one loop, which is the collision this method exists to prevent
+        with self._build_guard:
+            if self._closing:
+                return False
+            runner = self._runner
+            if runner is not None and not runner.is_alive():
+                # a thread that died before it ran the loop would otherwise be
+                # kept for the life of the process: every later update would wait
+                # out the timeout, log the warning and be refused, and no
+                # redelivery can recover a condition that never clears
+                logger.warning('the event loop thread is gone; starting another')
+                self._runner = runner = None
+                self._runner_ready.clear()
+            if runner is None:
+                loop = self.loop
+                if loop.is_running():
+                    # polling drives it; there is nothing to start
+                    return False
+                self._runner_ready.clear()
+
+                def run() -> None:
+                    asyncio.set_event_loop(loop)
+                    loop.call_soon(self._runner_ready.set)
+                    loop.run_forever()
+
+                self._runner = threading.Thread(target=run, name=LOOP_THREAD, daemon=True)
+                self._runner.start()
+        # every caller waits, not only the one that started the thread: a second
+        # request that returned as soon as the thread existed would find
+        # `is_running()` still false below and drive the update with
+        # `run_until_complete`, while the thread it saw called `run_forever` on
+        # the same loop. That kills the thread, leaves `_runner` pointing at a
+        # dead one, and quietly returns the process to handling updates one at a
+        # time — the thing this method exists to stop
+        if self._runner is None:
+            return False
+        if not self._runner_ready.wait(RUNNER_TIMEOUT):
+            # slow, not absent. Saying so is the whole point of the return value:
+            # a caller that drove the update here would collide with the thread
+            # the moment it did start
+            logger.warning('the event loop thread did not start in time', extra={'tg_timeout': RUNNER_TIMEOUT})
+        return True
+
+    def _stop_runner(self, drain_timeout: float) -> None:
+        """Stop the thread this process gave the loop, if it started one.
+
+        Before the teardown, not after: `close()` refuses outright on a running
+        loop, so a bot that started a runner could never be closed.
+
+        Updates in flight are waited for first, and cancelled if they outlast the
+        drain. A request thread blocks on `future.result()` with no deadline, so
+        stopping the loop under one would leave that thread waiting on a future
+        nothing will ever finish — a web worker held for the life of the process.
+        Cancelling before the loop stops is what turns that into an exception the
+        request can answer with.
+        """
+        # under the guard `_ensure_loop_runs` registers a thread beneath, and
+        # released before `loop_lock` below rather than held across it: a send
+        # driven under `loop_lock` reaches the `bot` property, which takes this
+        # guard, so guard-inside-lock is the order that already exists.
+        #
+        # Without it a request that passed the `_closing` check could register a
+        # runner *after* this snapshot read None, and that thread would call
+        # `run_forever` on the loop the teardown below is closing
+        with self._build_guard:
+            runner, self._runner = self._runner, None
+            self._runner_ready.clear()
+        if runner is None:
+            return
+        loop = self._loop
+        if loop is not None:
+            # under the lock `feed_update` submits beneath, so an update cannot
+            # slip in between this snapshot and the loop stopping. The waiting
+            # stays outside it: holding it would block nothing useful and delay
+            # the refusal above
+            with loop_lock(loop):
+                pending = list(self._updates)
+        else:
+            pending = list(self._updates)
+        if pending:
+            logger.info('waiting for updates in flight', extra={'tg_pending': len(pending)})
+            futures.wait(pending, timeout=max(0.0, drain_timeout))
+            unfinished = [future for future in pending if not future.done()]
+            if unfinished:
+                logger.warning('cancelling updates still in flight', extra={'tg_pending': len(unfinished)})
+                for future in unfinished:
+                    future.cancel()
+        if loop is not None and not loop.is_closed():
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(loop.stop)
+        runner.join(timeout=RUNNER_TIMEOUT)
+        if runner.is_alive():
+            logger.warning('the event loop thread did not stop in time', extra={'tg_timeout': RUNNER_TIMEOUT})
 
     def send(
         self,
@@ -390,13 +564,16 @@ class TelegramBot:
         if drain_timeout is None:
             drain_timeout = drain_budget()
         self._closing = True
+        # before anything else: close() refuses on a running loop, so a process
+        # that gave the loop a thread could otherwise never close its bot
+        self._stop_runner(drain_timeout)
         try:
             if self._loop is not None or self._bot is not None or self._dispatcher is not None:
                 loop = self.loop
                 if loop.is_running():
                     # run_until_complete and loop.close() both raise on a running
                     # loop; leaving everything in place keeps close() retryable
-                    logger.warning('skipping close: stop polling before closing the bot')
+                    logger.warning('skipping close: stop polling, or the loop thread, before closing the bot')
                     return
                 # a send from another thread may be driving this loop; the lock
                 # keeps the teardown from interleaving with it
@@ -608,6 +785,16 @@ class TelegramBot:
 
         loop = self.loop
         if running is loop:
+            if not self._polling and self._runner is None:
+                # nothing in this process drives this loop — not polling, and no
+                # runner — so the task is created and never stepped. With a
+                # runner it *is* stepped, which is the normal webhook path and
+                # must not warn: a warning on the healthy path is how people
+                # learn to stop reading them
+                logger.warning(
+                    'scheduling a send on a loop nothing in this process runs',
+                    extra={'tg_function': outbound.function, 'tg_correlation_id': str(outbound.correlation_id)},
+                )
             self._register(self._start(coroutine, loop, outbound), outbound, on_complete)
             return
 

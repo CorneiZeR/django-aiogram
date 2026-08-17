@@ -98,28 +98,39 @@ class Command(BaseCommand):
         self._require_crash_safety(delivery)
         threads: list[threading.Thread] = []
 
-        if mode == UpdateMode.WEBHOOK:
-            # nothing will run the loop here, so the callback below would never
-            # fire. The consumer drives the loop itself for each send instead,
-            # under the same lock a web thread uses.
+        # Both modes: starting the consumer before the loop runs would let a
+        # backlog reach send_raw while loop.is_running() is still False, so the
+        # coroutine would be driven from the consumer thread. Deferring the start
+        # until the loop picks up this callback keeps the loop single-threaded.
+        # Webhook mode used to start it directly because nothing ran the loop
+        # there — something does now, which is what this change is about.
+        # and refused once the shutdown starts. close() runs one turn of the loop
+        # on purpose, so a callback still queued when we reach the finally would
+        # start the consumer *after* stop() and after the joins — a thread nobody
+        # waits for, doing Redis work, whose first act is reclaim()
+        shutting_down = threading.Event()
+
+        def start_consuming() -> None:
+            if shutting_down.is_set():
+                logger.info('not starting the consumer: the shutdown had already begun')
+                return
             threads.append(delivery.start_thread())
-        else:
-            # Starting the consumer before the loop runs would let a backlog reach
-            # send_raw while loop.is_running() is still False, so the coroutine
-            # would be driven from the consumer thread. Deferring the start until
-            # the loop picks up this callback keeps the loop single-threaded.
-            bot.loop.call_soon(lambda: threads.append(delivery.start_thread()))
+
+        bot.loop.call_soon(start_consuming)
         previous = self._install_sigterm_handler()
 
         try:
             with contextlib.suppress(KeyboardInterrupt, SystemExit):
                 if mode == UpdateMode.WEBHOOK:
                     self.stdout.write('Consuming the queue; updates are expected over HTTP.')
-                    (self.idle_event or threading.Event()).wait()
+                    self._idle_on_the_loop()
                 else:
                     bot.start_polling()
         finally:
             logger.info('shutting down')
+            # before stop(), so the callback above cannot slip a consumer in
+            # behind the joins below
+            shutting_down.set()
             delivery.stop()
             for thread in threads:
                 # derived from the bound that actually governs the thread: every
@@ -145,6 +156,27 @@ class Command(BaseCommand):
                 # installed would turn a later SIGTERM into a stray interrupt
                 with contextlib.suppress(ValueError):
                     signal.signal(signal.SIGTERM, previous)
+
+    def _idle_on_the_loop(self) -> None:
+        """Wait on the bot's loop rather than on an Event.
+
+        In webhook mode this process consumes the queue and nothing drove the
+        loop, so every send the consumer scheduled sat there until something else
+        happened to run it — the next update, or `close()`. `run_forever` is what
+        makes a scheduled send run when it is scheduled, and it unwinds on
+        SIGTERM exactly as `start_polling` does, so the teardown below is
+        unchanged.
+        """
+        stop = self.idle_event or threading.Event()
+        loop = bot.loop
+
+        def wait_then_stop() -> None:
+            stop.wait()
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(loop.stop)
+
+        threading.Thread(target=wait_then_stop, name='tgbot-idle', daemon=True).start()
+        loop.run_forever()
 
     @staticmethod
     def _require_crash_safety(delivery: Delivery) -> None:

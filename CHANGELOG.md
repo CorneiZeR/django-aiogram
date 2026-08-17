@@ -11,6 +11,39 @@ them, so it is not one per message.
 
 ### Fixed
 
+- **Updates in one web process are handled concurrently.** A process serving the
+  webhook drove nothing, so every `feed_update` took `run_until_complete` *under
+  the loop lock* and updates handled strictly one at a time. Measured on four
+  concurrent updates with a 200 ms handler: 0.81 s serialized against 0.21 s with
+  the loop running. It also means a send scheduled from inside a handler now runs
+  when it is scheduled — before, nothing stepped it until the next update
+  arrived, or `close()`, or never.
+- **`send_raw` no longer waits in a web process that serves the webhook.** It
+  hands work to a running loop rather than driving one, and from the first update
+  such a process handles there is a loop running. Measured: 0.30 s and Telegram
+  called before it returns, against 0.00 s and Telegram not called yet. The
+  practical difference is the exception — a send that fails after its retries
+  raised into the view under `RAISE_EXCEPTION` and is now logged instead.
+  A process that never serves the webhook is unaffected, and `send()`, which
+  queues, never had this behaviour. The Sending messages page says what to do
+  when you need the answer.
+- In webhook mode `start_tgbot` runs the loop instead of blocking on an event, so
+  a send the consumer schedules runs when it is scheduled rather than waiting for
+  whatever happens next. Both modes now start the consumer from the loop, which
+  is what keeps a backlog from reaching `send_raw` while the loop is not running
+  yet.
+- `close()` waits for the updates a webhook process is still answering before it
+  stops that loop, and cancels what outlasts `DRAIN_TIMEOUT`. A request thread
+  waits on its update with no deadline of its own, so stopping the loop under one
+  would hold that worker for the life of the process. A cancelled update is
+  answered 503, the same as one refused on arrival — nothing handled it either
+  way, so Telegram should redeliver it rather than be told to forget it.
+- **The webhook view answers 503 to an update it refused**, rather than 200. It
+  answers 200 to a handler that raised, because retrying one that failed once is
+  a loop — but an update refused mid-shutdown was never handled, so redelivery is
+  the point. During a rolling restart that is the difference between the update
+  moving to the next instance and disappearing.
+
 - **The consumer acknowledged a message before Telegram had seen it.** In polling
   mode `send_raw` returns as soon as the coroutine is scheduled, and the consumer
   treated that as delivery: the message left the in-flight list at pop speed while
