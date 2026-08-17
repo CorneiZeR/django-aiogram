@@ -49,7 +49,7 @@ gives you `sent` rows with no `queued` rows to match. That is not a bug.
 | `outbound.sent` | Telegram accepted it |
 | `outbound.retried` | Telegram refused it with a rate limit; backing off |
 | `outbound.failed` | the call raised |
-| `outbound.dropped` | retries were exhausted, or shutdown cancelled it |
+| `outbound.dropped` | it never got sent: queueing refused it, retries were exhausted, or shutdown cancelled it. `detail.stage` says which |
 | `inbound.received` | an update arrived, by polling or webhook |
 | `inbound.handled` | the handlers finished |
 | `inbound.failed` | a handler raised |
@@ -57,6 +57,31 @@ gives you `sent` rows with no `queued` rows to match. That is not a bug.
 | `queue.undecodable` | a payload could not be decoded |
 | `queue.rejected` | a payload named something that is not a Telegram API method |
 | `log.dropped` | the writer fell behind and lost events — the gap, recorded |
+
+`outbound.dropped` is the one worth reading twice. Four different things end up
+under that one kind, they are not equally recoverable, and `detail` together with
+`error_code` is what separates them:
+
+| Row says | What happened | Send it again? |
+| --- | --- | --- |
+| `detail.stage: serialising` | the payload could not be encoded, so it never left the process | yes — Redis never saw it |
+| `detail.stage: queueing` | the write to Redis raised | **not certainly** — an `RPUSH` that raised may have been applied and only its reply lost |
+| `detail.max_retries: N` | Telegram refused it with a rate limit N times over | it was delivered nowhere and nothing will retry it, so yes — but expect the same refusal |
+| `error_code: NotScheduled` | it was never scheduled, or was cancelled at shutdown; `error` says which | **usually not** — see below |
+
+`NotScheduled` is the one that will bite an operator. A send that came off the
+queue is *deliberately* left in the worker's in-flight list when shutdown cancels
+it, so a restart under the same worker identity reclaims and delivers it —
+re-sending by hand duplicates. A send made directly with `send_raw`, from your own
+code rather than from the queue, was never in that list, and nothing will ever
+retry it. The rows tell them apart: a queued message has `outbound.queued` and
+`outbound.consumed` rows under the same `correlation_id`, and a direct `send_raw`
+has neither. See **[[Delivery]]** for the guarantee that makes the first case work.
+
+The stages matter most after a broadcast: `send_many` loses the ids of the failing
+chunk with the exception, so these rows are the only list of which messages went
+missing, and the stage is the only thing that says whether re-sending them would
+duplicate.
 
 Register your own:
 
@@ -86,6 +111,13 @@ the log.
 
 `EVENT_LOG_BUFFER_SIZE`, `EVENT_LOG_BATCH_SIZE` and `EVENT_LOG_FLUSH_INTERVAL`
 size it. A batch larger than the buffer can never fill, so `W007` says so.
+
+**A broadcast is where this bites.** `send_many` records one `outbound.queued` row
+per message, the same as sending them one at a time — but it removes the pacing
+the sequential round trips used to give the writer, so fifty thousand chats arrive
+as fifty thousand events in a few seconds rather than spread over minutes. Raise
+`EVENT_LOG_BUFFER_SIZE`, or narrow `EVENT_LOG_KINDS`, before the first large one.
+The messages are never at risk; the rows about them are.
 
 What is lost: on `SIGKILL`, a worker timeout or `os._exit()`, whatever is in the
 queue and in the current batch. At the defaults that is under a second of events

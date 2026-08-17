@@ -60,8 +60,10 @@ migration container, CI. See below.
 
 - no router autodiscovery, so those modules are never imported
 - no system checks registered
-- `send`, `send_redis` and `send_raw` become no-ops that build neither a bot
-  nor a connection
+- every send becomes a no-op that builds neither a bot nor a connection:
+  `send`, `send_redis`, `send_raw`, `send_many` and the `await` forms `asend`,
+  `asend_redis`, `asend_many`. Each still returns the correlation id it would
+  have used, so a caller storing ids beside its own rows behaves the same here
 - `start_tgbot` reports why and exits
 
 A disabled process needs no token and no reachable Redis at all.
@@ -113,6 +115,38 @@ seconds and no grace period could buy more. Watch the other direction too:
 raising `REDIS_TIMEOUT` raises the join, and a grace period shorter than the sum
 means Docker sends `SIGKILL` partway through, which is exactly the crash the
 in-flight list exists to survive.
+
+## Serving under ASGI
+
+Nothing here is required. A Django process under ASGI can call `bot.send()` and
+it works — it simply writes to a socket on the thread serving requests, and on
+the first call that includes a connect bounded by `REDIS_TIMEOUT`. `bot.asend()`
+is the same message without that; see **[[Sending-messages|Sending messages]]**.
+
+One thing is worth knowing rather than discovering. The async client belongs to
+the loop that created it, so each loop gets its own, and only that loop may close
+it. If your server has a lifespan hook, close it there:
+
+```python
+from django_redis_aiogram import bot
+
+
+# an ASGI lifespan shutdown, or django-ninja's
+async def shutdown():
+    await bot.aclose()
+```
+
+That closes the async client for the loop calling it, and nothing else — the
+worker's `close()` is a different thing and belongs in the bot container.
+
+A server with one loop for its whole life will not miss it: the connection is
+closed when the process exits either way, perhaps with a `ResourceWarning`. It
+matters where a process runs **many** loops — `asyncio.run` once per job in a
+Celery task, a management command, a script. There each loop takes its own client,
+and only closing it releases the connection while the loop that owns it still
+exists. Nothing accumulates if you skip it — the registry drops clients whose loop
+has closed — but the sockets stay open until then, and the close is untidy rather
+than clean.
 
 ## Is it working?
 

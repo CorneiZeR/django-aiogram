@@ -30,12 +30,23 @@ why the package sets the deadline itself rather than relying on the client.
 
 ## Messages pile up in Redis
 
+```python
+from django_redis_aiogram import bot
+
+bot.queue_depth()  # messages waiting for a worker
+bot.inflight_depth()  # what this worker is part-way through sending
+```
+
+Or from a shell, if that is where you are:
+
 ```shell
 redis-cli -n <db> llen TELEGRAM_BOT_MESSAGE
 ```
 
 `TELEGRAM_BOT_MESSAGE` is the default `REDIS_MESSAGES_KEY`; if you set your own,
-it is that key here and in every path below.
+it is that key here and in every path below — which is the reason to prefer the
+two calls above in anything you keep, an exporter especially. They read the keys
+this package owns, so a monitor does not encode a scheme that is ours to change.
 
 A growing list does not by itself mean the consumer is stopped: producers can
 simply be outpacing it, and `MAX_IN_FLIGHT` deliberately holds intake back while
@@ -111,8 +122,8 @@ the send path read it the same way.
 
 ## Sends are slow
 
-That is likely the pacing in **[[Rate limits]]** doing its job: one message per
-second to the same chat, 20 per minute to a group. Verify with `RATE_LIMIT`
+That is likely the pacing in **[[Rate-limits|Rate limits]]** doing its job: one
+message per second to the same chat, 20 per minute to a group. Verify with `RATE_LIMIT`
 set to `None`; if it speeds up, tune the numbers rather than removing them, or
 Telegram will start refusing.
 

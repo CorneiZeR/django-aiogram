@@ -56,12 +56,18 @@ OBSERVER_DECORATORS = (
 #: what 2.0 added on top, and must keep
 TWO_X_ADDITIONS = ('send', 'router', 'enabled', 'is_worker', 'rate_limiter', 'close')
 
+#: 3.1.0's additions. Kept apart from the tuple above because that one is the 2.x
+#: contract and must not be edited to make a later change pass
+THREE_ONE_ADDITIONS = ('asend', 'asend_redis', 'send_many', 'asend_many')
+THREE_ONE_COROUTINES = ('asend', 'asend_redis', 'asend_many', 'aqueue_depth', 'ainflight_depth', 'aclose')
+THREE_ONE_INTROSPECTION = ('queue_depth', 'inflight_depth')
+
 MODULE_EXPORTS = ('TelegramBot', 'bot', 'conf', 'redis_conn', 'get_redis', '__version__')
 
 SETTINGS = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'FSM_STORAGE': 'memory'}
 
 
-@pytest.mark.parametrize('name', INHERITED_ATTRIBUTES + TWO_X_ADDITIONS)
+@pytest.mark.parametrize('name', INHERITED_ATTRIBUTES + TWO_X_ADDITIONS + THREE_ONE_ADDITIONS + THREE_ONE_INTROSPECTION)
 def test_the_attribute_is_still_there(name):
     assert hasattr(TelegramBot, name), f'{name} disappeared from the public surface'
 
@@ -260,3 +266,35 @@ def test_the_2_0_string_alias_stays_gone(module_name, alias):
 
     assert not hasattr(module, alias), f'{module_name}.{alias} is back'
     assert alias not in getattr(module, '__all__', ()), f'{alias} is back in {module_name}.__all__'
+
+
+@pytest.mark.parametrize('name', THREE_ONE_COROUTINES)
+def test_the_async_member_is_a_coroutine_function(name):
+    """`callable()` would pass a synchronous method of the same name.
+
+    That is not a hypothetical: the whole value of these is that awaiting them
+    does not block the loop, so a sync implementation behind the same name would
+    satisfy every other test here while reintroducing exactly what they exist to
+    avoid.
+    """
+    member = getattr(TelegramBot, name, None)
+    assert member is not None, f'{name} is missing from the public surface'
+    assert inspect.iscoroutinefunction(member), f'{name} is not a coroutine function'
+
+
+def test_the_two_send_paths_agree_on_their_signature():
+    """A caller moving from `send` to `asend` should not have to rewrite the call.
+
+    Same for the bulk pair. Checked rather than asserted in prose, because the
+    two are written apart and a keyword added to one is easy to forget in the
+    other — and 4.0 renames the package with these signatures pinned.
+
+    Compared whole rather than by name: a keyword whose default moved, or one that
+    became positional, is a rewrite for the caller too, and a list of names says
+    nothing about either. The return annotation is in the comparison because
+    `async def` annotates the awaited value, so the two genuinely do agree on it.
+    """
+    for sync_name, async_name in (('send', 'asend'), ('send_many', 'asend_many')):
+        sync = inspect.signature(getattr(TelegramBot, sync_name))
+        asynchronous = inspect.signature(getattr(TelegramBot, async_name))
+        assert sync == asynchronous, f'{sync_name}{sync} and {async_name}{asynchronous} drifted'

@@ -48,15 +48,17 @@ feeding the dispatcher, reusing the connection — and that keeps working;
 | `bot.send(function='send_message', **kwargs)` | queue it, or call Telegram directly inside the bot container |
 | `bot.send_redis(...)` | always queue |
 | `bot.send_raw(...)` | always call Telegram from this process |
+| `bot.send_many(chat_ids, function='send_message', *, chunk_size=100, **kwargs)` | always queue, one message per chat, a chunk per round trip |
 
 `function` must name a Telegram API method aiogram exposes; anything else raises
 `ValueError` before it reaches the queue. See **[[Sending-messages|Sending messages]]**.
 
-All three return a **correlation id** — a `uuid.UUID` that ties every row about
-that message together, whichever process wrote it. Store it beside your own
-model if you want to join your records to the feed later. All three also accept
-one as a keyword argument, and a handler replying to an update inherits that
-update's id without passing anything:
+`send`, `send_redis` and `send_raw` return a **correlation id** — a `uuid.UUID`
+that ties every row about that message together, whichever process wrote it.
+`send_many` returns one per chat, in the order the chats were given. Store it
+beside your own model if you want to join your records to the feed later. Each of
+them also accepts one as a keyword argument, and a handler replying to an update
+inherits that update's id without passing anything:
 
 ```python
 identifier = bot.send(chat_id=chat_id, text='hello')
@@ -64,6 +66,52 @@ Receipt.objects.create(order=order, telegram_correlation_id=identifier)
 ```
 
 Before 3.0 they returned `None`, so every existing call site still compiles.
+
+### From code already on an event loop
+
+| | |
+| --- | --- |
+| `await bot.asend(...)` | as `send`, without the blocking socket write |
+| `await bot.asend_redis(...)` | as `send_redis` |
+| `await bot.asend_many(...)` | as `send_many` |
+
+Same signatures, same rows, and the same correlation id — resolved on the caller's
+context before the first `await`, so a handler's replies still inherit the id of
+the update that caused them.
+
+The difference is not *where* the write happens. `redis.asyncio` writes on the
+same thread the loop is running on; it just yields while waiting instead of
+holding that thread, so under ASGI the thread goes on serving other requests
+rather than sitting on a socket. Reach for these from an async view or an async
+task. Note that only the waiting yields: `asend_many` iterates the chats and
+serialises each chunk between its awaits, and that part is ordinary CPU work on
+the loop's thread. A fan-out large enough to matter belongs in a task, not in a
+request.
+
+Each loop gets its own client, because `redis.asyncio` connections are loop-affine.
+`await bot.aclose()` closes the one belonging to the loop that calls it, and it is
+worth calling from a lifespan shutdown if your server has one — it is the only
+path that closes the connection on the loop it belongs to, which is the only loop
+that may close it. Without it the connection stays open until the client is
+collected, and Python may say so with a `ResourceWarning`. **[[Deployment]]** has
+the shutdown recipe.
+
+### Queue introspection
+
+| | |
+| --- | --- |
+| `bot.queue_depth()` | messages waiting for a worker, one `LLEN` |
+| `bot.inflight_depth(worker=None)` | messages one worker is part-way through sending |
+| `await bot.aqueue_depth()` / `await bot.ainflight_depth(...)` | the same read, without holding the loop |
+
+`inflight_depth` defaults to this process's own worker identity; naming another is
+how a monitor reads a list left behind by a worker that is gone. The key scheme
+behind them is this package's business — an exporter should not have to reproduce
+`<REDIS_MESSAGES_KEY>:processing:<worker>` by hand.
+
+Each returns an `int` — a length at the moment it was read, not a correlation id
+and not a reservation. A depth read and then acted on is already out of date, so
+these answer "is the backlog growing" rather than "how many will this worker send".
 
 ## Handlers
 
