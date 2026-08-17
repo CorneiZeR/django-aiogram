@@ -38,9 +38,44 @@ in **[[Rate limits]]** bind long before the consumer does.
 ## Crash safety
 
 On Redis 6.2+ a message is moved to `<queue>:processing` while it is being
-sent and removed once the handler returns. A worker killed mid-send leaves it
-there, and the next start reclaims it — delivery is **at-least-once**, so a
-crash can cause a duplicate send.
+sent and removed once the send has actually finished. A worker killed mid-send
+leaves it there, and the next start reclaims it — delivery is **at-least-once**,
+so a crash can cause a duplicate send.
+
+Before 3.1.0 it was removed when the *handler returned*, and `send_raw` returns
+as soon as the coroutine is scheduled. In polling mode that meant the message
+left the in-flight list before Telegram had seen it, and this guarantee was not
+true: a `docker stop` with a backlog delivered what the drain had time for and
+lost the rest, with nothing left to redeliver. Webhook mode always had it,
+because there the consumer drives the send to completion itself.
+
+Duplicates after a kill are therefore real now where they were not before.
+**Build idempotency on your own business key**, not on `correlation_id`: a
+handler's replies inherit the id of the update that caused them, so it is not
+one per message.
+
+### It follows the handler, not the queue
+
+Waiting for the send is something the *handler* opts into, by taking an
+`on_complete` keyword. `bot.send_raw` does, and `manage.py start_tgbot` uses it,
+so a normal worker has the guarantee above.
+
+A handler of your own that takes only `**kwargs` — the shape every recipe on
+**[[Testing]]** uses — keeps the pre-3.1.0 semantics exactly: it is acknowledged
+the moment it returns, which is at-most-once if it goes on to do the sending
+somewhere else. That is deliberate, so existing handlers are not silently made to
+hold messages they never release. Take `on_complete` and call it when your send
+finishes if you want the message held until then.
+
+`MAX_IN_FLIGHT` bounds how many sends the consumer will leave outstanding before
+it stops taking messages. The default, `0`, is no bound. It is worth setting on a
+worker that sees large backlogs: acknowledging is an `LREM`, which scans the
+in-flight list, so an unbounded one turns draining a backlog into quadratic work.
+
+`REQUIRE_CRASH_SAFE` refuses to start at all where `LMOVE` is missing, rather
+than running at-most-once and only saying so in a log line. The check happens
+before the consumer thread starts — a failure inside it would kill the thread and
+leave the process polling updates with nothing draining the queue.
 
 Older servers lack `LMOVE`; the consumer says so in the log and falls back to
 plain pops, which is the 1.x at-most-once behaviour: a kill between the pop
@@ -63,11 +98,14 @@ the in-flight list — and `False` means it does not, leaving the message there
 for a later run to reclaim. Withholding the acknowledgement only saves the
 message where there *is* an in-flight list: without `LMOVE` the message was
 already popped before it was refused, so `False` and `True` come to the same
-thing and it is gone. Exactly one case returns `False` today: a pickled
-payload refused because `ALLOW_PICKLE` is off, which is the one failure a
-change of configuration can undo. Everything else — undecodable bytes, a method
-that is not Telegram API, a handler that raised — returns `True`, because
-redelivering it would only fail again.
+thing and it is gone. Three cases return `False` today. A pickled payload
+refused because `ALLOW_PICKLE` is off, which is the one failure a change of
+configuration can undo; a handler that accepted `on_complete`, where the
+acknowledgement is not withheld but deferred to the send; and a send cancelled
+rather than failed, which reached nothing and is left for a reclaim. Everything
+else — undecodable bytes, a method that is not Telegram API, a handler that
+raised before it scheduled anything — returns `True`, because redelivering it
+would only fail again.
 
 ## What happens to a broken message
 

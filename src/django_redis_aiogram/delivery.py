@@ -7,15 +7,26 @@ list while the worker is down. The keyspace consumer 1.x used was removed in
 providers usually refuse, and it could not deliver before the TTL elapsed.
 
 It consumes crash-safely where the server allows it: a message is moved to a
-processing list while it is being sent and removed afterwards, so a worker
-killed mid-send leaves it behind to be reclaimed on the next start. That makes
-delivery at-least-once — after a crash a message may be sent twice. Servers
-older than Redis 6.2 lack ``LMOVE``; there the consumer falls back to plain
-pops, which is the 1.x at-most-once behaviour, and says so in the log.
+processing list while it is being sent and removed once the send has actually
+finished, so a worker killed mid-send leaves it behind to be reclaimed on the
+next start. That makes delivery at-least-once — after a crash a message may be
+sent twice. Servers older than Redis 6.2 lack ``LMOVE``; there the consumer
+falls back to plain pops, which is the 1.x at-most-once behaviour, and says so
+in the log.
+
+"Once the send has finished" is doing real work in that sentence. Until 3.1.0 the
+message was acknowledged when the handler *returned*, and ``send_raw`` returns as
+soon as the coroutine is scheduled — so in polling mode the message left the
+in-flight list before Telegram had seen anything, and the guarantee above was
+false. A handler that takes an ``on_complete`` keyword is now handed one and the
+message waits for it; one that does not keeps the old semantics exactly.
 """
 
+import asyncio
 import hashlib
+import inspect
 import logging
+import queue
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -38,6 +49,28 @@ logger = logging.getLogger('django_redis_aiogram')
 Handler = Callable[..., Any]
 
 
+def defers_completion(handler: Handler) -> bool:
+    """Whether ``handler`` will take the callback that says a send has finished.
+
+    An explicit parameter only. Every documented recipe takes ``**kwargs`` — and
+    so does ``TelegramBot.send_raw`` — so treating that as acceptance would hand
+    the callback to handlers that never call it, and their messages would sit in
+    the in-flight list until a restart reclaimed them.
+
+    It also has to be a parameter the keyword call can reach. A positional-only
+    ``on_complete`` reads as acceptance but refuses ``on_complete=...`` with a
+    ``TypeError``, and that lands in the handler-failed branch — acknowledging a
+    message nothing ever sent.
+    """
+    takes_keyword = (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    try:
+        parameter = inspect.signature(handler).parameters.get('on_complete')
+    except (TypeError, ValueError):
+        # a callable signature cannot always be read; the old semantics are safe
+        return False
+    return parameter is not None and parameter.kind in takes_keyword
+
+
 class Delivery(ABC):
     """Consumes the Redis queue until stopped."""
 
@@ -47,6 +80,24 @@ class Delivery(ABC):
         self._stop = threading.Event()
         self._reliable = True
         self._beat_at = 0.0
+        #: messages whose send has finished and which may now leave the in-flight
+        #: list. Filled from the bot's event loop, drained on this thread, because
+        #: every Redis call in this class belongs to the consumer
+        self._finished: queue.SimpleQueue[bytes | str] = queue.SimpleQueue()
+        self._in_flight = 0
+        # asked once: a handler that cannot take the callback is acknowledged the
+        # moment it returns, which is the behaviour every existing caller has
+        self._defers = defers_completion(handler)
+
+    @property
+    def crash_safe(self) -> bool:
+        """Whether a message survives this worker being killed mid-send.
+
+        False on a Redis without ``LMOVE``, where the pop and the send cannot be
+        made one step; ``REQUIRE_CRASH_SAFE`` is how a deployment refuses to run
+        that way.
+        """
+        return self._reliable
 
     @property
     def queue_key(self) -> str:
@@ -156,6 +207,64 @@ class Delivery(ABC):
             # the loop must keep consuming even when it cannot say so
             logger.exception('could not write the heartbeat', extra={'tg_key': self.heartbeat_key})
 
+    def collect(self) -> None:
+        """Take every finished send off the in-flight list.
+
+        Called between reads rather than inside one, so every Redis call this
+        class makes still happens on this thread.
+        """
+        while True:
+            try:
+                raw = self._finished.get_nowait()
+            except queue.Empty:
+                return
+            self._in_flight -= 1
+            self.acknowledge(raw)
+
+    def _completion_for(self, handle: bytes | str) -> Callable[[], None]:
+        """One report per message, however many times the send says it finished.
+
+        A latch rather than a flag: two threads can both read an unset flag and
+        both report. A second report is not harmless — it takes another message's
+        place in the in-flight count, drives it below zero and quietly widens the
+        bound ``MAX_IN_FLIGHT`` exists to hold.
+        """
+        latch = threading.Lock()
+
+        def once() -> None:
+            if latch.acquire(blocking=False):
+                self._finished.put(handle)
+
+        return once
+
+    def at_capacity(self) -> bool:
+        """Whether this consumer is already holding as many sends as it may."""
+        limit = max(0, int(conf['MAX_IN_FLIGHT']))
+        return bool(limit) and self._in_flight >= limit
+
+    def hold_for_capacity(self) -> None:
+        """Stop taking messages while too many are still in flight.
+
+        The bound is on the in-flight list as much as on memory: acknowledging is
+        an ``LREM``, which scans that list, so letting a backlog accumulate there
+        turns draining it into quadratic work. Zero, the default, is the
+        behaviour that shipped before deferred acknowledgement existed.
+
+        The wait keeps writing the heartbeat, for the same reason ``run()`` caps
+        the blocking pop at ``HEARTBEAT_INTERVAL``: a worker at its limit is busy,
+        not dead. Held silently past the key's ``interval * 3`` TTL it would be
+        restarted while healthy, and the messages it was still sending reclaimed
+        and sent again.
+        """
+        while self.at_capacity() and not self._stop.is_set():
+            self.heartbeat()
+            try:
+                raw = self._finished.get(timeout=1)
+            except queue.Empty:
+                continue
+            self._in_flight -= 1
+            self.acknowledge(raw)
+
     def acknowledge(self, raw: bytes | str) -> None:
         """Drop a delivered message from the processing list."""
         if not self._reliable:
@@ -210,7 +319,7 @@ class Delivery(ABC):
             logger.exception('dropping a queued message whose envelope cannot be read')
             return None, True
 
-    def dispatch(self, raw: bytes) -> bool:
+    def dispatch(self, raw: bytes, handle: bytes | str | None = None) -> bool:
         """Decode one message and hand it to the handler.
 
         A bad payload is one message's problem, so everything short of a kill is
@@ -222,6 +331,8 @@ class Delivery(ABC):
         flight — acknowledging would destroy them over a setting or a deploy
         order.
         """
+        if handle is None:
+            handle = raw
         envelope, acknowledge = self._read(raw)
         if envelope is None:
             return acknowledge
@@ -239,21 +350,55 @@ class Delivery(ABC):
             )
             return True
         self._record(EventKind.OUTBOUND_CONSUMED, envelope)
+        # by keyword, the way 2.x splatted it: a handler taking **kwargs
+        # only — which every documented recipe does — refuses a positional
+        call: dict[str, Any] = {
+            'function': envelope.function,
+            'correlation_id': envelope.correlation_id,
+            'queued_at': envelope.queued_at,
+            **envelope.kwargs,
+        }
+        return self._hand_over(envelope, call, handle)
+
+    def _hand_over(self, envelope: Envelope, call: dict[str, Any], handle: bytes | str) -> bool:
+        """Call the handler, and say whether the message may be acknowledged.
+
+        Cancellation is the reason this is not one ``except``: it is a
+        ``BaseException``, so letting it through would leave :meth:`run` and end
+        the consumer for the life of the container. The message stays in flight,
+        which is right — nothing sent it — but this worker has to keep reading.
+        """
+        deferring = self._defers
+        if deferring:
+            # into the dict, never alongside it as a second keyword. The queue is
+            # a trust boundary and send() forwards whatever it was given, so a
+            # payload can carry this name — as a keyword that is "got multiple
+            # values", a TypeError landing in the failure branch below, which
+            # acknowledges a message nothing sent. Assigning simply wins
+            call['on_complete'] = self._completion_for(handle)
+            self._in_flight += 1
         try:
-            # by keyword, the way 2.x splatted it: a handler taking **kwargs
-            # only — which every documented recipe does — refuses a positional
-            self.handler(
-                function=envelope.function,
-                correlation_id=envelope.correlation_id,
-                queued_at=envelope.queued_at,
-                **envelope.kwargs,
+            self.handler(**call)
+        except asyncio.CancelledError:
+            if deferring:
+                self._in_flight -= 1
+            logger.warning(
+                'a queued send was cancelled; leaving it in flight',
+                extra={'tg_function': envelope.function},
             )
+            return False
         except Exception:
+            if deferring:
+                self._in_flight -= 1
             logger.exception(
                 'handler failed for queued message',
                 extra={'tg_function': envelope.function},
             )
-        return True
+            return True
+        # a deferring handler decides when this message is done. Returning True
+        # here is what made the at-least-once promise false: send_raw returns as
+        # soon as the coroutine is scheduled, long before Telegram has seen it
+        return not deferring
 
     def _record(self, kind: EventKind, envelope: Envelope, error: str = '') -> None:
         """Record what the consumer did with one message."""
@@ -298,6 +443,11 @@ class Delivery(ABC):
         connection = get_redis()
         raw: bytes | str | None
         while not self._stop.is_set():
+            self.collect()
+            if self.at_capacity():
+                # the blocking loop waits here; a drain has no thread to wait on,
+                # so it stops instead of scheduling past the bound
+                return
             if self._reliable:
                 try:
                     raw = connection.lmove(self.queue_key, self.processing_key, 'LEFT', 'RIGHT')
@@ -312,9 +462,11 @@ class Delivery(ABC):
                 # lpop only widens to a list when given a count
                 raw = connection.lpop(self.queue_key)  # type: ignore[assignment]
             if raw is None:
+                self.collect()
                 return
-            if self.dispatch(as_bytes(raw)):
+            if self.dispatch(as_bytes(raw), raw):
                 self.acknowledge(raw)
+            self.collect()
 
 
 class BlpopDelivery(Delivery):
@@ -343,6 +495,13 @@ class BlpopDelivery(Delivery):
         raw: bytes | str | None
         while not self._stop.is_set():
             self.heartbeat()
+            self.collect()
+            self.hold_for_capacity()
+            if self._stop.is_set():
+                # the gate above releases on shutdown as well as on capacity, and
+                # without this the loop would go on to take one more message it
+                # has no intention of sending
+                break
             if not reclaimed:
                 reclaimed = self.reclaim()
             try:
@@ -358,8 +517,11 @@ class BlpopDelivery(Delivery):
                 continue
             if raw is None:
                 continue
-            if self.dispatch(as_bytes(raw)):
+            if self.dispatch(as_bytes(raw), raw):
                 self.acknowledge(raw)
+        # sends that finished while the last read was blocking still have to
+        # leave the in-flight list, or every stop redelivers them
+        self.collect()
 
 
 # keyed by the enum's value, so the keys are the plain strings the setting holds

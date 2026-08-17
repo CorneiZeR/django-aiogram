@@ -7,7 +7,7 @@ from io import StringIO
 from types import SimpleNamespace
 
 import pytest
-from django.core.management import call_command
+from django.core.management import CommandError, call_command
 from django.test import override_settings
 
 from django_redis_aiogram import bot
@@ -15,8 +15,16 @@ from django_redis_aiogram.management.commands.start_tgbot import Command
 
 
 class RecordingDelivery:
+    # the two the command asks about before it starts anything
+    crash_safe = True
+    # named in the log line when a crash-safety probe could not reach Redis
+    queue_key = 'TELEGRAM_BOT_MESSAGE'
+
     def __init__(self, events):
         self.events = events
+
+    def reclaim(self):
+        return True
 
     def start_thread(self):
         self.events.append('consumer-started')
@@ -280,3 +288,78 @@ def test_a_consumer_that_outlives_its_join_is_reported(monkeypatch, caplog):
     # alone passes with `extra` deleted
     warning = next(r for r in caplog.records if 'did not stop in time' in r.message)
     assert warning.tg_timeout == 11
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost:6379/0',
+        'REQUIRE_CRASH_SAFE': True,
+    }
+)
+def test_a_server_without_lmove_is_refused_when_crash_safety_is_required(monkeypatch):
+    """Probed before the thread starts on purpose: `run()` is a daemon thread, so
+    a SystemExit raised there kills only that thread and leaves the process
+    polling updates with a dead consumer."""
+
+    class OldServer(RecordingDelivery):
+        def reclaim(self):
+            self.crash_safe = False
+            return True
+
+    started = []
+    monkeypatch.setattr(
+        'django_redis_aiogram.management.commands.start_tgbot.get_delivery',
+        lambda handler: OldServer(started),
+    )
+    # recorded too: asserting only on the consumer would let the probe move after
+    # start_polling and still pass, and a process polling updates with nothing
+    # draining the queue is the shape this refusal exists to prevent
+    monkeypatch.setattr(bot, 'start_polling', lambda: started.append('polling-started'))
+    monkeypatch.setattr(bot, 'close', lambda: None)
+
+    with pytest.raises(CommandError, match='LMOVE'):
+        call_command('start_tgbot')
+
+    assert started == [], f'the refusal came too late: {started}'
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost:6379/0',
+        'REQUIRE_CRASH_SAFE': True,
+    }
+)
+def test_an_unreachable_redis_does_not_read_as_an_old_server(monkeypatch, caplog):
+    """`reclaim()` returns False when it could not talk to Redis at all, with
+    crash safety still intact. Refusing to start over that turns a blip into an
+    outage."""
+
+    events = []
+
+    class Unreachable(RecordingDelivery):
+        def reclaim(self):
+            return False
+
+    monkeypatch.setattr(
+        'django_redis_aiogram.management.commands.start_tgbot.get_delivery',
+        lambda handler: Unreachable(events),
+    )
+
+    def polled():
+        events.append('polling-started')
+        bot.loop.run_until_complete(asyncio.sleep(0))
+
+    monkeypatch.setattr(bot, 'start_polling', polled)
+    monkeypatch.setattr(bot, 'close', lambda: None)
+
+    with caplog.at_level('WARNING', logger='django_redis_aiogram'):
+        call_command('start_tgbot')
+
+    # not merely "it did not raise": a command that returned early over the failed
+    # probe would satisfy that while starting neither the consumer nor polling
+    assert 'consumer-started' in events, events
+    assert 'polling-started' in events, events
+    # and the operator is told the guarantee went unproven rather than passed
+    assert 'could not verify crash-safe delivery' in caplog.text
