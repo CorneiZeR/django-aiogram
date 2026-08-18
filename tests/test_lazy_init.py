@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import textwrap
+import threading
 from pathlib import Path
 
 import pytest
@@ -156,16 +157,25 @@ def test_importing_the_package_pulls_nothing_third_party():
     A delta rather than an absolute set: a `.pth` file in site-packages can import
     anything it likes before this script runs, so what was already loaded says nothing
     about what the package is responsible for.
+
+    The stdlib is subtracted from that delta, which is right for third parties and
+    blind to two modules that mattered: `typing` and `threading` were 1.270 ms of the
+    1.420 ms this import used to cost, and re-adding either would have passed here
+    unnoticed. They are named explicitly below, out of the raw delta.
     """
     script = textwrap.dedent("""
         import sys
 
         before = set(sys.modules)
         import django_redis_aiogram
-        pulled = {name.split('.')[0] for name in set(sys.modules) - before}
+        delta = set(sys.modules) - before
+        pulled = {name.split('.')[0] for name in delta}
         pulled -= sys.stdlib_module_names | {'django_redis_aiogram'}
 
         assert not pulled, f'importing the package pulled {sorted(pulled)}'
+        # out of the raw delta, so the stdlib subtraction above cannot hide them
+        assert 'typing' not in delta, 'the package imported typing again'
+        assert 'threading' not in delta, 'the package imported threading again'
         assert django_redis_aiogram.__version__
 
         _ = django_redis_aiogram.bot
@@ -316,3 +326,80 @@ def test_connecting_a_metrics_receiver_pulls_neither_aiogram_nor_the_orm():
     )
     assert result.returncode == 0, result.stderr
     assert 'cheap seam ok' in result.stdout
+
+
+def test_threads_racing_for_the_bot_all_get_the_same_one(monkeypatch):
+    """The guarantee that replaced an explicit lock, so it needs holding down.
+
+    Two instances mean two event loops and two HTTP sessions, and `loop_lock` — which
+    exists to stop `run_until_complete` being re-entered — would be guarding one of
+    them while the other was entered. The lock this package used to hold is gone
+    because `_singleton`'s module body runs once per process and Python makes
+    concurrent importers wait on that module's own import lock.
+
+    A `Barrier` rather than luck: every thread is held until all of them are ready, so
+    they reach the import at the same moment rather than in sequence.
+    """
+    import django_redis_aiogram
+
+    # forget both the cached attribute and the module whose body builds it, so this
+    # really is a first access rather than a read of what an earlier test left — and
+    # through monkeypatch, so the next test does not inherit the instance built here
+    # while every test before it holds the original
+    monkeypatch.delattr(django_redis_aiogram, 'bot', raising=False)
+    monkeypatch.delitem(sys.modules, 'django_redis_aiogram._singleton', raising=False)
+
+    gate = threading.Barrier(8)
+    seen: list[object] = []
+    errors: list[BaseException] = []
+
+    def grab():
+        try:
+            gate.wait(timeout=10)
+            seen.append(django_redis_aiogram.bot)
+        except BaseException as error:
+            errors.append(error)
+
+    threads = [threading.Thread(target=grab, name=f'racer-{index}') for index in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+
+    assert not errors, errors
+    assert len(seen) == 8, f'only {len(seen)} of 8 threads got there'
+    assert len(set(map(id, seen))) == 1, f'{len(set(map(id, seen)))} different bots were built'
+
+
+def test_the_healthcheck_probe_does_not_import_aiogram():
+    """A container healthcheck runs on a timer, and paid ~900 ms every time.
+
+    It imported the shared `bot` for one flag and built a `Delivery` for a branch that
+    could not fire, and both pull aiogram. Measured in a process with
+    `AUTODISCOVER=0`: 902 ms against 16 ms.
+
+    The saving needs `AUTODISCOVER=0` to materialise, because the documented
+    `<app>/tg_router.py` layout imports aiogram during `django.setup()` anyway — so
+    this is decoupling first and speed second. What it buys unconditionally is that
+    the probe no longer depends on which class `DELIVERY` names.
+    """
+    script = textwrap.dedent("""
+        import sys
+
+        from django_redis_aiogram.management.commands import tgbot_healthcheck
+
+        assert 'aiogram' not in sys.modules, 'the healthcheck pulled aiogram'
+        assert 'django_redis_aiogram.client' not in sys.modules, 'it pulled the client half'
+        assert hasattr(tgbot_healthcheck, 'Command')
+        print('cheap probe ok')
+    """)
+    result = subprocess.run(  # noqa: S603 - our own interpreter, and a script written right above
+        [sys.executable, '-c', script],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=SUBPROCESS_TIMEOUT,
+        env={**os.environ, 'DJANGO_SETTINGS_MODULE': 'tests.settings', 'DJANGO_REDIS_AIOGRAM_AUTODISCOVER': '0'},
+    )
+    assert result.returncode == 0, result.stderr
+    assert 'cheap probe ok' in result.stdout
