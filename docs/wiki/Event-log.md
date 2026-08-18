@@ -125,6 +125,123 @@ plus up to 200 rows. A clean `SIGTERM` loses nothing. This is an event feed, not
 a ledger — if you need durability across a kill, the thing that already gives it
 to you is the Redis queue.
 
+## Metrics, without the table
+
+The same events reach a `django.dispatch.Signal`, so a project can count what the
+bot does without keeping a row for any of it:
+
+```python
+# metrics.py, imported from your AppConfig.ready()
+from prometheus_client import Counter
+
+from django_redis_aiogram.signals import events_recorded
+
+SENDS = Counter('telegram_events', 'django-redis-aiogram events', ['kind', 'function'])
+
+
+def count(sender, events, **kwargs):
+    for event in events:
+        SENDS.labels(kind=event.kind, function=event.function or 'none').inc()
+
+
+events_recorded.connect(count, dispatch_uid='metrics.telegram')
+```
+
+Receivers get `events`: a tuple of `Event`, whose field names are the same ones the
+table's columns carry and are pinned as public API. A signal rather than a setting
+naming a dotted path, because there is then no path to get wrong, no check id for
+it, and no question about what happens when the import fails.
+
+With `EVENT_LOG` on, the write is attempted before a receiver sees the batch, so
+nothing a receiver does can change a row that was written — which is why they get
+the real objects rather than copies. The `detail` dict inside one is an ordinary
+dict, shared with the other receivers, so treat it as read-only.
+
+*Attempted*, not guaranteed, and only when the log is on at all. A write that failed
+still publishes, because a database being down is exactly when someone is watching a
+dashboard; with the log off there is no write to attempt and a receiver is the only
+thing the batch reaches. Either way, a batch arriving is not evidence that a row
+exists for it.
+
+Four things about it are worth knowing before you rely on it, and three of them
+surprise people:
+
+**It fires with `EVENT_LOG` off.** The table and the metrics are separate
+decisions. Connect a receiver, leave the log off, run no migration for it: the
+events still arrive. Turn the log on as well and both happen.
+
+**Payload summaries are the only part of `detail` the log gates.** With the log
+off, `detail` still carries whatever the recording seam measured itself: a send's
+`duration_ms`, a retry's `retry_after`, a queueing failure's `stage`, a gap's
+`dropped` count. What is missing is the *summarised arguments* — redacting
+credentials out of a payload, walking it and bounding it costs tens of
+microseconds, and a counter keyed on `kind` and `function` needs none of it. If
+your receiver needs message bodies, it needs the log on too, and then
+`EVENT_LOG_PAYLOAD` decides what is in there.
+
+**`EVENT_LOG_KINDS` filters this as well, with one exemption.** It is one answer to
+"which events does this deployment care about", not two — so a receiver sees
+exactly the kinds the table would have kept. `log.dropped` is exempt in both
+directions: it is the record that recording itself fell behind, and a deployment
+that filtered it out would read the hole as quiet traffic rather than as a gap.
+The table has always been exempt for that row; receivers are exempt with it.
+
+**Connect during app loading.** The update middleware and the FSM storage wrapper
+are built once, and whether to build them is decided then. A receiver connected
+after the first update arrives will not see updates in that process. An
+`AppConfig.ready()` is where Django says signal receivers belong, and it is early
+enough.
+
+### Where it runs, and what that costs
+
+The rule is **whichever thread flushed the batch publishes it**, and normally that is
+the event writer's own — with `EVENT_LOG` on, after that batch's own write has been
+attempted. So a slow receiver delays neither a send nor the rows it just saw, only
+later batches and how long the writer takes to stop. Never delaying a send is the
+whole reason this is not a settings hook calling into your code from the send path.
+
+Three other threads can flush a batch, so three other threads can publish one:
+
+* whatever calls `recorder.drain_once()`, which exists so a test can drive the real
+  flush path on its own thread
+
+* under `EVENT_LOG_SYNC`, on the thread that recorded the event, after its write
+  attempt. That flag only takes effect with the log on — there is nothing to insert
+  synchronously otherwise — so the write is always attempted there, and may still
+  fail. It is a testing setting, and receivers running inside the send path is one
+  more reason to keep it one
+* at shutdown, on whichever thread called `stop()`, for whatever the writer had not
+  drained by then. Those are published rather than dropped because they are the last
+  events before the process goes, and there is no writer left to hand them to
+
+A receiver that raises is logged as `an events_recorded receiver raised` and costs
+neither the other receivers their batch nor the database its rows. `send_robust` is
+most of that: Django hands the exception back instead of letting it end the writer.
+
+Not all of it, though, and the gap is worth knowing if you write a receiver as a
+class. Django's own failure logging reads `receiver.__qualname__`, which a *callable
+instance* does not have — so for that shape `send_robust` raises rather than
+containing anything, measured on Django 6.1. This package catches that too and logs
+`publishing recorded events failed`; without it the exception would be counted as a
+failed database write, which is the one story in the log that would send you to the
+wrong place entirely.
+
+One consequence survives the catch: `send_robust` stops its own receiver loop when it
+raises, so **receivers after the offending one never see that batch**. The rows are
+unaffected — they were written first — and the next batch starts the loop again. If
+that matters to you, do not write a receiver as a callable class, or keep the risky
+one last.
+
+Two honest notes about `prometheus_client` in particular. Its `labels()` and
+`inc()` both take locks, and in multiprocess mode an increment is an mmap write —
+cheap, but not free, and it happens once per event in the batch. And `outbound.sent`
+is recorded inside the `start_tgbot` worker, which serves no HTTP at all: the
+exporter has to be stood up **in that container**, or the numbers you scrape from
+the web tier will only ever cover queueing.
+
+No new dependency comes with this. `django.dispatch` is Django, and nothing here
+imports `prometheus_client` or knows it exists.
+
 ## Message bodies are not stored by default
 
 `EVENT_LOG_PAYLOAD` is `'summary'`: argument names and text lengths, not the

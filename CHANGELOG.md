@@ -224,6 +224,58 @@ them, so it is not one per message.
   the server has moved the message to the in-flight list, and every later reclaim
   trips over the same message for ever. No restart recovers from it, which is why
   this is an error and not a warning.
+- **A metrics seam that is not the event log.** `django_redis_aiogram.signals`
+  carries `events_recorded`, a `django.dispatch.Signal` fired once per batch on the
+  event writer's own thread, with the `Event` objects that batch holds — except in the
+  two cases where there is no writer thread to run on: under `EVENT_LOG_SYNC`, which
+  only takes effect with the log on, and at shutdown for whatever the writer had not
+  drained, on the thread that called `recorder.stop()`. A signal
+  rather than a setting naming a dotted path: no path to get wrong, no check id for
+  it, no lazy import cache, and no question about what a failing import means.
+  A receiver that raises costs neither the other receivers their batch nor the
+  database its rows, and is logged as `an events_recorded receiver raised`.
+  `send_robust` is most of that — and only most: Django's own failure logging reads
+  `receiver.__qualname__`, which a *callable instance* does not have, so for that
+  shape `send_robust` raises instead of containing anything, measured on 6.1. That is
+  caught here as well and logged as `publishing recorded events failed`, because
+  otherwise it reached the writer's failure counter and was reported as a database
+  refusing a batch it never saw.
+
+  It fires with `EVENT_LOG` **off** — the table and the metrics are separate
+  decisions, and gating them together is how an advertised metric comes out
+  silently empty. So the one gate became three: `enabled` still means "this process
+  writes rows", `active` means "the table or a receiver is reading" and is what
+  every producing seam now sits behind, and `wants_payload` guards only the
+  summarising, which is the expensive part and no part of counting — so with the log
+  off a receiver gets `Event` objects without the *summarised arguments*, while still
+  getting what the seam measured itself: a send's `duration_ms`, a retry's
+  `retry_after`, a queueing failure's `stage`, a gap's `dropped` count. Rows are what
+  the table gets, and with the log off there are none. `EVENT_LOG_KINDS` filters
+  receivers as well, because it is one answer to "which events does this deployment
+  care about" and not two — except for `log.dropped`, which is the record that
+  recording itself fell behind and is exempt in both directions, since a deployment
+  that filtered it out would read the hole as quiet traffic.
+
+  Receivers see the batch **after** its write has been attempted — and only attempted:
+  with the log off there is nothing to write, and a failed write publishes anyway. They
+  get it as a tuple.
+
+  Both are containment rather than convenience. Publishing came *first* originally, and
+  receivers were handed the same list and the same `Event` objects the ORM was about to
+  read — and a frozen dataclass does not freeze the `detail` dict inside it, so a
+  receiver clearing the list or editing a `detail` changed what got persisted. It
+  cannot now: by the time a receiver runs, the write is done. The tuple covers what
+  ordering does not — `send_robust` hands every receiver the same argument, so one of
+  them could otherwise decide what the next one sees. Each `detail` dict is still
+  shared between receivers, so treat it as read-only.
+
+  `Event`'s field names are pinned in `tests/test_public_surface.py`, which makes
+  them public API. Importing the seam pulls neither aiogram nor the ORM: 0.356 ms
+  on top of a process that has already imported Django, of which `django.dispatch`
+  is 0.150 ms. And a process that has receivers but no table no longer imports
+  `eventlog` — and so `django.db` — to close a connection it never opened.
+  **Event log** has the recipe, including the two honest notes about
+  `prometheus_client` and about which container has to run the exporter.
 
 ### Changed
 

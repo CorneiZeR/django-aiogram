@@ -9,12 +9,18 @@ to a bounded queue that one writer thread drains in batches.
 ``record()`` reaches only ``Queue.put_nowait`` — a lock, a deque append and a
 notify. Nothing in that chain is decorated ``@async_unsafe``, which is what
 makes it legal from a coroutine with no ``sync_to_async`` and no
-``SynchronousOnlyOperation``. It also avoids what a synchronous insert would do
+``SynchronousOnlyOperation``. One setting suspends that, and only one:
+``EVENT_LOG_SYNC`` inserts on the calling thread on purpose, which is why it is
+documented as a testing setting and why it declines to act inside a running loop.
+
+Going through the queue also avoids what a synchronous insert would do
 inside a caller's ``atomic()`` block: on PostgreSQL a failed statement aborts
 the whole transaction, so logging would corrupt the caller's data.
 
 This module must not import ``django.db``. :mod:`django_redis_aiogram.eventlog`
-does, and the writer thread imports it on its first flush.
+does, and the writer thread imports it on its first flush — on its *first write*,
+more precisely, because since 3.1.0 the writer also runs with the log off, for
+``events_recorded`` receivers alone, and such a process never reaches it at all.
 """
 
 import asyncio
@@ -37,6 +43,7 @@ from django_redis_aiogram.defaults import DEFAULTS
 from django_redis_aiogram.enums import EventKind
 from django_redis_aiogram.events import known_kinds, new_correlation_id, worker_identity
 from django_redis_aiogram.settings import SETTINGS_NAME, coerce_bool, conf
+from django_redis_aiogram.signals import events_recorded
 
 logger = logging.getLogger('django_redis_aiogram')
 
@@ -119,6 +126,26 @@ def _number(key: str, cast: Callable[[Any], float]) -> float:
         return cast(DEFAULTS[key])
 
 
+def _receiver_name(receiver: object) -> str:
+    """Name a signal receiver for a log line, without calling anything that can raise.
+
+    ``repr()`` is deliberately not the fallback. Python evaluates every argument
+    before the call, so ``getattr(receiver, '__qualname__', repr(receiver))``
+    evaluates ``repr`` *even when the attribute is there* — and a receiver whose
+    ``__repr__`` raises would then take this line, and with it the rest of the batch's
+    receivers, out through :meth:`EventRecorder._flush`'s ``except``, where it would
+    be counted as a failed write. That is the failure this whole method exists to
+    contain, arriving through the code that reports it.
+
+    ``type(receiver).__name__`` is the last resort because reading it runs nothing.
+    """
+    for attribute in ('__qualname__', '__name__'):
+        name = getattr(receiver, attribute, None)
+        if isinstance(name, str) and name:
+            return name
+    return type(receiver).__name__
+
+
 def _acknowledge(wakes: list[Wake]) -> None:
     """Release everything waiting on this batch."""
     for wake in wakes:
@@ -141,6 +168,9 @@ class EventRecorder:
         self._owner_pid = os.getpid()
         self._fork_hook = False
         self._dropped = 0
+        # whether this process has ever handed a batch to the ORM, and so whether
+        # there is a connection to close on the way out
+        self._touched_database = False
         # its own lock, not _guard: _guard is held across starting a thread, and
         # the counter is touched from inside paths that must not wait on that
         self._counter = threading.Lock()
@@ -156,6 +186,38 @@ class EventRecorder:
         if enabled is None:
             enabled = self._enabled = self._read_flag()
         return enabled
+
+    @property
+    def active(self) -> bool:
+        """Whether anything at all is reading events: the table, a receiver, or both.
+
+        This is the gate every seam that *produces* an event belongs behind, and
+        :attr:`enabled` is not — a project that connects a receiver and leaves the
+        table off must still get its events, and gating on the table alone is how
+        an advertised metric comes out silently empty.
+
+        ``bool(receivers)`` rather than ``has_listeners()``: 7ns against 172ns
+        measured, and this is read once per event. The difference is a receiver
+        whose weak reference has died but whose entry has not been cleaned up yet,
+        which makes this answer yes while nothing listens — so an event is recorded
+        that nobody reads, and ``send_robust`` short-circuits on it. Wasted work,
+        never a wrong row. ``tests/test_metrics_seam.py`` pins the attribute, since
+        it is Django's to rename.
+        """
+        return self.enabled or bool(events_recorded.receivers)
+
+    @property
+    def wants_payload(self) -> bool:
+        """Whether anything will read a payload summary, which is the costly part.
+
+        Only the table does. ``describe()`` redacts credentials, walks the
+        structure and bounds the result — measured in tens of microseconds, against
+        nothing for a counter keyed on ``kind`` and ``function``. So unless the log
+        is on too, a receiver gets ``Event`` objects whose ``detail`` carries what
+        the seam measured itself and not the summarised arguments. Rows are what the
+        table gets; with the log off there are none.
+        """
+        return self.enabled
 
     @property
     def worker(self) -> str:
@@ -186,7 +248,7 @@ class EventRecorder:
 
     def record(self, event: Event) -> None:
         """Hand one event over. Never blocks, never raises, never touches the ORM."""
-        if not self.enabled:
+        if not self.active:
             return
         try:
             if not self.wants(event.kind):
@@ -196,7 +258,7 @@ class EventRecorder:
                 # consumer knew its own name before
                 event = replace(event, worker=self.worker)
             if self._write_here():
-                self._write([event])
+                self._deliver([event])
                 return
             buffer = self._buffer()
             buffer.put_nowait(event)
@@ -236,14 +298,21 @@ class EventRecorder:
                     continue
                 self._drop(1)
 
-    @staticmethod
-    def _write_here() -> bool:
+    def _write_here(self) -> bool:
         """Whether to write on this thread instead of handing it to the writer.
 
         Only when asked to, and never from inside a running loop: the ORM is
         @async_unsafe there, so the seam that records an update would raise
         SynchronousOnlyOperation instead of recording anything.
+
+        Requires the log as well as the flag. ``EVENT_LOG_SYNC`` is about *where the
+        insert happens*, so with nothing being inserted it has nothing to say — and
+        answering yes would have a process that only has receivers run them on the
+        thread that recorded the event, which is the one thing this design exists
+        to avoid.
         """
+        if not self.enabled:
+            return False
         if not coerce_bool(conf['EVENT_LOG_SYNC'], f"{SETTINGS_NAME}['EVENT_LOG_SYNC']"):
             return False
         try:
@@ -317,6 +386,7 @@ class EventRecorder:
         self._queue = None
         self._thread = None
         self._owner_pid = os.getpid()
+        self._touched_database = False
         self._dropped = 0
         self._reported_at = -DROP_REPORT_INTERVAL
 
@@ -356,7 +426,11 @@ class EventRecorder:
             # again: without this, everything still in it disappears with no row
             # and no counter, and the gap reads as quiet traffic
             self._abandon(buffer)
-            self._close_connections()
+            if self._touched_database:
+                # a process that only has receivers never opened one, and importing
+                # `eventlog` to close it would pull in `django.db` — the one import
+                # this module exists to keep out of a process that does not need it
+                self._close_connections()
 
     @staticmethod
     def _empty(buffer: 'queue.Queue[Event | Wake]') -> tuple[list[Event], list[Wake]]:
@@ -374,13 +448,25 @@ class EventRecorder:
                 events.append(item)
 
     def _abandon(self, buffer: 'queue.Queue[Event | Wake]') -> None:
-        """Write what is left in a queue nobody will drain again, or count it lost."""
+        """Write what is left in a queue nobody will drain again, or count it lost.
+
+        **Receivers run on whatever thread calls this**, which is the writer's own
+        when it is exiting and the caller's when :meth:`stop` reached a queue the
+        writer had already left behind. That is not a lapse in the writer-thread
+        contract so much as the end of it: this queue exists precisely because no
+        writer will ever drain it, so there is no writer thread to route through.
+
+        Publishing anyway rather than dropping, because these are the last events
+        before the process goes — the same reasoning that makes this method write
+        them instead of discarding them. The contract says so on all three surfaces
+        that state it.
+        """
         leftover, wakes = self._empty(buffer)
         _acknowledge(wakes)
         if not leftover:
             return
         with contextlib.suppress(Exception):
-            self._write(leftover)
+            self._deliver(leftover)
             return
         # counted, not silent: the next flush that succeeds turns this into a
         # log.dropped row, which is the only place the gap becomes visible
@@ -408,13 +494,32 @@ class EventRecorder:
         return batch, wakes
 
     def _flush(self, batch: list[Event], *, failures: int) -> tuple[int, float]:
-        """Write one batch, containing whatever it raises."""
-        dropped_before = self._dropped
+        """Write one batch and publish it, containing whatever the write raises.
+
+        Both happen inside :meth:`_deliver`, which writes first and publishes in a
+        ``finally`` — so a failing database costs rows and not metrics, and nothing
+        reaching the ``except`` here came from a receiver: :meth:`_publish` cannot
+        raise.
+
+        Which means **receivers run on whatever thread calls this**, and that is not
+        only the writer's: :meth:`drain_once` calls it on the caller's, which is what
+        lets a test drive the real flush path. The signal's own documentation states
+        the rule that way round rather than listing the threads, so a fourth one does
+        not make it wrong.
+        """
+        # under the counter's lock, both of them: `_drop`'s docstring already names
+        # "the writer on a failed flush" among the threads it protects against, and
+        # this was the one place that read and wrote the count without taking it —
+        # so a producer's drop landing between this `+=`'s read and its write was
+        # silently discarded, and the `log.dropped` row then under-reported the gap
+        with self._counter:
+            dropped_before = self._dropped
         try:
-            self._write(batch)
+            self._deliver(batch)
         except Exception:
             failures += 1
-            self._dropped += len(batch)
+            with self._counter:
+                self._dropped += len(batch)
             # one line per failure, not two: the suspension is a different
             # sentence about the same exception, not a second thing that broke
             if failures >= FAILURE_LIMIT:
@@ -442,7 +547,7 @@ class EventRecorder:
         with self._counter:
             self._dropped -= dropped
         with contextlib.suppress(Exception):
-            self._write([Event(kind=EventKind.LOG_DROPPED.value, detail={'dropped': dropped})])
+            self._deliver([Event(kind=EventKind.LOG_DROPPED.value, detail={'dropped': dropped})])
 
     @staticmethod
     def _write(batch: list[Event]) -> None:
@@ -450,6 +555,82 @@ class EventRecorder:
         from django_redis_aiogram.eventlog import write_batch  # noqa: PLC0415 - the point: no django.db above
 
         write_batch(batch)
+
+    def _publish(self, batch: list[Event]) -> None:
+        """Hand a batch to whoever connected to :data:`events_recorded`.
+
+        ``send_robust``, so one broken receiver neither loses the batch for the
+        others nor stops the writer, and it is logged here because a receiver that
+        fails silently is a metric that reads as zero traffic. Django logs it too, on
+        its own ``django.dispatch`` logger; the line here is on the logger a project
+        configures for this package, which is where it will actually be seen.
+
+        **Wrapped anyway, because ``send_robust`` does not contain everything.**
+        Django's own failure logging reads ``receiver.__qualname__`` unguarded, and a
+        callable *instance* — an ordinary shape for a metrics collector — has no such
+        attribute. So a receiver like that raising makes ``send_robust`` itself raise
+        ``AttributeError``, measured on Django 6.1, and without this ``try`` it would
+        land in :meth:`_flush`'s ``except`` and be counted as a failed *write*: the
+        other receivers lose the batch, a ``log.dropped`` row appears, and the log
+        blames the database for something a receiver did. Containing it here makes
+        this method's promise true whatever Django does with it, on any supported
+        version.
+
+        The upshot is a method that **cannot raise**, which is the property the rest
+        of the writer needs from it rather than a defensive habit.
+
+        A tuple rather than the list itself: receivers run one after another with
+        the same argument, so one of them sorting or clearing a list would decide
+        what the next one sees.
+        """
+        if not events_recorded.receivers:
+            return
+        # the reporting loop is inside the guard as well as the dispatch, because
+        # `getattr(..., None)` absorbs only `AttributeError` — a receiver whose
+        # `__getattr__` raises anything else makes naming it raise, and the whole
+        # point is that nothing about a receiver reaches `_flush`'s failure counter.
+        # A raise partway through does leave the remaining outcomes unlogged, which
+        # is a worse log and not a worse batch
+        try:
+            for receiver, outcome in events_recorded.send_robust(sender=self, events=tuple(batch)):
+                if isinstance(outcome, BaseException):
+                    logger.error(
+                        'an events_recorded receiver raised',
+                        exc_info=outcome,
+                        extra={'tg_receiver': _receiver_name(receiver), 'tg_count': len(batch)},
+                    )
+        except Exception:
+            # even this is suppressed: `logger.exception` is `logger.error` with
+            # `exc_info`, so a project whose handler or formatter raises would take
+            # the fallback out too — and the whole purpose here is that **nothing**
+            # about publishing reaches `_flush`'s failure counter, where it would be
+            # reported as a database refusing a batch it never saw
+            with contextlib.suppress(Exception):
+                logger.exception('publishing recorded events failed', extra={'tg_count': len(batch)})
+
+    def _deliver(self, batch: list[Event]) -> None:
+        """Write a batch if this process keeps the table, then publish it either way.
+
+        The order is the contract, and it is two claims rather than one. The write
+        is **attempted first**, so nothing a receiver does can change a row that was
+        written — which is why receivers get the real ``Event`` objects and not
+        copies. And the publish is in a ``finally``, so a write that *failed* still
+        reaches them: a database that is down or unmigrated is exactly when someone
+        is watching a dashboard, and the metrics have no reason to go with it. A
+        receiver seeing a batch is therefore not evidence that a row exists for it.
+
+        Publishing first was the original order, and it handed receivers the same
+        list and the same ``Event`` objects the ORM was about to read. A frozen
+        dataclass does not freeze the ``detail`` dict inside it, so a receiver
+        clearing the list or editing a ``detail`` changed what got persisted. This
+        way round makes that impossible instead of asking receivers to be careful.
+        """
+        try:
+            if self.enabled:
+                self._touched_database = True
+                self._write(batch)
+        finally:
+            self._publish(batch)
 
     @staticmethod
     def _close_connections() -> None:

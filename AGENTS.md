@@ -26,6 +26,7 @@ src/django_redis_aiogram/
     models.py       TelegramEvent, the append-only feed; migrations/ beside it
     events.py       the event-kind registry and the correlation id
     recorder.py     the bounded queue and the writer thread; no django.db here
+    signals.py      events_recorded, the metrics seam; imports only django.dispatch
     eventlog.py     the only module that touches the ORM
     dbrouter.py     optional routing of the log to its own database
     admin.py        the read-only changelist; registered from ready(), not on import
@@ -110,9 +111,18 @@ Packaging-only work does not need the Redis suite, and vice versa.
   `tests/test_event_log_off.py` for the model, `tests/db/test_admin.py` for the
   admin.
 - **`recorder.py` imports no `django.db`.** Only `eventlog.py` does, and the
-  writer thread imports it on its first flush. That is what makes a disabled log
+  writer thread imports it on its first *write* — not its first flush, which since
+  3.1.0 are different things. That is what makes a disabled log
   cost nothing and what makes `record()` legal from a coroutine — `put_nowait`
-  touches no I/O, so there is no `SynchronousOnlyOperation` to avoid.
+  touches no I/O, so there is no `SynchronousOnlyOperation` to avoid. `EVENT_LOG_SYNC`
+  is the one exception and is test-only: it inserts on the calling thread, which is
+  also why it refuses to act inside a running loop, where the ORM is `@async_unsafe`. Since 3.1.0
+  the writer also runs with the log *off*, for `events_recorded` receivers alone.
+  Such a process writes no rows, so `EventRecorder._run` must not call
+  `_close_connections()` on its way out: that imports `eventlog.py`, which imports
+  `django.db`, to close a connection nothing ever opened. It is gated on
+  `_touched_database`, set only where a batch is actually handed to the ORM, and
+  `tests/test_metrics_seam.py` pins both directions.
 - **The feed is append-only.** No updates, no foreign keys, no
   `Meta.constraints`, no index on the JSON column. Fast pruning, shardability
   and two processes writing one message's history without coordination all rest

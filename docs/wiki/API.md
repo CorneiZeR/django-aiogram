@@ -216,6 +216,7 @@ member may be renamed but never revalued.
 ```python
 from django_redis_aiogram.events import failure_kinds, kind_choices, register_kind
 from django_redis_aiogram.models import TelegramEvent
+from django_redis_aiogram.signals import events_recorded
 ```
 
 `TelegramEvent` is the append-only feed: one row per thing that happened, insert
@@ -232,8 +233,21 @@ TelegramEvent.objects.filter(correlation_id=identifier).order_by('id')
 TelegramEvent.objects.filter(chat_id=chat_id).order_by('-id')[:50]
 ```
 
+`events_recorded` is the metrics seam: a `django.dispatch.Signal` fired once per
+batch with the `Event` objects in it, from the event writer's own thread — except
+under `EVENT_LOG_SYNC` and at shutdown, where there is no writer thread to run on:
+there they run on the thread that recorded the event, or the one that called
+`recorder.stop()` — which is not `bot.close()`, documented above, but the event
+writer's own shutdown. `EVENT_LOG_SYNC` only takes effect with the log on, so a
+receiver-only process still gets the writer thread whatever that flag says. It fires whether or not `EVENT_LOG` is on, which is
+the point: counting what the bot does and keeping a row for it are separate
+decisions. `Event`'s field names are pinned by `tests/test_public_surface.py` and
+are therefore API.
+
 Nothing here is imported unless you import it: `models.py` pulls no aiogram, so
-a migration container pays nothing for it. See **[[Event-log|Event log]]**.
+a migration container pays nothing for it, and `signals.py` pulls neither aiogram
+nor the ORM so a metrics module can import it at settings time. See
+**[[Event-log|Event log]]**.
 
 ## Errors
 
