@@ -99,7 +99,26 @@ class Settings(Mapping[str, Any]):
         self._cache: dict[str, Any] | None = None
 
     def _resolve(self) -> dict[str, Any]:
-        overrides = getattr(django_settings, SETTINGS_NAME, None) or {}
+        """Build the whole settings dict once, in the documented order of precedence.
+
+        Every key at once rather than per lookup, so a process cannot end up holding one
+        value from Django settings and another from the environment because the two were
+        resolved at different moments.
+
+        The mapping check earns its place: ``key in overrides`` is a membership test, and
+        against a ``TELEGRAM_BOT`` that is a list it answers False for every key — so
+        without it the whole setting would be *silently* ignored and every value taken
+        from the environment or the defaults, including the token. A misconfiguration that
+        loudly refuses is worth more than one that runs as though unconfigured.
+
+        Only ``None`` and an absent setting mean *not configured*. Folding every falsy
+        value into ``{}`` first, which is what ``or {}`` did, let ``[]``, ``()`` and ``''``
+        past the check that exists to catch them — the empty ones, which are exactly what
+        a mistaken assignment produces.
+        """
+        overrides = getattr(django_settings, SETTINGS_NAME, None)
+        if overrides is None:
+            overrides = {}
         if not isinstance(overrides, Mapping):
             msg = f'{SETTINGS_NAME} must be a mapping, got {type(overrides).__name__}.'
             raise ImproperlyConfigured(msg)
@@ -195,6 +214,13 @@ def _reset_on_setting_change(
     setting: str,
     **kwargs: Any,
 ) -> None:
+    """Drop the resolved cache when the setting it was built from changes.
+
+    This is what makes ``override_settings`` work on a lazily cached mapping, and it is
+    a receiver rather than a test helper because a project may legitimately change the
+    setting at runtime. Filtered on the name: every other setting in the project sends
+    this signal too.
+    """
     if setting == SETTINGS_NAME:
         conf.reset()
 

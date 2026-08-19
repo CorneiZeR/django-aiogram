@@ -467,6 +467,57 @@ them, so it is not one per message.
   `QuerySet` method to `Any`, which fails `mypy --strict` on code that has not
   changed since 3.0.0.
 
+### Documentation
+
+- **A `TELEGRAM_BOT` that is empty and not a mapping is refused rather than ignored.**
+  Found while writing the docstring for `_resolve`, which claimed the opposite of what the
+  code did. `getattr(django_settings, 'TELEGRAM_BOT', None) or {}` folded every falsy value
+  into an empty mapping *before* the check meant to catch a wrong type, so `[]`, `()`, `''`
+  and `0` reached none of it: the setting was silently discarded and every value — the token
+  included — came from the environment or the defaults. A project that had configured the
+  bot then ran as though it had not. Only `None` and an absent setting mean *not
+  configured* now. The two tests that covered this used `['not', 'a', 'mapping']` and
+  `'TOKEN=abc'`, both truthy, which is how the hole survived three releases.
+
+- **Everything in `src/` has a docstring, and a test keeps it that way.** Eighteen
+  definitions were missing one, and they were not an even scattering: every single one
+  was a nested closure or a private helper, which is exactly what ruff cannot ask about.
+  `select = ["ALL"]` has required docstrings since 2.0, but pydocstyle's rules apply to
+  *public* module-level and class-level definitions, so `ruff check` was silent on the
+  retry loop inside `send_raw`, on the done-callback that decides whether a killed send
+  is acknowledged, on the thread body that owns the event loop, and on the latch that
+  keeps one message from being reported finished twice. The most load-bearing code in the
+  package is written as closures. Verified rather than assumed: deleting one of the new
+  docstrings leaves `ruff check src` reporting *All checks passed!* while
+  `tests/test_docstring_coverage.py` fails and names the definition.
+
+  That test walks the syntax tree, descends into function bodies — and into `try`, `with`
+  and `if TYPE_CHECKING`, where a definition can also hide — and reports `line:qualified.name`
+  rather than a percentage, because one number over a threshold does not say which
+  definition is missing. Its own control asserts that a nested definition *is* seen, since
+  a walker that stopped descending would report 100% for ever. A second check refuses the
+  degenerate restatement — a summary whose every word is filler or a word of the name, so
+  `def _bucket(): """Return the bucket."""` fails — measured against all 511 definitions
+  in `src/` and reporting none of them, because a false positive there would fail the build
+  on a docstring somebody wrote on purpose.
+
+- **The review's docstring check now asks about the library rather than about test
+  naming.** It had been the one failing pre-merge warning for most of this release, at
+  61.83% across the repository — a figure produced by ~576 undocumented definitions under
+  `tests/`, nearly all of them two-line fakes inside test bodies, where `pyproject.toml`
+  ignores `D` deliberately: *test names are the documentation*. Reaching 80% that way
+  would have meant padding the suite to satisfy a number, and overruling a decision this
+  project took on purpose.
+
+  The check cannot be scoped: its schema offers `mode` and `threshold` and nothing else,
+  and `reviews.path_filters` drives a sparse checkout, so excluding `tests/` would take
+  them out of review entirely — and review of the tests is what caught three assertions
+  that could not fail, in this release alone. So the built-in check is off and a custom
+  check asks the same question about `src/`, with the reason in `.coderabbit.yaml` beside
+  it. `mode: 'off'` is quoted there because YAML 1.1 reads a bare `off` as the boolean
+  false, which the schema rejects — an invalid config is an ignored config, and the 80%
+  would have come straight back.
+
 ## 3.0.0 - 2026-08-09
 
 Two kinds of change at once: the compatibility 2.0 shipped for 1.x is gone —
