@@ -935,3 +935,212 @@ def test_a_runner_registered_during_shutdown_is_not_missed():
     finally:
         instance._closing = False
         instance.close()
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_non_ascii_secret_is_refused_rather_than_raised():
+    """The 403 branch used to answer 500 to anyone who sent one non-ASCII byte.
+
+    `hmac.compare_digest` refuses `str` arguments outside ASCII, so the comparison
+    itself raised `TypeError` — an unauthenticated traceback in the log and a 500 from
+    the one branch whose whole job is to say no. Compared as bytes now.
+    """
+    response = post(an_update(), secret='пароль')
+
+    assert response.status_code == 403
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WEBHOOK_SECRET': 'пароль'})
+def test_a_matching_non_ascii_secret_passes():
+    """Comparing bytes means comparing, not refusing.
+
+    The other half of that fix, and the half the documentation first got wrong: a secret
+    outside ASCII is not rejected for being outside ASCII — it is compared like any other,
+    so one that matches is accepted and only a mismatch is a 403.
+    """
+    assert post(an_update(), secret='пароль').status_code == 200
+    assert post(an_update(update_id=2), secret='другой').status_code == 403
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_an_update_reaching_a_closed_loop_is_refused_not_swallowed(monkeypatch):
+    """A 200 here tells Telegram to stop redelivering an update nothing handled.
+
+    `close()` puts `_closing` back to False in its `finally`, so a request that captured
+    the loop before the teardown and reached the lock after it found a loop that was
+    neither closing nor running — and drove `run_until_complete` on a closed one. The
+    `RuntimeError` landed in the view's `except Exception`, which answers 200.
+
+    Asserted on the status code, because that is what Telegram acts on.
+    """
+    instance = TelegramBot()
+    instance.close()
+    assert instance._loop is None or instance._loop.is_closed(), 'the loop was not closed'
+    closed = asyncio.new_event_loop()
+    closed.close()
+    monkeypatch.setattr(type(instance), 'loop', property(lambda self: closed))
+    monkeypatch.setattr('django_redis_aiogram.webhook.bot', instance)
+
+    with pytest.raises(ShuttingDownError):
+        instance.feed_update(an_update())
+
+    assert post(an_update()).status_code == 503
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_loop_thread_that_outlives_the_join_is_kept_so_close_can_retry(monkeypatch):
+    """`close()` returns without closing anything when it cannot stop the loop thread.
+
+    It said so itself — "leaving everything in place keeps `close()` retryable" — while
+    `_stop_runner` had already set `_runner` to None. Every later `close()` then returned
+    in no time without asking the orphan to stop again, and the loop, the aiogram session
+    and the FSM client stayed open for the life of the process.
+    """
+    monkeypatch.setattr('django_redis_aiogram.client.RUNNER_TIMEOUT', 0.1)
+    instance = TelegramBot()
+    blocked = threading.Event()
+    released = threading.Event()
+
+    async def hold():
+        """Block the loop thread itself, so `loop.stop()` cannot be processed."""
+        blocked.set()
+        released.wait(5)
+
+    # the try opens before the first assertion after the runner exists: a failure between
+    # here and the finally would otherwise leave a blocked thread turning a loop, and the
+    # report would show the next test's timeout rather than the assertion that broke
+    try:
+        assert instance._ensure_loop_runs(), 'the runner never started'
+        asyncio.run_coroutine_threadsafe(hold(), instance.loop)
+        assert blocked.wait(5), 'the loop never reached the blocking coroutine'
+
+        instance.close()
+
+        assert instance._runner is not None, 'the orphan was forgotten, so nothing can stop it'
+        assert instance._runner.is_alive()
+        assert instance._runner_ready.is_set(), 'a cleared event refuses every update for the timeout'
+    finally:
+        released.set()
+        if instance._runner is not None:
+            instance._runner.join(timeout=5)
+        # the retry, which is also the assertion below: run in the teardown so that a
+        # failure above still closes the loop this test opened
+        instance.close()
+
+    assert instance._loop is None or instance._loop.is_closed(), 'the retry closed nothing'
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_send_waits_for_our_own_runner_instead_of_driving_the_loop(monkeypatch):
+    """`is_running()` is False for the whole window before the runner reaches `run_forever`.
+
+    A send arriving in it drove the loop itself, which killed our thread with "this event
+    loop is already running" — and set `_runner_ready` on the way, because the driving
+    call ran the `call_soon` the dead thread had queued. `_ensure_loop_runs` then reported
+    a runner it owned while nothing ran the loop, and every update answered 503.
+
+    The state is built rather than raced: a live thread registered as the runner, with the
+    loop not yet running. Driving completes the send inline; handing off does not.
+    """
+    instance = TelegramBot()
+    sent = []
+
+    class Telegram:
+        async def send_message(self, **kwargs):
+            """Record the call, so 'was it driven here' is observable."""
+            sent.append(kwargs['chat_id'])
+
+        class session:
+            @staticmethod
+            async def close():
+                """aiogram's session, reduced to what `close()` calls."""
+
+    instance._bot = Telegram()
+    release = threading.Event()
+    instance._runner = threading.Thread(target=lambda: release.wait(5), daemon=True)
+    instance._runner.start()
+
+    try:
+        instance.send_raw('send_message', chat_id=1, text='x')
+
+        assert sent == [], 'the send drove the loop our own thread was about to run'
+    finally:
+        release.set()
+        instance._runner.join(timeout=5)
+        # closing is what steps the handed-off send, and it is also this test's cleanup:
+        # in the finally so a failure above does not leave the loop and the thread behind
+        instance.close()
+
+    assert sent == [1], 'the handed-off send was never stepped'
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_no_loop_thread_is_started_on_a_closed_loop(monkeypatch):
+    """Starting one raises inside the thread, where nothing catches it.
+
+    And the caller then waits out `RUNNER_TIMEOUT` for a readiness event that no living
+    thread can set — ten seconds of it for two updates, with the real failure reported
+    only as an unhandled thread exception. Asserted on the thread not existing rather
+    than on how long the call took, which would pass either way.
+    """
+    instance = TelegramBot()
+    closed = asyncio.new_event_loop()
+    closed.close()
+    monkeypatch.setattr(type(instance), 'loop', property(lambda self: closed))
+
+    assert instance._ensure_loop_runs() is False, 'it claimed to own a loop it cannot run'
+    assert instance._runner is None, 'a thread was started on a closed loop'
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'DRAIN_TIMEOUT': 0.2})
+def test_a_close_that_gave_up_still_cancels_what_arrived_after_it(monkeypatch):
+    """The half of keeping the orphan that matters to a request thread.
+
+    A request waits on `future.result()` with no deadline, and `_stop_runner` is the only
+    code that cancels `_updates`. With the orphan forgotten it was never reached again, so
+    an update submitted after a give-up `close()` held its worker until SIGKILL. Keeping
+    the runner is what makes the retry cancel it.
+    """
+    monkeypatch.setattr('django_redis_aiogram.client.RUNNER_TIMEOUT', 0.1)
+    instance = TelegramBot()
+    blocked = threading.Event()
+    released = threading.Event()
+
+    async def hold():
+        """Block the loop thread for longer than both closes take.
+
+        Its first version waited five seconds, which the second close's own drain
+        outlasted — so the thread died mid-teardown, the join succeeded, and the test
+        failed on a state the code was right to be in.
+        """
+        blocked.set()
+        released.wait(30)
+
+    async def later():
+        """Stand in for an update submitted after the give-up."""
+        await asyncio.sleep(30)
+
+    try:
+        assert instance._ensure_loop_runs()
+        asyncio.run_coroutine_threadsafe(hold(), instance.loop)
+        assert blocked.wait(5)
+        instance.close()
+        assert instance._runner is not None, 'the orphan was forgotten'
+
+        arrived = asyncio.run_coroutine_threadsafe(later(), instance.loop)
+        instance._updates.add(arrived)
+        assert not arrived.done()
+
+        instance.close()
+
+        assert arrived.cancelled(), 'a request submitted after the give-up would wait for ever'
+        assert instance._runner is not None, 'the retry forgot the orphan it could still not stop'
+    finally:
+        # whatever failed above, the thread must not outlive this test: left blocked it
+        # keeps turning a loop beside the next one and hides which assertion broke
+        released.set()
+        if instance._runner is not None:
+            instance._runner.join(timeout=5)
+        # and the loop itself: the close under test gave up while the thread still held
+        # it, so nothing had closed it by the time that thread finally exited
+        instance.close()

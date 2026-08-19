@@ -366,6 +366,79 @@ PROBE_REFUSALS = (
 )
 
 
+#: the four reasons the webhook view answers 503, each quoted on Troubleshooting so an
+#: operator can grep the line they have. Same bidirectional pin as the probe's refusals
+WEBHOOK_REFUSALS = (
+    'webhook received an update while the bot is disabled',
+    'webhook received an update while this deployment polls',
+    'webhook cannot build the bot',
+    'webhook refused an update',
+)
+
+
+def webhook_source():
+    """The view, as text."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    return (root / 'src' / 'django_redis_aiogram' / 'webhook.py').read_text(encoding='utf-8')
+
+
+def catalogued_refusals():
+    """The messages Troubleshooting lists under 503, read out of the page itself."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    page = (root / 'docs' / 'wiki' / 'Troubleshooting.md').read_text(encoding='utf-8')
+    section = page.split('**503** means')[1].split('**400** means')[0]
+    return set(re.findall(r'^- `([^`]+)`', section, flags=re.MULTILINE))
+
+
+@pytest.mark.parametrize('fragment', WEBHOOK_REFUSALS)
+def test_every_reason_the_webhook_refuses_is_catalogued(fragment):
+    """A 503 is the one answer that makes Telegram try again, so its causes are read.
+
+    The page listed two of the four, and the audit that found this also found the same
+    shape twice elsewhere: prose quoting a message the code no longer emits, or omitting
+    one it does. Asserted in both directions, so a reworded line cannot leave the
+    catalogue describing something that never happens.
+    """
+    assert fragment in webhook_source(), 'the view no longer logs this; the page and this list still do'
+    assert fragment in catalogued_refusals(), 'Troubleshooting does not name a reason the view answers 503'
+
+
+#: what each of the four 503 branches is called on Webhook.md, where the causes are prose
+#: rather than log lines. Ordered as the view checks them, which is what the page claims
+WEBHOOK_CAUSES = ('`ENABLED` is off', '`MODE` is not `webhook`', 'cannot be built', 'nothing ran the update')
+
+
+def test_the_other_page_names_the_same_four_causes():
+    """The helpers above read Troubleshooting, and Webhook.md carries the causes too.
+
+    Dropping one from that page left every assertion here true — the same gap this file was
+    just fixed for on the other side. Asserted in the page's own order, because the
+    sentence claims to list them in the order the view checks them.
+    """
+    root = pathlib.Path(__file__).resolve().parent.parent
+    page = (root / 'docs' / 'wiki' / 'Webhook.md').read_text(encoding='utf-8')
+    paragraph = page.split('All four reasons for a 503')[1].split('\n\n')[0]
+    positions = [paragraph.find(cause) for cause in WEBHOOK_CAUSES]
+    absent = [cause for cause, position in zip(WEBHOOK_CAUSES, positions, strict=True) if position < 0]
+
+    assert not absent, f'Webhook.md no longer names {absent}'
+    assert positions == sorted(positions), 'the causes are no longer in the order the view checks them'
+    assert len(WEBHOOK_CAUSES) == len(WEBHOOK_REFUSALS), 'the two pages describe a different number of causes'
+
+
+def test_the_catalogue_and_the_view_agree_on_how_many_refusals_there_are():
+    """The list above is written by hand, so on its own it cannot notice a fifth reason.
+
+    A new `status=503` branch, or a bullet added to the page for something the view never
+    logs, would both leave every per-fragment assertion true. Counted from the source and
+    compared as sets with the page, so either side gaining or losing one fails here.
+    """
+    assert webhook_source().count('status=503') == len(WEBHOOK_REFUSALS), (
+        'the view has a 503 branch this list does not name'
+    )
+    assert catalogued_refusals() == set(WEBHOOK_REFUSALS), 'the page and this list disagree about the causes'
+
+
 @pytest.mark.parametrize('fragment', PROBE_REFUSALS)
 def test_every_line_the_probe_prints_is_catalogued(fragment):
     """An operator greps the line out of `docker inspect`; the page has to have it.
