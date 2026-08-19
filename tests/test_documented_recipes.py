@@ -10,6 +10,8 @@ import datetime
 import importlib
 import pathlib
 import re
+import subprocess
+import sys
 
 import fakeredis
 import pytest
@@ -271,3 +273,110 @@ def test_the_message_the_handler_receives_is_not_the_one_constructed():
 
     assert received, 'the handler never ran'
     assert received[0] is not original, 'patching the original would have worked'
+
+
+def test_the_deployment_healthcheck_recipe_names_a_runnable_module():
+    """The page tells readers what to put in `test:`, so it has to be real.
+
+    The old recipe named `manage.py tgbot_healthcheck` with `timeout: 10s`, and that
+    combination cannot work in a project of ordinary size — a management command runs
+    `django.setup()` first. If the page and the package drift again, the wrong half is
+    the one a reader copies into a compose file and only finds out about in production.
+    """
+    page = (pathlib.Path(__file__).resolve().parent.parent / 'docs' / 'wiki' / 'Deployment.md').read_text(
+        encoding='utf-8'
+    )
+
+    assert "test: ['CMD', 'python', '-m', 'django_redis_aiogram.healthcheck']" in page
+    assert "test: ['CMD', 'python', 'manage.py', 'tgbot_healthcheck']" not in page, (
+        'the page still tells readers to put the management command in a healthcheck'
+    )
+
+    module = importlib.import_module('django_redis_aiogram.healthcheck')
+    assert callable(module.main), 'the module the page names has no main() to run'
+
+    # run it, rather than grep the source for `if __name__`: that string is equally
+    # present in a comment or a docstring. `--help` is the invocation that needs neither
+    # settings nor a Redis, so it answers "is this runnable with python -m" and nothing
+    # else — the probe's real exit codes are pinned in tests/test_lazy_init.py
+    helped = subprocess.run(
+        [sys.executable, '-m', 'django_redis_aiogram.healthcheck', '--help'],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert helped.returncode == 0, helped.stderr
+    assert 'python -m django_redis_aiogram.healthcheck' in helped.stdout, helped.stdout
+    for flag in ('--max-queue', '--max-age', '--stranded', '--guarantee'):
+        assert flag in helped.stdout, f'{flag} is not on the module the page names'
+
+
+#: `DJANGO_SETTINGS_MODULE: core.settings` or `DJANGO_SETTINGS_MODULE=core.settings`,
+#: with something after the separator that is not the start of a comment
+SETTINGS_MODULE_ASSIGNMENT = re.compile(r'DJANGO_SETTINGS_MODULE\s*[:=]\s*[^\s#]')
+
+
+@pytest.mark.parametrize('page_name', ['Deployment', 'Troubleshooting'])
+def test_every_published_healthcheck_carries_the_settings_module(page_name):
+    """A recipe that omits `DJANGO_SETTINGS_MODULE` reads unhealthy forever.
+
+    The probe is a separate process and the conventional `manage.py` sets that variable
+    with `os.environ.setdefault(...)` inside its own, so a container that runs `manage.py`
+    need never export it. Omitting it from a compose snippet costs the reader their whole
+    healthcheck, in the one place they have no reason to doubt. Pinned per page, because
+    the pages are copied from independently.
+    """
+    page = (pathlib.Path(__file__).resolve().parent.parent / 'docs' / 'wiki' / f'{page_name}.md').read_text(
+        encoding='utf-8'
+    )
+
+    blocks = [block for block in page.split('```') if 'django_redis_aiogram.healthcheck' in block]
+    assert blocks, f'{page_name} publishes no healthcheck recipe any more'
+    for block in blocks:
+        # an assignment with a value, not the name anywhere in the block: the prose that
+        # explains why the variable is needed mentions it too, and a recipe whose only
+        # mention is a comment — or `DJANGO_SETTINGS_MODULE:` with nothing after it — is
+        # exactly the one that reads unhealthy for ever
+        assigned = [
+            line
+            for line in block.splitlines()
+            if not line.lstrip().startswith('#') and SETTINGS_MODULE_ASSIGNMENT.match(line.lstrip().lstrip('- '))
+        ]
+        assert assigned, f'a healthcheck recipe on {page_name} does not set DJANGO_SETTINGS_MODULE to anything'
+
+
+#: fragments of what the probe writes, stable across the interpolated parts. Held here as
+#: well as in the source and on the page on purpose: rewording a refusal has to touch all
+#: three, which is the only thing that keeps the catalogue on Troubleshooting true
+PROBE_REFUSALS = (
+    'redis is unreachable',
+    'is not a number',
+    'cannot read the settings',
+    'the consumer has not written one within',
+    'is not a timestamp',
+    'could not read the heartbeat',
+    'could not read the queue length',
+    'messages are queued, over the limit of',
+    'message(s) are in flight under',
+    'disabled in this process; nothing to check',
+    'could not scan for stranded in-flight lists',
+    'could not establish which delivery guarantee is in force',
+)
+
+
+@pytest.mark.parametrize('fragment', PROBE_REFUSALS)
+def test_every_line_the_probe_prints_is_catalogued(fragment):
+    """An operator greps the line out of `docker inspect`; the page has to have it.
+
+    Eleven of these were documented nowhere. Asserted in both directions — the fragment
+    has to be in the source *and* on the page — so a reworded message cannot leave the
+    catalogue quietly describing a line the probe no longer prints.
+    """
+    root = pathlib.Path(__file__).resolve().parent.parent
+    source = (root / 'src' / 'django_redis_aiogram' / 'healthcheck.py').read_text(encoding='utf-8')
+    page = (root / 'docs' / 'wiki' / 'Troubleshooting.md').read_text(encoding='utf-8')
+
+    assert fragment in source, 'the probe no longer says this; the page and this list still do'
+    assert fragment in page, 'Troubleshooting does not catalogue a line the probe prints'

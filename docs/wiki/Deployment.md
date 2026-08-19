@@ -172,7 +172,9 @@ python manage.py tgbot_healthcheck
 
 Exit 0 and a line on stdout when healthy, non-zero with the reason on stderr
 otherwise. It checks three things: Redis answers, the consumer reported in
-recently, and the queue is not piling up.
+recently, and the queue is not piling up. A warning — a stranded in-flight list is
+the one it has — goes to stderr *without* changing the verdict, so a healthy probe
+can write to both streams and still exit 0.
 
 The consumer writes `<REDIS_MESSAGES_KEY>:heartbeat:<worker>` every
 `HEARTBEAT_INTERVAL` seconds, with a TTL of three times that — so one missed
@@ -183,24 +185,62 @@ itself.
 ```yaml
   telegram_bot:
     command: python manage.py start_tgbot
+    environment:
+      # required: a healthcheck is a separate process, and `manage.py` only sets this
+      # inside its own — so without it here the probe cannot read your settings at all
+      DJANGO_SETTINGS_MODULE: core.settings
     healthcheck:
-      test: ['CMD', 'python', 'manage.py', 'tgbot_healthcheck']
+      test: ['CMD', 'python', '-m', 'django_redis_aiogram.healthcheck']
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       start_period: 30s
       retries: 3
 ```
+
+**Not `manage.py tgbot_healthcheck`, and this matters more than it looks.** That
+command still exists and still works; what it also does is `django.setup()`, which
+populates the app registry and runs every `AppConfig.ready()` in *your* project before
+it reads a single Redis key. In one measured project — twenty apps, one of them
+registering adapters in `ready()` — that was 17.9 seconds against 0.01 seconds of
+actual probing, so Docker killed the probe at every timeout and the container read
+`unhealthy` for the best part of an hour while the bot was fine. The number that would
+have to go in `timeout:` is not this package's to know, because what it covers is your
+`INSTALLED_APPS`.
+
+The `python -m` form reads your settings module and stops there: measured at 69 ms
+end to end, interpreter startup included.
+
+**`DJANGO_SETTINGS_MODULE` has to be in the container's environment**, which is the one
+thing this form needs and the management command does not. The conventional `manage.py`
+sets it with `os.environ.setdefault(...)` *inside its own process*, and a healthcheck is
+a different process — so a container that runs `manage.py` quite happily may still not
+export it. Without it the probe answers `cannot read the settings: …` and exits 1, which
+is honest but permanently unhealthy. It is in the `environment:` block above for that
+reason.
+
+Use the management command when a person is looking at the output. It additionally scans
+for stranded in-flight lists and reports which delivery guarantee is in force, neither of
+which can change the verdict, and both of which are the expensive part: the sweep is up to
+twenty `SCAN` rounds plus an `LLEN` per list it finds, over a keyspace often shared with a
+cache backend, and the guarantee is a write. Nobody reads either twice a minute.
+`--stranded` and `--guarantee` turn them on for the `python -m` form too.
 
 `start_period` matters: the first heartbeat is written when the consumer's loop
 first turns, so a container checked immediately after start has nothing to show
 yet.
 
 To fail when work is backing up rather than only when the worker is gone, set a
-queue limit — as a setting, or per invocation:
+queue limit — as a setting, or per invocation, where the flag wins:
 
 ```shell
-python manage.py tgbot_healthcheck --max-queue 1000 --max-age 60
+python manage.py tgbot_healthcheck --max-queue 1000 --max-age 25
 ```
+
+`--max-age` has a ceiling it cannot be argued out of: three `HEARTBEAT_INTERVAL`s, because
+that is the TTL the consumer writes the key with. A heartbeat can never be *observed*
+older than that — the key is gone — so a larger limit only ever refuses with the same
+line, and the probe says as much when you give it one. To tolerate a longer silence, raise
+`HEARTBEAT_INTERVAL` and the ceiling moves with it.
 
 A disabled process is not unhealthy: with `ENABLED=0` the command says so and
 exits 0, since nothing is meant to be running there.
