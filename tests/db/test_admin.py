@@ -443,6 +443,11 @@ def test_a_kind_filtered_changelist_needs_no_sort(client):
             cursor.execute(f'EXPLAIN QUERY PLAN {sql}')
             plan = ' '.join(str(row) for row in cursor.fetchall())
             assert 'TEMP B-TREE' not in plan.upper(), f'{plan}\nfor: {sql}'
+            # and the index by name. Without this the assertion above passes with no index
+            # at all — sqlite serves `ORDER BY -id` by walking the primary key, so a plan
+            # with no sort and a full scan reads exactly like the fixed one, at the cost the
+            # index was added to remove
+            assert 'drai_event_kind_id' in plan, f'the kind filter no longer uses its index\n{plan}'
 
 
 @pytest.mark.django_db
@@ -472,3 +477,78 @@ def test_the_created_at_headers_sort_at_most_a_tie(order):
 
     assert 'drai_event_recent' in plan, plan
     assert 'USE TEMP B-TREE FOR ORDER BY' not in plan.upper(), plan
+
+
+@pytest.mark.django_db
+@override_settings(TELEGRAM_BOT=ON)
+# both directions: the filter strips the sign before deciding, so a regression that
+# dropped `2` and kept `-2` would restore descending sorts on an unindexed column
+@pytest.mark.parametrize(
+    ('index', 'column'),
+    [
+        ('2', 'function'),
+        ('-2', 'function'),
+        ('5', 'worker'),
+        ('-5', 'worker'),
+        ('6', 'error_code'),
+        ('-6', 'error_code'),
+    ],
+)
+def test_an_o_param_for_an_unindexed_column_does_not_sort(client, index, column):
+    """`sortable_by` only decides whether the header is a link.
+
+    Django reads it in one place — the template tag — while `ChangeList` maps `?o=`
+    straight onto `list_display`. So a bookmark, a shared link, or a query string kept
+    from before this restriction still ordered the whole table by a column no index can
+    serve: on 200 000 rows a sequential scan and a sort for the page. Not for the count —
+    `BoundedPaginator` drops the ordering — so this is the page query, once per view.
+
+    Asserted on the SQL rather than on the attribute, which is what the previous test did
+    and why this went unnoticed.
+    """
+    for chat_id in range(3):
+        an_event(chat_id=chat_id, worker='w')
+    client.force_login(a_reader('sorter', 'view_telegramevent'))
+
+    with CaptureQueriesContext(connection) as queries:
+        response = client.get(f'{CHANGELIST}?o={index}')
+
+    assert response.status_code == 200, 'an old link should still render the page'
+    touched = [q['sql'] for q in queries if 'django_redis_aiogram_event' in q['sql']]
+    assert touched, 'the changelist issued no query at all'
+    for sql in touched:
+        assert f'"{column}" ASC' not in sql, f'ordered by {column}: {sql}'
+        assert f'"{column}" DESC' not in sql, f'ordered by {column}: {sql}'
+
+
+@pytest.mark.django_db
+@override_settings(TELEGRAM_BOT=ON)
+def test_the_outcome_filters_count_is_served_by_the_index(client):
+    """`BoundedPaginator` promised "one query the index can serve" and the failure
+    filter was the one place it was not.
+
+    An `IN` over the seven failure kinds cannot yield a global `id DESC` from
+    `(kind, -id)`, so the database sorted every match before the `LIMIT` could bite —
+    the same defect the index was added to remove, surviving in the filter that needs it
+    most. The count is unordered now, because which rows the cap admits does not change
+    how many there are.
+
+    The plan is asserted to *name the index* as well as to be free of a sort: an
+    assertion on the sort alone passes with no index at all, which is how the sibling
+    test missed a deleted one.
+    """
+    for kind in (EventKind.OUTBOUND_FAILED.value, EventKind.OUTBOUND_SENT.value):
+        an_event(kind=kind)
+    client.force_login(a_reader('outcome', 'view_telegramevent'))
+
+    with CaptureQueriesContext(connection) as queries:
+        assert client.get(f'{CHANGELIST}?outcome=failed').status_code == 200
+
+    counts = [q['sql'] for q in queries if 'COUNT(' in q['sql'].upper() and 'django_redis_aiogram_event' in q['sql']]
+    assert counts, 'the changelist counted nothing, so this proves nothing'
+    with connection.cursor() as cursor:
+        for sql in counts:
+            cursor.execute(f'EXPLAIN QUERY PLAN {sql}')
+            plan = ' '.join(str(row) for row in cursor.fetchall())
+            assert 'TEMP B-TREE' not in plan.upper(), f'the bounded count still sorts: {plan}'
+            assert 'drai_event_kind_id' in plan, f'the count no longer uses the kind index: {plan}'

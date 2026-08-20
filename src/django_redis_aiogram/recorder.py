@@ -258,7 +258,16 @@ class EventRecorder:
                 # consumer knew its own name before
                 event = replace(event, worker=self.worker)
             if self._write_here():
-                self._deliver([event])
+                # counted, which it was not: under EVENT_LOG_SYNC the row is written on
+                # this thread, and a database that refuses it raises `EventLogRefusedError`
+                # — which the broad `except` below logged and did not count, so the row
+                # vanished with no gap marker. A one-row batch either lands or raises, so
+                # there is no partial case to weigh here, only this one
+                try:
+                    self._deliver([event])
+                except Exception:
+                    self._drop(1)
+                    logger.exception('could not record an event on the calling thread', extra={'tg_kind': event.kind})
                 return
             buffer = self._buffer()
             buffer.put_nowait(event)
@@ -329,6 +338,11 @@ class EventRecorder:
         stop() draining what the writer left. `+=` is a read and a write, so
         without this a drop is silently swallowed by a concurrent one.
         """
+        if not count:
+            # callers pass the refused count straight through, and that is zero on every
+            # successful write — reporting "the event log is falling behind" for a batch
+            # that landed in full is a false alarm on the line people watch for real ones
+            return
         with self._counter:
             self._dropped += count
             dropped = self._dropped
@@ -465,8 +479,15 @@ class EventRecorder:
         _acknowledge(wakes)
         if not leftover:
             return
-        with contextlib.suppress(Exception):
-            self._deliver(leftover)
+        try:
+            # the refused count, not only the raise: a database that takes some of these
+            # rows and refuses others leaves a hole exactly as large as what it refused,
+            # and ignoring the return counted that hole as zero
+            refused = self._deliver(leftover)
+        except Exception:
+            logger.exception('could not write the events a stopping writer left behind')
+        else:
+            self._drop(refused)
             return
         # counted, not silent: the next flush that succeeds turns this into a
         # log.dropped row, which is the only place the gap becomes visible
@@ -515,7 +536,7 @@ class EventRecorder:
         with self._counter:
             dropped_before = self._dropped
         try:
-            self._deliver(batch)
+            refused = self._deliver(batch)
         except Exception:
             failures += 1
             with self._counter:
@@ -533,6 +554,16 @@ class EventRecorder:
                 extra={'tg_count': len(batch), 'tg_failures': failures},
             )
             return failures, 0.0
+        if refused:
+            # rows this very batch lost, one at a time, on the ladder below `write_batch`.
+            # Counted rather than reported now: the gap row belongs to the *next*
+            # successful flush, the same way a producer's drop does
+            with self._counter:
+                self._dropped += refused
+            logger.warning(
+                'the database refused part of an event batch',
+                extra={'tg_count': refused, 'tg_batch': len(batch)},
+            )
         if dropped_before:
             self._record_gap(dropped_before)
         return 0, 0.0
@@ -540,21 +571,59 @@ class EventRecorder:
     def _record_gap(self, dropped: int) -> None:
         """Put the gap in the feed, not only in the log: a silent hole reads as coverage.
 
-        Subtracts what it is about to report rather than assigning zero: the count
-        was snapshotted before the write, and anything dropped while that write was
-        in flight has to survive to be reported by the next one.
+        **Claimed, then written, and given back if the write fails.** Two flushes can be
+        in progress at once — the writer thread's and a ``drain_once()`` on somebody
+        else's — and both snapshot the drop count before their batch. Subtracting after
+        the write let each of them report the same hole and take it off twice, which
+        drives the count negative; subtracting before the write, which is where this
+        started, lost the hole whenever the gap row itself was refused. Taking the count
+        out of the counter first makes the claim exclusive, and putting it back on failure
+        keeps it for the next flush. Both properties, one lock.
+
+        Claims no more than is there: a count that another flush has already taken leaves
+        nothing to report, and this returns rather than writing a row about zero events.
+        Anything a producer drops while the write is in flight stays for the next one.
+
+        A refusal counts as a failure here, not only an exception. ``_deliver`` returns how
+        many rows the database refused one at a time, and this batch is one row — so a
+        return of 1 means the gap row did *not* land, which is the same loss as a raise and
+        was the one path this method used to ignore. Both give the claim back.
+
+        The failure stays suppressed either way: the batch this follows did land, and a
+        gap row that cannot be written must not turn a successful flush into a failed one.
         """
         with self._counter:
-            self._dropped -= dropped
-        with contextlib.suppress(Exception):
-            self._deliver([Event(kind=EventKind.LOG_DROPPED.value, detail={'dropped': dropped})])
+            claimed = min(dropped, self._dropped)
+            self._dropped -= claimed
+        if not claimed:
+            return
+        try:
+            refused = self._deliver([Event(kind=EventKind.LOG_DROPPED.value, detail={'dropped': claimed})])
+        except Exception:
+            self._reclaim(claimed)
+            logger.exception('could not record the gap; keeping the count for the next flush')
+            return
+        if refused:
+            self._reclaim(claimed)
+            logger.error(
+                'the database refused the gap row; keeping the count for the next flush',
+                extra={'tg_dropped': claimed},
+            )
+
+    def _reclaim(self, claimed: int) -> None:
+        """Put a claim back, so a gap nobody could record survives to be recorded."""
+        with self._counter:
+            self._dropped += claimed
 
     @staticmethod
-    def _write(batch: list[Event]) -> None:
-        """Hand a batch to the ORM, importing it here so a disabled process never does."""
+    def _write(batch: list[Event]) -> int:
+        """Hand a batch to the ORM, importing it here so a disabled process never does.
+
+        Returns how many rows did not land, which only a partial refusal produces.
+        """
         from django_redis_aiogram.eventlog import write_batch  # noqa: PLC0415 - the point: no django.db above
 
-        write_batch(batch)
+        return write_batch(batch)
 
     def _publish(self, batch: list[Event]) -> None:
         """Hand a batch to whoever connected to :data:`events_recorded`.
@@ -579,6 +648,16 @@ class EventRecorder:
         The upshot is a method that **cannot raise**, which is the property the rest
         of the writer needs from it rather than a defensive habit.
 
+        One limit worth stating, because it is Django's and not ours: when
+        ``send_robust`` raises on that unnamed receiver it abandons **its own loop**, so
+        receivers connected after the offending one do not run for that batch at all.
+        Containing it here keeps the write and every earlier receiver whole; it cannot
+        reach past Django into a dispatch that already stopped. Calling receivers
+        ourselves would need ``Signal._live_receivers``, a private API, which is a worse
+        trade than one documented sentence. A collector written as a callable instance
+        can close the gap on its side by defining ``__qualname__``; one written as a
+        function or a bound method has it already, and is the shape every recipe uses.
+
         A tuple rather than the list itself: receivers run one after another with
         the same argument, so one of them sorting or clearing a list would decide
         what the next one sees.
@@ -588,9 +667,7 @@ class EventRecorder:
         # the reporting loop is inside the guard as well as the dispatch, because
         # `getattr(..., None)` absorbs only `AttributeError` — a receiver whose
         # `__getattr__` raises anything else makes naming it raise, and the whole
-        # point is that nothing about a receiver reaches `_flush`'s failure counter.
-        # A raise partway through does leave the remaining outcomes unlogged, which
-        # is a worse log and not a worse batch
+        # point is that nothing about a receiver reaches `_flush`'s failure counter
         try:
             for receiver, outcome in events_recorded.send_robust(sender=self, events=tuple(batch)):
                 if isinstance(outcome, BaseException):
@@ -608,8 +685,12 @@ class EventRecorder:
             with contextlib.suppress(Exception):
                 logger.exception('publishing recorded events failed', extra={'tg_count': len(batch)})
 
-    def _deliver(self, batch: list[Event]) -> None:
+    def _deliver(self, batch: list[Event]) -> int:
         """Write a batch if this process keeps the table, then publish it either way.
+
+        Returns how many rows the database refused individually — zero unless a partial
+        refusal happened, and zero in a process that does not write at all.
+
 
         The order is the contract, and it is two claims rather than one. The write
         is **attempted first**, so nothing a receiver does can change a row that was
@@ -625,12 +706,14 @@ class EventRecorder:
         clearing the list or editing a ``detail`` changed what got persisted. This
         way round makes that impossible instead of asking receivers to be careful.
         """
+        refused = 0
         try:
             if self.enabled:
                 self._touched_database = True
-                self._write(batch)
+                refused = self._write(batch)
         finally:
             self._publish(batch)
+        return refused
 
     @staticmethod
     def _close_connections() -> None:

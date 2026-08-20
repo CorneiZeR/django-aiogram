@@ -9,18 +9,26 @@ empty. Each of these fails against a gate left on `recorder.enabled`.
 import asyncio
 import queue
 import threading
+import time
 import uuid
 
 import pytest
 from aiogram import Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Chat, Message, Update, User
+from django.db import OperationalError
 from django.test import override_settings
 
 from django_redis_aiogram import TelegramBot
 from django_redis_aiogram import recorder as recorder_module
 from django_redis_aiogram.instrumentation import install_instrumentation, instrumented
-from django_redis_aiogram.recorder import WRITER_THREAD, Event, EventRecorder, recorder
+from django_redis_aiogram.recorder import (
+    DROP_REPORT_INTERVAL,
+    WRITER_THREAD,
+    Event,
+    EventRecorder,
+    recorder,
+)
 from django_redis_aiogram.signals import events_recorded
 
 
@@ -80,6 +88,36 @@ def collected():
         recorder.stop(timeout=5)
         with recorder._counter:
             recorder._dropped = 0
+
+
+@pytest.fixture
+def clean_counters():
+    """Leave the process-wide recorder's counters as they were found.
+
+    `recorder` is a singleton, so a test that drives a failed write and leaves `_dropped`
+    set hands a real gap to whichever test runs next — which then correctly reports it, in
+    the wrong place, and reads as a defect in something unrelated. The same for
+    `_touched_database`, which decides whether a stopping writer closes a database
+    connection and is only otherwise cleared on a fork.
+
+    `_reported_at` goes with them: a test that pushes it into the past to reach the
+    once-a-minute report leaves the next drop reporting immediately, which is a log line
+    appearing where the code says it should be suppressed.
+
+    The `collected` fixture above does this for its own users; this is for the tests that
+    do not need a receiver.
+    """
+    reported_at = recorder._reported_at
+    with recorder._counter:
+        recorder._dropped = 0
+    recorder._touched_database = False
+    try:
+        yield
+    finally:
+        with recorder._counter:
+            recorder._dropped = 0
+        recorder._touched_database = False
+        recorder._reported_at = reported_at
 
 
 def kinds(events):
@@ -673,3 +711,168 @@ def test_a_failure_while_reporting_a_receiver_costs_nobody_their_batch(redis_ser
     assert calls, 'the reporting line never ran, so nothing is being tested'
     assert kinds(collected) == ['outbound.queued'], 'the working receiver lost its batch'
     assert recorder._dropped == 0, f'a broken log line was counted as {recorder._dropped} dropped events'
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': True})
+def test_a_gap_row_that_cannot_be_written_keeps_its_count(redis_server, monkeypatch, clean_counters):
+    """The hole outlives the row that failed to describe it.
+
+    The count was subtracted *before* the write and the write's failure suppressed, so a
+    gap row the database refused took the hole with it: `_dropped` was already zero, no
+    later flush would report those events, and the feed then read as complete coverage of
+    a period that had lost rows. Subtracted after the write now, and the count stays for
+    the next flush to report.
+    """
+
+    def refuse(batch):
+        raise OperationalError('no such table: django_redis_aiogram_event')
+
+    monkeypatch.setattr(recorder, '_write', refuse)
+    recorder._dropped = 7
+
+    recorder._record_gap(7)
+
+    assert recorder._dropped == 7, 'the gap was forgotten with the row that could not report it'
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': True})
+def test_a_gap_row_that_lands_clears_its_count(redis_server, monkeypatch, clean_counters):
+    """The control, so the fix above cannot be "never subtract"."""
+    # 0 refused, which is what `write_batch` returns on a clean write: a double returning
+    # None would be a shape no real path produces
+    monkeypatch.setattr(recorder, '_write', lambda batch: 0)
+    recorder._dropped = 7
+
+    recorder._record_gap(7)
+
+    assert recorder._dropped == 0, 'a reported gap was reported twice'
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_receiver_django_cannot_name_costs_the_receivers_behind_it(redis_server, monkeypatch):
+    """Django's limit, pinned as a limit rather than described as one.
+
+    `send_robust` logs a failing receiver with `receiver.__qualname__`, unguarded. A
+    callable *instance* — an ordinary shape for a metrics collector — has no such
+    attribute, so raising inside one makes `send_robust` itself raise and abandon its own
+    loop: every receiver connected after it misses that batch. The containment here keeps
+    the write and the earlier receivers whole, and cannot reach past a dispatch that has
+    already stopped.
+
+    If a Django release guards that logging, this test fails — which is the moment the
+    docstring saying otherwise has to change too.
+    """
+    seen = []
+
+    class Unnameable:
+        """A collector with no `__qualname__`, which is what breaks the naming."""
+
+        def __call__(self, sender, events, **kwargs):
+            """Raise, so Django reaches for a name it cannot find."""
+            message = 'the collector is broken'
+            raise RuntimeError(message)
+
+    def behind(sender, events, **kwargs):
+        """Connected after it, and therefore never reached for that batch."""
+        seen.append(len(events))
+
+    unnameable = Unnameable()
+    assert not hasattr(unnameable, '__qualname__'), 'the premise no longer holds'
+    events_recorded.connect(unnameable, dispatch_uid='unnameable')
+    events_recorded.connect(behind, dispatch_uid='behind')
+    try:
+        monkeypatch.setattr(recorder, '_write', lambda batch: 0)
+        failures, blocked = recorder._flush([Event(kind='outbound.sent')], failures=0)
+    finally:
+        events_recorded.disconnect(dispatch_uid='unnameable')
+        events_recorded.disconnect(dispatch_uid='behind')
+
+    assert failures == 0, 'a receiver was counted as a failed write'
+    assert blocked == 0.0
+    assert seen == [], 'Django named the receiver after all; the docstring needs updating'
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': True})
+def test_two_overlapping_flushes_report_one_gap_between_them(redis_server, monkeypatch, clean_counters):
+    """`drain_once()` runs on the caller's thread while the writer runs its own.
+
+    Both snapshot the drop count before their batch, so with the subtraction *after* the
+    write each of them reported the same hole and took it off — one gap counted twice in
+    the feed and a count driven negative, which then swallowed the next real gap. The
+    count is claimed under the lock before the write now, so the second flush finds
+    nothing left to report.
+
+    The overlap is arranged rather than raced: the first write blocks until the second has
+    been through, which is the interleaving that makes the defect certain.
+    """
+    inside = threading.Event()
+    release = threading.Event()
+    rows: list[int] = []
+
+    def blocking_write(batch):
+        """Hold the first gap row open, so the second flush runs beside it."""
+        for event in batch:
+            if event.kind == 'log.dropped':
+                rows.append(event.detail['dropped'])
+                inside.set()
+                release.wait(5)
+        return 0
+
+    monkeypatch.setattr(recorder, '_write', blocking_write)
+    recorder._dropped = 7
+    first = threading.Thread(target=recorder._record_gap, args=(7,), daemon=True)
+    first.start()
+
+    assert inside.wait(5), 'the first gap row never reached the write'
+    recorder._record_gap(7)
+    release.set()
+    first.join(timeout=5)
+
+    assert rows == [7], f'the same hole was reported {len(rows)} times: {rows}'
+    assert recorder._dropped == 0, f'the count went to {recorder._dropped}'
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': True})
+def test_a_gap_row_the_database_refuses_one_at_a_time_keeps_its_count(
+    redis_server, monkeypatch, caplog, clean_counters
+):
+    """A refusal is the same loss as a raise, and this was the path that ignored it.
+
+    `write_batch` reports how many rows the database refused individually — a return this
+    branch introduced. The gap batch is one row, so a return of 1 means the `log.dropped`
+    row did not land, while the claim had already been taken off: the hole disappeared with
+    no exception anywhere to notice it.
+    """
+
+    def refuse_every_row(batch):
+        """What `write_batch` returns when the database took none of them."""
+        return len(batch)
+
+    monkeypatch.setattr(recorder, '_write', refuse_every_row)
+    recorder._dropped = 5
+
+    with caplog.at_level('ERROR', logger='django_redis_aiogram'):
+        recorder._record_gap(5)
+
+    assert recorder._dropped == 5, 'the gap was lost to a refusal nobody checked'
+    assert 'refused the gap row' in caplog.text
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_dropping_nothing_says_nothing(redis_server, caplog, clean_counters):
+    """Callers pass the refused count straight through, and it is zero on every good write.
+
+    Without the guard, a batch that landed in full still reached the once-a-minute report
+    and logged `the event log is falling behind` — a false alarm on the one line an
+    operator watches for real ones, emitted by the successful path.
+
+    `_reported_at` is pushed into the past on purpose: the interval is what would otherwise
+    hide the defect, and a test that relied on it would pass either way.
+    """
+    recorder._reported_at = time.monotonic() - DROP_REPORT_INTERVAL - 1
+
+    with caplog.at_level('ERROR', logger='django_redis_aiogram'):
+        recorder._drop(0)
+
+    assert recorder._dropped == 0
+    assert 'falling behind' not in caplog.text, 'a batch that lost nothing reported a backlog'
