@@ -752,6 +752,20 @@ class TelegramBot:
         identifier = resolve_correlation_id(correlation_id)
         if self.is_worker:
             return self.send_raw(function, correlation_id=identifier, **kwargs)
+        # named here as well as in `send_redis`, and before delegating, because the twin a
+        # caller should hear about is the twin of the method they called: `send` pairs with
+        # `asend`, and `send_redis` — which this is about to call — pairs with `asend_redis`.
+        # The latch means whichever entry point the caller used is the one that speaks.
+        # Behind `enabled`, because `send_redis` refuses before writing anything when the
+        # bot is off — advice about the async twin of a call that does nothing is noise,
+        # and it would burn the once-per-process latch for whoever does write later
+        if self.enabled:
+            # validated here as well as in `send_redis`, and before the mention: the latch
+            # fires once per process, so a call that is about to raise `check_function`
+            # would otherwise emit the line and take it from the first caller who could
+            # have acted on it. Two membership tests on the happy path is the whole cost
+            check_function(function)
+            _mention_asend('asend')
         return self.send_redis(function, correlation_id=identifier, **kwargs)
 
     async def asend(
@@ -1220,7 +1234,7 @@ class TelegramBot:
         if not accepted:
             return identifier
 
-        _mention_asend('asend')
+        _mention_asend('asend_redis')
         with queueing(function, [(identifier, kwargs)]) as write:
             get_redis().rpush(write.key, *write.payloads)
         return identifier

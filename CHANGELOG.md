@@ -370,11 +370,13 @@ them, so it is not one per message.
   slow looks exactly like one that is dead. `--dry-run` reports without moving
   anything, through the same `--limit` a real run applies, and `--limit` bounds
   what one run can move.
-- Check `W010` reports the case it can detect: `WORKER_NAME` empty while the
+- Check `I001` reports the case it can detect: `WORKER_NAME` empty while the
   hostname is one Docker generated. Narrow on purpose — an unset `WORKER_NAME` is
   the documented default and correct almost everywhere, so warning about it as
   such would fire on every untouched installation and teach people to stop
-  reading warnings.
+  reading warnings. Information rather than a warning because a check cannot tell
+  a consumer from a web process, and only the consumer is affected; `start_tgbot`
+  warns for itself, where the process is known.
 - `manage.py tgbot_healthcheck` says which guarantee is in force — established
   by asking, not assumed from a default — and how many messages sit in flight
   under other worker names, so a stranded pile stops being invisible. It reports
@@ -407,9 +409,12 @@ them, so it is not one per message.
   `ALLOW_PICKLE` is on. Decoding is otherwise supported and stays supported — one
   URL is often shared with a cache backend — but a pickled payload is not valid
   text, and redis-py decodes inside its own parser: the consumer raises *after*
-  the server has moved the message to the in-flight list, and every later reclaim
-  trips over the same message for ever. No restart recovers from it, which is why
-  this is an error and not a warning.
+  the server has moved the message to the in-flight list, and each later start
+  trips over that message once before carrying on — measured on Redis 8, one error
+  per restart, then the queue drains around it. An error rather than a warning
+  because the message itself is unreadable for ever and only a hand-deleted key
+  clears it, but not a wedged consumer: an operator who reads this as a dead queue
+  drains it by hand for nothing.
 - **A metrics seam that is not the event log.** `django_redis_aiogram.signals`
   carries `events_recorded`, a `django.dispatch.Signal` fired once per batch on the
   event writer's own thread, with the `Event` objects that batch holds — except in the
@@ -463,13 +468,13 @@ them, so it is not one per message.
   **Event log** has the recipe, including the two honest notes about
   `prometheus_client` and about which container has to run the exporter.
 
-- **Check `W011`** — `EVENT_LOG_DATABASE` names an alias with nothing in
+- **Check `I002`** — `EVENT_LOG_DATABASE` names an alias with nothing in
   `DATABASE_ROUTERS` routing this app there. E040 sees a string, E041 sees a
   configured alias with a real engine, W005 sees a database, and `migrate` still never
-  creates the table: the writer logs `no such table` once per batch for ever. A
-  warning rather than an error, because a router of your own returning the same alias
-  is a legitimate way to do it. Compared through `import_string`, so a dotted path and
-  an instance both count.
+  creates the table: the writer logs `no such table` once per batch for ever.
+  Information rather than an error or a warning, because a router of your own returning
+  the same alias is a legitimate way to do it and this cannot see inside one. Compared
+  through `import_string`, so a dotted path and an instance both count.
 
 ### Changed
 

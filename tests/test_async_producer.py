@@ -239,7 +239,8 @@ def test_send_from_a_loop_mentions_asend_once(redis_server, caplog, monkeypatch)
     an exception and not a line per message: a warning on a working path, repeated,
     is how people learn to filter our logger out.
     """
-    monkeypatch.setattr('django_redis_aiogram.client._asend_mentioned', threading.Event())
+    latch = threading.Event()
+    monkeypatch.setattr('django_redis_aiogram.client._asend_mentioned', latch)
     bot = TelegramBot()
 
     async def three_sends():
@@ -251,6 +252,9 @@ def test_send_from_a_loop_mentions_asend_once(redis_server, caplog, monkeypatch)
 
     mentions = [record for record in caplog.records if MENTION in record.getMessage()]
     assert len(mentions) == 1, f'said it {len(mentions)} times'
+    # the latch is *why* it is once: without asserting it, a logger that happened to
+    # de-duplicate would satisfy the count and leave the mechanism unpinned
+    assert latch.is_set(), 'the line was emitted without the latch that makes it once'
     assert mentions[0].tg_alternative == 'asend', 'the line has to name the method to move to'
     assert redis_server.llen(QUEUE) == 3, 'the send itself must be unaffected'
 
@@ -259,18 +263,83 @@ def test_send_from_a_loop_mentions_asend_once(redis_server, caplog, monkeypatch)
 def test_send_off_a_loop_says_nothing(redis_server, caplog, monkeypatch):
     """Most callers are synchronous — Celery, a management command, a view — and
     there is nothing for them to do about a message aimed at async code."""
-    monkeypatch.setattr('django_redis_aiogram.client._asend_mentioned', threading.Event())
+    latch = threading.Event()
+    monkeypatch.setattr('django_redis_aiogram.client._asend_mentioned', latch)
 
     with caplog.at_level('WARNING', logger='django_redis_aiogram'):
         TelegramBot().send(chat_id=1, text='hi')
 
     assert MENTION not in caplog.text
+    # and the latch with it: the line is the symptom, the latch is the state, and a caller
+    # who never needed the advice must not be the one who spends it
+    assert not latch.is_set(), 'a synchronous send spent the line an async caller needs'
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_refused_method_does_not_spend_the_mention(caplog, monkeypatch):
+    """The line is latched once per process, so whoever emits it takes it from everyone else.
+
+    `send()` named the twin before delegating, and `send_redis` validates the method after
+    that — so a call that was about to raise `UnknownApiMethodError` emitted the advice and
+    left the first caller who could have acted on it in silence.
+
+    Asserted on the refusal alone. Counting mentions across a refusal *and* a good send
+    gives one either way: without the fix the refusal spends it, with the fix the good
+    send does.
+    """
+    latch = threading.Event()
+    monkeypatch.setattr('django_redis_aiogram.client._asend_mentioned', latch)
+    instance = TelegramBot()
+
+    async def only_the_refusal():
+        with pytest.raises(UnknownApiMethodError):
+            instance.send('no_such_method', chat_id=1)
+
+    with caplog.at_level('WARNING', logger='django_redis_aiogram'):
+        asyncio.run(only_the_refusal())
+
+    assert MENTION not in caplog.text
+    # the latch itself, not only its output: this is the process-wide state the validation
+    # order exists to protect, and a handler that swallowed the record would hide the leak
+    assert not latch.is_set(), 'the refusal spent the line a valid call needs'
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'ENABLED': False})
+def test_a_disabled_send_from_a_loop_says_nothing(caplog, monkeypatch):
+    """Nothing was written, so there is no better way to have written it.
+
+    `send()` named the async twin before delegating, and `send_redis` refuses a disabled
+    bot after that — so a process with the bot off was advised about a call that did
+    nothing. Worse than noise: the mention is latched once per process, so the disabled
+    path spent the one line the first real caller should have got.
+    """
+    latch = threading.Event()
+    monkeypatch.setattr('django_redis_aiogram.client._asend_mentioned', latch)
+
+    def refuse():
+        raise AssertionError('a disabled send reached Redis')
+
+    # the silence is only worth having if nothing was written: a regression that wrote and
+    # suppressed the line would satisfy every other assertion here
+    monkeypatch.setattr('django_redis_aiogram.client.get_redis', refuse)
+    instance = TelegramBot()
+
+    async def one_send():
+        assert instance.send(chat_id=1, text='hi') is not None, 'the id is still returned'
+
+    with caplog.at_level('WARNING', logger='django_redis_aiogram'):
+        asyncio.run(one_send())
+
+    assert MENTION not in caplog.text
+    assert not latch.is_set(), 'a disabled send spent the line a real send needs'
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
 @pytest.mark.parametrize(
     ('producer', 'alternative'),
-    [('send', 'asend'), ('send_redis', 'asend'), ('send_many', 'asend_many')],
+    # each names its *own* twin: the test used to expect `send_redis` to name `asend`,
+    # which is the twin of the method the caller did not call
+    [('send', 'asend'), ('send_redis', 'asend_redis'), ('send_many', 'asend_many')],
 )
 def test_every_synchronous_route_that_writes_names_its_own_twin(
     redis_server, caplog, monkeypatch, producer, alternative
@@ -282,7 +351,8 @@ def test_every_synchronous_route_that_writes_names_its_own_twin(
     every payload between round trips. Both were silent, so the async methods this
     release adds went unmentioned to exactly the callers who needed them.
     """
-    monkeypatch.setattr('django_redis_aiogram.client._asend_mentioned', threading.Event())
+    latch = threading.Event()
+    monkeypatch.setattr('django_redis_aiogram.client._asend_mentioned', latch)
     bot = TelegramBot()
 
     async def once():
@@ -296,6 +366,7 @@ def test_every_synchronous_route_that_writes_names_its_own_twin(
 
     mentions = [record for record in caplog.records if MENTION in record.getMessage()]
     assert len(mentions) == 1, f'{producer} said it {len(mentions)} times'
+    assert latch.is_set(), f'{producer} emitted the line without spending the latch'
     assert mentions[0].tg_alternative == alternative, f'{producer} pointed at the wrong method'
 
 

@@ -121,8 +121,11 @@ def _number(key: str, cast: Callable[[Any], float]) -> float:
     """
     try:
         return cast(conf[key])
-    except (ImproperlyConfigured, KeyError, TypeError, ValueError):
-        # ImproperlyConfigured from resolving the settings, the rest from the cast
+    except (ImproperlyConfigured, KeyError, TypeError, OverflowError, ValueError):
+        # ImproperlyConfigured from resolving the settings, the rest from the cast.
+        # OverflowError is the one that is not a typo: `int(float('inf'))` raises it, and a
+        # settings dict can hold `inf` directly — the environment cannot, it is refused
+        # there — so without this the writer thread ends on a value E044 only reports
         return cast(DEFAULTS[key])
 
 
@@ -493,9 +496,21 @@ class EventRecorder:
         # log.dropped row, which is the only place the gap becomes visible
         self._drop(len(leftover))
 
+    @staticmethod
+    def flush_interval() -> int:
+        """Seconds before a partial batch is written anyway, as ``E038`` defines it.
+
+        An integer, matching the check and the settings page. Read as a float this
+        honoured a fractional interval the check refuses, so a value could pass
+        ``manage.py check`` and then behave in a way the check called impossible — one
+        setting with two rules. Named rather than inline so the rule has one reader and a
+        test can ask it directly.
+        """
+        return int(max(1, _number('EVENT_LOG_FLUSH_INTERVAL', int)))
+
     def _collect(self, buffer: queue.Queue[Event | Wake]) -> tuple[list[Event], list[Wake]]:
         """Gather up to one batch, with any wake-ups that ended the wait."""
-        interval = max(0.01, _number('EVENT_LOG_FLUSH_INTERVAL', float))
+        interval = self.flush_interval()
         limit = max(1, int(_number('EVENT_LOG_BATCH_SIZE', int)))
         deadline = time.monotonic() + interval
         batch: list[Event] = []

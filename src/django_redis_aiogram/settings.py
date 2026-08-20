@@ -9,6 +9,8 @@ the whole project down — its test suite included — whenever the token or Red
 was absent.
 """
 
+import logging
+import math
 import os
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
@@ -19,6 +21,8 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.signals import setting_changed
 
 from django_redis_aiogram.defaults import DEFAULTS
+
+logger = logging.getLogger('django_redis_aiogram')
 
 SETTINGS_NAME = 'TELEGRAM_BOT'
 ENV_PREFIX = 'DJANGO_REDIS_AIOGRAM_'
@@ -81,8 +85,36 @@ def _from_env(key: str, default: object) -> object:
         except ValueError:
             msg = f'{name} must be an integer, got {raw!r}.'
             raise ImproperlyConfigured(msg) from None
+    if isinstance(default, float):
+        # a setting whose check accepts a number has to accept one from here too. Without
+        # this branch a float-defaulted setting fell through to `_MISSING` and the variable
+        # was *silently ignored*, and while `DRAIN_TIMEOUT` defaulted to an int the same
+        # value raised out of `apps.ready()` — so `DRAIN_TIMEOUT: 0.5` was valid in
+        # settings and stopped every `manage.py` command from the environment
+        try:
+            number = float(raw)
+        except ValueError:
+            msg = f'{name} must be a number, got {raw!r}.'
+            raise ImproperlyConfigured(msg) from None
+        if not math.isfinite(number):
+            # `float()` accepts 'nan', 'inf' and '-inf', and every consumer of these
+            # settings is a deadline: `nan` compares false against everything, so a wait
+            # bounded by it never expires, and `sleep(nan)` raises from inside a thread
+            # nobody is watching. E044 reports it, but only when `check` runs — and the
+            # environment reaches every process, including the ones that never run checks
+            msg = f'{name} must be a finite number, got {raw!r}.'
+            raise ImproperlyConfigured(msg)
+        return number
     if isinstance(default, str):
         return raw
+    # a container or a callable has no textual form, so the variable cannot be honoured —
+    # and being silently ignored is the worst of the three answers. An operator throttling
+    # the bot with DJANGO_REDIS_AIOGRAM_RATE_LIMIT got the default rate and no word about
+    # it, from a page that promises an environment twin for every scalar
+    logger.warning(
+        'ignoring an environment variable for a setting that has no textual form',
+        extra={'tg_setting': key, 'tg_variable': name},
+    )
     return _MISSING
 
 
@@ -185,10 +217,15 @@ class PopCeiling:
 def blpop_ceiling() -> PopCeiling:
     """Return the real cap on a blocking pop, which is not ``BLPOP_TIMEOUT`` alone.
 
-    Three bounds meet at the consumer's pop and the smallest wins: the configured
-    ``BLPOP_TIMEOUT``, the ``HEARTBEAT_INTERVAL`` — a worker that popped for longer
-    than that would let its own heartbeat key expire and look dead — and one second
-    inside ``REDIS_TIMEOUT``, so the pop returns before the read deadline fires.
+    Two bounds are weighed here and the smallest wins: the ``HEARTBEAT_INTERVAL`` — a
+    worker that popped for longer than that would let its own heartbeat key expire and
+    look dead — and one second inside ``REDIS_TIMEOUT``, so the pop returns before the
+    read deadline fires. The configured ``BLPOP_TIMEOUT`` is the third, applied by the
+    caller against this ceiling, which is why ``bound_by`` can never name it.
+
+    One second inside ``REDIS_TIMEOUT`` is only possible from 2 upwards, which is what
+    ``E030``'s floor is for: at 1 the subtraction clamps back to 1, the pop's timeout
+    equals the read deadline, and every idle pop raises instead of returning empty.
 
     Lives here rather than beside the consumer because ``checks.py`` needs it too, and
     importing :mod:`django_redis_aiogram.delivery` would pull in aiogram through

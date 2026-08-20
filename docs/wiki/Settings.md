@@ -135,7 +135,14 @@ carry, and a string from it would be read one character per item.
 
 ## Check ids
 
-Errors are `django_redis_aiogram.EXXX`, warnings `django_redis_aiogram.WXXX`.
+Errors are `django_redis_aiogram.EXXX`, warnings `django_redis_aiogram.WXXX`,
+and information `django_redis_aiogram.IXXX`. An error refuses the boot; a warning
+fails `manage.py check --fail-level WARNING`, which is what a CI step or an
+entrypoint usually runs; information fails neither, and is there for conditions
+this package can see but cannot judge from inside a check — `I001` and `I002`
+below are both of that kind, because a system check cannot tell which process it
+is running in or look inside a database router.
+
 They moved from `telegram_bot.EXXX` in 2.0 — update `SILENCED_SYSTEM_CHECKS`
 if you silenced any. An id is never reused once its setting is gone, so an
 entry naming a retired one is dead but harmless.
@@ -145,7 +152,7 @@ entry naming a retired one is dead but harmless.
 | `W001` / `W002` | `TOKEN` / `REDIS_URL` empty while the bot is enabled |
 | `W003` | `TELEGRAM_BOT` contains unknown keys |
 | `W004` | `BLPOP_TIMEOUT` is at or above `REDIS_TIMEOUT`, so the consumer caps it |
-| `E001`–`E003`, `E017` | a boolean setting holds something that cannot be read as true or false |
+| `E001`–`E003`, `E017` | a boolean setting holds something that cannot be read as true or false. `ENABLED` and `AUTODISCOVER` are read while the app loads, so in practice those two refuse the boot with the same message before `check` runs at all |
 | `E004`–`E007`, `E009`–`E011` | a string setting is wrong, or not one of the allowed values |
 | `E012`, `E014` | an integer setting is wrong or below its minimum |
 | `E015` / `E016` | `DEFAULT_KWARGS` not callable / `DEFAULT_BOT_PROPERTIES` not a mapping |
@@ -160,8 +167,8 @@ entry naming a retired one is dead but harmless.
 | `E027` | `WEBHOOK_URL` is set without a secret or is not https, or `MODE` is `webhook` with no URL |
 | `E028` | `MODE` is not `polling` or `webhook` |
 | `E029` | `WEBHOOK_ALLOWED_UPDATES` is not a list, or names an update type Telegram does not have |
-| `E030` | `REDIS_TIMEOUT` is wrong or below 1 |
-| `E031`, `E042` | `EVENT_LOG` / `EVENT_LOG_SYNC` cannot be read as true or false |
+| `E030` | `REDIS_TIMEOUT` is wrong or below 2 — the pop has to sit one second inside it |
+| `E031`, `E042` | `EVENT_LOG` / `EVENT_LOG_SYNC` cannot be read as true or false. `EVENT_LOG` is read while the app loads, so it too refuses the boot first |
 | `E032`, `E035` | `EVENT_LOG_KINDS` / `EVENT_LOG_REDACT_KEYS` is not a list or tuple of strings |
 | `E033` | `EVENT_LOG_PAYLOAD` is not `none`, `summary` or `full` |
 | `E034`, `E039` | `EVENT_LOG_MAX_PAYLOAD_BYTES` / `EVENT_LOG_RETENTION_DAYS` is wrong or negative |
@@ -172,8 +179,8 @@ entry naming a retired one is dead but harmless.
 | `E044` | `DRAIN_TIMEOUT` is not a finite number, or is negative |
 | `E045` | `MAX_IN_FLIGHT` is not an integer, or is negative |
 | `E046` | `REQUIRE_CRASH_SAFE` cannot be read as true or false |
-| `W010` | `WORKER_NAME` is empty **and** the hostname is one Docker generated, so a replacement container gets a different name. A fixed hostname is not warned about |
-| `W011` | `EVENT_LOG_DATABASE` names an alias but nothing in `DATABASE_ROUTERS` routes this app there, so a plain `migrate` does not create the table on it — `migrate --database=<alias>` still would. A warning rather than an error: a router of your own returning the same alias is a legitimate way to do it, and this cannot see inside one |
+| `I001` | `WORKER_NAME` is empty **and** the hostname is one Docker generated, so a replacement container gets a different name — which strands whatever the old container was sending. Information rather than a warning because a check cannot tell a consumer from a web process, and every container without `hostname:` matches; `start_tgbot` warns for itself at startup |
+| `I002` | `EVENT_LOG_DATABASE` names an alias and nothing in `DATABASE_ROUTERS` that this check can read sends this app there, so a plain `migrate` may not create the table — `migrate --database=<alias>` still would. Information rather than a warning: a router of your own returning that alias is equally correct, and this cannot see inside one |
 | `W005` | the log is on while its database has no engine, so every event is dropped |
 | `W006` | the log is on with `EVENT_LOG_RETENTION_DAYS` at 0, so nothing ever deletes a row |
 | `W007` | `EVENT_LOG_BATCH_SIZE` is above `EVENT_LOG_BUFFER_SIZE`, so the batch can never fill |

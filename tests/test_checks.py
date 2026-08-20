@@ -6,24 +6,26 @@ import pathlib
 import re
 
 import pytest
-from django.core.checks import Error
+from django.core.checks import WARNING, Error
 from django.core.checks import Warning as CheckWarning
 from django.test import override_settings
 
-from django_redis_aiogram.checks import CHECKS, check_settings
+from django_redis_aiogram.checks import CHECKS, check_settings, worker_name_problems
 from django_redis_aiogram.dbrouter import TelegramEventLogRouter
 from django_redis_aiogram.defaults import DEFAULTS
 from django_redis_aiogram.events import worker_identity
+from django_redis_aiogram.redis import read_timeout
+from django_redis_aiogram.settings import blpop_ceiling
 
 
 @pytest.fixture(autouse=True)
 def _stable_hostname(monkeypatch):
-    """Pin the hostname, because W010 reads it.
+    """Pin the hostname, because I001 reads it.
 
     Without this the whole module's results depend on where it runs: a container
     started without `hostname:` gets a twelve-character hex name, which is exactly
-    what W010 exists to report, so `test_the_defaults_report_nothing` would pass
-    on a laptop and fail in Docker. The tests that are *about* W010 patch it back.
+    what I001 exists to report, so `test_the_defaults_report_nothing` would pass
+    on a laptop and fail in Docker. The tests that are *about* I001 patch it back.
     """
     monkeypatch.setenv('HOSTNAME', 'bot-worker-1')
 
@@ -160,7 +162,7 @@ def test_disabled_bot_does_not_warn_about_credentials():
 
 SETTINGS_PAGE = pathlib.Path(__file__).resolve().parent.parent / 'docs' / 'wiki' / 'Settings.md'
 # the table separates a range with an en dash
-DOCUMENTED = re.compile('`([EW]\\d{3})`(?:\\s*[\u2013-]\\s*`([EW]\\d{3})`)?')
+DOCUMENTED = re.compile('`([EWI]\\d{3})`(?:\\s*[\u2013-]\\s*`([EWI]\\d{3})`)?')
 
 # Every id the checks can emit. Three settings dicts are needed: a wrong type
 # stops a check before it can reach its value-level complaint, and an alias that
@@ -168,14 +170,18 @@ DOCUMENTED = re.compile('`([EW]\\d{3})`(?:\\s*[\u2013-]\\s*`([EW]\\d{3})`)?')
 # E008 and E013 guarded the keyspace settings 3.0 removed. Their ids are gone
 # rather than reused: a project silencing one must not start silencing a new rule
 RETIRED_IDS = {'E008', 'E013'}
-# W010 is left out of the emitted set on purpose: it fires only when this machine's
+# I001 is left out of the emitted set on purpose: it fires only when this machine's
 # hostname looks Docker-generated, so whether the fixtures below produce it differs
 # between a laptop and CI. It has its own tests, and
 # `test_every_check_id_is_documented` reads the registry rather than this set, so it
 # is still held to the documentation
-HOSTNAME_DEPENDENT_IDS = {'W010'}
-EXPECTED_IDS = ({f'E{code:03d}' for code in range(1, 47)} - RETIRED_IDS) | (
-    {f'W{code:03d}' for code in range(1, 12)} - HOSTNAME_DEPENDENT_IDS
+HOSTNAME_DEPENDENT_IDS = {'I001'}
+EXPECTED_IDS = (
+    ({f'E{code:03d}' for code in range(1, 47)} - RETIRED_IDS)
+    # W011 and W010 became I002 and I001: a check cannot tell which process it runs in, so
+    # neither condition is one to fail `check --fail-level WARNING` over
+    | {f'W{code:03d}' for code in range(1, 10)}
+    | ({'I001', 'I002'} - HOSTNAME_DEPENDENT_IDS)
 )
 
 WRONG_TYPES = {
@@ -300,11 +306,74 @@ def test_every_check_id_is_documented():
 
     Read from the registry rather than from `EXPECTED_IDS`, which is the set of ids
     the fixtures below *emit*. Some rows cannot be emitted by a `TELEGRAM_BOT` dict at
-    all — W010 needs an ephemeral hostname, W011 needs `DATABASE_ROUTERS` — so an id
+    all — I001 needs an ephemeral hostname, I002 needs `DATABASE_ROUTERS` — so an id
     added without touching that set was documented only by whoever remembered to.
     """
     missing = sorted({check.code for check in CHECKS} - documented_ids())
     assert not missing, f'check ids missing from docs/wiki/Settings.md: {missing}'
+
+
+def test_the_documented_floor_is_the_floor_the_check_enforces():
+    """`E030` refuses a number, and the table has to name the same number.
+
+    The row said `below 1` while the registry had moved to 2, which is worse than
+    saying nothing: an operator reading it concludes `REDIS_TIMEOUT = 1` passes.
+    Read from the registry so the two cannot drift again — and pin the floor from
+    both sides, because a table naming a number no check enforces is the same
+    defect facing the other way.
+    """
+    floor = next(check for check in CHECKS if check.code == 'E030').validate.keywords['minimum']
+    row = next(line for line in SETTINGS_PAGE.read_text(encoding='utf-8').splitlines() if line.startswith('| `E030`'))
+    assert f'below {floor}' in row, f'the table does not name the floor the check enforces ({floor}): {row}'
+
+    for value, refused in ((floor - 1, True), (floor, False)):
+        with override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_TIMEOUT': value}):
+            reported = 'django_redis_aiogram.E030' in ids(errors(check_settings()))
+        assert reported is refused, f'REDIS_TIMEOUT={value} is {"accepted" if refused else "refused"}'
+
+
+def test_no_test_asserts_on_a_check_id_the_registry_no_longer_has():
+    """A half-done rename leaves assertions that are true of every configuration.
+
+    W010 became I001 and three assertions here kept the old spelling. Once an id is gone,
+    asking that the prefixed form of it be absent from `ids(...)` holds whatever the
+    settings are — so the fixed hostname, the padded name and the named worker were each
+    pinned by nothing. The grep that found the documentation found those lines too, which
+    is why the guard has to be executable rather than a habit.
+
+    Spelled without the package prefix on purpose: this scan reads every file under
+    `tests/`, its own docstring included, and an example written in full would be the
+    only thing it ever found.
+
+    Retired ids are exempt by name, not by pattern: their absence is the point, and
+    `RETIRED_IDS` is where that decision is written down.
+    """
+    live = {check.code for check in CHECKS} | RETIRED_IDS
+    stale = {}
+    for path in sorted(pathlib.Path(__file__).resolve().parent.rglob('*.py')):
+        named = set(re.findall(r'django_redis_aiogram\.([EWI]\d{3})', path.read_text(encoding='utf-8')))
+        if named - live:
+            stale[path.name] = sorted(named - live)
+
+    assert not stale, f'assertions naming ids the registry does not have: {stale}'
+
+
+def test_the_page_explains_every_severity_the_registry_uses():
+    """The table gained `I001` and `I002` while its legend still said errors and warnings.
+
+    Documenting an id is not documenting what it does to a build, and the level is the
+    part an operator acts on: `--fail-level WARNING` is what a CI step runs, and whether
+    a row can fail it decides whether they can deploy. Read from the registry, so a
+    fourth prefix cannot arrive unexplained the way the third one did.
+    """
+    page = SETTINGS_PAGE.read_text(encoding='utf-8')
+    unexplained = sorted(
+        f'django_redis_aiogram.{check.code[0]}XXX'
+        for check in CHECKS
+        if f'django_redis_aiogram.{check.code[0]}XXX' not in page
+    )
+
+    assert not unexplained, f'the Check ids legend does not explain: {unexplained}'
 
 
 def test_every_registry_row_reports_under_its_own_id():
@@ -442,8 +511,8 @@ ROUTED_LOG = {'EVENT_LOG': True, 'EVENT_LOG_DATABASE': 'events', 'TOKEN': '1:x',
 
 
 def routing_warnings():
-    """The W011 messages the current settings produce."""
-    return [message for message in check_settings() if str(message.id).endswith('W011')]
+    """The I002 messages the current settings produce."""
+    return [message for message in check_settings() if str(message.id).endswith('I002')]
 
 
 @override_settings(TELEGRAM_BOT=ROUTED_LOG, DATABASE_ROUTERS=[])
@@ -457,7 +526,11 @@ def test_a_log_database_nothing_routes_to_is_reported():
     reported = routing_warnings()
 
     assert reported, 'a log pointed at an unrouted alias was not reported'
-    assert 'nothing routes this app there' in reported[0].msg
+    # the level, not only the id: a router of your own returning this alias is equally
+    # correct, so this cannot be allowed to fail `check --fail-level WARNING`. Reported as
+    # information is the whole reason it stopped being W011
+    assert reported[0].level < WARNING, 'a check that cannot see inside a router warned'
+    assert 'cannot see a router that sends this app there' in reported[0].msg
     assert 'TelegramEventLogRouter' in (reported[0].hint or '')
 
 
@@ -587,7 +660,7 @@ def test_a_container_that_forgot_its_hostname_is_warned_about(monkeypatch):
     """
     monkeypatch.setenv('HOSTNAME', 'ba333cb79e00')
 
-    assert 'django_redis_aiogram.W010' in ids(check_settings())
+    assert 'django_redis_aiogram.I001' in ids(check_settings())
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'})
@@ -596,7 +669,7 @@ def test_a_fixed_hostname_is_not_warned_about(monkeypatch):
     everywhere; warning about it as such would fire on every install."""
     monkeypatch.setenv('HOSTNAME', 'bot-worker-1')
 
-    assert 'django_redis_aiogram.W010' not in ids(check_settings())
+    assert 'django_redis_aiogram.I001' not in ids(check_settings())
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'WORKER_NAME': '   '})
@@ -605,16 +678,71 @@ def test_a_padded_name_is_judged_the_way_the_worker_judges_it(monkeypatch):
 
     A check that stripped first would call this empty, look at the hostname, and
     warn about a name the worker never uses. Poor as that name is, it is stable,
-    and stability is the only thing W010 is about.
+    and stability is the only thing I001 is about.
     """
     monkeypatch.setenv('HOSTNAME', 'ba333cb79e00')
 
     assert worker_identity() == '   ', 'the runtime stopped taking a padded name'
-    assert 'django_redis_aiogram.W010' not in ids(check_settings())
+    assert 'django_redis_aiogram.I001' not in ids(check_settings())
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'WORKER_NAME': 'bot-1'})
 def test_a_named_worker_is_not_warned_about(monkeypatch):
     monkeypatch.setenv('HOSTNAME', 'ba333cb79e00')
 
-    assert 'django_redis_aiogram.W010' not in ids(check_settings())
+    assert 'django_redis_aiogram.I001' not in ids(check_settings())
+
+
+@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})
+def test_a_documented_configuration_survives_fail_level_warning():
+    """`check --fail-level WARNING` is what projects run in CI and in entrypoints.
+
+    Both of the ids added in this release were warnings about conditions a check cannot
+    decide from where it stands: an ephemeral hostname, which every container without
+    `hostname:` has whether or not it consumes anything, and a log alias that a router
+    this check cannot read may well serve. So a web container that upgraded went from
+    exit 0 to exit 1 on a configuration that works. They report as information now.
+    """
+    reported = [message for message in check_settings() if message.level >= WARNING]
+
+    assert reported == [], f'a working configuration would fail --fail-level WARNING: {ids(reported)}'
+
+
+@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})
+def test_the_worker_name_rule_is_information_and_the_consumer_warns_for_itself(monkeypatch):
+    """One rule, two audiences: the check informs, `start_tgbot` warns.
+
+    Being the consumer is knowable in the command and not in a check, and this is the
+    one place the same rule is asked twice — so it is asked of one function.
+    """
+    monkeypatch.setattr('django_redis_aiogram.checks.socket.gethostname', lambda: 'ba333cb79e00')
+    monkeypatch.delenv('HOSTNAME', raising=False)
+
+    reported = [message for message in check_settings() if str(message.id).endswith('I001')]
+
+    assert len(reported) == 1, 'the rule stopped reporting at all'
+    assert reported[0].level < WARNING, 'a check that cannot tell which process it is in warned'
+    assert worker_name_problems(), 'the command would be told nothing'
+
+
+@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'REDIS_TIMEOUT': 1})
+def test_a_read_deadline_of_one_second_is_refused():
+    """At 1 the consumer's blocking pop cannot fit inside the deadline it is capped by.
+
+    `blpop_ceiling()` promises one second inside `REDIS_TIMEOUT`; at 1 the subtraction
+    clamps back to 1, so the pop's own timeout *equals* the read deadline and the deadline
+    always wins. Every idle second then costs a `TimeoutError`, a traceback and a
+    reconnect, against a healthy server, for ever — and `W004` invited exactly that by
+    suggesting `BLPOP_TIMEOUT` be lowered to match.
+    """
+    assert 'django_redis_aiogram.E030' in ids(errors(check_settings()))
+
+
+@pytest.mark.parametrize('timeout', [2, 3, 5, 10, 60])
+def test_every_read_deadline_the_check_admits_leaves_room_for_the_pop(timeout):
+    """The floor and the ceiling are one statement, so they are asserted together."""
+    with override_settings(
+        TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'REDIS_TIMEOUT': timeout}
+    ):
+        assert errors(check_settings()) == [], 'the check refuses a value the consumer can work with'
+        assert blpop_ceiling().seconds < read_timeout(), 'the pop cannot outlast the socket it reads through'
