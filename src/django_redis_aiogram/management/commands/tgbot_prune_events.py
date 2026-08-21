@@ -90,9 +90,12 @@ class Command(BaseCommand):
         cutoff = timezone.now() - datetime.timedelta(days=days)
         rows = TelegramEvent.objects.using(alias)
 
-        # where the walk stops: nothing older than the cutoff lives above this
-        # id. `ORDER BY id DESC LIMIT 1` rather than an aggregate — the same
-        # answer without a heap pass over exactly the set about to be deleted
+        # where the walk stops: nothing older than the cutoff lives above this id.
+        # `drai_event_recent` covers the cutoff range, so neither form touches the
+        # table — but ordering by id still sorts that range, and `EXPLAIN QUERY PLAN`
+        # gives this and `Min(id)` the same two steps: the covering search and one
+        # `USE TEMP B-TREE FOR ORDER BY`. Written as a limit rather than an aggregate
+        # to read like the `low` below it, not because it measures faster
         expired = rows.filter(created_at__lt=cutoff)
         watermark = expired.order_by('-id').values_list('id', flat=True).first()
         if watermark is None:

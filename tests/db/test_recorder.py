@@ -912,6 +912,9 @@ def test_recording_does_not_close_a_connection_whose_autocommit_is_off(monkeypat
     monkeypatch.setattr(connection, 'is_in_memory_db', lambda: False)
     monkeypatch.setattr(connection, '_close', lambda: closed.append('closed'))
     recorder = EventRecorder()
+    # the same premise the atomic-block test above asserts: queued instead of written,
+    # nothing here looks at a connection at all and the empty list below is free
+    assert recorder._write_here(), 'the event would be queued, so nothing here is on trial'
     transaction.set_autocommit(False)
 
     try:
