@@ -12,9 +12,10 @@ import uuid
 from typing import TYPE_CHECKING, Any, cast
 
 from django.contrib import admin, messages
-from django.core.exceptions import ImproperlyConfigured
+from django.contrib.admin.views.main import ORDER_VAR
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.paginator import Paginator
-from django.db.models import QuerySet
+from django.db.models import Field, QuerySet
 from django.http import HttpRequest
 from django.utils.functional import cached_property
 from django.utils.html import format_html, format_html_join
@@ -23,6 +24,9 @@ from django_redis_aiogram.eventlog import log_alias
 from django_redis_aiogram.events import failure_kinds, kind_choices
 from django_redis_aiogram.models import TelegramEvent
 from django_redis_aiogram.settings import SETTINGS_NAME, coerce_bool, conf
+
+#: fetched only on the page that renders them; see TelegramEventAdmin.get_queryset
+PAYLOAD_COLUMNS = ('error', 'detail')
 
 if TYPE_CHECKING:
     # django-stubs parameterises these; at runtime neither is subscriptable
@@ -120,6 +124,12 @@ class BoundedPaginator(Paginator):  # type: ignore[type-arg]
         # the changelist always paginates a queryset; the base class is typed
         # for anything sliceable, which has no count()
         rows = cast('QuerySet[TelegramEvent]', self.object_list)
+        # unordered on purpose. Which rows the cap admits does not change how many
+        # there are, and the ordering is what stopped the index serving this: an `IN`
+        # over the failure kinds cannot yield a global `id DESC` from `(kind, -id)`, so
+        # the database sorted every match before the LIMIT could bite — the same defect
+        # the index was added to remove, surviving in the filter that needs it most
+        rows = rows.order_by()
         # one row past the cap, so the difference between "exactly ten thousand"
         # and "more than we will count" is knowable rather than assumed
         found = int(rows[: COUNT_LIMIT + 1].count())
@@ -142,12 +152,55 @@ class TelegramEventAdmin(ModelAdminBase):
     # insert from becoming a constraint check
     list_select_related = False
     ordering = ('-id',)
+    # only the columns an index can serve: function, worker and error_code have
+    # none, and one click on those headers sorts a table sized by traffic
+    sortable_by = ('created_at', 'kind', 'chat_id')
     # no date_hierarchy: its drilldown truncates created_at for every row, which
     # is a full scan no index can serve
 
     def get_queryset(self, request: HttpRequest) -> QuerySet[TelegramEvent]:
-        """Read from the alias the writer writes to, router installed or not."""
-        return super().get_queryset(request).using(log_alias())
+        """Read from the alias the writer writes to, router installed or not.
+
+        The two wide columns are left behind. Between them they are most of what a
+        row weighs — about 1.4 MB per fifty-row page under ``EVENT_LOG_PAYLOAD:
+        'full'`` with long tracebacks, and much less on the default ``'summary'``
+        with its 8 KiB cap — and the changelist renders neither, so they were
+        fetched to be discarded, including for a user `get_fields` withholds them
+        from. :meth:`get_object` asks for them
+        back on the one page that shows them.
+        """
+        return super().get_queryset(request).using(log_alias()).defer(*PAYLOAD_COLUMNS)
+
+    def get_object(
+        self,
+        request: HttpRequest,
+        object_id: str,
+        from_field: str | None = None,
+    ) -> TelegramEvent | None:
+        """Fetch one row with its payload columns, since this page renders them.
+
+        Django routes the detail page through `get_queryset` too, so without this
+        every deferred column would cost its own extra query when the template
+        touched it. Written out rather than delegated because the deferral has to
+        be lifted *before* the lookup, not after it.
+
+        Only for a reader allowed to see them. `get_fields` already keeps message
+        bodies and exception text off the page, but fetching them anyway would put
+        both on the wire and into the query log for someone the permission exists
+        to withhold them from.
+        """
+        rows = self.get_queryset(request)
+        if may_see_payloads(request):
+            rows = rows.defer(None)
+        meta = TelegramEvent._meta  # noqa: SLF001 - how Django itself asks a model for its fields
+        field = meta.pk if from_field is None else meta.get_field(from_field)
+        if not isinstance(field, Field):
+            # this model holds no relations, so nothing else can turn up here
+            return None
+        try:
+            return rows.get(**{field.name: field.to_python(object_id)})
+        except (TelegramEvent.DoesNotExist, ValidationError, ValueError):
+            return None
 
     def changelist_view(self, request: HttpRequest, extra_context: dict[str, Any] | None = None) -> Any:  # noqa: ANN401 - Django types this as a bare response
         """Render the list, saying so when the count stopped at the cap.
@@ -155,7 +208,19 @@ class TelegramEventAdmin(ModelAdminBase):
         A page that reports exactly ten thousand results reads as the whole
         answer. Silently, it would be the same defect the paginator exists to
         avoid, moved one step along.
+
+        It also drops an ``?o=`` naming a column no index can serve. ``sortable_by``
+        decides whether a header is rendered as a *link* and nothing else — Django reads
+        it in one place, the template tag, while ``ChangeList`` maps ``?o=`` straight onto
+        ``list_display``. So a bookmark, a shared link or a query string kept from before
+        this restriction still ordered the whole table by ``function``, ``worker`` or
+        ``error_code``: on 200 000 rows a sequential scan and a sort for the page. Not for
+        the count — :class:`BoundedPaginator` drops the ordering, for the reason given
+        there — so this is the page query alone, once per view. Filtered rather than
+        refused, because an operator following an old link wants the page; the ordering
+        falls back to the default, which the index serves.
         """
+        self._drop_unsortable_ordering(request)
         response = super().changelist_view(request, extra_context)
         changelist = getattr(response, 'context_data', {}).get('cl')
         paginator = getattr(changelist, 'paginator', None)
@@ -167,6 +232,27 @@ class TelegramEventAdmin(ModelAdminBase):
                 messages.WARNING,
             )
         return response
+
+    def _drop_unsortable_ordering(self, request: HttpRequest) -> None:
+        """Keep only the ``?o=`` terms whose column is in :attr:`sortable_by`."""
+        requested = request.GET.get(ORDER_VAR)
+        if not requested:
+            return
+        allowed = {str(index) for index, field in enumerate(self.list_display) if field in self.sortable_by}
+        terms = requested.split('.')
+        kept = [term for term in terms if term.lstrip('-') in allowed]
+        if len(kept) == len(terms):
+            return
+        params = request.GET.copy()
+        if kept:
+            params[ORDER_VAR] = '.'.join(kept)
+        else:
+            del params[ORDER_VAR]
+        # django-stubs types `request.GET` immutable, which it is by convention rather
+        # than by construction; rewriting it before `super()` reads the params is what
+        # Django's own admin does, and the alternative — a ChangeList subclass — puts the
+        # rule further from the reason for it
+        request.GET = params  # type: ignore[assignment]
 
     def get_fields(self, request: HttpRequest, _obj: TelegramEvent | None = None) -> list[Any]:
         """Hide the two columns that can hold a message body or a stack trace."""

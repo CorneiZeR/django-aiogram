@@ -10,6 +10,8 @@ import datetime
 import importlib
 import pathlib
 import re
+import subprocess
+import sys
 
 import fakeredis
 import pytest
@@ -107,10 +109,17 @@ def test_a_catch_all_registered_earlier_swallows_the_update():
         seen.append(message.text)
 
     dispatcher = Dispatcher()
-    dispatcher.include_router(bot.router)
-
+    # any test that drove the webhook view built the real `bot.dispatcher`, which holds
+    # this same router for the rest of the session — so borrow it rather than assume it
+    # is free, and give it back to whoever had it
+    parent = bot.router.parent_router
+    bot.router._parent_router = None  # the public setter refuses None
     observers = bot.router.observers['message'].handlers
     try:
+        # inside the try, because it can raise: attaching is the step that fails when the
+        # router is already held, and failing it above the `finally` left the singleton
+        # detached and this handler registered for every test after
+        dispatcher.include_router(bot.router)
         asyncio.run(dispatcher.feed_update(Bot(token='42:x'), types.Update(update_id=2, message=a_message('/late'))))
 
         assert seen == [], 'a later handler received an update the catch-all should have taken'
@@ -119,7 +128,7 @@ def test_a_catch_all_registered_earlier_swallows_the_update():
         # answer updates in every test after this one, and a router left
         # attached makes the next include_router() raise
         observers[:] = [handler for handler in observers if handler.callback is not late]
-        bot.router._parent_router = None  # the public setter refuses None
+        bot.router._parent_router = parent
 
     assert observers == before, 'the recipe left the shared router changed'
 
@@ -192,6 +201,24 @@ def test_every_package_attribute_a_snippet_uses_exists(snippet):
         and not hasattr(bound[node.value.id], node.attr)
     ]
     assert not missing, f'the page uses what no longer exists: {missing}'
+
+
+def test_the_page_binds_names_the_attribute_check_can_read():
+    """The check above is a scan for absences, so an empty resolver passes it.
+
+    `imported_from_the_package` walks imports and factory assignments; if it ever
+    stopped resolving — a renamed package prefix, an import form it does not
+    handle — every snippet would report no missing attributes and the page could
+    rot freely. This pins both halves: something is bound, and a name that does
+    not exist on the bound object is actually reported.
+    """
+    bound = [imported_from_the_package(ast.parse(snippet)) for snippet in SNIPPETS]
+    assert any(bound), 'no snippet on the page binds anything from the package'
+
+    tree = ast.parse('from django_redis_aiogram import bot\nbot.no_such_attribute\n')
+    resolved = imported_from_the_package(tree)
+    assert 'bot' in resolved, 'a plain package import is no longer resolved'
+    assert not hasattr(resolved['bot'], 'no_such_attribute')
 
 
 def test_the_page_documents_every_recipe_here():
@@ -271,3 +298,226 @@ def test_the_message_the_handler_receives_is_not_the_one_constructed():
 
     assert received, 'the handler never ran'
     assert received[0] is not original, 'patching the original would have worked'
+
+
+def test_a_recipe_that_pins_a_hostname_says_what_a_second_worker_would_do():
+    """A fixed `hostname:` is the survival half of worker identity, and only that half.
+
+    The comment above it explained why the name has to outlive the container and stopped
+    there — so the obvious next step, `--scale telegram_bot=3`, gives three replicas one
+    resolved name, one in-flight list, and each reclaiming what the others are still
+    sending. `Delivery.md` states the collision rule; the recipe a reader copies did not.
+    """
+    page = (pathlib.Path(__file__).resolve().parent.parent / 'docs' / 'wiki' / 'Deployment.md').read_text(
+        encoding='utf-8'
+    )
+    # asserted before the slice: `split` on a missing marker returns the whole page, and
+    # the two fragments below turn up somewhere in a page this size whatever it says
+    assert 'hostname: telegram-bot-1' in page, 'the recipe this test is about is gone from the page'
+    assert 'telegram_bot:' in page, 'the service this test reads is gone from the page'
+    recipe = page.split('hostname: telegram-bot-1')[0].rsplit('telegram_bot:', 1)[1]
+
+    assert 'scale' in recipe, 'the recipe pins a hostname without saying what scaling it does'
+    assert 'WORKER_NAME' in recipe, 'nothing tells the reader how to run more than one worker'
+
+
+def test_the_deployment_healthcheck_recipe_names_a_runnable_module():
+    """The page tells readers what to put in `test:`, so it has to be real.
+
+    The old recipe named `manage.py tgbot_healthcheck` with `timeout: 10s`, and that
+    combination cannot work in a project of ordinary size — a management command runs
+    `django.setup()` first. If the page and the package drift again, the wrong half is
+    the one a reader copies into a compose file and only finds out about in production.
+    """
+    page = (pathlib.Path(__file__).resolve().parent.parent / 'docs' / 'wiki' / 'Deployment.md').read_text(
+        encoding='utf-8'
+    )
+
+    assert "test: ['CMD', 'python', '-m', 'django_redis_aiogram.healthcheck']" in page
+    assert "test: ['CMD', 'python', 'manage.py', 'tgbot_healthcheck']" not in page, (
+        'the page still tells readers to put the management command in a healthcheck'
+    )
+
+    module = importlib.import_module('django_redis_aiogram.healthcheck')
+    assert callable(module.main), 'the module the page names has no main() to run'
+
+    # run it, rather than grep the source for `if __name__`: that string is equally
+    # present in a comment or a docstring. `--help` is the invocation that needs neither
+    # settings nor a Redis, so it answers "is this runnable with python -m" and nothing
+    # else — the probe's real exit codes are pinned in tests/test_lazy_init.py
+    helped = subprocess.run(
+        [sys.executable, '-m', 'django_redis_aiogram.healthcheck', '--help'],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert helped.returncode == 0, helped.stderr
+    assert 'python -m django_redis_aiogram.healthcheck' in helped.stdout, helped.stdout
+    for flag in ('--max-queue', '--max-age', '--stranded', '--guarantee'):
+        assert flag in helped.stdout, f'{flag} is not on the module the page names'
+
+
+#: `DJANGO_SETTINGS_MODULE: core.settings` or `DJANGO_SETTINGS_MODULE=core.settings`,
+#: with something after the separator that is not the start of a comment
+SETTINGS_MODULE_ASSIGNMENT = re.compile(r'DJANGO_SETTINGS_MODULE\s*[:=]\s*[^\s#]')
+
+
+@pytest.mark.parametrize('page_name', ['Deployment', 'Troubleshooting'])
+def test_every_published_healthcheck_carries_the_settings_module(page_name):
+    """A recipe that omits `DJANGO_SETTINGS_MODULE` reads unhealthy forever.
+
+    The probe is a separate process and the conventional `manage.py` sets that variable
+    with `os.environ.setdefault(...)` inside its own, so a container that runs `manage.py`
+    need never export it. Omitting it from a compose snippet costs the reader their whole
+    healthcheck, in the one place they have no reason to doubt. Pinned per page, because
+    the pages are copied from independently.
+    """
+    page = (pathlib.Path(__file__).resolve().parent.parent / 'docs' / 'wiki' / f'{page_name}.md').read_text(
+        encoding='utf-8'
+    )
+
+    # odd indices only: `split` alternates prose, fenced block, prose — so taking every
+    # segment made a paragraph that merely *names* the module into a "block" that then had
+    # to contain a settings assignment. This page has exactly such a paragraph
+    fenced = page.split('```')[1::2]
+    blocks = [block for block in fenced if 'django_redis_aiogram.healthcheck' in block]
+    assert blocks, f'{page_name} publishes no healthcheck recipe any more'
+    for block in blocks:
+        # an assignment with a value, not the name anywhere in the block: the prose that
+        # explains why the variable is needed mentions it too, and a recipe whose only
+        # mention is a comment — or `DJANGO_SETTINGS_MODULE:` with nothing after it — is
+        # exactly the one that reads unhealthy for ever
+        assigned = [
+            line
+            for line in block.splitlines()
+            if not line.lstrip().startswith('#') and SETTINGS_MODULE_ASSIGNMENT.match(line.lstrip().lstrip('- '))
+        ]
+        assert assigned, f'a healthcheck recipe on {page_name} does not set DJANGO_SETTINGS_MODULE to anything'
+
+
+#: fragments of what the probe writes, stable across the interpolated parts. Held here as
+#: well as in the source and on the page on purpose: rewording a refusal has to touch all
+#: three, which is the only thing that keeps the catalogue on Troubleshooting true
+PROBE_REFUSALS = (
+    'redis is unreachable',
+    'is not a number',
+    'cannot read the settings',
+    'the consumer has not written one within',
+    'is not a timestamp',
+    'could not read the heartbeat',
+    'could not read the queue length',
+    'messages are queued, over the limit of',
+    'message(s) are in flight under',
+    'disabled in this process; nothing to check',
+    'could not scan for stranded in-flight lists',
+    'could not establish which delivery guarantee is in force',
+)
+
+
+#: the four reasons the webhook view answers 503, each quoted on Troubleshooting so an
+#: operator can grep the line they have. Same bidirectional pin as the probe's refusals
+WEBHOOK_REFUSALS = (
+    'webhook received an update while the bot is disabled',
+    'webhook received an update while this deployment polls',
+    'webhook cannot build the bot',
+    'webhook refused an update',
+)
+
+
+def webhook_source():
+    """The view, as text."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    return (root / 'src' / 'django_redis_aiogram' / 'webhook.py').read_text(encoding='utf-8')
+
+
+def catalogued_refusals():
+    """The messages Troubleshooting lists under 503, read out of the page itself."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    page = (root / 'docs' / 'wiki' / 'Troubleshooting.md').read_text(encoding='utf-8')
+    section = page.split('**503** means')[1].split('**400** means')[0]
+    return set(re.findall(r'^- `([^`]+)`', section, flags=re.MULTILINE))
+
+
+@pytest.mark.parametrize('fragment', WEBHOOK_REFUSALS)
+def test_every_reason_the_webhook_refuses_is_catalogued(fragment):
+    """A 503 is the one answer that makes Telegram try again, so its causes are read.
+
+    The page listed two of the four, and the audit that found this also found the same
+    shape twice elsewhere: prose quoting a message the code no longer emits, or omitting
+    one it does. Asserted in both directions, so a reworded line cannot leave the
+    catalogue describing something that never happens.
+    """
+    assert fragment in webhook_source(), 'the view no longer logs this; the page and this list still do'
+    assert fragment in catalogued_refusals(), 'Troubleshooting does not name a reason the view answers 503'
+
+
+#: enough to read the count the page states in prose; it is a small number by construction
+NUMBER_WORDS = {'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7}
+
+#: what each of the four 503 branches is called on Webhook.md, where the causes are prose
+#: rather than log lines. Ordered as the view checks them, which is what the page claims.
+#: The third names the exception, because the view catches `ImproperlyConfigured` and a
+#: bad `TOKEN` is only its most common cause
+WEBHOOK_CAUSES = (
+    '`ENABLED` is off',
+    '`MODE` is not `webhook`',
+    'raised `ImproperlyConfigured`',
+    'nothing ran the update',
+)
+
+
+def test_the_other_page_names_the_same_four_causes():
+    """The helpers above read Troubleshooting, and Webhook.md carries the causes too.
+
+    Dropping one from that page left every assertion here true — the same gap this file was
+    just fixed for on the other side. Asserted in the page's own order, because the
+    sentence claims to list them in the order the view checks them.
+    """
+    root = pathlib.Path(__file__).resolve().parent.parent
+    page = (root / 'docs' / 'wiki' / 'Webhook.md').read_text(encoding='utf-8')
+    # the page's own count, read rather than assumed: comparing anything derived from
+    # WEBHOOK_CAUSES against WEBHOOK_REFUSALS compares two constants written in this file,
+    # which held for every possible state of the page and of the view
+    stated = re.search(r'All (\w+) reasons for a 503', page)
+    assert stated, 'Webhook.md no longer says how many reasons there are'
+    assert NUMBER_WORDS[stated.group(1)] == len(WEBHOOK_REFUSALS), (
+        f'the page says {stated.group(1)} reasons, the view refuses for {len(WEBHOOK_REFUSALS)}'
+    )
+
+    paragraph = page[stated.end() :].split('\n\n')[0]
+    positions = [paragraph.find(cause) for cause in WEBHOOK_CAUSES]
+    absent = [cause for cause, position in zip(WEBHOOK_CAUSES, positions, strict=True) if position < 0]
+
+    assert not absent, f'Webhook.md no longer names {absent}'
+    assert positions == sorted(positions), 'the causes are no longer in the order the view checks them'
+
+
+def test_the_catalogue_and_the_view_agree_on_how_many_refusals_there_are():
+    """The list above is written by hand, so on its own it cannot notice a fifth reason.
+
+    A new `status=503` branch, or a bullet added to the page for something the view never
+    logs, would both leave every per-fragment assertion true. Counted from the source and
+    compared as sets with the page, so either side gaining or losing one fails here.
+    """
+    assert webhook_source().count('status=503') == len(WEBHOOK_REFUSALS), (
+        'the view has a 503 branch this list does not name'
+    )
+    assert catalogued_refusals() == set(WEBHOOK_REFUSALS), 'the page and this list disagree about the causes'
+
+
+@pytest.mark.parametrize('fragment', PROBE_REFUSALS)
+def test_every_line_the_probe_prints_is_catalogued(fragment):
+    """An operator greps the line out of `docker inspect`; the page has to have it.
+
+    Eleven of these were documented nowhere. Asserted in both directions — the fragment
+    has to be in the source *and* on the page — so a reworded message cannot leave the
+    catalogue quietly describing a line the probe no longer prints.
+    """
+    root = pathlib.Path(__file__).resolve().parent.parent
+    source = (root / 'src' / 'django_redis_aiogram' / 'healthcheck.py').read_text(encoding='utf-8')
+    page = (root / 'docs' / 'wiki' / 'Troubleshooting.md').read_text(encoding='utf-8')
+
+    assert fragment in source, 'the probe no longer says this; the page and this list still do'
+    assert fragment in page, 'Troubleshooting does not catalogue a line the probe prints'

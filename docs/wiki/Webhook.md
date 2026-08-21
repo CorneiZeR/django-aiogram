@@ -146,12 +146,32 @@ cannot.
 because a handler that failed once will fail the same way on redelivery — that
 is a loop, not a retry. Failures are logged; see **[[Logging]]**.
 
+It answers **503** for the other case: an update that was *refused* rather than
+handled, because nothing ran it. Shutting down is one reason; a loop already closed
+by an earlier `close()` is another, and that one used to answer 200 — so the update
+was lost and Telegram was told not to try again. There redelivery is the point —
+during a rolling restart it is the difference between the update moving to the next
+instance and disappearing into a 200 nobody acted on.
+
+What a POST gets back: **200** handled, or a handler raised; **503** refused, so
+redeliver; **403** the secret does not match — the comparison is on bytes, so a secret
+outside ASCII is compared like any other and a matching one passes; **400** the body is
+not an update Telegram could have sent. Anything that is not a POST gets **405**.
+
+All four reasons for a 503, in the order the view checks them: `ENABLED` is off in this
+process; `MODE` is not `webhook`, so a worker is polling and two sources of updates would
+be one too many; building the bot raised `ImproperlyConfigured`, most often a `TOKEN` that
+is missing or malformed; and nothing ran the update — the process is shutting down, its loop is closed,
+or the loop's own thread had not started yet.
+
 **Updates are not queued through Redis.** They go straight from the request to
 the dispatcher. Redis carries outbound messages only, in both modes.
 
 ## Health
 
-`tgbot_healthcheck` reads the consumer's heartbeat, so in webhook mode it
-answers for the `start_tgbot` worker rather than for the web process — the
-worker still runs the queue consumer, it just does not poll. See
-**[[Deployment]]**.
+The healthcheck reads the consumer's heartbeat — `python -m
+django_redis_aiogram.healthcheck` in a container, `manage.py tgbot_healthcheck`
+by hand — so in webhook mode it answers for the `start_tgbot` worker rather than
+for the web process: the worker still runs the queue consumer, it just does not
+poll. Do not point it at the web service, which writes no heartbeat and would
+read unhealthy for ever. See **[[Deployment]]**.

@@ -1,21 +1,29 @@
 """Crash-safe consuming: a worker killed mid-send must not lose the message.
 
 The consumer moves each message to a processing list before sending and
-removes it afterwards; a new worker reclaims whatever a crashed one left
+removes it afterward; a new worker reclaims whatever a crashed one left
 behind. On servers without LMOVE it falls back to plain pops.
 """
 
+import asyncio
 import threading
+from io import StringIO
 
 import pytest
 from aiogram import exceptions
 from aiogram.methods import SendMessage
+from django.core.management import CommandError, call_command
 from django.test import override_settings
-from redis.exceptions import ResponseError
+
+# ConnectionError shadows the builtin deliberately: this is the one redis-py raises, and a
+# fake raising the builtin proved nothing — `redis.exceptions.ConnectionError` is a
+# `RedisError` and not an `OSError`, so a guard narrowed to either would stay green
+from redis.exceptions import ConnectionError, ResponseError  # noqa: A004
 
 from django_redis_aiogram import TelegramBot
 from django_redis_aiogram.api import API_METHODS, check_function
-from django_redis_aiogram.delivery import BlpopDelivery
+from django_redis_aiogram.delivery import BlpopDelivery, defers_completion
+from django_redis_aiogram.management.commands.start_tgbot import Command
 from django_redis_aiogram.serializers import JsonSerializer, PickleSerializer
 
 LOGGER = 'django_redis_aiogram'
@@ -118,8 +126,12 @@ class OldRedis:
 
     def __init__(self, inner):
         self._inner = inner
+        #: whether anything actually asked for LMOVE, so a test can prove the fallback
+        #: is what ran rather than assume it from the outcome
+        self.refused = False
 
     def lmove(self, *args, **kwargs):
+        self.refused = True
         msg = "unknown command 'LMOVE'"
         raise ResponseError(msg)
 
@@ -406,3 +418,744 @@ def test_the_deny_list_only_removes_methods_that_exist():
     public = {name for name in dir(Bot) if not name.startswith('_')}
 
     assert discovered & public >= DENIED_METHODS, 'the deny list names something aiogram lacks'
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_draining_by_hand_downgrades_on_an_old_server(old_redis_server):
+    """`consume_pending` is documented as the drain that needs no thread.
+
+    `run()` learns the server has no LMOVE from `reclaim()`; nothing probes for a
+    caller draining by hand, so the first pop used to raise `ResponseError` out of
+    a documented helper instead of falling back to the at-most-once path.
+    """
+    old_redis_server.rpush(QUEUE, payload(9))
+
+    handled = []
+    delivery = BlpopDelivery(handler=lambda **kwargs: handled.append(kwargs))
+    delivery.consume_pending()
+
+    assert [item['chat_id'] for item in handled] == [9]
+    assert delivery._reliable is False
+
+
+class Deferring(BlpopDelivery):
+    """A handler that takes the completion callback and holds onto it.
+
+    Stands in for `send_raw`, which returns as soon as the coroutine is scheduled
+    — long before Telegram has seen anything.
+    """
+
+    def __init__(self):
+        self.handled = []
+        self.finish = []
+        super().__init__(handler=self._handle)
+
+    def _handle(self, on_complete=None, **kwargs):
+        self.handled.append(kwargs)
+        self.finish.append(on_complete)
+
+
+class Refusing(BlpopDelivery):
+    """A handler that takes both callbacks and refuses every send, as `send_raw` can.
+
+    `_schedule` has three refusal paths — closing, a closed loop, and a hand-off that
+    lands after `close()` began — and none of them calls `on_complete`, by contract.
+    """
+
+    def __init__(self):
+        self.handled = []
+        super().__init__(handler=self._handle)
+
+    def _handle(self, on_complete=None, on_refused=None, **kwargs):
+        self.handled.append(kwargs)
+        if on_refused is not None:
+            on_refused()
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_message_stays_in_flight_until_its_send_finishes(redis_server):
+    """The whole at-least-once promise.
+
+    `send_raw` returns once the coroutine is *scheduled*, so acknowledging when
+    the handler returns took the message out of the in-flight list before
+    Telegram had seen it. A kill anywhere in between lost it, with nothing left
+    to redeliver — while the module docstring, Delivery, Deployment and
+    Troubleshooting all promised at-least-once.
+    """
+    redis_server.rpush(QUEUE, payload(1))
+    delivery = Deferring()
+    drain(delivery, expected_handled=1)
+
+    assert [item['chat_id'] for item in delivery.handled] == [1]
+    assert redis_server.llen(PROCESSING) == 1, 'acknowledged before the send finished'
+    assert redis_server.llen(QUEUE) == 0
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_finished_send_leaves_the_in_flight_list(redis_server):
+    """And the other half: once the send says it is done, the message goes."""
+    redis_server.rpush(QUEUE, payload(2))
+    delivery = Deferring()
+    thread = delivery.start_thread()
+    for _ in range(500):
+        if delivery.finish:
+            break
+        threading.Event().wait(0.01)
+
+    try:
+        assert delivery.finish, 'the handler was never called'
+        delivery.finish[0]()  # what the send's done-callback does
+        for _ in range(500):
+            if redis_server.llen(PROCESSING) == 0:
+                break
+            threading.Event().wait(0.01)
+    finally:
+        # in a finally, because the assertion above can fail: the consumer would then keep
+        # polling Redis beside whatever ran next, and the report would show that test's
+        # confusion rather than this one's failure
+        delivery.stop()
+        thread.join(timeout=5)
+
+    assert redis_server.llen(PROCESSING) == 0
+    assert redis_server.llen(QUEUE) == 0
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'MAX_IN_FLIGHT': 'two'})
+def test_an_unreadable_in_flight_limit_refuses_at_construction(redis_server):
+    """A value the consumer cannot read has to stop the container, not the delivery thread.
+
+    `at_capacity` read the setting on every message and again on every turn of
+    `hold_for_capacity`, so `MAX_IN_FLIGHT: 'two'` raised `ValueError` out of `run()` — on
+    the consumer thread, where nothing catches it. The container stayed up, polling
+    updates with no consumer behind it, which is the one failure mode `REQUIRE_CRASH_SAFE`
+    exists to make loud. `run()` resolves `BLPOP_TIMEOUT` once before its loop for the same
+    reason; this is now read in the same place.
+    """
+    with pytest.raises(ValueError, match='two'):
+        Deferring()
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'MAX_IN_FLIGHT': 2})
+def test_the_consumer_stops_taking_messages_at_the_limit(redis_server):
+    """Acknowledging is an LREM, which scans the in-flight list — so letting a
+    backlog accumulate there turns draining it into quadratic work."""
+    for chat_id in range(6):
+        redis_server.rpush(QUEUE, payload(chat_id))
+    delivery = Deferring()
+    thread = delivery.start_thread()
+    for _ in range(500):
+        if len(delivery.handled) >= 2:
+            break
+        threading.Event().wait(0.01)
+    threading.Event().wait(0.2)  # long enough for an unbounded consumer to take the rest
+
+    taken = len(delivery.handled)
+    delivery.stop()
+    thread.join(timeout=5)
+
+    assert taken == 2, f'took {taken} messages with a limit of two'
+    assert redis_server.llen(QUEUE) == 4
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_handler_that_cannot_defer_keeps_the_old_semantics(redis_server):
+    """Every documented recipe takes `**kwargs` and nothing else, and each one
+    has to go on being acknowledged the moment it returns."""
+    redis_server.rpush(QUEUE, payload(3))
+    delivery = Recording()
+    drain(delivery, expected_handled=1)
+
+    assert [item['chat_id'] for item in delivery.handled] == [3]
+    assert redis_server.llen(PROCESSING) == 0
+    assert redis_server.llen(QUEUE) == 0
+
+
+def test_the_real_send_path_is_the_one_that_defers():
+    """The production wiring, not a double written to look like it.
+
+    `defers_completion` decides by an explicit `on_complete` parameter. Every
+    test above supplies its own handler, so all of them would still pass if
+    `send_raw` lost that parameter — and the consumer would go back to
+    acknowledging before Telegram had seen anything, silently.
+    """
+    assert defers_completion(TelegramBot().send_raw) is True
+    # and the shape every documented recipe uses must not be mistaken for it
+    assert defers_completion(lambda function=None, **kwargs: None) is False
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'gone'})
+def test_reclaim_requeues_a_dead_workers_messages(redis_server):
+    """A container with no fixed name gets a fresh one when it is replaced, so its
+    in-flight list is stranded where nothing will look for it again. This is the
+    way back, and it is manual because only a human knows the worker is dead."""
+    redis_server.rpush(f'{QUEUE}:processing:gone', payload(1), payload(2))
+    out = StringIO()
+
+    with override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'}):
+        call_command('tgbot_reclaim', worker='gone', stdout=out)
+
+    assert redis_server.llen(f'{QUEUE}:processing:gone') == 0
+    assert redis_server.llen(QUEUE) == 2
+    assert 'Requeued 2' in out.getvalue()
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+def test_a_bounded_reclaim_takes_the_newest_in_flight_first(redis_server):
+    """`--limit` has a direction, and the help text said the opposite of it.
+
+    A message is taken with ``LEFT`` → ``RIGHT``, so the tail of the in-flight list is the
+    most recent one — and a reclaim pops that tail. Draining the whole list therefore
+    restores the original order, which is what the order test below asserts, but a run
+    stopped by ``--limit`` has moved the *newest* and left the older ones in place. An
+    operator reading "oldest first" would have expected the opposite of what they got.
+    """
+    for chat_id in (1, 2, 3):
+        redis_server.rpush(f'{QUEUE}:processing:gone', payload(chat_id))
+
+    call_command('tgbot_reclaim', worker='gone', limit=1, stdout=StringIO())
+
+    assert redis_server.llen(f'{QUEUE}:processing:gone') == 2, 'the limit did not hold'
+    front = JsonSerializer().loads(redis_server.lrange(QUEUE, 0, -1)[0])
+    assert front['chat_id'] == 3, f'a bounded run took {front["chat_id"]}, not the newest'
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+def test_reclaim_does_not_stop_on_a_message_that_happens_to_be_empty(redis_server):
+    """The walk stopped on any falsy element, and only nil means the list is empty.
+
+    `LMOVE` and `RPOPLPUSH` return the element they moved, or nil when the source list has
+    nothing left — so `if not moved` treated an empty payload as exhaustion, left every
+    later message in the in-flight list, and reported a count lower than the list held.
+    An empty payload is not something this package writes, which is exactly why the bug
+    could sit here: the loop's stop condition has to mean what it says regardless.
+    """
+    redis_server.rpush(f'{QUEUE}:processing:gone', payload(1), b'', payload(2))
+    out = StringIO()
+
+    call_command('tgbot_reclaim', worker='gone', stdout=out)
+
+    assert redis_server.llen(f'{QUEUE}:processing:gone') == 0, 'the walk stopped short'
+    assert redis_server.llen(QUEUE) == 3, 'a message was left behind'
+    assert 'Requeued 3' in out.getvalue(), out.getvalue()
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+def test_reclaim_by_hand_preserves_the_original_order(redis_server):
+    """`Delivery.reclaim` has this test; its manual twin had counts only.
+
+    `'RIGHT', 'LEFT'` to `'LEFT', 'LEFT'` left the whole suite green while the messages
+    came back reversed: measured here, `2, 1, 3` instead of `1, 2, 3` — and an operator
+    running this command is already having a bad day. Asserted by draining the queue
+    rather than by reading it, because the order that matters is the order a consumer
+    sees, and this is the same shape the `Delivery.reclaim` test uses.
+    """
+    for chat_id in (1, 2):
+        redis_server.rpush(f'{QUEUE}:processing:gone', payload(chat_id))
+    redis_server.rpush(QUEUE, payload(3))
+
+    call_command('tgbot_reclaim', worker='gone', stdout=StringIO())
+
+    survivor = Recording()
+    drain(survivor, expected_handled=3)
+
+    assert [item['chat_id'] for item in survivor.handled] == [1, 2, 3]
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+def test_reclaim_refuses_this_processs_own_worker(redis_server):
+    """A running consumer reclaims its own list when it starts. Taking messages
+    from underneath one that is mid-send is how you deliver them twice."""
+    redis_server.rpush(f'{QUEUE}:processing:alive', payload(1))
+
+    with pytest.raises(CommandError, match='own worker name'):
+        call_command('tgbot_reclaim', worker='alive')
+
+    assert redis_server.llen(f'{QUEUE}:processing:alive') == 1
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+def test_reclaim_dry_run_moves_nothing(redis_server):
+    redis_server.rpush(f'{QUEUE}:processing:gone', payload(1))
+    out = StringIO()
+
+    call_command('tgbot_reclaim', worker='gone', dry_run=True, stdout=out)
+
+    assert redis_server.llen(f'{QUEUE}:processing:gone') == 1
+    assert redis_server.llen(QUEUE) == 0
+    assert 'would requeue' in out.getvalue()
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+def test_reclaim_dry_run_counts_through_the_limit(redis_server):
+    """A rehearsal has to promise what the real run does.
+
+    Reporting the whole list while `--limit` would move one of it is read as the
+    plan, and the difference turns up later as messages left behind that nobody
+    went looking for — from the command whose whole job is finding those.
+    """
+    redis_server.rpush(f'{QUEUE}:processing:gone', payload(1), payload(2), payload(3))
+    rehearsal, real = StringIO(), StringIO()
+
+    call_command('tgbot_reclaim', worker='gone', limit=1, dry_run=True, stdout=rehearsal)
+    call_command('tgbot_reclaim', worker='gone', limit=1, stdout=real)
+
+    assert 'would requeue 1 of them' in rehearsal.getvalue(), rehearsal.getvalue()
+    assert 'Requeued 1' in real.getvalue(), real.getvalue()
+    # what the rehearsal promised is what the run did
+    assert redis_server.llen(f'{QUEUE}:processing:gone') == 2
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+def test_reclaim_stops_at_the_limit(redis_server):
+    """`--limit` is what bounds one run's blast radius."""
+    redis_server.rpush(f'{QUEUE}:processing:gone', payload(1), payload(2))
+
+    call_command('tgbot_reclaim', worker='gone', limit=1, stdout=StringIO())
+
+    assert redis_server.llen(f'{QUEUE}:processing:gone') == 1
+    assert redis_server.llen(QUEUE) == 1
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+def test_reclaim_refuses_a_negative_limit(redis_server):
+    """`max(0, ...)` read a negative limit as "no limit", which is the opposite
+    of what someone typing a limit is asking for."""
+    redis_server.rpush(f'{QUEUE}:processing:gone', payload(1), payload(2))
+
+    with pytest.raises(CommandError, match='cannot be negative'):
+        call_command('tgbot_reclaim', worker='gone', limit=-1)
+
+    # and under --dry-run too: the limit is an argument, so judging it after the
+    # dry run has reported and returned tells someone rehearsing the command that
+    # it is fine, and refuses only once they mean it
+    with pytest.raises(CommandError, match='cannot be negative'):
+        call_command('tgbot_reclaim', worker='gone', limit=-1, dry_run=True)
+
+    assert redis_server.llen(f'{QUEUE}:processing:gone') == 2
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'MAX_IN_FLIGHT': 1, 'HEARTBEAT_INTERVAL': 1})
+def test_the_heartbeat_survives_a_consumer_held_at_the_limit(redis_server):
+    """A worker at its in-flight limit is busy, not dead, and has to say so.
+
+    `run()` caps the blocking pop at HEARTBEAT_INTERVAL for exactly this reason
+    — the comment above it says a read longer than the interval would let the
+    key expire under a consumer that is doing fine. The capacity gate is a wait
+    of the same kind and outlasts the key's `interval * 3` TTL whenever a send
+    is slow, and a healthy worker that stops answering gets restarted while its
+    in-flight messages are reclaimed and sent twice.
+    """
+    beats = []
+    original = type(redis_server).set
+
+    def counting(self, name, *args, **kwargs):
+        if ':heartbeat:' in (name if isinstance(name, str) else name.decode()):
+            beats.append(name)
+        return original(self, name, *args, **kwargs)
+
+    for chat_id in (1, 2):
+        redis_server.rpush(QUEUE, payload(chat_id))
+    delivery = Deferring()
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(type(redis_server), 'set', counting)
+        thread = delivery.start_thread()
+        waiter = threading.Event()
+        for _ in range(300):  # up to three seconds, three heartbeat intervals
+            if len(beats) >= 2:
+                break
+            waiter.wait(0.01)
+        held = len(delivery.handled)
+        delivery.stop()
+        thread.join(timeout=5)
+
+    assert held == 1, f'the gate never engaged: {held} messages taken with a limit of one'
+    assert len(beats) >= 2, 'the heartbeat stopped while the consumer was held at its limit'
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        **SETTINGS,
+        'TOKEN': '42:x',
+        'FSM_STORAGE': 'memory',
+        'RATE_LIMIT': None,
+    }
+)
+def test_a_cancelled_send_is_not_acknowledged_on_the_synchronous_path():
+    """Cancellation is not completion, on both paths that can report one.
+
+    The task path says so explicitly — `_completion` returns early on
+    `task.cancelled()`. The synchronous path that webhook mode takes for every
+    send caught `BaseException`, and `asyncio.CancelledError` is one, so a send
+    that never reached Telegram was reported finished and the consumer dropped
+    it from the in-flight list with nothing left to redeliver.
+    """
+    instance = TelegramBot()
+    finished = []
+
+    class Canceled:
+        async def send_message(self, **kwargs):
+            raise asyncio.CancelledError
+
+        class session:
+            @staticmethod
+            async def close():
+                pass
+
+    instance._bot = Canceled()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            instance.send_raw('send_message', chat_id=1, text='x', on_complete=lambda: finished.append(True))
+    finally:
+        instance._bot = None
+        instance.close()
+
+    assert finished == [], 'a canceled send was acknowledged'
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        **SETTINGS,
+        'TOKEN': '42:x',
+        'FSM_STORAGE': 'memory',
+        'RAISE_EXCEPTION': True,
+        'MAX_RETRIES': 0,
+        'MAX_IN_FLIGHT': 2,
+        'RATE_LIMIT': None,
+    }
+)
+def test_a_message_is_only_counted_off_once(redis_server):
+    """One message, one decrement, however many ways it reports finishing.
+
+    `send_raw` is the handler here, not a stand-in, because this only goes wrong
+    on the real path: RAISE_EXCEPTION re-raises out of the synchronous drive, and
+    that used to settle the message *and* let the exception through, so
+    `dispatch` acknowledged what it caught and the message left the count twice.
+    Each occurrence drove `_in_flight` a further step below zero, and a bound
+    that has drifted negative admits more concurrent sends than MAX_IN_FLIGHT
+    names — the unbounded in-flight list the setting exists to prevent.
+    """
+    instance = TelegramBot()
+    attempts = []
+
+    class Refusing:
+        async def send_message(self, **kwargs):
+            attempts.append(kwargs)
+            # not RuntimeError: _schedule catches that one first, to spot a loop
+            # that started running under it, so it never reaches the path at issue
+            msg = 'chat not found'
+            raise ValueError(msg)
+
+        class session:
+            @staticmethod
+            async def close():
+                pass
+
+    instance._bot = Refusing()
+    delivery = Recording(handler=instance.send_raw)
+    delivery.handled = attempts
+    redis_server.rpush(QUEUE, payload(1))
+
+    try:
+        drain(delivery, expected_handled=1)
+    finally:
+        instance._bot = None
+        instance.close()
+
+    assert attempts, 'the send never ran'
+    assert delivery._defers is True, 'send_raw stopped taking on_complete, so this proves nothing'
+    # deterministically, rather than hoping the loop's last collect() won the
+    # race: a second report sitting in the queue is the drift, just not yet applied
+    delivery.collect()
+    assert delivery._in_flight == 0, f'the in-flight count drifted to {delivery._in_flight}'
+    assert redis_server.llen(PROCESSING) == 0
+
+
+def test_a_positional_only_callback_is_not_mistaken_for_acceptance():
+    """Taking the name is not the same as taking the keyword.
+
+    The callback is passed as `on_complete=...`, which a positional-only
+    parameter refuses with a TypeError — and that lands in the handler-failed
+    branch, which acknowledges. The message would be dropped without ever having
+    been sent, and the name in the signature is what made it look supported.
+    """
+
+    def positional_only(on_complete, /, **kwargs):
+        pass
+
+    def keyword_only(*, on_complete=None, **kwargs):
+        pass
+
+    assert defers_completion(positional_only) is False
+    assert defers_completion(keyword_only) is True
+    assert defers_completion(lambda on_complete=None, **kwargs: None) is True
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'MAX_IN_FLIGHT': 2})
+def test_a_callback_called_twice_counts_once(redis_server):
+    """A second report is not harmless: it takes another message's place in the
+    in-flight count, and a count that has drifted below zero admits more
+    concurrent sends than MAX_IN_FLIGHT names."""
+
+    class CallingTwice(BlpopDelivery):
+        def __init__(self):
+            self.handled = []
+            super().__init__(handler=self._handle)
+
+        def _handle(self, on_complete=None, **kwargs):
+            self.handled.append(kwargs)
+            on_complete()
+            on_complete()  # a retry wrapper, a done-callback fired twice, a bug
+
+    redis_server.rpush(QUEUE, payload(1))
+    delivery = CallingTwice()
+    drain(delivery, expected_handled=1)
+    delivery.collect()
+
+    assert delivery.handled, 'the handler never ran'
+    assert delivery._in_flight == 0, f'the in-flight count drifted to {delivery._in_flight}'
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'ENABLED': False, 'MAX_IN_FLIGHT': 2})
+def test_a_disabled_bot_gives_the_slot_back_too(redis_server):
+    """`ENABLED` is read live, so a consumer can reach that branch mid-run.
+
+    `send_raw` returns the correlation id and sends nothing when the bot is off — and it
+    was returning without either callback, so a slot taken for the message was never
+    given back. Under `MAX_IN_FLIGHT` the bound then closed one message at a time until
+    a restart. The same defect as the refusal paths, one branch earlier.
+    """
+    for chat_id in (1, 2, 3, 4):
+        redis_server.rpush(QUEUE, payload(chat_id))
+    instance = TelegramBot()
+    delivery = Deferring()
+    handed: list[object] = []
+
+    def handler(function='send_message', on_complete=None, on_refused=None, **kwargs):
+        """The real `send_raw` on a disabled bot, which returns having sent nothing."""
+        handed.append(kwargs)
+        instance.send_raw(function, on_complete=on_complete, on_refused=on_refused, **kwargs)
+
+    delivery.handler = handler
+    delivery._defers = True
+    delivery._releases = True
+
+    delivery.consume_pending()
+
+    assert len(handed) == 4, f'the bound never reopened: {len(handed)} of 4 taken'
+    assert delivery._in_flight == 0, f'the in-flight count drifted to {delivery._in_flight}'
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'MAX_IN_FLIGHT': 2})
+def test_a_refused_send_gives_its_slot_back(redis_server):
+    """A refusal is not a completion, and it is not a leak either.
+
+    `_hand_over` takes a slot before the handler runs, and `send_raw`'s three refusal
+    paths do not call `on_complete` — by contract, because the message was not sent and
+    must stay in flight. So the slot was never returned: under `MAX_IN_FLIGHT` a handful
+    of refusals stopped the consumer taking messages at all, until `stop()`.
+
+    Four messages against a limit of two: with the slot returned every one is handled and
+    none is acknowledged; without it the second pair never gets taken.
+    """
+    for chat_id in (1, 2, 3, 4):
+        redis_server.rpush(QUEUE, payload(chat_id))
+    delivery = Refusing()
+
+    delivery.consume_pending()
+
+    assert len(delivery.handled) == 4, f'the bound never reopened: {len(delivery.handled)} of 4 taken'
+    assert delivery._in_flight == 0, f'the in-flight count drifted to {delivery._in_flight}'
+    assert redis_server.llen(PROCESSING) == 4, 'a refused send was acknowledged'
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'MAX_IN_FLIGHT': 1})
+def test_the_hand_drain_respects_the_in_flight_bound(redis_server):
+    """`consume_pending` is the documented drain that needs no thread, and it
+    schedules the same deferred sends the loop does. Without the bound it hands
+    the whole backlog to the loop at once, which is the unbounded in-flight list
+    MAX_IN_FLIGHT exists to prevent — and every one of them sits in the
+    processing list, where acknowledging is an LREM that scans it.
+    """
+    for chat_id in (1, 2, 3):
+        redis_server.rpush(QUEUE, payload(chat_id))
+    delivery = Deferring()
+
+    delivery.consume_pending()
+
+    assert len(delivery.handled) == 1, f'took {len(delivery.handled)} messages with a limit of one'
+    assert redis_server.llen(QUEUE) == 2
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_queued_on_complete_key_cannot_spend_the_callback(redis_server):
+    """The queue is a trust boundary: `send()` forwards whatever it was given.
+
+    A payload carrying this name made the call pass `on_complete` twice, which is
+    a TypeError, which lands in the handler-failed branch — so a payload could
+    have a message acknowledged without anything sending it, from the other side
+    of the queue.
+    """
+    poisoned = JsonSerializer().dumps({'function': 'send_message', 'chat_id': 1, 'on_complete': 'mine'})
+    redis_server.rpush(QUEUE, poisoned)
+    delivery = Deferring()
+    drain(delivery, expected_handled=1)
+
+    assert delivery.handled, 'the handler never ran'
+    assert callable(delivery.finish[0]), 'the payload replaced the callback'
+    assert redis_server.llen(PROCESSING) == 1, 'acknowledged without sending'
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_cancelled_send_does_not_end_the_consumer(redis_server, caplog):
+    """`dispatch` catches Exception, and CancelledError is not one.
+
+    The synchronous send path lets it out of `run_until_complete`, so it escaped
+    `run()` and ended the consumer for the life of the container — one canceled
+    send and the worker stops delivering, quietly, with the queue still filling.
+    """
+    canceled = []
+
+    def cancel_once(**kwargs):
+        canceled.append(kwargs)
+        if len(canceled) == 1:
+            raise asyncio.CancelledError
+
+    for chat_id in (1, 2):
+        redis_server.rpush(QUEUE, payload(chat_id))
+    delivery = Recording(handler=cancel_once)
+    delivery.handled = canceled
+
+    with caplog.at_level('WARNING', logger=LOGGER):
+        drain(delivery, expected_handled=2)
+
+    assert [item['chat_id'] for item in canceled] == [1, 2], 'the consumer stopped after the cancellation'
+    assert 'a queued send was cancelled' in caplog.text
+    assert redis_server.llen(PROCESSING) == 1, 'the canceled message was acknowledged'
+
+
+@override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop'})
+def test_an_unconfigured_project_gets_the_old_behavior():
+    """Both settings are new, and both default to what 3.0 already did.
+
+    Asserted through behavior rather than by reading `DEFAULTS` back, because
+    the value is only interesting for what it does: `MAX_IN_FLIGHT` at 0 is no
+    bound at all, and `REQUIRE_CRASH_SAFE` off means a Redis without `LMOVE`
+    still starts. An upgrade must not quietly gate a deployment that was working,
+    and neither default is exercised by any test that overrides the setting.
+    """
+    unbounded = Deferring()
+    unbounded._in_flight = 10_000
+    assert unbounded.at_capacity() is False, 'an unconfigured consumer grew a bound'
+
+    without_lmove = Deferring()
+    without_lmove._reliable = False
+    assert without_lmove.crash_safe is False
+    # unasked, the command starts anyway; the refusal is opt-in
+    Command._require_crash_safety(without_lmove)
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        **SETTINGS,
+        'TOKEN': '42:x',
+        'MODE': 'webhook',
+        'FSM_STORAGE': 'memory',
+        'RATE_LIMIT': None,
+        'MAX_RETRIES': 0,
+        'REDIS_TIMEOUT': 2,
+        'DRAIN_TIMEOUT': 10,
+    }
+)
+def test_a_send_the_drain_finishes_is_acknowledged_before_the_command_returns(redis_server, monkeypatch):
+    """A graceful stop must not duplicate. Driven through the command, not around it.
+
+    `on_complete` only queues the handle; the `LREM` happens in `collect()`, which runs
+    inside the consumer loop — and the loop returns *before* `close()` drains the sends
+    still in flight. So everything the drain delivered stayed in the in-flight list and
+    the next start reclaimed and sent it again: a duplicate per graceful restart, where
+    `Delivery.md` promises one only after a kill.
+
+    The send outlasts the consumer's exit on purpose. Without the settle after the drain
+    this fails whatever the timing, because the acknowledgement never happens at all;
+    the margin only guards against the reverse, a send that finishes early enough for
+    the loop's own last `collect()` to catch it and hide the defect.
+    """
+    started = threading.Event()
+
+    class SlowTelegram:
+        async def send_message(self, **kwargs):
+            """Still in flight when the consumer thread is joined."""
+            started.set()
+            await asyncio.sleep(2.0)
+            sent.append(kwargs['chat_id'])
+
+        class session:
+            @staticmethod
+            async def close():
+                """aiogram's session, reduced to what `close()` calls."""
+
+    sent: list[int] = []
+    instance = TelegramBot()
+    instance._bot = SlowTelegram()
+    monkeypatch.setattr('django_redis_aiogram.management.commands.start_tgbot.bot', instance)
+    monkeypatch.setattr(
+        'django_redis_aiogram.management.commands.start_tgbot.get_delivery',
+        lambda handler: BlpopDelivery(handler=handler),
+    )
+    release = threading.Event()
+    monkeypatch.setattr(Command, 'idle_event', release)
+    redis_server.rpush(QUEUE, payload(7))
+
+    finished = threading.Event()
+
+    def run():
+        call_command('start_tgbot', stdout=StringIO())
+        finished.set()
+
+    threading.Thread(target=run, daemon=True).start()
+    assert started.wait(5), 'the send never began, so the drain has nothing to finish'
+    assert redis_server.llen(PROCESSING) == 1, 'the message was not taken in flight'
+    release.set()
+
+    assert finished.wait(20), 'the command never returned'
+    assert sent == [7], f'the drain did not finish the send: {sent}'
+    assert redis_server.llen(PROCESSING) == 0, 'a delivered message was left to be sent again'
+    assert redis_server.llen(QUEUE) == 0
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+def test_reclaim_works_on_a_server_older_than_lmove(redis_server, monkeypatch):
+    """The one path that can still recover a list stranded on a pre-6.2 server.
+
+    `reclaim()` gives up there and the consumer runs at-most-once, so nothing else will
+    ever come back for those messages — while `--dry-run` counted them with `LLEN`, which
+    works on every server, and promised a requeue the real run then failed to perform with
+    `unknown command LMOVE`. `RPOPLPUSH` is the same move as `LMOVE ... RIGHT LEFT` and has
+    existed since 1.2.
+    """
+    redis_server.rpush(f'{QUEUE}:processing:gone', payload(1), payload(2))
+    old = OldRedis(redis_server)
+    targets = (
+        'django_redis_aiogram.redis.get_redis',
+        'django_redis_aiogram.management.commands.tgbot_reclaim.get_redis',
+    )
+    for target in targets:
+        # no `raising=False`: it would create the attribute instead of failing, so a
+        # rename or a move to `redis.get_redis(...)` at the call site would leave this
+        # patch attached to nothing — the command would resolve a modern client and every
+        # assertion below would still pass, reporting that the pre-6.2 path works without
+        # ever taking it
+        monkeypatch.setattr(target, lambda *args, **kwargs: old)
+    out = StringIO()
+
+    call_command('tgbot_reclaim', worker='gone', stdout=out)
+
+    assert old.refused, 'LMOVE was never attempted, so the fallback was not what ran'
+
+    assert redis_server.llen(f'{QUEUE}:processing:gone') == 0, 'the messages were left stranded'
+    assert redis_server.llen(QUEUE) == 2
+    assert 'Requeued 2' in out.getvalue()
+    # oldest first, the same order LMOVE RIGHT->LEFT produces
+    queued = [JsonSerializer().loads(raw)['chat_id'] for raw in redis_server.lrange(QUEUE, 0, -1)]
+    assert queued == [1, 2], f'the order was reversed: {queued}'

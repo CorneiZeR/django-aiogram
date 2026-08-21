@@ -12,6 +12,11 @@ that, a table you can query and join against your own models is worth the write.
 ```python
 TELEGRAM_BOT = {
     'EVENT_LOG': True,
+    # part of turning it on, not an afterthought: nothing on the write path deletes
+    # anything, so `W006` warns while this is 0, which is also the default — and a project running
+    # `manage.py check --fail-level WARNING` in CI, which this documentation recommends,
+    # gets a red build for a log that grows for ever. See Pruning below
+    'EVENT_LOG_RETENTION_DAYS': 30,
 }
 ```
 
@@ -49,7 +54,7 @@ gives you `sent` rows with no `queued` rows to match. That is not a bug.
 | `outbound.sent` | Telegram accepted it |
 | `outbound.retried` | Telegram refused it with a rate limit; backing off |
 | `outbound.failed` | the call raised |
-| `outbound.dropped` | retries were exhausted, or shutdown cancelled it |
+| `outbound.dropped` | it had not completed when the row was written: serialization failed, queueing refused it, retries were exhausted, or shutdown canceled it. `detail.stage` says which. Not the same as *never sent* — a queueing error can follow a write that landed, and a cancellation can land after Telegram took the request |
 | `inbound.received` | an update arrived, by polling or webhook |
 | `inbound.handled` | the handlers finished |
 | `inbound.failed` | a handler raised |
@@ -57,6 +62,31 @@ gives you `sent` rows with no `queued` rows to match. That is not a bug.
 | `queue.undecodable` | a payload could not be decoded |
 | `queue.rejected` | a payload named something that is not a Telegram API method |
 | `log.dropped` | the writer fell behind and lost events — the gap, recorded |
+
+`outbound.dropped` is the one worth reading twice. Four different things end up
+under that one kind, they are not equally recoverable, and `detail` together with
+`error_code` is what separates them:
+
+| Row says | What happened | Send it again? |
+| --- | --- | --- |
+| `detail.stage: serialising` | the payload could not be encoded, so it never left the process | yes — Redis never saw it |
+| `detail.stage: queueing` | the write to Redis raised | **not certainly** — an `RPUSH` that raised may have been applied and only its reply lost |
+| `detail.max_retries: N` | Telegram refused it with a rate limit N times over | it was delivered nowhere and nothing will retry it, so yes — but expect the same refusal |
+| `error_code: NotScheduled` | it was never scheduled, or was canceled at shutdown; `error` says which | **usually not** — see below |
+
+`NotScheduled` is the one that will bite an operator. A send that came off the
+queue is *deliberately* left in the worker's in-flight list when shutdown cancels
+it, so a restart under the same worker identity reclaims and delivers it —
+re-sending by hand duplicates. A send made directly with `send_raw`, from your own
+code rather than from the queue, was never in that list, and nothing will ever
+retry it. The rows tell them apart: a queued message has `outbound.queued` and
+`outbound.consumed` rows under the same `correlation_id`, and a direct `send_raw`
+has neither. See **[[Delivery]]** for the guarantee that makes the first case work.
+
+The stages matter most after a broadcast: `send_many` loses the ids of the failing
+chunk with the exception, so these rows are the only list of which messages went
+missing, and the stage is the only thing that says whether re-sending them would
+duplicate.
 
 Register your own:
 
@@ -84,14 +114,146 @@ a minute as `the event log is falling behind`. When the writer catches up it
 records a `log.dropped` row, so the gap is visible in the data and not only in
 the log.
 
+A row the database refuses on its own — a constraint, a column too small — is counted
+the same way, so a batch that lands 39 of 40 rows leaves a `log.dropped` behind it
+rather than a silent hole. The count survives a gap row that itself cannot be written: it
+is taken off the counter before the row is written and given back if that row does not
+land — raised or refused alike — so the next successful flush reports it. Taking it off
+first is also what stops two flushes reporting the same hole, since a worker draining by
+hand and the writer thread can both be mid-flush at once.
+
 `EVENT_LOG_BUFFER_SIZE`, `EVENT_LOG_BATCH_SIZE` and `EVENT_LOG_FLUSH_INTERVAL`
 size it. A batch larger than the buffer can never fill, so `W007` says so.
+
+**A broadcast is where this bites.** `send_many` records one `outbound.queued` row
+per message, the same as sending them one at a time — but it removes the pacing
+the sequential round trips used to give the writer, so fifty thousand chats arrive
+as fifty thousand events in a few seconds rather than spread over minutes. Raise
+`EVENT_LOG_BUFFER_SIZE`, or narrow `EVENT_LOG_KINDS`, before the first large one.
+The messages are never at risk; the rows about them are.
 
 What is lost: on `SIGKILL`, a worker timeout or `os._exit()`, whatever is in the
 queue and in the current batch. At the defaults that is under a second of events
 plus up to 200 rows. A clean `SIGTERM` loses nothing. This is an event feed, not
 a ledger — if you need durability across a kill, the thing that already gives it
 to you is the Redis queue.
+
+## Metrics, without the table
+
+The same events reach a `django.dispatch.Signal`, so a project can count what the
+bot does without keeping a row for any of it:
+
+```python
+# metrics.py, imported from your AppConfig.ready()
+from prometheus_client import Counter
+
+from django_redis_aiogram.signals import events_recorded
+
+SENDS = Counter('telegram_events', 'django-redis-aiogram events', ['kind', 'function'])
+
+
+def count(sender, events, **kwargs):
+    for event in events:
+        SENDS.labels(kind=event.kind, function=event.function or 'none').inc()
+
+
+events_recorded.connect(count, dispatch_uid='metrics.telegram')
+```
+
+Receivers get `events`: a tuple of `Event`, whose field names are the same ones the
+table's columns carry and are pinned as public API. A signal rather than a setting
+naming a dotted path, because there is then no path to get wrong, no check id for
+it, and no question about what happens when the import fails.
+
+With `EVENT_LOG` on, the write is attempted before a receiver sees the batch, so
+nothing a receiver does can change a row that was written — which is why they get
+the real objects rather than copies. The `detail` dict inside one is an ordinary
+dict, shared with the other receivers, so treat it as read-only.
+
+*Attempted*, not guaranteed, and only when the log is on at all. A write that failed
+still publishes, because a database being down is exactly when someone is watching a
+dashboard; with the log off there is no write to attempt and a receiver is the only
+thing the batch reaches. Either way, a batch arriving is not evidence that a row
+exists for it.
+
+Four things about it are worth knowing before you rely on it, and three of them
+surprise people:
+
+**It fires with `EVENT_LOG` off.** The table and the metrics are separate
+decisions. Connect a receiver, leave the log off, run no migration for it: the
+events still arrive. Turn the log on as well and both happen.
+
+**Payload summaries are the only part of `detail` the log gates.** With the log
+off, `detail` still carries whatever the recording seam measured itself: a send's
+`duration_ms`, a retry's `retry_after`, a queueing failure's `stage`, a gap's
+`dropped` count. What is missing is the *summarized arguments* — redacting
+credentials out of a payload, walking it and bounding it costs tens of
+microseconds, and a counter keyed on `kind` and `function` needs none of it. If
+your receiver needs message bodies, it needs the log on too, and then
+`EVENT_LOG_PAYLOAD` decides what is in there.
+
+**`EVENT_LOG_KINDS` filters this as well, with one exemption.** It is one answer to
+"which events does this deployment care about", not two — so a receiver sees
+exactly the kinds the table would have kept. `log.dropped` is exempt in both
+directions: it is the record that recording itself fell behind, and a deployment
+that filtered it out would read the hole as quiet traffic rather than as a gap.
+The table has always been exempt for that row; receivers are exempt with it.
+
+**Connect during app loading.** The update middleware and the FSM storage wrapper
+are built once, and whether to build them is decided then. A receiver connected
+after the first update arrives will not see updates in that process. An
+`AppConfig.ready()` is where Django says signal receivers belong, and it is early
+enough.
+
+### Where it runs, and what that costs
+
+The rule is **whichever thread flushed the batch publishes it**, and normally that is
+the event writer's own — with `EVENT_LOG` on, after that batch's own write has been
+attempted. So a slow receiver delays neither a send nor the rows it just saw, only
+later batches and how long the writer takes to stop. Never delaying a send is the
+whole reason this is not a settings hook calling into your code from the send path.
+
+Three other threads can flush a batch, so three other threads can publish one:
+
+* whatever calls `recorder.drain_once()`, which exists so a test can drive the real
+  flush path on its own thread
+
+* under `EVENT_LOG_SYNC`, on the thread that recorded the event, after its write
+  attempt. That flag only takes effect with the log on — there is nothing to insert
+  synchronously otherwise — so the write is always attempted there, and may still
+  fail. It is a testing setting, and receivers running inside the send path is one
+  more reason to keep it one
+* at shutdown, on whichever thread called `stop()`, for whatever the writer had not
+  drained by then. Those are published rather than dropped because they are the last
+  events before the process goes, and there is no writer left to hand them to
+
+A receiver that raises is logged as `an events_recorded receiver raised` and costs
+neither the other receivers their batch nor the database its rows. `send_robust` is
+most of that: Django hands the exception back instead of letting it end the writer.
+
+Not all of it, though, and the gap is worth knowing if you write a receiver as a
+class. Django's own failure logging reads `receiver.__qualname__`, which a *callable
+instance* does not have — so for that shape `send_robust` raises rather than
+containing anything, measured on Django 6.1. This package catches that too and logs
+`publishing recorded events failed`; without it the exception would be counted as a
+failed database write, which is the one story in the log that would send you to the
+wrong place entirely.
+
+One consequence survives the catch: `send_robust` stops its own receiver loop when it
+raises, so **receivers after the offending one never see that batch**. The rows are
+unaffected — they were written first — and the next batch starts the loop again. If
+that matters to you, do not write a receiver as a callable class, or keep the risky
+one last.
+
+Two honest notes about `prometheus_client` in particular. Its `labels()` and
+`inc()` both take locks, and in multiprocess mode an increment is an mmap write —
+cheap, but not free, and it happens once per event in the batch. And `outbound.sent`
+is recorded inside the `start_tgbot` worker, which serves no HTTP at all: the
+exporter has to be stood up **in that container**, or the numbers you scrape from
+the web tier will only ever cover queueing.
+
+No new dependency comes with this. `django.dispatch` is Django, and nothing here
+imports `prometheus_client` or knows it exists.
 
 ## Message bodies are not stored by default
 
@@ -148,13 +310,24 @@ app, and dragging `auth` along would move your users with it.
 What the admin deliberately does not do, because the table is sized by traffic:
 no full result count, no date drilldown (its truncation is a scan no index can
 serve), and no substring search — the two searchable columns are matched
-exactly, so both use their index.
+exactly, so both use their index. Sorting is limited to the three indexed columns:
+`created_at`, `kind` and `chat_id`. The other headers are not links, and an `?o=`
+naming one of them — from a bookmark, or a link shared before this restriction — is
+dropped rather than honoured, because ordering the whole table by `worker` is a
+sequential scan and a sort on every page.
 
 Paging counts at most **10 000 rows**, inside a `LIMIT`. The number is exact for
 the filtered views people actually read and stops growing past the cap, so the
 deepest pages are unreachable; at that depth the answer is a filter, not another
 page. Django would otherwise run `COUNT(*)` over the whole filtered queryset on
 every page load.
+
+A `LIMIT` only stops early if the rows arrive already ordered, which is why the
+kind index is on `(kind, -id)` — the same `-id` the changelist orders by. Before
+3.1.0 it was `(kind, -created_at)`, so every filtered page sorted in a temporary
+b-tree first and the bound above was not true. The list also leaves `error` and
+`detail` in the table: it renders neither, and between them they are most of what
+a row weighs. The detail page asks for them back.
 
 ## Growth, and the job that bounds it
 
@@ -164,8 +337,8 @@ bodies pushes the per-event figure up, so measure rather than trust it once
 `EVENT_LOG_PAYLOAD` is `'full'`.
 
 Nothing on the write path deletes anything. Set `EVENT_LOG_RETENTION_DAYS` and
-schedule the command; `W006` warns while it is unset, because the feature is not
-finished without it:
+schedule the command; `W006` warns while it is `0`, which is its default, because the
+feature is not finished without it:
 
 ```shell
 python manage.py tgbot_prune_events
@@ -239,7 +412,7 @@ before it is dropped. Work all three out for your data before running anything.
 
 Retention then becomes `DROP TABLE` on a whole partition — instant, no dead
 tuples. All of this is **unsupported**: `migrate` must not touch this app on
-that database afterwards. Django's migrations have no representation for
+that database afterward. Django's migrations have no representation for
 `PARTITION BY`, and both PostgreSQL and MySQL require every unique key to
 contain the partition column, which an auto-incrementing primary key cannot
 express.

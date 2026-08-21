@@ -7,6 +7,7 @@ import signal
 import threading
 import time
 from io import StringIO
+from types import SimpleNamespace
 
 import pytest
 from django.core.management import call_command
@@ -14,8 +15,13 @@ from django.test import override_settings
 
 from django_redis_aiogram import TelegramBot, bot
 from django_redis_aiogram.client import Outbound, loop_lock
+from django_redis_aiogram.defaults import DEFAULTS
 from django_redis_aiogram.events import new_correlation_id
 from django_redis_aiogram.management.commands.start_tgbot import Command as StartCommand
+
+
+async def stub_close():
+    """Enough of an aiogram session for close() to release it."""
 
 
 def an_outbound(function='send_message', **kwargs):
@@ -66,6 +72,75 @@ def running_loop(instance):
     finally:
         loop.call_soon_threadsafe(loop.stop)
         runner.join(timeout=5)
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'MODE': 'webhook', 'RATE_LIMIT': None, 'REDIS_TIMEOUT': 2})
+def test_the_join_bound_is_read_before_the_threads_it_bounds(monkeypatch):
+    """A setting read inside `finally` takes the whole teardown with it when it refuses.
+
+    `read_timeout()` raises `ValueError` on a non-numeric `REDIS_TIMEOUT`, and in polling
+    mode nothing else in the process reads that setting — so the *first* call could be the
+    `thread.join(timeout=read_timeout() + 1)` inside the teardown. From there the exception
+    skipped `bot.close()`, `delivery.collect()` and `recorder.stop()`, and without
+    `collect()` every message the drain had finished stays in the in-flight list for the
+    next start to send again: a graceful stop duplicating what only a kill should.
+
+    Asserted on the *order*, which is the whole claim: the bound is read before any thread
+    exists. A call count cannot separate the two designs — a consumer thread that has
+    already finished is joined without the second read the warning branch would make — and
+    a count of one is what both produce.
+    """
+    from django_redis_aiogram.management.commands import start_tgbot as command_module
+
+    class Quiet:
+        class session:
+            @staticmethod
+            async def close():
+                """aiogram's session, reduced to what `close()` calls."""
+
+    instance = TelegramBot()
+    instance._bot = Quiet()
+    collected = []
+    monkeypatch.setattr(command_module, 'bot', instance)
+    order: list[str] = []
+
+    def started_thread():
+        """A consumer thread that exists and is already done, so the joins have work."""
+        order.append('thread')
+        thread = threading.Thread(target=lambda: None, daemon=True)
+        thread.start()
+        return thread
+
+    monkeypatch.setattr(
+        command_module,
+        'get_delivery',
+        lambda handler: SimpleNamespace(
+            start_thread=started_thread,
+            stop=lambda: None,
+            collect=lambda: collected.append('collected'),
+            crash_safe=True,
+        ),
+    )
+
+    real = command_module.read_timeout
+
+    def note_the_read():
+        order.append('bound')
+        return real()
+
+    monkeypatch.setattr(command_module, 'read_timeout', note_the_read)
+    release = threading.Event()
+    monkeypatch.setattr(StartCommand, 'idle_event', release)
+    # released from another thread, not pre-set: the consumer starts from a `call_soon`
+    # callback, so a loop that stops before its first turn leaves `threads` empty — and
+    # the join loop this test is about would never run at all
+    threading.Timer(0.3, release.set).start()
+
+    call_command('start_tgbot', stdout=StringIO())
+
+    assert 'thread' in order, 'no consumer thread was started, so the joins never ran'
+    assert order[:2] == ['bound', 'thread'], f'the bound was read after the thread it bounds: {order}'
+    assert collected == ['collected'], 'the teardown did not reach collect()'
 
 
 @override_settings(TELEGRAM_BOT={'ENABLED': False})
@@ -120,6 +195,11 @@ def test_sigterm_unwinds_polling(monkeypatch):
         def stop(self):
             events.append('stopped')
 
+        def collect(self):
+            # the teardown settles the sends close() drained; a double that omits it
+            # only proves the command still runs, not that it finishes the job
+            events.append('collected')
+
     monkeypatch.setattr(
         'django_redis_aiogram.management.commands.start_tgbot.get_delivery',
         lambda handler: Delivery(),
@@ -140,7 +220,8 @@ def test_sigterm_unwinds_polling(monkeypatch):
     finally:
         signal.signal(signal.SIGTERM, previous)
 
-    assert events == ['polling', 'stopped', 'closed']
+    # `collected` after `closed`, because close() is what drains the sends being settled
+    assert events == ['polling', 'stopped', 'closed', 'collected']
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
@@ -222,12 +303,12 @@ def test_shutdown_cancels_a_send_that_outlasts_the_drain(caplog):
         instance.close(drain_timeout=0.1)
 
     assert 'dropped in-flight sends at shutdown' in caplog.text
-    assert len(sent) == 1, 'the cancelled send should not have gone out'
+    assert len(sent) == 1, 'the canceled send should not have gone out'
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
 def test_shutdown_leaves_tasks_it_does_not_own_alone():
-    """aiogram keeps its own tasks on this loop; cancelling them is not ours."""
+    """aiogram keeps its own tasks on this loop; canceling them is not ours."""
     instance = TelegramBot()
     foreign = []
     created = threading.Event()
@@ -244,13 +325,13 @@ def test_shutdown_leaves_tasks_it_does_not_own_alone():
     task = foreign[0]
     cancels = []
     original_cancel = task.cancel
-    # spied rather than inferred: a stopped loop reports nothing as cancelled
+    # spied rather than inferred: a stopped loop reports nothing as canceled
     task.cancel = lambda *args, **kwargs: cancels.append(True) or original_cancel(*args, **kwargs)  # type: ignore[method-assign]
 
     instance._bot = stub_bot()
     instance.close(drain_timeout=0.1)
 
-    assert cancels == [], 'shutdown cancelled a task belonging to someone else'
+    assert cancels == [], 'shutdown canceled a task belonging to someone else'
     assert not task.cancelled()
 
 
@@ -345,7 +426,7 @@ def test_close_refuses_to_tear_down_a_running_loop(caplog):
     with running_loop(instance), caplog.at_level('WARNING', logger='django_redis_aiogram'):
         instance.close(drain_timeout=0.1)
 
-    assert 'skipping close: stop polling before closing the bot' in caplog.text
+    assert 'skipping close: stop polling, or the loop thread, before closing the bot' in caplog.text
     # nothing was half-released, so closing again after polling stops still works
     assert instance._loop is not None
     assert instance._bot is not None
@@ -379,3 +460,171 @@ def test_the_recorder_is_stopped_even_when_close_raises(monkeypatch, redis_serve
         command.handle(mode='webhook', idle=False)
 
     assert stopped, 'the recorder was not stopped when close() raised'
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_handoff_the_loop_never_stepped_is_drained_not_destroyed():
+    """The one `_register`'s docstring says shutdown must not lose.
+
+    A hand-off is a `call_soon_threadsafe` callback until the loop steps, and a
+    callback is not a task, so `_drain` could not see it. `close()` set `_closing`
+    first, `start()` refused on that flag, and the message — already gone from the
+    queue's in-flight list — died with the loop.
+
+    The runner is stopped *and joined* before the hand-off. The obvious recipe —
+    hand off, then `call_soon_threadsafe(loop.stop)` — passes on the old code,
+    because one `_run_once` batch runs both callbacks.
+    """
+    instance = TelegramBot()
+    sent = []
+    instance._bot = stub_bot(sent)
+
+    loop = instance.loop
+    ready = threading.Event()
+    loop.call_soon_threadsafe(ready.set)
+    runner = threading.Thread(target=loop.run_forever, daemon=True)
+    runner.start()
+    try:
+        assert ready.wait(5), 'the event loop never started'
+    finally:
+        # stopped in a finally: a loop that never started leaves this thread blocked in
+        # `run_forever`, and the next test inherits a second thread on its own loop.
+        # Closed here too, because the `instance.close()` that would have done it is
+        # further down and unreachable when the assertion above fails
+        loop.call_soon_threadsafe(loop.stop)
+        runner.join(timeout=5)
+        if not ready.is_set():
+            loop.close()
+    assert not runner.is_alive(), 'the loop is still running'
+
+    instance._hand_off(instance.bot.send_message(chat_id=1, text='drained'), loop, an_outbound())
+    instance.close()
+
+    assert [call['chat_id'] for call in sent] == [1]
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'DRAIN_TIMEOUT': 9})
+def test_close_takes_its_drain_budget_from_the_setting():
+    """`start_tgbot` calls `bot.close()` bare, so the hardcoded five seconds was
+    the only budget a deployment could ever get — however long its
+    `stop_grace_period` said."""
+    instance = TelegramBot()
+    instance._bot = stub_bot()
+    seen = []
+    instance._drain = seen.append
+
+    instance.close()
+
+    assert seen == [9.0]
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'DRAIN_TIMEOUT': 'soon'})
+def test_an_unreadable_drain_budget_does_not_break_shutdown():
+    """E044 reports it at boot. Here the safe answer is the default: the drain sits
+    between stopping the consumer and flushing the event log, so raising costs the
+    rows that describe what the drain just did."""
+    instance = TelegramBot()
+    instance._bot = stub_bot()
+    seen = []
+    instance._drain = seen.append
+
+    instance.close()
+
+    assert seen == [float(DEFAULTS['DRAIN_TIMEOUT'])]
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_send_cancelled_at_shutdown_is_not_acknowledged():
+    """Cancellation is not completion.
+
+    A send drained away never reached Telegram, so acknowledging it would destroy
+    it — leaving it in the in-flight list is exactly what lets the next start
+    pick it up, and is what makes at-least-once true rather than documented.
+    """
+    instance = TelegramBot()
+    started = threading.Event()
+
+    async def never_returns(**kwargs):
+        started.set()
+        await asyncio.sleep(60)
+
+    instance._bot = SimpleNamespace(send_message=never_returns, session=SimpleNamespace(close=stub_close))
+    acknowledged = []
+
+    with running_loop(instance):
+        instance.send_raw(chat_id=1, text='x', on_complete=lambda: acknowledged.append(True))
+        assert started.wait(5), 'the send never started'
+
+    instance.close(drain_timeout=0.05)
+
+    assert acknowledged == [], 'a canceled send was acknowledged'
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_finished_send_is_acknowledged_once():
+    """Sent, refused or given up on — all three are finished, and redelivering
+    any of them would only repeat itself."""
+    instance = TelegramBot()
+    instance._bot = stub_bot()
+    acknowledged = []
+
+    with running_loop(instance):
+        instance.send_raw(chat_id=1, text='x', on_complete=lambda: acknowledged.append(True))
+        for _ in range(500):
+            if acknowledged:
+                break
+            threading.Event().wait(0.01)
+
+    instance.close()
+
+    assert acknowledged == [True]
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_close_publishes_the_drain_before_it_publishes_the_shutdown(monkeypatch):
+    """`start()` refuses on `_closing and not _draining`, so the order is the guard.
+
+    Two assignments cannot be made atomic without a lock every send would have to take.
+    They can be ordered, and then the state between them is harmless: a hand-off callback
+    landing mid-transition sees a bot that is not closing yet. Set `_closing` first and
+    that same callback is refused and its coroutine closed — a send dropped at shutdown,
+    and only sometimes, which is why it survived a release that claimed to have fixed it.
+
+    Asserted on the order of the writes rather than by racing a thread against them: a
+    test that has to lose a race to fail is a test that passes on a fast machine.
+    """
+    written = []
+    original = TelegramBot.__setattr__
+
+    def record(self, name, value):
+        if name in {'_closing', '_draining'} and value is True:
+            written.append(name)
+        original(self, name, value)
+
+    monkeypatch.setattr(TelegramBot, '__setattr__', record)
+    TelegramBot().close()
+
+    assert written[:2] == ['_draining', '_closing'], f'the shutdown was published first: {written}'
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_runner_that_will_not_stop_still_leaves_the_bot_usable(monkeypatch):
+    """`_stop_runner` joins a thread, and `Thread.join` raises on its own thread.
+
+    Whatever the cause, an exception there used to escape before the `finally` that
+    resets the two flags — leaving a bot that refuses every later send as *closing*, for
+    the life of the process, with no way back. The teardown is inside the try now.
+    """
+    instance = TelegramBot()
+
+    def refuse(_timeout):
+        msg = 'cannot join'
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(type(instance), '_stop_runner', staticmethod(refuse))
+
+    with pytest.raises(RuntimeError, match='cannot join'):
+        instance.close()
+
+    assert instance._closing is False, 'a bot that failed to close can never send again'
+    assert instance._draining is False

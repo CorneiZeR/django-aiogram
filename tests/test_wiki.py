@@ -1,6 +1,7 @@
 """The wiki is published verbatim, so a broken link ships as a broken link."""
 
 import re
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -46,7 +47,7 @@ def test_every_link_resolves(path):
 def test_piped_links_name_the_page_first(path):
     """[[Page-Name|Link Text]], not the other way round.
 
-    Reversed, GitHub still resolves the page — it normalises spaces to dashes —
+    Reversed, GitHub still resolves the page — it normalizes spaces to dashes —
     but renders the file name as the label, so the resolve check above cannot
     catch it. This requires the first field to match a page exactly.
     """
@@ -57,6 +58,17 @@ def test_piped_links_name_the_page_first(path):
         if '|' in link and link.split('|')[0].strip() not in known
     ]
     assert not reversed_links, f'{path.name} has label-first links: {reversed_links}'
+
+
+@pytest.mark.parametrize('path', PAGES, ids=lambda path: path.name)
+def test_a_multi_word_page_is_linked_by_its_file_name(path):
+    """`[[Sending messages]]` does resolve — GitHub normalizes spaces to dashes,
+    which is why the check above accepts it — but it names no file, so a rename
+    breaks it in a way only a published wiki shows. Both forms were in use here
+    at once. Spell the page, let the label carry the spaces.
+    """
+    loose = [link for link in LINK.findall(path.read_text(encoding='utf-8')) if '|' not in link and ' ' in link.strip()]
+    assert not loose, f'{path.name} links to a page by its label: {loose}'
 
 
 README = ROOT / 'README.md'
@@ -75,6 +87,139 @@ def test_readme_wiki_links_resolve():
     assert targets, 'no wiki links found in the README'
     broken = [target for target in targets if target not in known]
     assert not broken, f'README links to missing wiki pages: {broken}'
+
+
+def test_every_documented_log_message_is_still_emitted():
+    """The other direction from the table's own purpose.
+
+    `Logging.md` lists the events worth alerting on — a curated subset, not every
+    warning the package writes, so requiring the code to be exhausted by it would
+    be wrong. What is worth enforcing is the reverse: a row describing a message
+    nothing emits any more sends someone to build an alert that can never fire.
+    """
+    import ast
+
+    page = (ROOT / 'docs' / 'wiki' / 'Logging.md').read_text(encoding='utf-8')
+    documented = re.findall(r'^\| `([a-z][^`]+)` \| (?:ERROR|WARNING|INFO) \|', page, re.MULTILINE)
+    assert documented, 'no message rows found on the Logging page'
+
+    emitted = []
+    for path in sorted((ROOT / 'src' / 'django_redis_aiogram').rglob('*.py')):
+        for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr not in {'debug', 'info', 'warning', 'error', 'exception'}:
+                continue
+            if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+                emitted.append(node.args[0].value)
+
+    # matched on the name of the event, by equality — not by containment anywhere in any
+    # literal, which kept a row green after its own event was renamed away as long as its
+    # words survived inside some other message. A row names either the whole line or the
+    # part before the remedy, because the table carries the remedy in its own column; both
+    # are anchored at the start of the literal and end where its punctuation does
+    names = set(emitted)
+    for literal in emitted:
+        names.update(literal.split(separator, 1)[0] for separator in (':', ';') if separator in literal)
+    stale = [message for message in documented if message not in names]
+    assert not stale, f'documented but no longer emitted: {stale}'
+
+
+def test_wiki_link_syntax_stays_in_the_wiki():
+    """`[[Page]]` is wiki-only syntax, and renders literally everywhere else.
+
+    The changelog is read on the repository page and as the package description,
+    where a double-bracket link shows its own brackets. It names pages in prose
+    instead — "the Deployment page" — and this is what keeps a habit from one
+    file leaking into the other.
+    """
+    outside = {'CHANGELOG.md', 'README.md'}
+    offenders = {
+        name: [line for line in (ROOT / name).read_text(encoding='utf-8').splitlines() if '[[' in line]
+        for name in outside
+    }
+    broken = {name: lines for name, lines in offenders.items() if lines}
+    assert not broken, f'wiki link syntax outside the wiki: {broken}'
+
+
+CHANGELOG = ROOT / 'CHANGELOG.md'
+#: the newest released heading. Everything below it describes what shipped, in the words
+#: it shipped with, and is not ours to edit — a spelling pass reached three lines under
+#: here and no test noticed
+HISTORY_BEGINS = '## 3.0.0 - 2026-08-09'
+#: words the released entries spell the way those releases spelled them
+#: written the way those releases wrote them, and **not** to be Americanised: this tuple
+#: is the guard, so a sweep that edits it here edits the thing doing the guarding — which
+#: a mechanical en-US pass did, and this test caught
+HISTORICAL_SPELLINGS = ('`VACUUM` afterwards', 'about its behaviour changed', 'for the old behaviour.')
+
+
+def test_the_newest_changelog_entry_is_this_version_and_is_dated():
+    """A release shipped as `unreleased` reads as a nightly to whoever installs it.
+
+    Two ways to get this wrong, and one test for both: publishing with the heading still
+    saying `unreleased`, and bumping `__version__` without writing the entry. Read from
+    `__version__` so the next release inherits the demand rather than the date.
+    """
+    from django_redis_aiogram import __version__
+
+    # `visible()`, because a heading inside a fenced block is not a release: without it
+    # the real one could be deleted and an example in a code block would satisfy this
+    lines = visible(CHANGELOG.read_text(encoding='utf-8')).splitlines()
+    heading = next(line for line in lines if line.startswith('## '))
+
+    assert heading.startswith(f'## {__version__} - '), f'the newest entry is not {__version__}: {heading!r}'
+    stamp = heading.removeprefix(f'## {__version__} - ')
+    # parsed, not pattern-matched: `2026-13-45` has the shape of a date and is not one,
+    # and a release dated by hand is exactly where that typo lands
+    try:
+        date.fromisoformat(stamp)
+    except ValueError as wrong:
+        raise AssertionError(f'not a date: {stamp!r} ({wrong})') from wrong
+
+
+def test_the_released_entries_keep_the_words_they_shipped_with():
+    """A changelog entry is a record of what was said, not prose to be improved.
+
+    The en-US pass for 3.1.0 rewrote three lines below `## 3.0.0` — `afterwards` and two
+    `behaviour` — while the pull request describing it said history was left alone. Nothing
+    failed, because no test reads down there.
+
+    Narrow on purpose: this pins the words a sweep would reach for, not the whole section,
+    so an entry can still be corrected on its facts if one is ever found to be wrong.
+    """
+    text = CHANGELOG.read_text(encoding='utf-8')
+    assert HISTORY_BEGINS in text, f'{HISTORY_BEGINS!r} is gone; this test no longer knows where history starts'
+    history = text[text.index(HISTORY_BEGINS) :]
+    rewritten = [phrase for phrase in HISTORICAL_SPELLINGS if phrase not in history]
+
+    assert not rewritten, f'a released entry was reworded: {rewritten}'
+
+
+def test_the_upgrade_page_covers_the_version_being_shipped():
+    """`Upgrading.md` had no 3.1 section while `__version__` already said 3.1.0.
+
+    Nothing pointed it out, because the page is prose and the version is code — so the
+    release that changed the acknowledgement point, added a migration and moved the
+    shutdown arithmetic shipped with an upgrade page whose newest entry was the release
+    before it. Read from `__version__`, so the next release inherits the same demand.
+    """
+    from django_redis_aiogram import __version__
+
+    series = '.'.join(__version__.split('.')[:2])
+    # `visible()` for the same reason: a heading in a code block is not a section
+    page = visible((WIKI / 'Upgrading.md').read_text(encoding='utf-8'))
+    # through the same two helpers the rest of this file reads headings with, so setext
+    # and a closing `##` are headings here too — a hand-matched `#{1,6} ` saw neither
+    headings = [normalized(heading) for heading in sections(page)]
+
+    # the heading, not the page text: `to 3.1` appears in any prose that mentions
+    # upgrading to it, so the broad search passed on a page with no such section.
+    # Any level: `startswith('# ')` matched only level one, so moving the section under
+    # `## ` would have failed a page that documents the series perfectly well
+    assert any(heading.endswith(normalized(f' to {series}')) for heading in headings), (
+        f'no section heading upgrading to {series}: {headings}'
+    )
 
 
 def test_home_and_sidebar_exist():
@@ -116,17 +261,17 @@ def sections(text: str) -> list[str]:
     return ATX.findall(text) + SETEXT.findall(text)
 
 
-def normalised(title: str) -> str:
+def normalized(title: str) -> str:
     """`## Rate  limits ##` and `## Rate-limits` name the same page."""
     return '-'.join(re.sub(r'\s*#+\s*$', '', title).split()).lower()
 
 
-def test_normalised_reads_the_heading_forms_markdown_allows():
+def test_normalized_reads_the_heading_forms_markdown_allows():
     """Written out, because each of these once slipped past the check below."""
-    assert normalised('Delivery') == 'delivery'
-    assert normalised('Delivery ##') == 'delivery'
-    assert normalised('  Rate   limits  ') == 'rate-limits'
-    assert normalised('Rate-limits') == 'rate-limits'
+    assert normalized('Delivery') == 'delivery'
+    assert normalized('Delivery ##') == 'delivery'
+    assert normalized('  Rate   limits  ') == 'rate-limits'
+    assert normalized('Rate-limits') == 'rate-limits'
 
 
 def test_visible_drops_what_is_not_rendered():
@@ -162,9 +307,9 @@ def test_the_readme_stays_a_front_page():
 
 def test_no_readme_section_duplicates_a_wiki_page():
     """A section named after a page is that page's material coming back."""
-    pages = {normalised(name) for name in page_names()} - {'home', '_sidebar'}
+    pages = {normalized(name) for name in page_names()} - {'home', '_sidebar'}
     duplicated = [
-        title for title in sections(visible(README.read_text(encoding='utf-8'))) if normalised(title) in pages
+        title for title in sections(visible(README.read_text(encoding='utf-8'))) if normalized(title) in pages
     ]
 
     assert not duplicated, f'these belong in the wiki, not the README: {duplicated}'
@@ -173,13 +318,13 @@ def test_no_readme_section_duplicates_a_wiki_page():
 def test_the_readme_links_to_every_page():
     """A new page nobody can find from the front page is a page nobody reads.
 
-    Both sides are normalised: GitHub resolves a wiki link case-insensitively and
+    Both sides are normalized: GitHub resolves a wiki link case-insensitively and
     treats spaces as dashes, so `../../wiki/rate-limits` reaches the page and has
     to count as reaching it.
     """
-    linked = {normalised(target) for target in README_WIKI_LINK.findall(visible(README.read_text(encoding='utf-8')))}
-    pages = {normalised(name) for name in page_names()}
-    missing = pages - linked - {normalised('Home'), normalised('_Sidebar')}
+    linked = {normalized(target) for target in README_WIKI_LINK.findall(visible(README.read_text(encoding='utf-8')))}
+    pages = {normalized(name) for name in page_names()}
+    missing = pages - linked - {normalized('Home'), normalized('_Sidebar')}
 
     assert not missing, f'pages the README does not link to: {sorted(missing)}'
 
@@ -187,7 +332,7 @@ def test_the_readme_links_to_every_page():
 def test_a_link_spelled_the_way_github_accepts_it_counts(tmp_path, monkeypatch):
     """Otherwise the test demands one spelling of a link that has several."""
     readme = tmp_path / 'README.md'
-    rows = '\n'.join(f'[{name}]({WIKI_URL}{normalised(name)})' for name in page_names() if name != '_Sidebar')
+    rows = '\n'.join(f'[{name}]({WIKI_URL}{normalized(name)})' for name in page_names() if name != '_Sidebar')
     readme.write_text(rows + '\n', encoding='utf-8')
     monkeypatch.setattr('tests.test_wiki.README', readme)
 
@@ -197,7 +342,7 @@ def test_a_link_spelled_the_way_github_accepts_it_counts(tmp_path, monkeypatch):
 def a_readme(tmp_path, monkeypatch, body: str):
     """Point the checks at a README of our own, through the name they read."""
     readme = tmp_path / 'README.md'
-    rows = '\n'.join(f'[{name}]({WIKI_URL}{normalised(name)})' for name in page_names() if name != '_Sidebar')
+    rows = '\n'.join(f'[{name}]({WIKI_URL}{normalized(name)})' for name in page_names() if name != '_Sidebar')
     readme.write_text(rows + '\n' + body, encoding='utf-8')
     monkeypatch.setattr('tests.test_wiki.README', readme)
     return readme

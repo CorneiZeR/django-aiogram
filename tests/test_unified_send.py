@@ -2,6 +2,9 @@
 
 import contextlib
 
+import pytest
+from aiogram import exceptions
+from aiogram.methods import SendMessage
 from django.test import override_settings
 
 from django_redis_aiogram import TelegramBot
@@ -119,3 +122,102 @@ def test_sends_during_startup_are_queued_not_sent_directly(redis_server, monkeyp
 
     assert direct == [], 'a startup-time send was driven through send_raw'
     assert redis_server.llen('TELEGRAM_BOT_MESSAGE') == 1
+
+
+class Refusing:
+    """A bot whose every send fails, so the retry path runs to its end."""
+
+    def __init__(self):
+        self.attempts = []
+
+    async def send_message(self, **kwargs):
+        """Refuse with something `_schedule` does not intercept on its way out."""
+        self.attempts.append(kwargs)
+        # not RuntimeError: `_schedule` catches that one to spot a loop already
+        # running under it, so it would never reach the branch under test
+        msg = 'chat not found'
+        raise ValueError(msg)
+
+    class session:
+        @staticmethod
+        async def close():
+            """aiogram's session, reduced to the one call `close()` makes."""
+
+
+class RateLimited:
+    """A bot Telegram always meters, so the retry loop runs out instead of failing."""
+
+    def __init__(self):
+        self.attempts = []
+
+    async def send_message(self, **kwargs):
+        """Refuse the way Telegram refuses, which is the other raising path entirely."""
+        self.attempts.append(kwargs)
+        raise exceptions.TelegramRetryAfter(
+            method=SendMessage(chat_id=1, text='x'),
+            message='Too Many Requests',
+            retry_after=0,
+        )
+
+    class session:
+        @staticmethod
+        async def close():
+            """aiogram's session, reduced to the one call `close()` makes."""
+
+
+def a_failing_send(raise_exception, bot=Refusing):
+    """Drive one doomed send on the caller's thread and report what reached them."""
+    with override_settings(
+        TELEGRAM_BOT={**SETTINGS, 'RAISE_EXCEPTION': raise_exception, 'MAX_RETRIES': 0, 'RATE_LIMIT': None}
+    ):
+        instance = TelegramBot()
+        refusing = bot()
+        instance._bot = refusing
+        try:
+            # no loop runner, so `send_raw` drives the coroutine here and a raise
+            # from it lands on this line — the way it reaches a caller's view
+            instance.send_raw('send_message', chat_id=1, text='x')
+        finally:
+            instance._bot = None
+            instance.close()
+        return refusing.attempts
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_raise_exception_reads_the_word_and_not_its_truthiness():
+    """`DJANGO_REDIS_AIOGRAM_RAISE_EXCEPTION=false` arrives as `'false'`, which is truthy.
+
+    Read with a bare `if`, that re-raised into the caller the exception the project had
+    just asked to have swallowed — and only after a send had exhausted `MAX_RETRIES`, so a
+    project that spelled the flag the way the environment can spell it learned about it
+    the day Telegram started refusing them.
+    """
+    assert a_failing_send('false'), 'the send never ran, so nothing was proved'
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_the_flag_still_reaches_the_caller_when_it_is_asked_to():
+    """The other direction, so the fix cannot be "the flag never fires".
+
+    `'true'` is the string form as well: the point is that the word is read, not that
+    strings are ignored.
+    """
+    for asked in (True, 'true'):
+        with pytest.raises(ValueError, match='chat not found'):
+            a_failing_send(asked)
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_the_exhausted_retry_path_reads_the_word_too():
+    """The second place the flag is read, and the one the tests above cannot reach.
+
+    A refusal Telegram *retries* leaves the loop by exhausting `MAX_RETRIES`, not through
+    the generic handler, so it raises `last_error` from a different line. Reverting that
+    line alone to raw truthiness left 116 tests passing — half a fix with no failure to
+    its name, in the change whose whole subject is reading this flag correctly.
+    """
+    assert a_failing_send('false', bot=RateLimited), 'the send never ran, so nothing was proved'
+
+    for asked in (True, 'true'):
+        with pytest.raises(exceptions.TelegramRetryAfter):
+            a_failing_send(asked, bot=RateLimited)

@@ -9,8 +9,11 @@ the whole project down — its test suite included — whenever the token or Red
 was absent.
 """
 
+import logging
+import math
 import os
 from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from django.conf import settings as django_settings
@@ -18,6 +21,8 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.signals import setting_changed
 
 from django_redis_aiogram.defaults import DEFAULTS
+
+logger = logging.getLogger('django_redis_aiogram')
 
 SETTINGS_NAME = 'TELEGRAM_BOT'
 ENV_PREFIX = 'DJANGO_REDIS_AIOGRAM_'
@@ -80,8 +85,36 @@ def _from_env(key: str, default: object) -> object:
         except ValueError:
             msg = f'{name} must be an integer, got {raw!r}.'
             raise ImproperlyConfigured(msg) from None
+    if isinstance(default, float):
+        # a setting whose check accepts a number has to accept one from here too. Without
+        # this branch a float-defaulted setting fell through to `_MISSING` and the variable
+        # was *silently ignored*, and while `DRAIN_TIMEOUT` defaulted to an int the same
+        # value raised out of `apps.ready()` — so `DRAIN_TIMEOUT: 0.5` was valid in
+        # settings and stopped every `manage.py` command from the environment
+        try:
+            number = float(raw)
+        except ValueError:
+            msg = f'{name} must be a number, got {raw!r}.'
+            raise ImproperlyConfigured(msg) from None
+        if not math.isfinite(number):
+            # `float()` accepts 'nan', 'inf' and '-inf', and every consumer of these
+            # settings is a deadline: `nan` compares false against everything, so a wait
+            # bounded by it never expires, and `sleep(nan)` raises from inside a thread
+            # nobody is watching. E044 reports it, but only when `check` runs — and the
+            # environment reaches every process, including the ones that never run checks
+            msg = f'{name} must be a finite number, got {raw!r}.'
+            raise ImproperlyConfigured(msg)
+        return number
     if isinstance(default, str):
         return raw
+    # a container or a callable has no textual form, so the variable cannot be honoured —
+    # and being silently ignored is the worst of the three answers. An operator throttling
+    # the bot with DJANGO_REDIS_AIOGRAM_RATE_LIMIT got the default rate and no word about
+    # it, from a page that promises an environment twin for every scalar
+    logger.warning(
+        'ignoring an environment variable for a setting that has no textual form',
+        extra={'tg_setting': key, 'tg_variable': name},
+    )
     return _MISSING
 
 
@@ -98,7 +131,26 @@ class Settings(Mapping[str, Any]):
         self._cache: dict[str, Any] | None = None
 
     def _resolve(self) -> dict[str, Any]:
-        overrides = getattr(django_settings, SETTINGS_NAME, None) or {}
+        """Build the whole settings dict once, in the documented order of precedence.
+
+        Every key at once rather than per lookup, so a process cannot end up holding one
+        value from Django settings and another from the environment because the two were
+        resolved at different moments.
+
+        The mapping check earns its place: ``key in overrides`` is a membership test, and
+        against a ``TELEGRAM_BOT`` that is a list it answers False for every key — so
+        without it the whole setting would be *silently* ignored and every value taken
+        from the environment or the defaults, including the token. A misconfiguration that
+        loudly refuses is worth more than one that runs as though unconfigured.
+
+        Only ``None`` and an absent setting mean *not configured*. Folding every falsy
+        value into ``{}`` first, which is what ``or {}`` did, let ``[]``, ``()`` and ``''``
+        past the check that exists to catch them — the empty ones, which are exactly what
+        a mistaken assignment produces.
+        """
+        overrides = getattr(django_settings, SETTINGS_NAME, None)
+        if overrides is None:
+            overrides = {}
         if not isinstance(overrides, Mapping):
             msg = f'{SETTINGS_NAME} must be a mapping, got {type(overrides).__name__}.'
             raise ImproperlyConfigured(msg)
@@ -149,11 +201,63 @@ class Settings(Mapping[str, Any]):
 conf = Settings()
 
 
+@dataclass(frozen=True)
+class PopCeiling:
+    """How long a blocking pop may actually wait, and which settings decided that.
+
+    ``bound_by`` is a tuple because the limits can tie: ``HEARTBEAT_INTERVAL`` at 9
+    beside ``REDIS_TIMEOUT`` at 10 both produce 9, and naming one of them sends an
+    operator to raise it and meet the same warning again, unchanged.
+    """
+
+    seconds: int
+    bound_by: tuple[str, ...]
+
+
+def blpop_ceiling() -> PopCeiling:
+    """Return the real cap on a blocking pop, which is not ``BLPOP_TIMEOUT`` alone.
+
+    Two bounds are weighed here and the smallest wins: the ``HEARTBEAT_INTERVAL`` — a
+    worker that popped for longer than that would let its own heartbeat key expire and
+    look dead — and one second inside ``REDIS_TIMEOUT``, so the pop returns before the
+    read deadline fires. The configured ``BLPOP_TIMEOUT`` is the third, applied by the
+    caller against this ceiling, which is why ``bound_by`` can never name it.
+
+    One second inside ``REDIS_TIMEOUT`` is only possible from 2 upwards, which is what
+    ``E030``'s floor is for: at 1 the subtraction clamps back to 1, the pop's timeout
+    equals the read deadline, and every idle pop raises instead of returning empty.
+
+    Lives here rather than beside the consumer because ``checks.py`` needs it too, and
+    importing :mod:`django_redis_aiogram.delivery` would pull in aiogram through
+    :mod:`django_redis_aiogram.api` — which is the whole reason ``manage.py check``
+    costs nothing.
+
+    ``bound_by`` is what makes a hint actionable: told only that the pop is capped, an
+    operator raises ``REDIS_TIMEOUT`` when it was the heartbeat that bound it — and
+    when the two tie, raising either one alone changes nothing at all.
+    """
+    limits = {
+        'HEARTBEAT_INTERVAL': max(1, int(conf['HEARTBEAT_INTERVAL'])),
+        'REDIS_TIMEOUT': max(1, max(1, int(conf['REDIS_TIMEOUT'])) - 1),
+    }
+    seconds = min(limits.values())
+    # every setting sitting at the minimum, not the first one found: a tie means both
+    # have to move, and a hint naming one of them is a round trip that achieves nothing
+    return PopCeiling(seconds=seconds, bound_by=tuple(key for key, value in limits.items() if value == seconds))
+
+
 def _reset_on_setting_change(
     sender: object,  # noqa: ARG001 - Django sends this to every receiver, named
     setting: str,
     **kwargs: Any,
 ) -> None:
+    """Drop the resolved cache when the setting it was built from changes.
+
+    This is what makes ``override_settings`` work on a lazily cached mapping, and it is
+    a receiver rather than a test helper because a project may legitimately change the
+    setting at runtime. Filtered on the name: every other setting in the project sends
+    this signal too.
+    """
     if setting == SETTINGS_NAME:
         conf.reset()
 

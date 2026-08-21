@@ -21,6 +21,15 @@ Project uses django-redis-aiogram 3.x. Rules:
   It queues through Redis outside the bot container and calls Telegram directly
   inside it. Pass another method by name: bot.send('send_photo', chat_id=..., photo=...).
   Only Telegram API methods aiogram exposes are accepted.
+- From async code, await `bot.asend(...)` instead: `send()` writes to a socket on
+  the thread the loop is running on. Same arguments, same returned id.
+- To reach many chats, call `bot.send_many(chat_ids, text=...)`, which is
+  synchronous. From async code, `await bot.asend_many(chat_ids, text=...)`: the
+  coroutine queues nothing until it is awaited. Both queue a chunk per round trip
+  and return one id per chat, and both queue inside the bot container too, where
+  `send` would call Telegram directly. With `ENABLED=0` neither writes anything
+  and you still get the ids, the same as `send`. They speed up queueing only —
+  the rate limits still pace delivery.
 - Handlers go in <app>/tg_router.py and are registered with decorators on the
   shared bot: @bot.message(F.text), @bot.callback_query(...). They are ordinary
   async Django code; use afirst()/sync_to_async for the ORM.
@@ -51,6 +60,11 @@ Project uses django-redis-aiogram 3.x. Rules:
   created whether or not you turn the event log on.
 - bot.send() returns a correlation id. Store it next to your own model if you
   want to join your records to the event log later.
+- For metrics, connect a receiver to `events_recorded` from
+  `django_redis_aiogram.signals` in an AppConfig.ready(). Do not invent a settings
+  hook: there is none. It fires with EVENT_LOG off, so metrics need no table and no
+  migration, and the exporter must run in the start_tgbot container because that is
+  where send outcomes are recorded.
 - The event log is off by default (TELEGRAM_BOT['EVENT_LOG']). Turning it on
   needs a retention job — `manage.py tgbot_prune_events` — or the table grows
   without bound. Message bodies are not stored unless EVENT_LOG_PAYLOAD='full',
@@ -72,9 +86,13 @@ from `django_redis_aiogram`, keep the ORM access async, and do not touch
 
 **Set up the containers.** *"Add a `telegram_bot` service to
 `docker-compose.yml` running `python manage.py start_tgbot`, restarting always,
-depending on redis, sharing the same image and `.env` as `back`. Leave
-`DJANGO_REDIS_AIOGRAM_ENABLED` unset on the other services — they queue
-messages."*
+depending on redis, sharing the same image and `.env` as `back`. Give it a
+healthcheck running `python -m django_redis_aiogram.healthcheck` with
+`DJANGO_SETTINGS_MODULE` in its `environment:` — the probe is a separate process, and
+`manage.py` only sets that variable inside its own process. Not
+`manage.py tgbot_healthcheck` in a healthcheck: it runs `django.setup()` first and
+Docker kills it at the timeout. Leave `DJANGO_REDIS_AIOGRAM_ENABLED` unset on the other services
+— they queue messages."*
 
 **Turn on the event log.** *"Run `manage.py migrate` first, then enable
 `TELEGRAM_BOT['EVENT_LOG']` in django-redis-aiogram — a process that starts

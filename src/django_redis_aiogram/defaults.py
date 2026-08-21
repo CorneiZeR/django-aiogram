@@ -44,9 +44,23 @@ DEFAULTS: dict[str, Any] = {
     'WORKER_NAME': '',
     # how long a blocking pop waits before re-checking the shutdown flag
     'BLPOP_TIMEOUT': 5,
+    # seconds close() gives in-flight sends to finish before canceling them. A float,
+    # which is what makes `DJANGO_REDIS_AIOGRAM_DRAIN_TIMEOUT=0.5` readable: the
+    # environment coerces on the default's type, and an int default sent a fraction to
+    # the integer branch, where it raised out of apps.ready() and stopped every command
+    'DRAIN_TIMEOUT': 5.0,
+    # how many sends the consumer will leave in flight before it stops taking
+    # messages. 0 means no bound, which is what shipped before the consumer
+    # waited for a send to finish. Acknowledging scans the in-flight list, so an
+    # unbounded one turns draining a backlog into quadratic work
+    'MAX_IN_FLIGHT': 0,
+    # refuse to start where a message cannot survive the worker being killed
+    # mid-send, rather than running at-most-once without saying so
+    'REQUIRE_CRASH_SAFE': False,
     'REDIS_TIMEOUT': 10,
-    # how often the consumer refreshes the key `tgbot_healthcheck` reads. The key
-    # lives three times as long, so one missed refresh is not a failure
+    # how often the consumer refreshes the key the healthcheck reads. The key lives
+    # three times as long, so one missed refresh is not a failure — and that TTL is
+    # also the most `--max-age` can ever observe
     'HEARTBEAT_INTERVAL': 10,
     # a queue longer than this fails the healthcheck; 0 turns the check off
     'HEALTHCHECK_MAX_QUEUE': 0,

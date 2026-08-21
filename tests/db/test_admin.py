@@ -90,7 +90,7 @@ def test_a_count_that_stopped_at_the_cap_says_so(client, monkeypatch):
     Silently, that is the defect the paginator exists to avoid, moved one step
     along: the number would be wrong and nothing would show it.
 
-    The cap is lowered rather than ten thousand rows inserted — the behaviour
+    The cap is lowered rather than ten thousand rows inserted — the behavior
     under test is the comparison, not the number.
     """
     monkeypatch.setattr(admin_module, 'COUNT_LIMIT', 2)
@@ -353,3 +353,202 @@ def test_the_permissions_are_refusals_not_opinions():
     assert admin_instance.has_add_permission(None) is False
     assert admin_instance.has_change_permission(None) is False
     assert admin_instance.has_delete_permission(None) is False
+
+
+@pytest.mark.django_db
+@override_settings(TELEGRAM_BOT=ON)
+def test_the_changelist_does_not_fetch_the_payload_columns(client):
+    """`error` and `detail` are most of what a row weighs, and the list renders
+    neither — about 1.4 MB per fifty-row page fetched to be discarded, including
+    for a reader `get_fields` withholds them from."""
+    an_event(error='x' * 500, detail={'text': 'y' * 500})
+    client.force_login(a_reader('lean', 'view_telegramevent'))
+
+    with CaptureQueriesContext(connection) as queries:
+        client.get(CHANGELIST)
+
+    selects = [q['sql'] for q in queries if 'django_redis_aiogram_event' in q['sql'] and 'COUNT(' not in q['sql']]
+    assert selects, 'the changelist issued no query at all'
+    assert not any('"error"' in sql or '"detail"' in sql for sql in selects), selects
+
+
+@pytest.mark.django_db
+@override_settings(TELEGRAM_BOT=ON)
+def test_a_reader_without_the_payload_permission_never_fetches_them(client):
+    """`get_fields` keeps them off the page. Fetching them anyway would still put
+    message bodies and exception text on the wire and into the query log for
+    someone the permission exists to withhold them from."""
+    event = an_event(error='secret', detail={'text': 'private'})
+    client.force_login(a_reader('narrow', 'view_telegramevent'))
+
+    with CaptureQueriesContext(connection) as queries:
+        response = client.get(f'{CHANGELIST}{event.pk}/change/')
+
+    assert response.status_code == 200
+    rows = [q['sql'] for q in queries if 'django_redis_aiogram_event' in q['sql']]
+    assert rows, 'the detail page issued no query at all'
+    assert not any('"error"' in sql or '"detail"' in sql for sql in rows), rows
+
+
+@pytest.mark.django_db
+@override_settings(TELEGRAM_BOT=ON)
+def test_the_detail_page_still_fetches_them_in_one_query(client):
+    """Deferring on the changelist routes the detail page through the same
+    queryset, so without lifting it each column would cost its own extra query
+    the moment the template touched it."""
+    event = an_event(error='boom', detail={'text': 'hello'})
+    client.force_login(a_reader('full', 'view_telegramevent', 'view_telegramevent_payload'))
+
+    with CaptureQueriesContext(connection) as queries:
+        response = client.get(f'{CHANGELIST}{event.pk}/change/')
+
+    assert response.status_code == 200
+    body = response.content.decode()
+    assert 'boom' in body
+    rows = [q['sql'] for q in queries if 'django_redis_aiogram_event' in q['sql'] and 'WHERE' in q['sql'].upper()]
+    assert any('"error"' in sql and '"detail"' in sql for sql in rows), rows
+
+
+@pytest.mark.django_db
+@override_settings(TELEGRAM_BOT=ON)
+def test_only_indexed_columns_are_sortable():
+    """One click on an unindexed header sorts a table sized by traffic."""
+    from django_redis_aiogram.admin import TelegramEventAdmin
+
+    assert set(TelegramEventAdmin.sortable_by) == {'created_at', 'kind', 'chat_id'}
+
+
+@pytest.mark.django_db
+@override_settings(TELEGRAM_BOT=ON)
+def test_a_kind_filtered_changelist_needs_no_sort(client):
+    """The index was `(kind, -created_at)` while `ordering` is `-id`.
+
+    So every filtered changelist sorted in a temp b-tree — the page query and
+    the bounded count alike — which is what made the count's documented bound
+    untrue: it can only stop early if the rows arrive already ordered.
+
+    Asserted on the plan rather than on `_meta.indexes`: a snapshot of the model
+    would pass with an index the database never chooses.
+    """
+    an_event()
+    client.force_login(a_reader('planner', 'view_telegramevent'))
+
+    with CaptureQueriesContext(connection) as queries:
+        client.get(f'{CHANGELIST}?kind={EventKind.OUTBOUND_SENT.value}')
+
+    touched = [q['sql'] for q in queries if 'django_redis_aiogram_event' in q['sql']]
+    assert touched, 'the changelist issued no query at all'
+    with connection.cursor() as cursor:
+        for sql in touched:
+            cursor.execute(f'EXPLAIN QUERY PLAN {sql}')
+            plan = ' '.join(str(row) for row in cursor.fetchall())
+            assert 'TEMP B-TREE' not in plan.upper(), f'{plan}\nfor: {sql}'
+            # and the index by name. Without this the assertion above passes with no index
+            # at all — sqlite serves `ORDER BY -id` by walking the primary key, so a plan
+            # with no sort and a full scan reads exactly like the fixed one, at the cost the
+            # index was added to remove
+            assert 'drai_event_kind_id' in plan, f'the kind filter no longer uses its index\n{plan}'
+
+
+@pytest.mark.django_db
+@override_settings(TELEGRAM_BOT=ON)
+@pytest.mark.parametrize('order', ['created_at', '-created_at'])
+def test_the_created_at_headers_sort_at_most_a_tie(order):
+    """Django appends `-pk` to make the changelist's order deterministic, and a
+    single-column index cannot serve that on its own.
+
+    What it *can* avoid is sorting the whole result set. Measured: ascending needs
+    no sort at all, and descending sorts only the last term — the rows sharing one
+    `created_at`. Removing even that would take a `(created_at, -id)` index in
+    each direction, which is two more writes per row on a table whose whole design
+    is cheap inserts.
+
+    Falsified by dropping `drai_event_recent` from the database directly, where
+    both directions become a full `USE TEMP B-TREE FOR ORDER BY` — editing
+    `models.py` does not do it, because the test database is built from the
+    migrations.
+    """
+    rows = TelegramEvent.objects.order_by(order, '-pk')[:50]
+    sql, params = rows.query.sql_with_params()
+
+    with connection.cursor() as cursor:
+        cursor.execute(f'EXPLAIN QUERY PLAN {sql}', params)
+        plan = ' | '.join(str(row[-1]) for row in cursor.fetchall())
+
+    assert 'drai_event_recent' in plan, plan
+    assert 'USE TEMP B-TREE FOR ORDER BY' not in plan.upper(), plan
+
+
+@pytest.mark.django_db
+@override_settings(TELEGRAM_BOT=ON)
+# both directions: the filter strips the sign before deciding, so a regression that
+# dropped `2` and kept `-2` would restore descending sorts on an unindexed column
+@pytest.mark.parametrize(
+    ('index', 'column'),
+    [
+        ('2', 'function'),
+        ('-2', 'function'),
+        ('5', 'worker'),
+        ('-5', 'worker'),
+        ('6', 'error_code'),
+        ('-6', 'error_code'),
+    ],
+)
+def test_an_o_param_for_an_unindexed_column_does_not_sort(client, index, column):
+    """`sortable_by` only decides whether the header is a link.
+
+    Django reads it in one place — the template tag — while `ChangeList` maps `?o=`
+    straight onto `list_display`. So a bookmark, a shared link, or a query string kept
+    from before this restriction still ordered the whole table by a column no index can
+    serve: on 200 000 rows a sequential scan and a sort for the page. Not for the count —
+    `BoundedPaginator` drops the ordering — so this is the page query, once per view.
+
+    Asserted on the SQL rather than on the attribute, which is what the previous test did
+    and why this went unnoticed.
+    """
+    for chat_id in range(3):
+        an_event(chat_id=chat_id, worker='w')
+    client.force_login(a_reader('sorter', 'view_telegramevent'))
+
+    with CaptureQueriesContext(connection) as queries:
+        response = client.get(f'{CHANGELIST}?o={index}')
+
+    assert response.status_code == 200, 'an old link should still render the page'
+    touched = [q['sql'] for q in queries if 'django_redis_aiogram_event' in q['sql']]
+    assert touched, 'the changelist issued no query at all'
+    for sql in touched:
+        assert f'"{column}" ASC' not in sql, f'ordered by {column}: {sql}'
+        assert f'"{column}" DESC' not in sql, f'ordered by {column}: {sql}'
+
+
+@pytest.mark.django_db
+@override_settings(TELEGRAM_BOT=ON)
+def test_the_outcome_filters_count_is_served_by_the_index(client):
+    """`BoundedPaginator` promised "one query the index can serve" and the failure
+    filter was the one place it was not.
+
+    An `IN` over the seven failure kinds cannot yield a global `id DESC` from
+    `(kind, -id)`, so the database sorted every match before the `LIMIT` could bite —
+    the same defect the index was added to remove, surviving in the filter that needs it
+    most. The count is unordered now, because which rows the cap admits does not change
+    how many there are.
+
+    The plan is asserted to *name the index* as well as to be free of a sort: an
+    assertion on the sort alone passes with no index at all, which is how the sibling
+    test missed a deleted one.
+    """
+    for kind in (EventKind.OUTBOUND_FAILED.value, EventKind.OUTBOUND_SENT.value):
+        an_event(kind=kind)
+    client.force_login(a_reader('outcome', 'view_telegramevent'))
+
+    with CaptureQueriesContext(connection) as queries:
+        assert client.get(f'{CHANGELIST}?outcome=failed').status_code == 200
+
+    counts = [q['sql'] for q in queries if 'COUNT(' in q['sql'].upper() and 'django_redis_aiogram_event' in q['sql']]
+    assert counts, 'the changelist counted nothing, so this proves nothing'
+    with connection.cursor() as cursor:
+        for sql in counts:
+            cursor.execute(f'EXPLAIN QUERY PLAN {sql}')
+            plan = ' '.join(str(row) for row in cursor.fetchall())
+            assert 'TEMP B-TREE' not in plan.upper(), f'the bounded count still sorts: {plan}'
+            assert 'drai_event_kind_id' in plan, f'the count no longer uses the kind index: {plan}'

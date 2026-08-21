@@ -21,15 +21,74 @@ bot.send('send_chat_action', chat_id=CHAT_ID, action='typing')
 
 ## Choosing the route yourself
 
-| Method | Behaviour |
+| Method | Behavior |
 | ------ | --------- |
 | `send()` | direct in the bot container, queued elsewhere |
 | `send_redis()` | always queue |
 | `send_raw()` | always call Telegram from this process |
 
-`send_raw` from a web process builds its own event loop and HTTP session. That
-works, but it makes the request wait on Telegram and does not share the bot's
-rate-limit budget. Prefer `send()`.
+`send_raw` from a web process that does not serve the webhook builds its own event
+loop and HTTP session. That works, but it does not share the bot's rate-limit budget.
+Prefer `send()`. A process that *does* serve the webhook is the case below.
+
+**Whether it waits changed in 3.1.0, in a web process that also serves the
+webhook.** A process serving the webhook gives the loop a thread of its own from
+the first update it handles, and `send_raw` hands work to a running loop rather
+than driving it. So from that point on it *schedules* and returns, where before
+it drove the loop and blocked until Telegram answered.
+
+What that costs is the exception: a send that fails after the retries used to
+raise into your view under `RAISE_EXCEPTION`, and now appears in the log instead.
+A process that never serves the webhook is unaffected — with no thread running
+the loop, `send_raw` still drives it and waits.
+
+From inside a **handler** it could never wait — a handler already runs on that
+loop, so it can only schedule. What 3.1.0 changes there is that the scheduled
+send now *runs*: before, nothing stepped it until the next update arrived, or
+`close()`, or never.
+
+If you need the answer, `await` the aiogram call yourself, or send from a process
+that does not serve the webhook.
+
+## From an async view, and to many chats
+
+```python
+async def notify(request):
+    await bot.asend(chat_id=CHAT_ID, text='done')
+
+
+def announce(chat_ids):
+    return bot.send_many(chat_ids, text='we are back')
+
+
+async def announce_from_async(chat_ids):
+    return await bot.asend_many(chat_ids, text='we are back')
+```
+
+`asend` is `send` for code already on an event loop. The synchronous one writes to
+a socket on the calling thread, which under ASGI is the thread serving requests —
+and on the first call that includes a TCP connect bounded by `REDIS_TIMEOUT`. The
+ids, the rows and the routing are identical.
+
+`send_many` queues one message per chat, a chunk of them per round trip, and
+returns an id per message in the order the chats were given. `asend_many` is its
+loop-friendly twin, and the case for it is stronger than for `asend`: a fan-out
+writes once per chunk and serializes every payload, so the synchronous one holds
+the calling thread that much longer. What `asend_many` moves off the way is the
+waiting, not the work — it still serializes each chunk on the loop's own thread
+between its awaits, so a broadcast big enough to notice belongs in a task rather
+than in a request.
+
+Two things it does **not** do. It does not speed up delivery — the rate limits
+still pace what leaves for Telegram, so fifty thousand chats is about half an hour
+at the default thirty a second. And it makes event-log overflow *worse*, because
+the pacing that sequential round trips gave the writer is gone: raise
+`EVENT_LOG_BUFFER_SIZE`, or narrow `EVENT_LOG_KINDS`, before broadcasting. See
+**[[Event-log|Event log]]**.
+
+A chunk that fails records a drop for its own messages and raises. Earlier chunks
+are already queued and their ids are lost with the exception, which is why those
+rows exist rather than leaving you to work out how far it got.
 
 ## Keyboards
 
@@ -72,7 +131,10 @@ too — share a volume, or send bytes with `BufferedInputFile`.
 ## Errors
 
 Queued messages are delivered by the worker; failures are logged there, not
-raised in your view. For direct calls, `RAISE_EXCEPTION` propagates them:
+raised in your view. For direct calls, `RAISE_EXCEPTION` propagates them — but
+only where `send_raw` still waits for the answer, which in a process that serves
+the webhook it does not. See [Choosing the route yourself](#choosing-the-route-yourself)
+above: there the failure reaches the log rather than the `except` below.
 
 ```python
 from aiogram.exceptions import TelegramBadRequest
@@ -84,7 +146,8 @@ except TelegramBadRequest:
 ```
 
 Telegram rate-limit refusals are retried up to `MAX_RETRIES`; exhausting them
-logs an error and, with `RAISE_EXCEPTION`, re-raises. See **[[Rate limits]]**
+logs an error and, with `RAISE_EXCEPTION`, re-raises — into the caller that was
+waiting, so the same qualification applies. See **[[Rate-limits|Rate limits]]**
 for staying under the limits in the first place.
 
 ## From Celery

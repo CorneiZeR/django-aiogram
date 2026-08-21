@@ -230,7 +230,7 @@ def test_the_walk_ignores_what_is_not_root_logging(source, tmp_path):
 @pytest.mark.parametrize(
     ('source', 'expected'), BOUND, ids=['positional', 'keyword', 'on an instance', 'imported getLogger']
 )
-def test_the_walk_recognises_the_package_logger_however_it_is_bound(source, expected, tmp_path):
+def test_the_walk_recognizes_the_package_logger_however_it_is_bound(source, expected, tmp_path):
     assert expected in walk(source, tmp_path).package_loggers, source
 
 
@@ -242,6 +242,105 @@ def test_the_walk_refuses_a_logger_that_is_not_ours(source, tmp_path):
     assert [name for _, name in use.logger_names if name != PACKAGE_LOGGER], source
 
 
+def _is_logging_call(node: ast.Call, receivers: 'set[str]') -> bool:
+    """A call this scan judges: `logger.warning(...)` on a name that holds a logger.
+
+    Levels come from `LEVELS`, the same set the rest of this file uses, rather than a
+    second list — mine left out `warn` and `fatal`, which `logging` still accepts, so
+    `logger.fatal(msg, **{'extra': ...})` was judged by nothing.
+
+    The *receiver* matters as much as the level: `handler.info('x', extra={'tg_x': 1})`
+    has the shape of a logging call and logs nothing, so counting it would fail the
+    documentation check over a field nobody emits. `receivers` comes from
+    :class:`LoggingUse`, which already tracks which names hold this package's logger.
+    """
+    if not isinstance(node.func, ast.Attribute) or node.func.attr not in LEVELS:
+        return False
+    receiver = node.func.value
+    if isinstance(receiver, ast.Name):
+        return receiver.id in receivers
+    # `self.logger.warning(...)`: `LoggingUse` records that binding under the attribute's
+    # own name, so refusing the shape here would have missed every field such a module
+    # logs — no module in `src/` does today, which is exactly why nothing noticed
+    return isinstance(receiver, ast.Attribute) and receiver.attr in receivers
+
+
+def _keys_of(mapping: ast.expr, where: str) -> set[str]:
+    """The string keys of a literal mapping, refusing anything it cannot read.
+
+    Refusing rather than skipping: a mapping this cannot read is a field that escapes the
+    documentation check, which is the one thing the whole scan exists to prevent.
+    """
+    assert isinstance(mapping, ast.Dict), f'{where}: `extra` is not a literal mapping'
+    keys: set[str] = set()
+    for key in mapping.keys:
+        readable = isinstance(key, ast.Constant) and isinstance(key.value, str)
+        assert readable, f'{where}: an `extra=` key this scan cannot read'
+        keys.add(key.value)  # type: ignore[union-attr]  # asserted above
+    return keys
+
+
+def _extra_from_dict_call(call: ast.Call, where: str) -> set[str]:
+    """`extra=dict(...)`, which is readable — unless it carries a positional mapping."""
+    assert not call.args, f'{where}: a positional mapping inside `extra=dict(...)` hides its fields'
+    keys: set[str] = set()
+    for entry in call.keywords:
+        assert entry.arg, f'{where}: a `**` spread inside an `extra=dict(...)`'
+        keys.add(entry.arg)
+    return keys
+
+
+def _extra_from_spread(spread: ast.expr, where: str) -> set[str]:
+    """A logging call that expands a mapping: `logger.info(msg, **{'extra': {...}})`.
+
+    Its keyword has `arg is None`, so a loop looking for `arg == 'extra'` walks past it
+    and the field is never held to the documentation.
+    """
+    assert isinstance(spread, ast.Dict), f'{where}: a logging call expands a mapping this scan cannot read'
+    keys: set[str] = set()
+    for key, value in zip(spread.keys, spread.values, strict=True):
+        assert isinstance(key, ast.Constant), f'{where}: an unreadable key in an expanded logging call'
+        if key.value == 'extra':
+            keys |= _keys_of(value, where)
+    return keys
+
+
+def fields_logged_in(source: str, name: str, receivers: 'set[str] | None' = None) -> set[str]:
+    """Every `extra=` key one module logs, refusing any shape it cannot read.
+
+    `receivers` defaults to the names this module binds a logger to, which is what makes
+    the scan ignore a `handler.info(...)` that happens to share the shape.
+    """
+    tree = ast.parse(source)
+    if receivers is None:
+        use = LoggingUse()
+        use.visit(tree)
+        receivers = use.package_loggers | use.logging_variables
+    fields: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not _is_logging_call(node, receivers):
+            # `extra=` is only a log field on a logging call: `handler(extra={'tg_x': 1})`
+            # is somebody's keyword argument, and judging it would fail this test over a
+            # name that is never logged
+            continue
+        for keyword in node.keywords:
+            where = f'{name}:{keyword.value.lineno}'
+            if keyword.arg is None:
+                fields |= _extra_from_spread(keyword.value, where)
+                continue
+            if keyword.arg != 'extra':
+                continue
+            if isinstance(keyword.value, ast.Call):
+                by_name = isinstance(keyword.value.func, ast.Name) and keyword.value.func.id == 'dict'
+                assert by_name, f'{where}: `extra=` is built by a call this scan cannot read'
+                fields |= _extra_from_dict_call(keyword.value, where)
+                continue
+            fields |= _keys_of(keyword.value, where)
+    return fields
+
+
 def test_every_structured_field_is_documented():
     """The Logging page exists to say what these mean, and it had fallen ten
     fields behind — every one of them added by a release that documented the
@@ -249,16 +348,69 @@ def test_every_structured_field_is_documented():
 
     Both directions: a field the page describes and nothing emits is a reader
     looking for something that will never appear.
+
+    Read from the keys of `extra=` mappings rather than from every `tg_`-prefixed string
+    in the package: taking every constant let `MODULE_NAME`'s default, the string
+    `'tg_router'`, count as a field, and the page kept a row for a field nothing has ever
+    written. Every shape that could hide a key fails rather than being skipped — a
+    computed key, `dict(mapping)`, and a `**` expansion on a logging call, whose keyword
+    has no name at all.
     """
-    emitted = set()
+    emitted: set[str] = set()
     for path in MODULES:
-        # parsed rather than matched: a regex for one quote style lets the other
-        # through, and this test exists to catch what nobody noticed
-        for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.startswith('tg_'):
-                emitted.add(node.value)
+        emitted |= fields_logged_in(path.read_text(encoding='utf-8'), path.name)
     page = (SOURCE.parent / 'docs' / 'wiki' / 'Logging.md').read_text(encoding='utf-8')
     documented = set(re.findall(r'`(tg_[a-z_]+)`', page))
 
     assert emitted - documented == set(), f'undocumented log fields: {sorted(emitted - documented)}'
     assert documented - emitted == set(), f'documented but never logged: {sorted(documented - emitted)}'
+
+
+@pytest.mark.parametrize(
+    ('source', 'expected'),
+    [
+        ("logger.info('x', extra={'tg_a': 1})", {'tg_a'}),
+        ("logger.info('x', extra=dict(tg_b=1))", {'tg_b'}),
+        ("logger.info('x', **{'extra': {'tg_c': 1}})", {'tg_c'}),
+        ("logger.info('x', **{'extra': {'tg_d': 1}, 'stacklevel': 2})", {'tg_d'}),
+        ('self.handler(**call)', set()),
+        ("handler(extra={'tg_value': 1})", set()),
+        # the shape of a logging call on something that is not a logger: `handler.info`
+        # logs nothing, so counting its `extra` would fail the documentation check over a
+        # field nobody emits
+        ("handler.info('x', extra={'tg_unrelated': 1})", set()),
+        ("self.logger.info('x', extra={'tg_attribute': 1})", {'tg_attribute'}),
+        # a receiver that holds no logger, whatever it is called
+        ("self.handler.info('x', extra={'tg_unrelated': 1})", set()),
+        ("logger.fatal('x', **{'extra': {'tg_f': 1}})", {'tg_f'}),
+        ("logger.warn('x', extra={'tg_w': 1})", {'tg_w'}),
+    ],
+)
+def test_the_field_scan_reads_every_shape_it_should(source, expected):
+    """The scan above is only as good as the shapes it can read.
+
+    A `**` expansion on a logging call is the one that motivated this: its keyword has no
+    name, so a loop matching `arg == 'extra'` walks straight past it. `**call` on
+    something that is not a logging call stays allowed, because that is ordinary code.
+    """
+    assert fields_logged_in(source, 'probe.py', receivers={'logger'}) == expected
+
+
+@pytest.mark.parametrize(
+    ('source', 'refusal'),
+    [
+        ("logger.info('x', **payload)", 'expands a mapping this scan cannot read'),
+        ("logger.info('x', extra=fields)", 'not a literal mapping'),
+        ("logger.info('x', extra=dict(fields, tg_e=1))", 'positional mapping'),
+        ("logger.info('x', **{'extra': fields})", 'not a literal mapping'),
+        ("logger.info('x', extra=build())", 'built by a call this scan cannot read'),
+    ],
+)
+def test_the_field_scan_refuses_what_it_cannot_read(source, refusal):
+    """Skipping an unreadable shape is how a field escapes the documentation check.
+
+    Each of these once passed silently, one shape at a time, and each was found by review
+    rather than by this suite — so the refusals are pinned rather than trusted.
+    """
+    with pytest.raises(AssertionError, match=refusal):
+        fields_logged_in(source, 'probe.py', receivers={'logger'})

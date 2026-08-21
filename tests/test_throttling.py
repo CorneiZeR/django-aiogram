@@ -74,6 +74,38 @@ def test_bucket_paces_once_the_burst_is_spent():
     assert clock.total_slept == pytest.approx(0.5, abs=1e-6)
 
 
+def test_an_idle_bucket_cannot_bank_the_silence_as_credit():
+    """A minute of quiet must not become a minute's worth of sends at one instant.
+
+    The claim starts no further back than the burst allows. Without that clamp the
+    slot walks backwards with the clock, so a bucket at Telegram's own 30/s, idle
+    for a minute, admits **1831** calls before it pauses — measured, not reasoned —
+    against the 31 the burst permits. Both existing burst tests start from a fresh
+    bucket, where the clamp and its absence agree, so neither could see it.
+    """
+    clock = FakeClock()
+    bucket = TokenBucket(rate=30, capacity=30, clock=clock.time, sleep=clock.sleep)
+    clock.now += 60  # what a quiet bot looks like between two conversations
+
+    async def scenario():
+        attempts = 0
+        # bounded well above the 1831 an unclamped bucket reaches: a regression that
+        # stopped sleeping at all would otherwise spin here until CI's own timeout, where
+        # a hang says far less than a failure
+        while not clock.slept and attempts < 3000:
+            # counted before the await, because the call that finally sleeps is counted
+            # too: what this measures is which call is the first to wait, not how many
+            # went through without waiting
+            attempts += 1
+            await bucket.acquire()
+        assert clock.slept, f'the bucket admitted {attempts} calls without ever pacing'
+        return attempts
+
+    attempts = run(scenario())
+
+    assert attempts == 31, f'the silence was banked as credit: the first wait came at call {attempts}'
+
+
 def test_bucket_rejects_a_nonpositive_rate():
     with pytest.raises(ValueError, match='rate must be positive'):
         TokenBucket(rate=0)
@@ -403,3 +435,88 @@ def test_unreadable_allow_pickle_is_reported_not_raised():
 
     assert 'django_redis_aiogram.E017' in reported
     assert 'django_redis_aiogram.E022' not in reported
+
+
+def test_admission_is_strict_fifo():
+    """A herd re-racing for the same token admits in whatever order the loop
+    happens to resume, so the message that waited longest had no claim on going
+    first. Claiming a slot up front makes arrival order the admission order.
+
+    On a real loop, like the wakeup count below: under `FakeClock` each waiter
+    that wakes finds the bucket already refilled, so no herd forms and the old
+    design comes out ordered too. Against a real one it admits
+    `[0, 14, 26, 13, 28, 2, ...]`.
+    """
+    admitted = []
+
+    async def scenario():
+        bucket = TokenBucket(rate=400, capacity=1)
+
+        async def caller(index):
+            await bucket.acquire()
+            admitted.append(index)
+
+        await asyncio.gather(*(caller(index) for index in range(30)))
+
+    run(scenario())
+
+    assert admitted == list(range(30))
+
+
+def test_a_backlog_wakes_once_per_admitted_call():
+    """Counting tokens made every waiter recompute the same wait from the same
+    state, so N waiters woke together and N-1 went back to sleep — about N²/2
+    wakeups for N sends.
+
+    On a real loop, not `FakeClock`: its `sleep` advances the clock by the whole
+    wait, so the herd never forms and the count comes out right on either design.
+
+    What this pins is the wakeup count, which is what the reservation design buys.
+    Falsified by giving `acquire` a recompute-and-re-sleep tail, which is what the
+    token counter did: 120 251 wakeups for these forty sends, against 35.
+
+    It does not pin the *order* admissions come out in. That is
+    `test_admission_is_strict_fifo` above, which does — the first attempt at an ordering
+    test here was unfalsifiable and removed, and the one that replaced it reproduces the
+    token counter's interleaving on a real loop. This paragraph used to say no such test
+    could fail, which stopped being true when that one was written.
+    """
+    waits = []
+
+    async def counting_sleep(seconds):
+        waits.append(seconds)
+        await asyncio.sleep(0)
+
+    async def scenario():
+        bucket = TokenBucket(rate=200, capacity=5, sleep=counting_sleep)
+        await asyncio.gather(*(bucket.acquire() for _ in range(40)))
+
+    run(scenario())
+
+    # forty calls, five of them inside the burst
+    assert len(waits) == 35
+
+
+def test_the_wait_is_measured_from_when_it_starts():
+    """The slot is claimed under the lock; the wait is not.
+
+    A clock sampled while claiming is already stale by the time the sleep is
+    computed, and sleeping `slot - stale` overshoots by exactly that gap. The
+    scripted clock puts the gap where it would be in production — between
+    releasing the lock and starting to wait.
+    """
+    reads = iter([0.0, 0.0, 0.0, 0.0, 0.05])
+    slept = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+
+    async def scenario():
+        bucket = TokenBucket(rate=10, capacity=1, clock=lambda: next(reads), sleep=sleep)
+        await bucket.acquire()
+        await bucket.acquire()
+
+    run(scenario())
+
+    # the slot is at 0.1 and the wait starts at 0.05, so half of it has passed
+    assert slept == [pytest.approx(0.05)]

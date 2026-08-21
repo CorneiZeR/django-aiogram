@@ -58,8 +58,13 @@ TELEGRAM_BOT = {
 
 A payload names the method to call, so that name is validated before anything is
 looked up on the bot. Only the Telegram API methods aiogram exposes are
-accepted — the ones matching `aiogram.methods`, 185 of them at the time of
-writing. Anything else is refused with a `ValueError`.
+accepted: **185** names match `aiogram.methods` at the time of writing, and **181**
+are allowed once four are denied. Anything else is refused with a `ValueError`.
+
+Those four of aiogram's own are denied on purpose: `set_webhook` and `delete_webhook`
+reconfigure where Telegram delivers, `log_out` invalidates the token, and `close`
+tears down the session the consumer is using. None is a message, and a queue is
+not the place to reach them from — `manage.py tgbot_webhook` is.
 
 That closes off the other public attributes a `Bot` carries: `download_file`
 would write to the container's filesystem, `token` would hand out the
@@ -83,6 +88,77 @@ and rebuilt on the way out.
 
 Class lookup is limited to `aiogram.types` members that subclass
 `TelegramObject`, so a payload cannot name an arbitrary import path.
+
+## Why not a faster JSON library
+
+Asked often enough to be worth answering with a number rather than a preference.
+
+**The bench**, runnable as it stands from a Django shell:
+
+```python
+import json
+import statistics
+import timeit
+import uuid
+
+from django_redis_aiogram.envelope import pack
+from django_redis_aiogram.serializers import get_serializer
+
+payload = pack(
+    'send_message',
+    {'chat_id': 12345, 'text': 'hello there, a realistic message'},
+    uuid.UUID('11111111-1111-1111-1111-111111111111'),
+    1700000000.0,
+)
+serializer = get_serializer()  # bound once, the way the queueing path binds it
+
+calls = 200_000
+rounds = 5  # the median of five, so one slow round cannot set the number
+
+
+def per_call(what):
+    """Microseconds per call, median of `rounds` runs of `calls` each."""
+    return statistics.median(timeit.timeit(what, number=calls) / calls * 1e6 for _ in range(rounds))
+
+
+print(per_call(lambda: serializer.dumps(payload)))
+print(per_call(lambda: json.dumps(payload)))
+print(per_call(lambda: get_serializer().dumps(payload)))
+print(per_call(lambda: json.dumps(payload, separators=(',', ':'))))
+```
+
+A fixed correlation id and timestamp, so the payload is byte-stable between runs: a
+32-character body, 189 bytes encoded. Per-call means over 200 000 calls, CPython
+3.13.14 on arm64 macOS.
+
+| | |
+| --- | --- |
+| `serializer.dumps(payload)`, serializer bound | **0.90 µs** |
+| `json.dumps(payload)` — same bytes | 0.80 µs |
+| `get_serializer().dumps(payload)` — lookup included | 0.98 µs |
+| `json.dumps(payload, separators=(',', ':'))` — 177 bytes, different output | 0.96 µs |
+
+Every row from one run, median of five, so the differences below are subtractions of
+these numbers rather than separate measurements — which is how they came to disagree.
+
+So the tagging costs about **0.10 µs** over a bare `json.dumps` producing the same
+bytes: the price of `default` being available to encode aiogram models. The third row
+is a separate 0.08 µs for resolving the serializer, which the queueing path pays once
+per write rather than once per message — worth separating, because it is the same size
+as the overhead and easy to attribute to the wrong thing.
+
+A faster library has to beat 0.10 µs *plus* the 0.80 µs underneath it — roughly a
+microsecond in total, against a Redis round trip measured at 14 µs on Linux (105 µs on
+macOS, so treat it as an order of magnitude) and a Telegram call
+in tens of milliseconds. `orjson` would also change what is representable, since it
+has its own rules about `dict` keys and subclasses while the tagging here depends on
+`default` being called for exactly the types it registers.
+
+The last row is worth knowing for a different reason: this package encodes with
+Python's **default** separators, so a payload carries about 6% more bytes than it needs
+to. Cheap to change and deliberately not changed here — it would rewrite every queued
+payload's bytes, which is a decision for a release thinking about storage rather than
+one closing out its checks.
 
 ## Pickle, the escape hatch
 
@@ -114,15 +190,19 @@ TELEGRAM_BOT = {
 }
 ```
 
-Two behaviours make the mixed case work:
+Two behaviors make the mixed case work:
 
 - **Reads sniff the format per message.** A queue holding both formats drains
   without being stopped, so switching `SERIALIZER` needs no downtime.
 - **A refused pickle stays in flight**, rather than being acknowledged — *on
-  Redis 6.2 and newer*. It is the only case where `dispatch()` returns `False`,
-  which is what withholds the acknowledgement; see **[[Delivery]]**. Turning `ALLOW_PICKLE` off while a producer is still
-  writing pickled payloads leaves them in the worker's processing list with a
-  log line saying so; set it back, restart the worker, and they are delivered.
+  Redis 6.2 and newer*. It is one of the cases where `dispatch()` returns
+  `False`, which is what withholds the acknowledgement; see **[[Delivery]]**.
+  Turning `ALLOW_PICKLE` off while a producer is still writing pickled payloads
+  leaves them in the worker's processing list with a log line saying so; set it
+  back and restart the worker under the same worker identity — `WORKER_NAME`, or
+  the fixed `hostname:` it falls back to — and they are delivered. Start it under
+  a different one and the backlog sits in a list the new worker never opens; see
+  **[[Delivery]]**.
 
 > **Turning `ALLOW_PICKLE` off is only recoverable where `LMOVE` exists.**
 > Without it there is no in-flight list — the consumer has already popped the

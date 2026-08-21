@@ -35,7 +35,7 @@ logger = logging.getLogger('django_redis_aiogram')
 
 
 def state_name(state: StateType) -> str | None:
-    """Name a state the way a reader recognises it, whatever shape it arrives in."""
+    """Name a state the way a reader recognizes it, whatever shape it arrives in."""
     if state is None:
         return None
     if isinstance(state, State):
@@ -58,7 +58,7 @@ def event_type(update: Update) -> str:
 
 
 def describe_update(update: Update) -> dict[str, Any]:
-    """Summarise an update, under the same payload policy a send obeys."""
+    """Summarize an update, under the same payload policy a send obeys."""
     message = update.message or update.edited_message
     query = update.callback_query
     return describe(
@@ -112,7 +112,9 @@ class RecordingMiddleware(BaseMiddleware):
                 function=event_type(event),
                 chat_id=inbound.chat_id,
                 user_id=inbound.user_id,
-                detail=describe_update(event),
+                # summarized only for the table: a receiver counting updates has no
+                # use for the text, and this is the costly part of recording one
+                detail=describe_update(event) if recorder.wants_payload else None,
             )
         )
 
@@ -204,18 +206,26 @@ class RecordingStorage(BaseStorage):
 
 
 def install_instrumentation(dispatcher: Dispatcher) -> None:
-    """Register the update middleware, unless the log is off.
+    """Register the update middleware, unless nothing is reading events.
 
-    Returning before anything is built is what makes the disabled cost zero:
+    Returning before anything is built is what makes the inactive cost zero:
     there is no middleware in the chain at all, not one that checks a flag.
+
+    Read once, when the dispatcher is built — so a receiver connected after the
+    first update arrives will not see updates in this process. Connect them while
+    the apps load, which is where Django says signal receivers belong anyway.
     """
-    if not recorder.enabled:
+    if not recorder.active:
         return
     dispatcher.update.outer_middleware.register(RecordingMiddleware())
 
 
 def instrumented(storage: BaseStorage) -> BaseStorage:
-    """Wrap the storage when the log is on, and hand it back untouched when not."""
-    if not recorder.enabled:
+    """Wrap the storage when something reads events, and hand it back untouched when not.
+
+    Same one-shot reading as :func:`install_instrumentation`, and for the same
+    reason: the storage is built once.
+    """
+    if not recorder.active:
         return storage
     return RecordingStorage(storage)

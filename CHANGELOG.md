@@ -1,5 +1,674 @@
 # Changelog
 
+## 3.1.0 - 2026-08-22
+
+**At-least-once delivery is true now, and was not before.** A message is
+acknowledged when its send finishes rather than when it is scheduled, so
+duplicates after a crash are real where they used to be impossible — and losses
+were. **Make your handlers idempotent on your own business key**, not on
+`correlation_id`: a handler's replies inherit the id of the update that caused
+them, so it is not one per message.
+
+### Fixed
+
+- **A refused send gives its in-flight slot back.** `MAX_IN_FLIGHT` bounds how many
+  sends a consumer holds, and `send_raw` takes a slot before the send is scheduled —
+  but its three refusal paths deliberately do not report completion, because the
+  message was not sent and must stay in flight for a redelivery. So the slot was never
+  returned: a handful of refusals during a shutdown, and the consumer stopped taking
+  messages at all until it was restarted. `send_raw` takes an `on_refused` callback
+  beside `on_complete` now, and the consumer passes both — the slot comes back, the
+  message does not get acknowledged.
+- **A replacement writer no longer strands the one it replaced.** `stop()` detaches
+  the old queue and sets the stop flag; a `record()` landing next starts a
+  replacement, and starting one *clears* that flag. The old writer then found an empty
+  queue with nothing telling it to stop and waited on it for the life of the process,
+  holding the database connection it had opened. It now leaves when its own buffer is
+  no longer the recorder's queue, which nobody else can undo.
+- **A receiver that turns the log off no longer strands the writer thread.**
+  `events_recorded` receivers run on the writer's own thread, so one of them calling
+  `recorder.stop()` is a reachable thing to do — and the writer then ran for the life of
+  the process, holding a database connection. Its loop ended only when it had *seen* the
+  wake `stop()` queues, and `stop()` drains that same buffer through `_abandon`, taking
+  the wake with it; the flag and an empty queue say everything the wake said. `stop()`
+  from the writer also stops trying to join itself, which it had been reporting as a
+  writer that missed its deadline.
+- **Logging an event could still destroy the caller's writes.** The guard that stops the
+  log recycling a connection mid-transaction tested `in_atomic_block`, which is half of
+  what an open transaction means — and the worse half. With autocommit off
+  (`transaction.set_autocommit(False)`, or `AUTOCOMMIT: False` on the alias) the server
+  holds one from the first statement and no block exists anywhere:
+  `close_if_unusable_or_obsolete` then closes because `get_autocommit()` disagrees with
+  the configured value, while `close()` skips `needs_rollback` *because* the block flag is
+  False. So the caller's writes were rolled back by the server and nothing raised.
+  Measured on PostgreSQL 16: the row was gone after a `commit()` that reported success.
+  The suite could not see it — `tests/db_settings.py` is sqlite `:memory:` — so the test
+  pins the rule rather than the consequence, with a control that still recycles a
+  connection past its `CONN_MAX_AGE`.
+
+- **A gap row the database refused took the gap with it.** `_record_gap` subtracted the
+  count before writing and suppressed the write's failure, so the hole it could not
+  describe was forgotten: no later flush would report those events and the feed read as
+  complete coverage of a period that had lost rows.
+
+  The count is now *claimed* under the counter's lock before the row is written, and given
+  back if that row does not land — whether the write raised or the database refused the
+  row on its own. Claiming rather than subtracting afterward is what keeps two flushes
+  from reporting the same hole: `drain_once()` runs on the caller's thread while the
+  writer runs its own, both snapshot the count before their batch, and a subtraction after
+  the write let each of them take it off. It claims no more than is there, so a drop
+  landing while the row is being written survives for the next flush.
+
+- **Rows the database refused one at a time were counted nowhere.** The ladder under
+  `write_batch` knew how many landed and used it only to decide whether to raise, so a
+  batch of forty that lost one left the drop counter at zero with no `log.dropped` row —
+  against this release's own promise that "what cannot is counted". `write_batch` reports
+  the loss and the recorder counts it, which the next successful flush turns into a gap
+  row.
+
+- **`sortable_by` never stopped a sort.** Django reads it in one place, the template tag
+  that decides whether a column header is a link, while `ChangeList` maps `?o=` straight
+  onto `list_display`. A bookmark, a shared link or a query string kept from before the
+  restriction still ordered the whole table by `function`, `worker` or `error_code`. The
+  changelist drops an `?o=` naming a column no index can serve, and renders the page with
+  the default ordering rather than refusing an old link.
+
+- **The failure filter's bounded count was not bounded.** `BoundedPaginator` promised "one
+  query the index can serve", and an `IN` over the seven failure kinds cannot yield a
+  global `id DESC` from `(kind, -id)` — so the database sorted every match before the
+  `LIMIT` could bite, which is the defect the index was added to remove, surviving in the
+  filter that needs it most. The count is unordered now: which rows the cap admits does
+  not change how many there are. Verified on the query plan, which names the index and no
+  longer sorts.
+
+- **`RAISE_EXCEPTION='false'` no longer re-raises.** `client.py` tested this setting with
+  a bare `if`, the only boolean in the package still read that way, so the string
+  `'false'` — which is what `DJANGO_REDIS_AIOGRAM_RAISE_EXCEPTION=false` arrives as, and
+  truthy — propagated into the caller the exception the project had just asked to have
+  swallowed. `'0'`, `'no'` and `'off'` did the same. Both reads now go through
+  `coerce_bool`, behind one private property, so the two failure paths read the flag
+  through the same line and cannot diverge. Private deliberately: the fix is the coercion,
+  and a new name on the public surface would be a commitment carried into 4.0 for it.
+
+  The failure needed a send to exhaust `MAX_RETRIES` first, so a project that spelled the
+  flag the way an environment variable can spell it would have met it on the day Telegram
+  started refusing them — not on the day they configured it. `E003` was strict for exactly
+  this reason and is now `_a_readable_boolean` like the rest, which means **every boolean
+  setting in this package is parsed rather than tested for truthiness**, with no exception
+  left to remember.
+
+- **Updates in one web process are handled concurrently.** A process serving the
+  webhook drove nothing, so every `feed_update` took `run_until_complete` *under
+  the loop lock* and updates handled strictly one at a time. Measured on four
+  concurrent updates with a 200 ms handler: 0.81 s serialized against 0.21 s with
+  the loop running. It also means a send scheduled from inside a handler now runs
+  when it is scheduled — before, nothing stepped it until the next update
+  arrived, or `close()`, or never.
+- **`send_raw` no longer waits in a web process that serves the webhook.** It
+  hands work to a running loop rather than driving one, and from the first update
+  such a process handles there is a loop running. Measured: 0.30 s and Telegram
+  called before it returns, against 0.00 s and Telegram not called yet. The
+  practical difference is the exception — a send that fails after its retries
+  raised into the view under `RAISE_EXCEPTION` and is now logged instead.
+  A process that never serves the webhook is unaffected, and `send()`, which
+  queues, never had this behavior. The Sending messages page says what to do
+  when you need the answer.
+- In webhook mode `start_tgbot` runs the loop instead of blocking on an event, so
+  a send the consumer schedules runs when it is scheduled rather than waiting for
+  whatever happens next. Both modes now start the consumer from the loop, which
+  is what keeps a backlog from reaching `send_raw` while the loop is not running
+  yet.
+- `close()` waits for the updates a webhook process is still answering before it
+  stops that loop, and cancels what outlasts `DRAIN_TIMEOUT`. A request thread
+  waits on its update with no deadline of its own, so stopping the loop under one
+  would hold that worker for the life of the process. A canceled update is
+  answered 503, the same as one refused on arrival — nothing handled it either
+  way, so Telegram should redeliver it rather than be told to forget it.
+- **The webhook view answers 503 to an update it refused**, rather than 200. It
+  answers 200 to a handler that raised, because retrying one that failed once is
+  a loop — but an update refused mid-shutdown was never handled, so redelivery is
+  the point. During a rolling restart that is the difference between the update
+  moving to the next instance and disappearing.
+
+- **The consumer acknowledged a message before Telegram had seen it.** In polling
+  mode `send_raw` returns as soon as the coroutine is scheduled, and the consumer
+  treated that as delivery: the message left the in-flight list at pop speed while
+  Telegram is fed at `overall_per_second`. A `docker stop` with a backlog sent
+  what the drain had time for — roughly 180 messages at the defaults — and lost
+  the rest, with nothing left to redeliver, while the module docstring,
+  **Delivery**, **Deployment** and **Troubleshooting** all promised
+  at-least-once. Webhook mode always had the guarantee, because there the
+  consumer drives the send to completion itself. A handler that accepts an
+  `on_complete` keyword is now handed one and the message waits for it; one that
+  does not — which is every documented recipe — keeps the old semantics exactly,
+  so nothing outside this package changes behavior.
+
+  The teardown settles those reports after the drain, which is the step that makes a
+  *graceful* stop different from a kill: `close()` is what finishes the sends still in
+  flight, and the loop that would have acknowledged them has already returned by then.
+  Without it every message the drain delivered stayed in the in-flight list and the next
+  start sent it again — a duplicate per restart, rather than per crash.
+- **The webhook view answered 200 to updates nothing had handled.** `close()` puts
+  `_closing` back to False in its `finally`, and `feed_update` checked only that flag and
+  `loop.is_running()` — so a request that captured the loop before a teardown and reached
+  the lock after it drove `run_until_complete` on a *closed* loop. The `RuntimeError`
+  landed in the view's `except Exception`, which answers 200, and Telegram never
+  redelivered the update. Measured under contention: 1,797 of them against 232,141
+  correct refusals. `feed_update` now refuses a closed loop the way `_schedule` always
+  has, so the view answers 503 and Telegram tries again.
+
+  Three more from the same lens. `_ensure_loop_runs` would start a thread on a closed
+  loop, where `run_forever` raises with nothing to catch it and every caller then waits
+  out `RUNNER_TIMEOUT` for a readiness event no living thread can set. `_stop_runner` set
+  `_runner` to None *before* it knew whether the join had worked, so a loop thread it
+  could not stop was forgotten: `close()` says "leaving everything in place keeps
+  `close()` retryable" while every later call returned immediately without asking the
+  orphan again, holding the loop, the aiogram session and the FSM client for the life of
+  the process. And it queued `loop.stop` even when the thread was already gone, which
+  left the callback in the ready queue to fire inside the drain's own
+  `run_until_complete` and take the teardown down with `Event loop stopped before Future
+  completed`.
+
+- **A non-ASCII secret header was an unauthenticated 500.** `hmac.compare_digest`
+  refuses `str` arguments outside ASCII, so the comparison itself raised `TypeError`
+  from the one branch whose job is to answer 403 — a traceback in the log for anyone who
+  found the URL. Compared as bytes now.
+
+- **A send arriving before our own loop thread reached `run_forever` killed it.**
+  `is_running()` is False for that whole window, so `_schedule` drove the loop itself and
+  the runner died with `This event loop is already running` — reported through
+  `threading.excepthook` rather than the package logger. Worse, the driving call ran the
+  `call_soon` the dead thread had queued, so `_runner_ready` was set and
+  `_ensure_loop_runs` reported a runner it owned while nothing turned the loop; every
+  update answered 503 until the next call noticed. `_schedule` now consults the runner as
+  `feed_update` already did.
+
+- **`manage.py check` no longer imports aiogram.** `DEFAULT_BOT_PROPERTIES`
+  defaults to `{}`, and the check that validates it reached for
+  `DefaultBotProperties` before noticing there was nothing to validate — so
+  every `check`, and with it every `migrate`, `runserver` and `shell`, paid for
+  aiogram in every project that installs this package. Measured on an
+  installation that configures nothing: 966 ms and 174 MiB before, 7 ms and
+  47 MiB after. A non-empty `DEFAULT_BOT_PROPERTIES` is still validated exactly
+  as before.
+- **The FSM storage is bounded by `REDIS_TIMEOUT` like everything else.** aiogram
+  builds its own Redis client and was handed no connection settings, so it had no
+  read deadline at all on the declared 6.2 floor, and redis-py 8's own five
+  seconds rather than yours above it. Every update reads FSM state, so a Redis
+  that accepts the connection and then stops answering wedged the whole bot
+  instead of one send. A `?socket_timeout=` on `REDIS_URL` still wins, as it
+  always did — redis-py resolves the URL after keyword arguments.
+- `manage.py tgbot_*` drains by hand no longer fail on a Redis older than 6.2.
+  `consume_pending()` had nothing to probe `LMOVE` support with — the consumer
+  loop learns it from `reclaim()` — so the first pop raised `ResponseError`
+  straight out of a documented helper instead of falling back to plain pops.
+- **A send handed to the loop just before shutdown is no longer destroyed.** A
+  hand-off is a `call_soon_threadsafe` callback until the loop steps, and a
+  callback is not a task — so the drain could not see it, and `close()` had
+  already set the flag its callback refuses on. The message was gone from the
+  queue's in-flight list by then, so nothing would ever redeliver it. `close()`
+  now runs one turn of the loop before draining, which is what turns those
+  callbacks into tasks it can wait for — and counts itself as draining from the
+  moment it begins, not only during that turn. A webhook process gave the loop a
+  thread, so the callback ran on *that* thread while it was being stopped, in the
+  window after the closing flag was set and before the drain claimed it: the
+  coroutine was refused and closed there, one window over from where it was fixed.
+- **The consumer's join deadline is derived from the bound that governs it.** It
+  was `BLPOP_TIMEOUT + 1` — six seconds at the defaults — while every call the
+  consumer makes is bounded by `REDIS_TIMEOUT`, ten. A consumer that outlived the
+  join went on to acknowledge a message `close()` had already refused, destroying
+  one message per shutdown. It is now `REDIS_TIMEOUT + 1`, and a thread still
+  alive after it says so in the log instead of leaving silence that reads as a
+  clean stop.
+- **Recording an event no longer rolls back the transaction it was recorded in.**
+  The writer discarded stale connections before every batch, and inside an
+  `atomic()` block Django closes the connection on the first check — which sets
+  `needs_rollback`. Under `EVENT_LOG_SYNC`, with `ATOMIC_REQUESTS` or a plain
+  `atomic()`, that destroyed the caller's own writes on PostgreSQL and MySQL.
+  The suite could not see it: sqlite `:memory:` refuses to close at all. Stale
+  connections are still discarded, just never while a transaction is open — and
+  only the log's own alias, never every connection in the process. With
+  `EVENT_LOG_DATABASE` pointing somewhere of its own, the sweep reached past the
+  log's connection, which is not in a transaction, to the caller's `default` one,
+  which is.
+- **A database that refuses everything is now reported as a failure.** The
+  bisecting write caught `DatabaseError` at every rung and returned normally, so
+  the writer counted a total refusal as a written batch: the suspension after
+  repeated failures was unreachable, no `log.dropped` row was ever written, and
+  a forgotten `migrate` meant a full batch of statements and tracebacks once per
+  flush interval, for ever.
+- **Events are no longer lost when the writer thread dies or when `stop()`
+  races a `record()`.** Both left a queue nobody would ever drain again, and its
+  contents disappeared with no row, no counter and no gap marker. Both now drain
+  it: what can be written is written, and what cannot is counted, so the next
+  successful flush records the gap.
+- The writer reads its own batch size, buffer size and flush interval with a
+  fallback to their defaults. They are read on the writer thread, in a loop,
+  outside the net that contains a failed flush — so a value that could not be
+  parsed ended the writer and took the whole buffer with it. Checks `E036`–`E038`
+  still report it at boot.
+- **The changelist's bounded count is now actually bounded.** The kind index was
+  `(kind, -created_at)` while the changelist orders by `-id`, so every filtered
+  page sorted in a temporary b-tree — the page query and the count alike. A
+  `LIMIT` can only stop early if the rows arrive ordered, so the documented
+  "counts at most 10 000 rows" was not true for any filtered view. The index is
+  `(kind, -id)` now. **This release ships migration `0002`; run `manage.py
+  migrate`.** The new index is added before the old one is dropped, so the table
+  is never without one on `kind`, and the name is new because the columns differ.
+  `AddIndex` issues a plain `CREATE INDEX`, so on a table large enough for the
+  lock to matter, run the migration in a window. What it costs: a per-kind *time
+  window* query loses its range column. `drai_event_recent` still covers a time
+  window without a kind.
+- The changelist stops fetching `error` and `detail`. It renders neither, and
+  between them they are most of what a row weighs. Under `EVENT_LOG_PAYLOAD: 'full'`
+  with long tracebacks that is about 1.4 MB per fifty-row page; on the default,
+  `'summary'` with its 8 KiB cap, far less — either way fetched to be discarded, and
+  fetched even for a reader the payload permission withholds them from.
+  The detail page asks for them back, and only for a reader allowed to see them.
+- Only indexed columns are sortable in the admin. One click on the `function`,
+  `worker` or `error_code` header was a full sort of a table sized by traffic.
+- **`tgbot_prune_events` makes forward progress past a recent low-id row.** The
+  walk's lower bound was the table's lowest id while its upper bound was filtered
+  by the cutoff, so one surviving row down there pinned every run to restart from
+  it — and a bounded `--max-chunks` run spent its budget crossing rows it could
+  not delete. The watermark is also read with `ORDER BY id DESC LIMIT 1` instead
+  of an aggregate, and the pause between chunks is skipped when a chunk deleted
+  nothing and under `--dry-run` entirely.
+
+- **The boolean checks no longer refuse configuration that works.**
+  `{'ENABLED': 'true', 'EVENT_LOG': '1', 'ALLOW_PICKLE': 'no'}` is documented, boots
+  and sends — and failed `manage.py check` on one id per setting it names, because the
+  rules demanded a real `bool` while every one of those settings is coerced where it is
+  used. They were
+  inverted twice: the values `coerce_bool` genuinely refuses raise
+  `ImproperlyConfigured` out of `apps.ready()` before a check runs, so the errors could
+  never fire on the case they were written for. E001, E002, E017, E031, E042 and E046
+  now ask by trying the coercion and report the message the runtime would have raised.
+  `E003` went with them once `client.py` stopped reading `RAISE_EXCEPTION` on raw
+  truthiness — see the entry above — so no boolean in this package is tested for
+  truthiness any more, and there is no exception left to remember.
+- **`W004` compared `BLPOP_TIMEOUT` against the wrong bound.** The consumer caps its
+  pop at `min(BLPOP_TIMEOUT, HEARTBEAT_INTERVAL, REDIS_TIMEOUT - 1)`, and the rule
+  looked only at the deadline — so `BLPOP_TIMEOUT=30, HEARTBEAT_INTERVAL=10,
+  REDIS_TIMEOUT=60` was silent while the pop ran at ten, and when the warning did fire
+  it told the operator to raise `REDIS_TIMEOUT` whether or not that was the term
+  binding. Both the check and the consumer now read one helper, and the hint names
+  whichever setting produced the cap.
+- **The container healthcheck no longer builds a bot.** It imported the shared `bot`
+  for one flag and a `Delivery` for a branch that cannot fire — `crash_safe` starts
+  true and is only lowered by `reclaim()`, which the probe must never call. Both pull
+  aiogram: 902 ms against 16 ms with `AUTODISCOVER=0`. It reads the keys from the
+  module that owns them and asks the server about the guarantee, which the rest of
+  that method already did.
+
+- **The container healthcheck could not finish inside any timeout the wiki could
+  publish.** `manage.py tgbot_healthcheck` was correct and unusable: a management
+  command runs `django.setup()` first, which populates the app registry and executes
+  every `AppConfig.ready()` in the *host* project before the probe reads a single key.
+  Measured in a consumer project — Django 5.2, twenty apps, one registering adapters in
+  `ready()` — 2.45s for the settings module, **17.89s** more for `apps.populate()`, and
+  ~0.01s for the three Redis calls the probe actually makes. Docker killed it at the
+  documented `timeout: 10s`: `ExitCode: -1`, `FailingStreak: 62`, while the probe's own
+  last line read `healthy: heartbeat 6s old, 0 queued`. The container reported unhealthy
+  for the best part of an hour with nothing wrong.
+
+  The decision now lives in `django_redis_aiogram.healthcheck`, which imports nothing
+  that needs the registry, and **`python -m django_redis_aiogram.healthcheck`** is what
+  a healthcheck should run: 69 ms end to end, interpreter startup included.
+
+  **What a consumer does:** change the `test:` line, put `DJANGO_SETTINGS_MODULE` in the
+  container's `environment:`, and lower `timeout:` if you had raised it. That variable is
+  the one thing this form needs and the command does not: `manage.py` sets it with
+  `os.environ.setdefault(...)` *inside its own process*, so a container that runs
+  `manage.py` may never export it, and a healthcheck is a different process. Without it
+  the probe writes `cannot read the settings: …` and exits 1.
+
+  `manage.py tgbot_healthcheck` keeps working — it is a wrapper now, with the same flags
+  and the same exit codes. It also keeps scanning for stranded in-flight lists and
+  reporting the delivery guarantee, which the `python -m` form leaves off behind
+  `--stranded` and `--guarantee`: neither can change the verdict, the scan is up to twenty
+  `SCAN` rounds over a keyspace often shared with a cache, and the guarantee probe is a
+  write that answers `unknown` on a read-only replica. Twice a minute for a line nobody
+  reads was the wrong trade.
+
+  Two lines it prints did change, and both are worth knowing if you read them by hand or
+  grep them. A sweep that fails partway now reports the count it did reach as
+  `at least N message(s) are in flight …` where it used to print the healthy line alone —
+  which reads as *none*, the one conclusion a partial sweep cannot support. And a missing
+  heartbeat now names the limit the probe judged by, so `--max-age 600` no longer says
+  `within 30s`; the `--help` text of both limits is reworded to match between the two
+  forms, which now declare them from one place.
+
+  `ping`, `GET` and `LLEN` are now guarded by `except RedisError` rather than
+  `except Exception`, which is what the two later stages already used. That narrowing
+  showed the suite's own fakes were raising Python's built-in `ConnectionError` — which
+  no real client produces, since redis-py's subclasses `RedisError` and not the
+  built-in one. It also had to keep three non-Redis failures readable rather than let
+  them out as tracebacks: an empty `REDIS_URL` (`ImproperlyConfigured`), a `REDIS_URL`
+  with no scheme or an unreadable `REDIS_TIMEOUT` (`ValueError`), and a heartbeat that
+  cannot be decoded, which `decode_responses` in a URL shared with a cache backend makes
+  possible (`UnicodeDecodeError`) — that one can also come off a foreign key the stranded
+  sweep matches, where it now leaves a warning instead of aborting the probe. A mistyped
+  `DJANGO_SETTINGS_MODULE` is answered the same way as a missing one; an import the
+  settings module itself fails at keeps its traceback, because that fault is not this
+  package's to flatten into a line.
+
+### Added
+
+- **`python -m django_redis_aiogram.healthcheck`**, and `--stranded` / `--guarantee` on
+  it, so a container probe can answer without booting Django. See the `### Fixed` entry
+  above for why the management command could not be used in a healthcheck at all.
+
+- **`await bot.asend(...)`**, and `asend_redis`, for code already on an event
+  loop. `send()` writes to a socket on the calling thread, which under ASGI is
+  the thread serving requests, and on a first call that includes a TCP connect
+  bounded by `REDIS_TIMEOUT`. Native `redis.asyncio` rather than a thread wrapper:
+  `sync_to_async` measured the same for one send, but its default
+  `thread_sensitive=True` runs every call in one shared thread — twenty
+  concurrent sends took 0.49 s against 0.02 s — and even threaded it draws on a
+  pool shared with every other `sync_to_async` in the process, the ORM's
+  included. Each loop gets its own client, because these connections are
+  loop-affine, and `await bot.aclose()` is the only way to close one on the loop
+  that owns it — the only loop permitted to. A process that runs a loop per unit of
+  work should call it; the registry drops clients whose loop has closed, so nothing
+  accumulates without it, but the sockets wait for the collector. **Deployment**
+  has the recipe.
+- **`bot.send_many(chat_ids, ...)`** and **`await bot.asend_many(...)`** queue one
+  message per chat, a chunk of them per variadic `RPUSH`, returning an id per
+  message in the order given. It speeds up *queueing*, not delivery — the rate
+  limits still pace what leaves, so fifty thousand chats is about half an hour at
+  the default thirty a second — and it makes event-log overflow worse by removing
+  the pacing sequential round trips gave the writer. A chunk that fails records a
+  drop for its own messages and raises; the earlier chunks are already queued.
+- **`bot.queue_depth()`** and **`bot.inflight_depth(worker=None)`**, with async
+  twins, so a monitor stops reproducing `<REDIS_MESSAGES_KEY>:processing:<worker>`
+  by hand — a scheme that is this package's to change. Troubleshooting used to
+  send people to `redis-cli` for it.
+- Both producers now share one write body: serialization, the key and both event
+  rows live in a single context manager, and each transport is the one line that
+  writes. The `await` is the only thing the two cannot share, so it is the only
+  thing they do not.
+
+- **`manage.py tgbot_reclaim --worker <name>`** puts a dead worker's in-flight
+  messages back on the queue. Crash safety rests on a restarted worker
+  recognizing its own list, and a container started without `hostname:` gets a
+  fresh name from Docker for each container it creates — so every replacement,
+  which is what a redeploy does, stranded whatever the last one was sending where
+  nothing would look again. The command is deliberately
+  manual: naming a worker is a human saying it is gone, and one that is merely
+  slow looks exactly like one that is dead. `--dry-run` reports without moving
+  anything, through the same `--limit` a real run applies, and `--limit` bounds
+  what one run can move.
+- Check `I001` reports the case it can detect: `WORKER_NAME` empty while the
+  hostname is one Docker generated. Narrow on purpose — an unset `WORKER_NAME` is
+  the documented default and correct almost everywhere, so warning about it as
+  such would fire on every untouched installation and teach people to stop
+  reading warnings. Information rather than a warning because a check cannot tell
+  a consumer from a web process, and only the consumer is affected; `start_tgbot`
+  warns for itself, where the process is known.
+- `manage.py tgbot_healthcheck` says which guarantee is in force — established
+  by asking, not assumed from a default — and how many messages sit in flight
+  under other worker names, so a stranded pile stops being invisible. It reports
+  rather than acts: one of those may be a message another worker is sending this
+  second. The count is a floor and says so when it is one: `SCAN` walks the whole
+  keyspace, and this runs on a healthcheck timer, so the sweep is bounded.
+- `MAX_IN_FLIGHT` bounds how many sends the consumer will leave outstanding
+  before it stops taking messages, with `0` — the default — meaning no bound.
+  Worth setting on a worker that sees large backlogs: acknowledging is an `LREM`,
+  which scans the in-flight list, so an unbounded one turns draining a backlog
+  into quadratic work.
+- `REQUIRE_CRASH_SAFE` refuses to start where `LMOVE` is missing, rather than
+  running at-most-once and only saying so in a log line. Checked before the
+  consumer thread starts: a failure raised inside it would kill the thread and
+  leave the process polling updates with nothing draining the queue. An
+  unreachable Redis is not mistaken for an old server.
+- `Delivery.crash_safe` reports which guarantee is actually in force.
+- Checks `E045` and `E046` for the two settings above.
+- `DRAIN_TIMEOUT` sets how long `close()` gives in-flight sends before canceling
+  them. It was hardcoded at five seconds and `start_tgbot` called `close()` bare,
+  so a deployment could raise `stop_grace_period` all it liked and never buy the
+  drain a second more. The Deployment page now has the arithmetic for sizing the
+  grace period against all three waits.
+- Check `E044` refuses a `DRAIN_TIMEOUT` that is not a finite number, or is
+  negative. `close()` reads it while shutting down, between stopping the consumer
+  and flushing the event log, so raising there would cost the rows describing what
+  the drain just did — it falls back to the default rather than refusing, and the
+  check is what tells you at boot.
+- Check `E043` refuses a `REDIS_URL` that sets `decode_responses` while
+  `ALLOW_PICKLE` is on. Decoding is otherwise supported and stays supported — one
+  URL is often shared with a cache backend — but a pickled payload is not valid
+  text, and redis-py decodes inside its own parser: the consumer raises *after*
+  the server has moved the message to the in-flight list, and each later start
+  trips over that message once before carrying on — measured on Redis 8, one error
+  per restart, then the queue drains around it. An error rather than a warning
+  because the message itself is unreadable for ever and only a hand-deleted key
+  clears it, but not a wedged consumer: an operator who reads this as a dead queue
+  drains it by hand for nothing.
+- **A metrics seam that is not the event log.** `django_redis_aiogram.signals`
+  carries `events_recorded`, a `django.dispatch.Signal` fired once per batch on the
+  event writer's own thread, with the `Event` objects that batch holds — except in the
+  two cases where there is no writer thread to run on: under `EVENT_LOG_SYNC`, which
+  only takes effect with the log on, and at shutdown for whatever the writer had not
+  drained, on the thread that called `recorder.stop()`. A signal
+  rather than a setting naming a dotted path: no path to get wrong, no check id for
+  it, no lazy import cache, and no question about what a failing import means.
+  A receiver that raises costs neither the other receivers their batch nor the
+  database its rows, and is logged as `an events_recorded receiver raised`.
+  `send_robust` is most of that — and only most: Django's own failure logging reads
+  `receiver.__qualname__`, which a *callable instance* does not have, so for that
+  shape `send_robust` raises instead of containing anything, measured on 6.1. That is
+  caught here as well and logged as `publishing recorded events failed`, because
+  otherwise it reached the writer's failure counter and was reported as a database
+  refusing a batch it never saw.
+
+  It fires with `EVENT_LOG` **off** — the table and the metrics are separate
+  decisions, and gating them together is how an advertised metric comes out
+  silently empty. So the one gate became three: `enabled` still means "this process
+  writes rows", `active` means "the table or a receiver is reading" and is what
+  every producing seam now sits behind, and `wants_payload` guards only the
+  summarizing, which is the expensive part and no part of counting — so with the log
+  off a receiver gets `Event` objects without the *summarized arguments*, while still
+  getting what the seam measured itself: a send's `duration_ms`, a retry's
+  `retry_after`, a queueing failure's `stage`, a gap's `dropped` count. Rows are what
+  the table gets, and with the log off there are none. `EVENT_LOG_KINDS` filters
+  receivers as well, because it is one answer to "which events does this deployment
+  care about" and not two — except for `log.dropped`, which is the record that
+  recording itself fell behind and is exempt in both directions, since a deployment
+  that filtered it out would read the hole as quiet traffic.
+
+  Receivers see the batch **after** its write has been attempted — and only attempted:
+  with the log off there is nothing to write, and a failed write publishes anyway. They
+  get it as a tuple.
+
+  Both are containment rather than convenience. Publishing came *first* originally, and
+  receivers were handed the same list and the same `Event` objects the ORM was about to
+  read — and a frozen dataclass does not freeze the `detail` dict inside it, so a
+  receiver clearing the list or editing a `detail` changed what got persisted. It
+  cannot now: by the time a receiver runs, the write is done. The tuple covers what
+  ordering does not — `send_robust` hands every receiver the same argument, so one of
+  them could otherwise decide what the next one sees. Each `detail` dict is still
+  shared between receivers, so treat it as read-only.
+
+  `Event`'s field names are pinned in `tests/test_public_surface.py`, which makes
+  them public API. Importing the seam pulls neither aiogram nor the ORM: **0.15 ms**
+  on top of a process that already has `django.dispatch`, which every Django process
+  has by the time settings are read. From a bare interpreter it is 16 ms, almost all
+  of it `django.dispatch` pulling `asgiref` — which is why the test asserts what gets
+  imported rather than how long it takes. And a process that has receivers but no table no longer imports
+  `eventlog` — and so `django.db` — to close a connection it never opened.
+  **Event log** has the recipe, including the two honest notes about
+  `prometheus_client` and about which container has to run the exporter.
+
+- **Check `I002`** — `EVENT_LOG_DATABASE` names an alias with nothing in
+  `DATABASE_ROUTERS` routing this app there. E040 sees a string, E041 sees a
+  configured alias with a real engine, W005 sees a database, and `migrate` still never
+  creates the table: the writer logs `no such table` once per batch for ever.
+  Information rather than an error or a warning, because a router of your own returning
+  the same alias is a legitimate way to do it and this cannot see inside one. Compared
+  through `import_string`, so a dotted path and an instance both count.
+
+### Changed
+
+- **Encoding a queued call takes one pass instead of two.** `encode()` rebuilt
+  every container and `json.dumps` then walked the copy. A `JSONEncoder` that
+  tags as it writes produces the same bytes from one walk: a plain send 2.17 →
+  0.58 µs, an envelope 4.12 → 0.98 µs, a thirty-button keyboard of **plain dicts**
+  53.3 → 6.0 µs. Built from `InlineKeyboardButton` objects, which is how every
+  keyboard on **Sending messages** is built, the same markup costs 235 µs — the
+  encoder still walks each model through the recursive path, and that is where the
+  time goes rather than in the JSON.
+  A payload built from aiogram model objects is unchanged at 1.0x — `ModelCodec`
+  still recurses per field, and it has to, because `encode` is exported and a
+  codec returning half-tagged data would break every caller that uses it alone.
+  A payload too deeply nested to read back is still refused: the C encoder
+  ignores Python's recursion limit while `decode` does not, so without a guard
+  such a call would be queued happily and then be undecodable for ever.
+- **Redaction reads the settings once per payload, not once per string.**
+  `redact_text` resolved `TOKEN` and `WEBHOOK_SECRET` for every string at every
+  depth of every event, and `to_row` rebuilt the redaction key set for every row
+  of a two-hundred-row batch. Both are hoisted. A string with no colon also skips
+  the token regex, which is exact — every token Telegram issues contains one —
+  and covered by its own test, because what it guards is the token reaching a row.
+- **The rate limiter no longer spins.** It paced correctly, but by counting
+  tokens: every waiter recomputed the same wait from the same shared state, so N
+  waiters woke together, one won and the rest went back to sleep — about N²/2
+  wakeups, which is the shape rather than a number, because the old design is gone
+  and cannot be re-measured honestly. What is measured is what ships: **35 wakeups
+  for 40 queued sends, 495 for 500** — one per send that had to wait, since the burst
+  is admitted without sleeping at all, so the count is `N - capacity`. A
+  recompute-and-re-sleep tail costs 120 251 for those same 40, which is what the
+  test that pins this uses to fail. Admission also becomes strict FIFO —
+  before, a herd re-racing for the same token admitted in whatever order the loop
+  happened to resume, so the message that had waited longest had no claim on
+  going first. The limits themselves are unchanged, and every existing pacing
+  test passes untouched.
+- Redis commands are documented as deliberately un-retried. `Redis.from_url`
+  builds the pool before the client, so redis-py's client-level retry default
+  never reached the connection and every command already ran with zero retries;
+  that was an accident, and it is now a decision with a test behind it. Neither
+  `RPUSH` nor `BLMOVE` is idempotent, and redis-py retries the whole
+  send-and-read — a connection dropped after the server applied an `RPUSH` would
+  queue the message twice and a real person would receive two of them.
+
+- **Importing the package costs 0.134 ms instead of 1.420 ms**, and pulls neither
+  `typing` nor `threading`. Annotations are postponed and `TYPE_CHECKING` is a local
+  sentinel; the lock around building the shared bot is gone, because a module body
+  runs once per process under Python's own import lock. Honestly: this only matters
+  outside Django, where `django.setup()` has not already paid for both modules —
+  inside one the figure is 0.088 ms either way. The guarantee the lock used to give is
+  pinned by eight threads on a barrier asserting they get one instance.
+- **`orjson` is not coming, and here is the number.** On a fixed 202-byte send,
+  `timeit` over 200 000 calls on CPython 3.13.14: `serializer.dumps(payload)` is
+  **0.98 µs** with the serializer bound the way the queueing path binds it, and a bare
+  `json.dumps` producing the same bytes is **0.83 µs**. So the tagging costs about
+  0.08 µs, and a faster library has to beat that plus the 0.83 µs underneath it —
+  roughly a microsecond in total, against a Redis round trip of 14 µs on Linux — 105 µs
+  measured on macOS, so read it as an order of magnitude rather than a constant — and a
+  Telegram call
+  in tens of milliseconds. Resolving the serializer is a separate 0.09 µs, paid once per
+  write rather than per message, and worth separating because it is the same size as the
+  overhead. `orjson` would also change what is representable, since the tagging depends
+  on `default` being called for exactly the types it registers. The runnable bench, the
+  payload and the platform are on the Serialization page so the question stops being
+  reopened.
+
+### Infrastructure
+
+- **`pip install -e '.[dev]'` becomes `pip install -e . --group dev`.** The dev
+  requirements were an extra, so `Provides-Extra: dev` shipped in the wheel and
+  every consumer resolving the package saw a group of linters they have no use
+  for. They are a PEP 735 dependency group now, which needs pip 25.1 or newer —
+  `AGENTS.md`, `CONTRIBUTING.md` and CI all say the new command.
+- An optional `hiredis` extra: `pip install django-redis-aiogram[hiredis]` makes
+  redis-py parse the protocol in C. Worth it on a busy consumer, pointless on a
+  web tier that only ever pushes, which is why it is opt-in rather than a
+  dependency.
+- The sdist carries `docs/`, `scripts/`, `CONTRIBUTING.md`, `SECURITY.md` and
+  `AGENTS.md`, and the wheel gains the `Framework :: AsyncIO`,
+  `Framework :: Django :: 6.1` and `Topic :: Communications :: Chat`
+  classifiers, plus `Repository` and `Funding` URLs.
+- `redis_conn` is annotated for consumers. It forwards through `__getattr__`, so
+  `redis_conn.ping()` typed as `Any` while `get_redis().ping()` did not; the
+  smoke install now `assert_type`s it, which is the only place a packaging-level
+  typing regression is catchable.
+- CI gains a Django 6.1 leg and a `valkey/valkey:8` integration leg — the fork
+  most managed providers actually run. The integration suite also asserts that an
+  unknown command's error text contains `unknown command`, which is the single
+  assumption the crash-safety downgrade rests on and which fakeredis can never
+  answer.
+- `publish.yml` checks that the release tag and `__version__` agree before
+  building, and pins every action it runs to a commit — it is the one workflow
+  holding `id-token: write`. The tag reaches the shell through `env` rather than
+  template interpolation, since a tag may legally contain a quote, and the build
+  tools are installed by hash from `.github/release-requirements.txt`, with
+  `.github/release-constraints.txt` pinning the backend that `python -m build`
+  resolves in an isolated environment of its own. That job is where third-party
+  code last touches the artefact PyPI receives. `hatchling>=1.27` in
+  `pyproject.toml` is unchanged: only what CI installs is pinned, not what
+  consumers build against.
+- Deprecation warnings fail the suite. Deliberately not a bare `error`: that
+  escalates `ResourceWarning` into `PytestUnraisableExceptionWarning`, whose
+  attribution follows GC timing and differs across the 3.10-3.14 legs.
+- The lazy-boot tests assert what they were meant to. The first now compares a
+  `sys.modules` delta against `sys.stdlib_module_names`, so it catches any
+  third-party import the package pulls rather than aiogram alone, and a third
+  test covers the checks. They run under `tests/bare_settings.py`, because the
+  suite's usual settings install an app whose router imports aiogram anyway.
+- `django-stubs` is held below 6.1. 6.1.0 resolves every `Self`-returning
+  `QuerySet` method to `Any`, which fails `mypy --strict` on code that has not
+  changed since 3.0.0.
+
+### Documentation
+
+- **A `TELEGRAM_BOT` that is empty and not a mapping is refused rather than ignored.**
+  Found while writing the docstring for `_resolve`, which claimed the opposite of what the
+  code did. `getattr(django_settings, 'TELEGRAM_BOT', None) or {}` folded every falsy value
+  into an empty mapping *before* the check meant to catch a wrong type, so `[]`, `()`, `''`
+  and `0` reached none of it: the setting was silently discarded and every value — the token
+  included — came from the environment or the defaults. A project that had configured the
+  bot then ran as though it had not. Only `None` and an absent setting mean *not
+  configured* now. The two tests that covered this used `['not', 'a', 'mapping']` and
+  `'TOKEN=abc'`, both truthy, which is how the hole survived three releases.
+
+- **Everything in `src/` has a docstring, and a test keeps it that way.** Eighteen
+  definitions were missing one, and they were not an even scattering: every single one
+  was a nested closure or a private helper, which is exactly what ruff cannot ask about.
+  `select = ["ALL"]` has required docstrings since 2.0, but pydocstyle's rules apply to
+  *public* module-level and class-level definitions, so `ruff check` was silent on the
+  retry loop inside `send_raw`, on the done-callback that decides whether a killed send
+  is acknowledged, on the thread body that owns the event loop, and on the latch that
+  keeps one message from being reported finished twice. The most load-bearing code in the
+  package is written as closures. Verified rather than assumed: deleting one of the new
+  docstrings leaves `ruff check src` reporting *All checks passed!* while
+  `tests/test_docstring_coverage.py` fails and names the definition.
+
+  That test walks the syntax tree, descends into function bodies — and into `try`, `with`
+  and `if TYPE_CHECKING`, where a definition can also hide — and reports `line:qualified.name`
+  rather than a percentage, because one number over a threshold does not say which
+  definition is missing. Its own control asserts that a nested definition *is* seen, since
+  a walker that stopped descending would report 100% for ever. A second check refuses the
+  degenerate restatement — a summary whose every word is filler or a word of the name, so
+  `def _bucket(): """Return the bucket."""` fails — run against all 484 definitions
+  in `src/` and reporting none of them, because a false positive there would fail the build
+  on a docstring somebody wrote on purpose.
+
+- **The review's docstring check now asks about the library rather than about test
+  naming.** It had been the one failing pre-merge warning for most of this release, at
+  61.83% across the repository — a figure produced by ~576 undocumented definitions under
+  `tests/`, nearly all of them two-line fakes inside test bodies, where `pyproject.toml`
+  ignores `D` deliberately: *test names are the documentation*. Reaching 80% that way
+  would have meant padding the suite to satisfy a number, and overruling a decision this
+  project took on purpose.
+
+  The check cannot be scoped: its schema offers `mode` and `threshold` and nothing else,
+  and `reviews.path_filters` drives a sparse checkout, so excluding `tests/` would take
+  them out of review entirely — and review of the tests is what caught three assertions
+  that could not fail, in this release alone. So the built-in check is off and a custom
+  check asks the same question about `src/`, with the reason in `.coderabbit.yaml` beside
+  it. `mode: 'off'` is quoted there because YAML 1.1 reads a bare `off` as the boolean
+  false, which the schema rejects — an invalid config is an ignored config, and the 80%
+  would have come straight back.
+
 ## 3.0.0 - 2026-08-09
 
 Two kinds of change at once: the compatibility 2.0 shipped for 1.x is gone —

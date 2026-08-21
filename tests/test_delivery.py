@@ -11,6 +11,7 @@ from django_redis_aiogram import TelegramBot
 from django_redis_aiogram.client import Outbound
 from django_redis_aiogram.delivery import BlpopDelivery, get_delivery
 from django_redis_aiogram.events import new_correlation_id
+from django_redis_aiogram.redis import processing_key
 from django_redis_aiogram.serializers import JsonSerializer, PickleSerializer
 
 
@@ -140,7 +141,6 @@ def test_schedule_hops_to_the_loop_thread():
 
     thread = threading.Thread(target=run_loop, daemon=True)
     thread.start()
-    assert started.wait(5)
 
     ran_on = []
     done = threading.Event()
@@ -149,14 +149,20 @@ def test_schedule_hops_to_the_loop_thread():
         ran_on.append(threading.get_ident())
         done.set()
 
-    instance._schedule(coroutine(), an_outbound())
-    assert done.wait(5), 'coroutine never ran on the loop thread'
-    assert ran_on == [thread.ident]
-
-    loop.call_soon_threadsafe(loop.stop)
-    thread.join(timeout=5)
-    loop.close()
-    instance._loop = None
+    try:
+        # inside the try as well: a loop that never starts left this thread in
+        # `run_forever` and the loop open, because the assertion was above the cleanup
+        assert started.wait(5), 'the loop thread never started'
+        instance._schedule(coroutine(), an_outbound())
+        assert done.wait(5), 'coroutine never ran on the loop thread'
+        assert ran_on == [thread.ident]
+    finally:
+        # in a finally: either assertion failing would otherwise leave this thread running
+        # `run_forever` on a loop nothing closes, for the rest of the session
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=5)
+        loop.close()
+        instance._loop = None
 
 
 def test_schedule_runs_inline_when_no_loop_is_running():
@@ -225,7 +231,7 @@ def test_concurrent_send_raw_from_web_threads(monkeypatch):
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'FSM_STORAGE': 'memory', 'RATE_LIMIT': None})
-def test_sends_that_all_see_a_stopped_loop_are_serialised():
+def test_sends_that_all_see_a_stopped_loop_are_serialized():
     """The window the lock exists for.
 
     The test above cannot reach it: while one thread drives the loop the others
@@ -403,3 +409,89 @@ def test_concurrent_first_sends_share_one_event_loop(monkeypatch):
     assert len({id(loop) for loop in seen}) == 1
     for loop in created:
         loop.close()
+
+
+@override_settings(
+    TELEGRAM_BOT={'DELIVERY': 'blpop', 'BLPOP_TIMEOUT': 30, 'HEARTBEAT_INTERVAL': 4, 'REDIS_TIMEOUT': 60}
+)
+def test_the_consumer_pops_for_what_the_shared_ceiling_says(redis_server, monkeypatch):
+    """W004 describes a cap; this is what makes the description true.
+
+    The check tests prove `check_settings()` reports the right number. They cannot
+    prove `run()` uses it — reverted to arithmetic of its own, every one of them still
+    passes while the warning and the consumer disagree, which is the exact defect the
+    shared helper was introduced to remove.
+
+    Asked of the call: `blmove` records the timeout it was given. Four here rather
+    than thirty, because the heartbeat binds.
+    """
+    asked: list[int] = []
+
+    def record_and_stop(source, destination, timeout, *args, **kwargs):
+        asked.append(timeout)
+        delivery.stop()
+
+    # on the instance, not the type: patching the class leaves `self` as the first
+    # positional, and the timeout would be read out of the wrong argument
+    monkeypatch.setattr(redis_server, 'blmove', record_and_stop, raising=False)
+    delivery = BlpopDelivery(handler=lambda **kwargs: None)
+    thread = delivery.start_thread()
+    thread.join(timeout=5)
+
+    # the join alone proves nothing: a `run()` that stopped honouring `stop()` times out here
+    # and leaks the thread for the rest of the session while the assertions below still pass
+    assert not thread.is_alive(), 'the consumer did not stop'
+    assert asked, 'the consumer never popped, so nothing is being tested'
+    assert asked[0] == 4, f'popped for {asked[0]}s while the ceiling says 4'
+
+
+@override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop', 'BLPOP_TIMEOUT': 1, 'WORKER_NAME': 'mine'})
+def test_a_subclass_can_still_name_its_own_in_flight_list(redis_server, monkeypatch):
+    """The keys are module-level functions, and the properties over them stay overridable.
+
+    Both halves matter and only one of them was pinned. `queue_key`, `processing_key`
+    and `heartbeat_key` live in `redis.py` so a producer, both depth reads and
+    `tgbot_reclaim` derive them from one place — but `Delivery` keeps properties over
+    those functions precisely so a subclass can answer differently, which
+    `tests/integration/test_delivery_against_redis.py` relies on to run two consumers
+    against one queue under different names. That reliance only ran with a real Redis.
+
+    Asserted on the key the consumer handed to Redis, not on the property. Reading the
+    property back proves only that the subclass defines it, and asserting the message
+    arrived proves only that *some* key worked: the first version of this test did both
+    and passed with `self.processing_key` replaced by the module function at all eight
+    call sites — which is exactly the regression it was written for.
+    """
+
+    class Named(BlpopDelivery):
+        """A consumer that keeps its in-flight list under a name of its own."""
+
+        @property
+        def processing_key(self) -> str:
+            """Answer with a name this class chose rather than the worker identity."""
+            return f'{self.queue_key}:processing:borrowed'
+
+    destinations: list[str] = []
+    original = redis_server.lmove
+
+    def recording_lmove(source, destination, *args, **kwargs):
+        destinations.append(destination)
+        return original(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(redis_server, 'lmove', recording_lmove)
+
+    handled: list[int] = []
+    delivery = Named(handler=lambda **kwargs: handled.append(kwargs['chat_id']))
+    redis_server.rpush(
+        'TELEGRAM_BOT_MESSAGE',
+        JsonSerializer().dumps({'function': 'send_message', 'chat_id': 7}),
+    )
+
+    delivery.consume_pending()
+
+    assert handled == [7], f'the override stopped the consumer working: {handled}'
+    assert destinations, 'nothing was moved, so nothing is being tested'
+    assert destinations[0] == 'TELEGRAM_BOT_MESSAGE:processing:borrowed', destinations[0]
+    # and the module function is untouched by the override, which is what makes the
+    # producer and `tgbot_reclaim` agree with each other rather than with a subclass
+    assert processing_key() == 'TELEGRAM_BOT_MESSAGE:processing:mine'

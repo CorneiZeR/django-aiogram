@@ -36,15 +36,21 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_delivery` | the consumer that started, always `blpop` |
 | `tg_key` | Redis list being consumed |
 | `tg_timeout` | blocking-pop timeout, or how long a shutdown waited |
-| `tg_error` | text of a non-fatal error |
+| `tg_error` | the class name of a non-fatal error, not its text — a webhook secret or a chat id can end up in the message, and this field is what a log aggregator groups on |
 | `tg_crash_safe` | whether the consumer holds messages in flight; false on a Redis without `LMOVE` |
 | `tg_mode` | `polling` or `webhook` |
 | `tg_update` | the update id being handled |
-| `tg_router` | a router module autodiscovery imported |
-| `tg_pending` | in-flight sends at shutdown |
+| `tg_correlation_id` | the id every event about one message carries |
+| `tg_alternative` | the awaitable method a synchronous send from a loop should move to |
+| `tg_pending` | work still in flight at shutdown: sends, or the updates a webhook process is answering |
 | `tg_drain_timeout` | how long shutdown gave them |
 | `tg_kind` | the event log kind of a row |
+| `tg_receiver` | the `events_recorded` receiver that raised |
 | `tg_count` | events in the batch being written |
+| `tg_batch` | how many rows the batch held, when part of it was refused |
+| `tg_worker` | the worker name an in-flight list is keyed on |
+| `tg_setting` | the setting a message is about |
+| `tg_variable` | the environment variable a message is about |
 | `tg_dropped` | events lost because the buffer was full, or sends dropped at shutdown |
 | `tg_failures` | consecutive failures of the event writer |
 
@@ -56,13 +62,26 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `handler failed for queued message` | ERROR | the send itself raised |
 | `dropping undecodable queued message` | ERROR | a payload could not be deserialized |
 | `blocking pop failed, retrying` | ERROR | lost the Redis connection; it retries |
+| `the delivery consumer did not stop in time` | WARNING | the consumer outlived its join at shutdown; a message it holds may be redelivered |
+| `cancelling updates still in flight` | WARNING | a webhook update outlasted the drain at shutdown; its request is answered 503, so Telegram redelivers it rather than a worker hanging on a stopped loop |
+| `webhook refused an update` | WARNING | an update arrived while the process was shutting down; answered 503 so Telegram redelivers it |
+| `the event loop thread did not start in time` | WARNING | a webhook process cannot hand updates to its loop; every request is refused with 503 until a thread starts |
+| `the event loop thread is gone; starting another` | WARNING | that thread died and was replaced; the update that lost it was refused |
+| `the event loop thread did not stop in time` | WARNING | it outlived its join at shutdown, so the teardown was skipped and `close()` can be retried |
+| `skipping close` | WARNING | the loop was still running, so nothing was torn down; stop polling or the loop thread and call it again |
+| `skipping drain` | WARNING | the same, for the drain alone: in-flight sends were left rather than waited for |
+| `scheduling a send on a loop nothing in this process runs` | WARNING | nothing polls this process and no loop thread exists, so the send is created and never stepped |
 | `rate limited by telegram` | WARNING | refused and backing off |
+| `a synchronous send was called from a running event loop` | WARNING | `send`, `send_redis` or `send_many` from async code: correct, but it writes on the loop's own thread. `tg_alternative` names the awaitable form. Said once per process |
+| `an events_recorded receiver raised` | ERROR | one of your metrics receivers raised; the batch reached the database if the event log is on and the write succeeded, and usually the other receivers too — `send_robust` isolates them, but the row below is the case where it cannot. `tg_receiver` names it |
+| `publishing recorded events failed` | ERROR | the signal dispatch itself raised, not a receiver — Django's own failure logging cannot name a callable instance. The batch reached the database if the event log is on; some receivers may have missed it |
 | `delivery started` | INFO | the consumer is up |
 | `message sent` | INFO | one call succeeded |
 | `the event log is falling behind; events are being dropped` | ERROR | the writer cannot keep up; rows are being lost, messages are not |
-| `the event log is suspended after repeated failures` | ERROR | three failed batches in a row, usually a missing `migrate` |
+| `the event log is suspended after repeated failures` | ERROR | five failed batches in a row, usually a missing `migrate` |
 | `leaving a refused pickle message in flight` | ERROR | `ALLOW_PICKLE` is off and a pickled payload is waiting for it |
 | `leaving a message from a newer version in flight` | ERROR | the web tier was deployed ahead of the bot container |
+| `could not close the client a settings change replaced` | ERROR | a settings change replaced the async Redis client and closing the old one raised; its replacement is already in use, so nothing was refused |
 
 ## The database event log
 

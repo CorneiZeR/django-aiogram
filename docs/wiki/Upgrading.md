@@ -3,6 +3,100 @@
 What each major release changed, newest first. Start at the section for the
 version you are on and work down.
 
+# From 3.0 to 3.1
+
+## Make your handlers idempotent, on your own key
+
+3.0 acknowledged a message when the send was *scheduled*; 3.1 acknowledges it when the
+send has actually finished, for a handler that takes an `on_complete` keyword and calls
+it. `bot.send_raw` does, and `manage.py start_tgbot` uses it, so a normal worker has the
+guarantee the documentation always claimed. It changes what a crash does: before, a
+`kill -9` mid-send lost the message silently — now it is redelivered, so a handler can
+run twice.
+
+A handler of your own that takes only `**kwargs` is still acknowledged the moment it
+returns, which is the pre-3.1.0 behavior and is deliberate — see **[[Delivery]]**. If
+you want the message held until your send finishes, take `on_complete`.
+
+**Do not use `correlation_id` as the key.** A handler's own replies inherit the id of the
+update that caused them, so it is one per *conversation turn*, not one per message: a
+handler that sends three messages produces three rows under one id, and `SET :seen:<id>
+NX` would drop two of them. Use something your own domain owns — an order number, a
+notification row's primary key.
+
+Nothing to configure. If you would rather have the old behavior for a while, there is no
+flag for it: the old behavior lost messages.
+
+## Run migrate
+
+`0002_kind_id_index` swaps the index the event log's admin page and its pruning read:
+`AddIndex` for `drai_event_kind_id` on `(kind, -id)`, then `RemoveIndex` for the old
+`drai_event_kind_recent`. In that order, so the table is never without an index on
+`kind`. It ships whether or not you turn the log on.
+
+`AddIndex` issues a plain `CREATE INDEX` — no `IF NOT EXISTS`, and no adoption of one
+that is already there — so on PostgreSQL, where a table big enough for the lock to matter
+wants `CONCURRENTLY`, creating it by hand ahead of `migrate` makes the migration **fail**
+rather than saving it work. Do the whole swap by hand and then tell Django it is done:
+
+```sql
+CREATE INDEX CONCURRENTLY drai_event_kind_id ON django_redis_aiogram_event (kind, id DESC);
+DROP INDEX CONCURRENTLY drai_event_kind_recent;
+```
+
+```shell
+python manage.py migrate django_redis_aiogram 0002_kind_id_index --fake
+```
+
+Neither statement can run inside a transaction, so run them outside one — `psql` does
+that by default. Everywhere else, plain `migrate` is the whole procedure. The index name
+is new rather than reused so that the hand-made one and the migration's own cannot be
+confused for each other.
+
+## Change the compose healthcheck
+
+If you copied the healthcheck from **[[Deployment]]** in 3.0, replace it:
+
+```yaml
+    environment:
+      DJANGO_SETTINGS_MODULE: core.settings   # the probe is its own process
+    healthcheck:
+      test: ['CMD', 'python', '-m', 'django_redis_aiogram.healthcheck']
+```
+
+`manage.py tgbot_healthcheck` still exists and still works, but it runs `django.setup()`
+first — every `AppConfig.ready()` in your project, before it reads a single Redis key. One
+measured project spent 17.9 seconds there against 0.01 seconds of probing, so Docker
+killed the probe at every timeout and the container read `unhealthy` while the bot was
+fine. The `python -m` form is 69 ms end to end. `DJANGO_SETTINGS_MODULE` has to be in
+`environment:` because a healthcheck is a separate process and `manage.py` only sets it
+inside its own.
+
+## Raise `stop_grace_period` to 30 seconds
+
+The shutdown arithmetic moved. Joining the consumer thread is bounded by
+`REDIS_TIMEOUT + 1` — eleven seconds at the defaults, where 3.0 used
+`BLPOP_TIMEOUT + 1` and gave it six, which was shorter than the worst call the consumer
+makes. Add `DRAIN_TIMEOUT` (five) and the event log's flush (five) and the total is
+**21 seconds**, against 16 before.
+
+A grace period shorter than that turns a graceful stop into a kill, which is now the case
+that duplicates messages rather than losing them. `30s` leaves room; raise
+`DRAIN_TIMEOUT` if your sends spend long in the rate limiter, and raise the grace period
+with it.
+
+## Re-silence checks if you had to
+
+`W010` and `W011` are gone, replaced by `I001` and `I002` with the same meanings. They
+report as *information* now: an ephemeral hostname and an unrouted log alias are both
+conditions a system check can see but cannot judge from where it stands, and as warnings
+they failed `manage.py check --fail-level WARNING` in containers that owned no in-flight
+list at all. If either id is in `SILENCED_SYSTEM_CHECKS`, update it — a silenced id that
+no longer exists is dead but harmless, so nothing will tell you.
+
+`E030` also refuses `REDIS_TIMEOUT` below **2** rather than below 1: at 1 the blocking
+pop's deadline equals the socket's, and every idle pop raises instead of returning empty.
+
 # From 2.x to 3.0
 
 ## The `telegram_bot` package name is gone
@@ -160,7 +254,7 @@ soon as step 2 holds.
 
 Ids moved from `telegram_bot.EXXX` to `django_redis_aiogram.EXXX`.
 
-## Behaviour that changed by itself
+## Behavior that changed by itself
 
 | | 1.x | 2.0 |
 | --- | --- | --- |

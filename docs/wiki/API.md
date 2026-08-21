@@ -10,8 +10,8 @@ from django_redis_aiogram import bot
 does appears on first use — so importing it anywhere is safe, including in a
 process that never talks to Telegram.
 
-`import django_redis_aiogram` costs about a millisecond, because the package
-resolves its exports on attribute access. Naming `bot` is what loads aiogram and
+`import django_redis_aiogram` costs about 0.17 ms, because the package resolves its
+exports on attribute access — it was roughly a millisecond and a half before 3.1.0. Naming `bot` is what loads aiogram and
 the pydantic stack under it (~900 ms), so `from django_redis_aiogram import bot`
 pays that once, at the moment of import. Put it in the modules that send —
 router modules, the views and tasks that call `bot.send()` — and a process that
@@ -48,15 +48,20 @@ feeding the dispatcher, reusing the connection — and that keeps working;
 | `bot.send(function='send_message', **kwargs)` | queue it, or call Telegram directly inside the bot container |
 | `bot.send_redis(...)` | always queue |
 | `bot.send_raw(...)` | always call Telegram from this process |
+| `bot.send_many(chat_ids, function='send_message', *, chunk_size=100, **kwargs)` | queue rather than call, one message per chat, a chunk per round trip |
 
 `function` must name a Telegram API method aiogram exposes; anything else raises
 `ValueError` before it reaches the queue. See **[[Sending-messages|Sending messages]]**.
 
-All three return a **correlation id** — a `uuid.UUID` that ties every row about
-that message together, whichever process wrote it. Store it beside your own
-model if you want to join your records to the feed later. All three also accept
-one as a keyword argument, and a handler replying to an update inherits that
-update's id without passing anything:
+`send`, `send_redis` and `send_raw` return a **correlation id** — a `uuid.UUID`
+that ties every row about that message together, whichever process wrote it.
+It is not one per message and not an idempotency key: a handler's replies inherit
+the id of the update that caused them, so one id can cover several messages.
+Deduplicate on a key your own domain owns.
+`send_many` returns one per chat, in the order the chats were given. Store it
+beside your own model if you want to join your records to the feed later. Each of
+them also accepts one as a keyword argument, and a handler replying to an update
+inherits that update's id without passing anything:
 
 ```python
 identifier = bot.send(chat_id=chat_id, text='hello')
@@ -64,6 +69,63 @@ Receipt.objects.create(order=order, telegram_correlation_id=identifier)
 ```
 
 Before 3.0 they returned `None`, so every existing call site still compiles.
+
+### From code already on an event loop
+
+| | |
+| --- | --- |
+| `await bot.asend(...)` | as `send`, without the blocking socket write |
+| `await bot.asend_redis(...)` | as `send_redis` |
+| `await bot.asend_many(...)` | as `send_many` |
+
+Same signatures, same rows, and the same correlation id — resolved on the caller's
+context before the first `await`, so a handler's replies still inherit the id of
+the update that caused them.
+
+The difference is not *where* the write happens. `redis.asyncio` writes on the
+same thread the loop is running on; it just yields while waiting instead of
+holding that thread, so under ASGI the thread goes on serving other requests
+rather than sitting on a socket. Reach for these from an async view or an async
+task. Note that only the waiting yields: `asend_many` iterates the chats and
+serializes each chunk between its awaits, and that part is ordinary CPU work on
+the loop's thread. A fan-out large enough to matter belongs in a task, not in a
+request.
+
+Each loop gets its own client, because `redis.asyncio` connections are loop-affine.
+`await bot.aclose()` closes the one belonging to the loop that calls it, and it is
+worth calling from a lifespan shutdown if your server has one — it is the only
+path that closes the connection on the loop it belongs to, which is the only loop
+that may close it. Without it the connection stays open until the client is
+collected, and Python may say so with a `ResourceWarning`. **[[Deployment]]** has
+the shutdown recipe.
+
+### Queue introspection
+
+| | |
+| --- | --- |
+| `bot.queue_depth()` | messages waiting for a worker, one `LLEN` |
+| `bot.inflight_depth(worker=None)` | messages one worker is part-way through sending |
+| `await bot.aqueue_depth()` / `await bot.ainflight_depth(...)` | the same read, without holding the loop |
+
+`aget_redis()` and `aclose_redis()` in `django_redis_aiogram.redis` are **not** part
+of this surface, deliberately: the async client is one per running loop, and its
+lifetime belongs to `bot.aclose()` rather than to a caller. Reach the queue through
+the four methods above; if you hold a client of your own, you own closing it on the
+loop that made it.
+
+These four are reads rather than sends, so `ENABLED=0` does not turn them into
+no-ops the way it does every send: they still connect, and without `REDIS_URL` they
+raise `ImproperlyConfigured` rather than answering zero. A monitor that runs in a
+disabled process needs the URL.
+
+`inflight_depth` defaults to this process's own worker identity; naming another is
+how a monitor reads a list left behind by a worker that is gone. The key scheme
+behind them is this package's business — an exporter should not have to reproduce
+`<REDIS_MESSAGES_KEY>:processing:<worker>` by hand.
+
+Each returns an `int` — a length at the moment it was read, not a correlation id
+and not a reservation. A depth read and then acted on is already out of date, so
+these answer "is the backlog growing" rather than "how many will this worker send".
 
 ## Handlers
 
@@ -90,10 +152,16 @@ bot.start_polling()  # attaches the router, then blocks on long polling
 bot.close()  # drains in-flight sends, releases the storage, session and loop
 ```
 
-`close(drain_timeout=5.0)` waits that long for sends still pacing behind the rate
-limiter, cancels whatever outlasts it with a warning, then releases the FSM
-storage's own Redis client, the bot's HTTP session and the loop. A closed
-instance builds itself again on next use.
+`close(drain_timeout=None)` waits for sends still pacing behind the rate limiter,
+cancels whatever outlasts the wait with a warning, then releases the FSM storage's
+own Redis client, the bot's HTTP session and the loop. A closed instance builds
+itself again on next use.
+
+The wait defaults to `DRAIN_TIMEOUT`, five seconds, and passing a number overrides
+it for that call. It was a hardcoded five before 3.1.0, which `start_tgbot` never
+passed — so a deployment could raise `stop_grace_period` all it liked and never buy
+the drain a second more. Set the setting rather than the argument: the arithmetic on
+**[[Deployment]]** adds it up for you.
 
 `start_tgbot` does both around the delivery consumer; you only need them when
 running the bot yourself.
@@ -168,6 +236,7 @@ member may be renamed but never revalued.
 ```python
 from django_redis_aiogram.events import failure_kinds, kind_choices, register_kind
 from django_redis_aiogram.models import TelegramEvent
+from django_redis_aiogram.signals import events_recorded
 ```
 
 `TelegramEvent` is the append-only feed: one row per thing that happened, insert
@@ -184,8 +253,21 @@ TelegramEvent.objects.filter(correlation_id=identifier).order_by('id')
 TelegramEvent.objects.filter(chat_id=chat_id).order_by('-id')[:50]
 ```
 
+`events_recorded` is the metrics seam: a `django.dispatch.Signal` fired once per
+batch with the `Event` objects in it, from the event writer's own thread — except
+under `EVENT_LOG_SYNC` and at shutdown, where there is no writer thread to run on:
+there they run on the thread that recorded the event, or the one that called
+`recorder.stop()` — which is not `bot.close()`, documented above, but the event
+writer's own shutdown. `EVENT_LOG_SYNC` only takes effect with the log on, so a
+receiver-only process still gets the writer thread whatever that flag says. It fires whether or not `EVENT_LOG` is on, which is
+the point: counting what the bot does and keeping a row for it are separate
+decisions. `Event`'s field names are pinned by `tests/test_public_surface.py` and
+are therefore API.
+
 Nothing here is imported unless you import it: `models.py` pulls no aiogram, so
-a migration container pays nothing for it. See **[[Event-log|Event log]]**.
+a migration container pays nothing for it, and `signals.py` pulls neither aiogram
+nor the ORM so a metrics module can import it at settings time. See
+**[[Event-log|Event log]]**.
 
 ## Errors
 
@@ -198,6 +280,9 @@ from django_redis_aiogram.exceptions import DjangoRedisAiogramError
 | `DjangoRedisAiogramError` | base of everything this package raises |
 | `SerializationError` | a payload cannot be encoded, or cannot be decoded |
 | `UnknownApiMethodError` | a call names something that is not a Telegram API method |
+| `LoopUnavailableError` | there is no event loop this call can use; also a `RuntimeError` |
+| `ShuttingDownError` | the bot is closing, so the send was refused rather than queued for a loop that will not run it — a webhook view answers 503 on this, and Telegram redelivers |
+| `LoopThreadNotStartedError` | the loop exists but nothing is turning it, so a hand-off would never be stepped |
 
 Catching `DjangoRedisAiogramError` catches all of them. The two you are likely
 to name keep the bases they had before the family existed —

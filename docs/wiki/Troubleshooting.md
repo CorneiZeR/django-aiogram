@@ -30,16 +30,125 @@ why the package sets the deadline itself rather than relying on the client.
 
 ## Messages pile up in Redis
 
+```python
+from django_redis_aiogram import bot
+
+bot.queue_depth()  # messages waiting for a worker
+bot.inflight_depth()  # what this worker is part-way through sending
+```
+
+Or from a shell, if that is where you are:
+
 ```shell
 redis-cli -n <db> llen TELEGRAM_BOT_MESSAGE
 ```
 
-A growing list means the consumer is not running — see above. Messages wait
-there until a worker takes them. On Redis 6.2+ a taken message sits in
-`TELEGRAM_BOT_MESSAGE:processing:<worker>` until the send returns, and a
-restart with the same `WORKER_NAME` reclaims it: at-least-once, so a crash
-mid-send can duplicate a send. Without `LMOVE` it is at-most-once. A send that
+`TELEGRAM_BOT_MESSAGE` is the default `REDIS_MESSAGES_KEY`; if you set your own,
+it is that key here and in every path below — which is the reason to prefer the
+two calls above in anything you keep, an exporter especially. They read the keys
+this package owns, so a monitor does not encode a scheme that is ours to change.
+
+A growing list does not by itself mean the consumer is stopped: producers can
+simply be outpacing it, and `MAX_IN_FLIGHT` deliberately holds intake back while
+sends are outstanding. Check the heartbeat and the in-flight list below before
+concluding the worker is down — see above for one that genuinely is. Messages
+wait in the queue until a worker takes them. On Redis 6.2+ a taken message sits in
+`<key>:processing:<worker>` until the send has finished, and a restart under the
+same **worker identity** reclaims it: at-least-once, so a crash mid-send can
+duplicate a send. That identity is `WORKER_NAME` when it is set and the hostname
+otherwise — so on a platform that gives each container a fresh hostname, a
+recreated worker looks like a different one and leaves the old list untouched.
+Set `WORKER_NAME` to something stable wherever hostnames change.
+
+All of that holds for the worker `start_tgbot` runs; a handler of your own is
+only held that way if it takes an `on_complete` keyword.
+
+That list is expected to be non-empty while sends are in flight, and an entry
+stays until its send finishes or shutdown cancels it. `MAX_IN_FLIGHT` bounds how
+many sends the consumer leaves outstanding, and so how far the list can run
+ahead. Without `LMOVE` it is at-most-once, unless `REQUIRE_CRASH_SAFE` is on —
+then the worker refuses to start rather than deliver that way. A send that
 exhausted `MAX_RETRIES` is logged and acknowledged, not redelivered.
+
+## The container is unhealthy while the probe says `healthy`
+
+The probe was killed by Docker's `timeout`, so its exit code never arrived — `docker
+inspect` shows `ExitCode: -1` and a growing `FailingStreak` beside a last line that
+reads `healthy: heartbeat 6s old, 0 queued`.
+
+It happens when the healthcheck runs `manage.py tgbot_healthcheck`, because a
+management command runs `django.setup()` first: the whole of your `INSTALLED_APPS`,
+every `AppConfig.ready()`, before the first Redis call. In one project that was 17.9
+seconds. Use the form that does not:
+
+```yaml
+    environment:
+      DJANGO_SETTINGS_MODULE: core.settings   # a healthcheck is a separate process
+    healthcheck:
+      test: ['CMD', 'python', '-m', 'django_redis_aiogram.healthcheck']
+      timeout: 5s
+```
+
+If the probe answers `cannot read the settings: …` instead, that variable is the thing
+missing: `manage.py` sets it inside its own process, so a container running it may
+never export it.
+
+See **[[Deployment]]**. Raising `timeout:` also stops the killing and leaves your whole
+Django app being imported twice a minute to read two keys.
+
+## What the healthcheck's refusals mean
+
+Every line below is what the probe writes to stderr before exiting 1, from either form.
+Grepping one out of `docker inspect` should land here.
+
+| The line | What it is telling you |
+| --- | --- |
+| `redis is unreachable: …` | The client could not be built or could not `PING`. Covers a missing or malformed `REDIS_URL` and an unreadable `REDIS_TIMEOUT` as well as a Redis that is genuinely down — the probe cannot tell a server it cannot reach from one it cannot address |
+| `TELEGRAM_BOT['…'] is not a number: …` | `HEARTBEAT_INTERVAL` or `HEALTHCHECK_MAX_QUEUE` holds something `int()` refuses. `manage.py check` reports these as `E023`/`E024`, but the container form never runs it — that is the point of it — so it says so itself |
+| `cannot read the settings: …` | `DJANGO_SETTINGS_MODULE` is missing from the container's environment, or names a module that does not import. See the section above |
+| `no heartbeat at …: the consumer has not written one within Ns, or it never started` | The key is absent: the consumer never ran, died before its first beat, or has been silent longer than the key's TTL. If the line adds that a limit over the TTL cannot be observed, `--max-age` is set above `3 × HEARTBEAT_INTERVAL` and is doing nothing |
+| `the consumer last reported Ns ago, over the Ns limit` | The key is there and stale. The consumer thread is stuck or gone while the process lives — the failure this probe exists for |
+| `the heartbeat at … is not a timestamp` | Something else writes to that key. Give the worker its own `REDIS_MESSAGES_KEY`, or its own database |
+| `could not read the heartbeat: …` | `PING` answered and the next command did not: a failover in between, a replica that cannot serve the key, or `decode_responses` in a URL shared with a cache backend meeting bytes it cannot decode |
+| `could not read the queue length: …` | The same, one command later |
+| `N messages are queued, over the limit of N` | Work is backing up. `HEALTHCHECK_MAX_QUEUE` or `--max-queue` is what set that number; see **Messages pile up in Redis** above |
+
+Two lines are not refusals and do not change the exit code:
+
+| The line | What it is telling you |
+| --- | --- |
+| `N message(s) are in flight under other worker names …` | Written to stderr while still exiting 0, and only with `--stranded`. Another worker may be sending them this second; if it is gone, `manage.py tgbot_reclaim --worker <name>` requeues them. `at least N` means the bounded sweep stopped early, so the count is a floor |
+| `disabled in this process; nothing to check` | `ENABLED` is off here, so nothing is meant to be running and nothing is wrong. Exit 0, and deliberately not colored as a success |
+
+Two more reach the log rather than the output — both mean the probe declined to answer
+that part rather than fail the container over it:
+
+- `could not scan for stranded in-flight lists`
+- `could not establish which delivery guarantee is in force`
+
+## The webhook answers 503, or every update 403s
+
+**503** means the view refused the update rather than handling it, so Telegram will
+redeliver — which is what you want. Four reasons, each with its own log line:
+
+- `webhook received an update while the bot is disabled` — `ENABLED` is off here
+- `webhook received an update while this deployment polls` — `MODE` is not `webhook`, so
+  a worker is polling and this process must not also feed the dispatcher
+- `webhook cannot build the bot` — building it raised `ImproperlyConfigured`; a
+  missing or malformed `TOKEN` is the common example, not the only one
+- `webhook refused an update` — nothing ran it: the process is shutting down, its loop was
+  already closed by an earlier `close()`, or the loop's own thread had not started yet.
+  The closed-loop case is worth knowing about in a web worker that stays up — something
+  closed the bot and requests kept arriving
+
+**403** means the `X-Telegram-Bot-Api-Secret-Token` header did not match
+`WEBHOOK_SECRET`. Check that the value you registered with `manage.py tgbot_webhook set`
+is the one the process now reads — rotating the setting without re-registering gives
+exactly this. The comparison is on bytes, so a secret outside ASCII is compared like any
+other: a matching one passes, and a mismatched one gets this 403 rather than a traceback.
+
+**400** means the body did not parse as an update. Something other than Telegram is
+posting to that URL.
 
 ## Handlers never fire
 
@@ -93,8 +202,8 @@ the send path read it the same way.
 
 ## Sends are slow
 
-That is likely the pacing in **[[Rate limits]]** doing its job: one message per
-second to the same chat, 20 per minute to a group. Verify with `RATE_LIMIT`
+That is likely the pacing in **[[Rate-limits|Rate limits]]** doing its job: one
+message per second to the same chat, 20 per minute to a group. Verify with `RATE_LIMIT`
 set to `None`; if it speeds up, tune the numbers rather than removing them, or
 Telegram will start refusing.
 
@@ -112,8 +221,9 @@ In order of how often it is the answer:
 1. `TELEGRAM_BOT['EVENT_LOG']` is off. It is off by default, and `record()`
    returns before it reads anything else.
 2. `migrate` has not run. The writer logs `no such table` once per batch and
-   drops what it held; after three failures in a row it suspends for a minute
-   rather than hammering the database.
+   drops what it held; after five failures in a row it suspends for a minute
+   rather than hammering the database, and records a `log.dropped` row for the
+   gap once it gets through again.
 3. The process you are looking at is not the one that records. `outbound.queued`
    is written by whichever process called `send_redis`; `outbound.sent` by the
    bot container. Enabling the log in one and not the other gives you half a

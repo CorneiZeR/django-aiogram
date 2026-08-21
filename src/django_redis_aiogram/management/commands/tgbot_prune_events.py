@@ -17,8 +17,8 @@ import time
 from argparse import ArgumentParser
 from typing import Any, NamedTuple
 
-from django.core.management import BaseCommand
-from django.db import models, transaction
+from django.core.management import BaseCommand, CommandError
+from django.db import connections, models, transaction
 from django.utils import timezone
 
 from django_redis_aiogram.eventlog import log_alias
@@ -82,17 +82,29 @@ class Command(BaseCommand):
             return
 
         alias = options['database'] or log_alias()
+        if alias not in connections:
+            # E041 guards the setting; the flag bypasses it, in the one command that runs
+            # from cron — where a Django traceback is the least useful thing to wake up to
+            msg = f'no database is configured under the alias {alias!r}; DATABASES has {sorted(connections)}.'
+            raise CommandError(msg)
         cutoff = timezone.now() - datetime.timedelta(days=days)
         rows = TelegramEvent.objects.using(alias)
 
-        # where the walk stops: nothing older than the cutoff lives above this
-        # id. Reading it costs one pass over the rows about to be deleted, on
-        # the created_at index — not over the table
-        watermark = rows.filter(created_at__lt=cutoff).aggregate(models.Max('id'))['id__max']
+        # where the walk stops: nothing older than the cutoff lives above this id.
+        # `drai_event_recent` covers the cutoff range, so neither form touches the
+        # table — but ordering by id still sorts that range, and `EXPLAIN QUERY PLAN`
+        # gives this and `Min(id)` the same two steps: the covering search and one
+        # `USE TEMP B-TREE FOR ORDER BY`. Written as a limit rather than an aggregate
+        # to read like the `low` below it, not because it measures faster
+        expired = rows.filter(created_at__lt=cutoff)
+        watermark = expired.order_by('-id').values_list('id', flat=True).first()
         if watermark is None:
             self.stdout.write(f'Nothing older than {cutoff.isoformat()}.')
             return
-        low = rows.aggregate(models.Min('id'))['id__min'] or 1
+        # filtered by the cutoff like the watermark is. Taking the table's lowest
+        # id instead meant one surviving row down there pinned the walk to
+        # restart from it every night, and a --max-chunks run never got past it
+        low = expired.order_by('id').values_list('id', flat=True).first() or 1
 
         deleted = self._walk(Window(rows, low, watermark, cutoff, alias), options)
         verb = 'would delete' if options['dry_run'] else 'deleted'
@@ -114,17 +126,19 @@ class Command(BaseCommand):
             # several processes and a buffered writer are involved
             batch = rows.filter(id__gte=low, id__lte=high, created_at__lt=cutoff)
             if options['dry_run']:
-                deleted += batch.count()
+                removed_here = batch.count()
             else:
                 with transaction.atomic(using=alias):
-                    removed, _ = batch.delete()
-                deleted += removed
+                    removed_here, _ = batch.delete()
+            deleted += removed_here
             low = high + 1
             rounds += 1
             if limit and rounds >= limit:
                 self.stdout.write(f'Stopped after {rounds} chunks; rerun to continue.')
                 break
-            if pause and low <= watermark:
+            # nothing was deleted, so there is nothing for a replica to catch up
+            # on and nothing to vacuum; a dry run deletes nothing at all
+            if pause and removed_here and low <= watermark and not options['dry_run']:
                 # replicas and autovacuum both need the gaps
                 time.sleep(pause)
         return deleted

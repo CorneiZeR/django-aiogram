@@ -41,14 +41,39 @@ MAX_TRACKED_CHATS = 4096
 #: how many of the oldest buckets to look at before evicting one regardless
 EVICTION_CANDIDATES = 8
 
-# refilling accumulates float error, so a full bucket can land on 0.9999999999
-# instead of 1.0. Without this tolerance the wait shrinks to intervals too small
-# to advance the clock at all, and acquire() spins forever.
-TOKEN_EPSILON = 1e-9
-
 
 class TokenBucket:
-    """Classic token bucket, with the clock injectable so tests stay fast."""
+    """A token bucket by its behavior, GCRA by its implementation.
+
+    The name is kept because that is what the limits are described as, but nothing
+    counts tokens. Each caller claims the next free slot under the lock and sleeps
+    until exactly that instant, which gives the same pacing for two reasons a
+    counter cannot:
+
+    * **Wakeups are O(1) per admitted call.** Counting meant every waiter computed
+      the same wait from the same shared state, so N waiters woke together, one
+      won and N-1 recomputed — about N²/2 wakeups. Measured here, on the design that
+      ships: 35 wakeups for 40 queued sends and 495 for 500, which is one per send that
+      *had to wait* — the burst goes through without sleeping at all, so the count is
+      ``max(0, N - max(1, floor(capacity)))`` rather than ``N`` — clamped, because a
+      batch smaller than the burst sleeps not at all: measured, three calls against a
+      capacity of five wake nobody. The floor matters because
+      ``capacity`` is a float: measured, 1.5 admits one call without sleeping and 5.5
+      admits five, so a fraction of a slot buys nothing. The ``max`` matters because a
+      capacity *below* one still admits the first call — ``_burst`` clamps to zero and the
+      claim starts at ``now`` — so 0.5 gives 39 wakeups for 40 calls, not 40.
+
+      The old shape is quoted as N²/2 rather than as a number, because it is gone and a
+      number for it would be invented.
+    * **Admission is strict FIFO.** A herd re-racing for the same token admits in
+      whatever order the loop happens to resume, so the message that waited
+      longest had no claim on going first.
+
+    It also removes the reason `TOKEN_EPSILON` existed: refilling accumulated
+    float error, a full bucket landed on 0.9999999999, and the wait shrank to
+    intervals too small to advance the clock at all. There is no loop to spin in
+    here — a slot is claimed once and waited for once.
+    """
 
     def __init__(
         self,
@@ -58,7 +83,7 @@ class TokenBucket:
         clock: Clock = time.monotonic,
         sleep: Sleeper = asyncio.sleep,
     ) -> None:
-        """Build a bucket that refills at ``rate`` per second."""
+        """Build a bucket admitting ``rate`` calls per second, ``capacity`` at once."""
         if rate <= 0:
             msg = 'rate must be positive'
             raise ValueError(msg)
@@ -66,37 +91,45 @@ class TokenBucket:
         self.capacity = capacity if capacity is not None else max(rate, 1.0)
         self._clock = clock
         self._sleep = sleep
-        self._tokens = self.capacity
-        self._updated = clock()
+        self._interval = 1 / rate
+        # (capacity - 1), not capacity: the first call takes a slot rather than
+        # only credit for one, so the full form admits capacity + 1 in a burst
+        self._burst = max(0.0, (self.capacity - 1) * self._interval)
+        # a fresh bucket owes nothing, which is the whole burst available at once
+        self._next_free = clock() - self._burst
         self._guard = threading.Lock()
 
     def is_idle(self) -> bool:
-        """Report whether the bucket is back to full, and so free to forget."""
-        with self._guard:
-            self._refill()
-            return self._tokens >= self.capacity - TOKEN_EPSILON
+        """Report whether the bucket owes no wait, and so is free to forget.
 
-    def _refill(self) -> None:
-        now = self._clock()
-        elapsed = max(0.0, now - self._updated)
-        self._tokens = min(self.capacity, self._tokens + elapsed * self.rate)
-        self._updated = now
+        Against `now - burst` rather than `now`: a bucket that has spent part of
+        its burst still owes that part, and calling it idle would let `_evict`
+        forget a chat that is mid-conversation — which is the bounded-loss
+        argument that method rests on.
+        """
+        with self._guard:
+            return self._next_free <= self._clock() - self._burst
 
     async def acquire(self) -> None:
-        """Block until one token is available, then spend it.
+        """Claim the next free slot, then wait until it arrives.
 
         The guard is a threading lock, not an asyncio one: a limiter is shared
         per token and may be reached from more than one loop or thread, and an
         asyncio primitive binds itself to the first loop that awaits it. It is
-        held only across the read-modify-write, never across the sleep.
+        held only across the claim, never across the sleep.
         """
-        while True:
-            with self._guard:
-                self._refill()
-                if self._tokens >= 1 - TOKEN_EPSILON:
-                    self._tokens = max(0.0, self._tokens - 1)
-                    return
-                wait = (1 - self._tokens) / self.rate
+        with self._guard:
+            now = self._clock()
+            # the claim cannot start further back than the burst allows, or an
+            # idle bucket would bank credit without limit
+            slot = max(self._next_free, now - self._burst)
+            self._next_free = slot + self._interval
+        # read again, outside the lock: `now` was sampled while claiming, and
+        # anything between then and here — the GIL, another thread, a slow
+        # logger — makes it stale. Sleeping `slot - stale` overshoots the slot by
+        # exactly that gap, which is throttling nobody asked for
+        wait = slot - self._clock()
+        if wait > 0:
             await self._sleep(wait)
 
 
@@ -129,6 +162,12 @@ class RateLimiter:
         self._lock = threading.Lock()
 
     def _bucket(self, rate: float, capacity: float | None = None) -> TokenBucket | None:
+        """Build a bucket, or None when this limit is switched off.
+
+        ``None`` for a zero rate is what lets every caller treat *unlimited* as *no
+        bucket* and skip the wait entirely, rather than each one repeating the check
+        against the setting.
+        """
         if not rate:
             return None
         return TokenBucket(rate, capacity, clock=self._clock, sleep=self._sleep)
@@ -140,6 +179,14 @@ class RateLimiter:
         rate: float,
         capacity: float | None = None,
     ) -> TokenBucket | None:
+        """Return this key's bucket, creating it on first use, and mark it as used.
+
+        The ``move_to_end`` is the whole reason this is one method rather than a
+        ``setdefault``: the map is bounded, and eviction draws its candidates from the
+        least recently used end — so a lookup that did not record itself would leave a
+        busy chat sitting at the front of that queue, and be thrown away while it is
+        still owed a wait.
+        """
         bucket = chats.get(key)
         if bucket is None:
             created = self._bucket(rate, capacity)
@@ -277,6 +324,12 @@ def _reset_on_setting_change(
     setting: str,
     **kwargs: Any,
 ) -> None:
+    """Forget the shared limiters when the setting they were built from changes.
+
+    The registry is keyed by token and outlives any one bot, so without this a test or a
+    runtime change of the rates would keep pacing against the numbers a previous
+    configuration was built with.
+    """
     if setting == SETTINGS_NAME:
         reset_rate_limiters()
 
