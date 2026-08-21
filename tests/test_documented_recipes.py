@@ -311,6 +311,10 @@ def test_a_recipe_that_pins_a_hostname_says_what_a_second_worker_would_do():
     page = (pathlib.Path(__file__).resolve().parent.parent / 'docs' / 'wiki' / 'Deployment.md').read_text(
         encoding='utf-8'
     )
+    # asserted before the slice: `split` on a missing marker returns the whole page, and
+    # the two fragments below turn up somewhere in a page this size whatever it says
+    assert 'hostname: telegram-bot-1' in page, 'the recipe this test is about is gone from the page'
+    assert 'telegram_bot:' in page, 'the service this test reads is gone from the page'
     recipe = page.split('hostname: telegram-bot-1')[0].rsplit('telegram_bot:', 1)[1]
 
     assert 'scale' in recipe, 'the recipe pins a hostname without saying what scaling it does'
@@ -449,6 +453,9 @@ def test_every_reason_the_webhook_refuses_is_catalogued(fragment):
     assert fragment in catalogued_refusals(), 'Troubleshooting does not name a reason the view answers 503'
 
 
+#: enough to read the count the page states in prose; it is a small number by construction
+NUMBER_WORDS = {'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7}
+
 #: what each of the four 503 branches is called on Webhook.md, where the causes are prose
 #: rather than log lines. Ordered as the view checks them, which is what the page claims.
 #: The third names the exception, because the view catches `ImproperlyConfigured` and a
@@ -470,17 +477,21 @@ def test_the_other_page_names_the_same_four_causes():
     """
     root = pathlib.Path(__file__).resolve().parent.parent
     page = (root / 'docs' / 'wiki' / 'Webhook.md').read_text(encoding='utf-8')
-    paragraph = page.split('All four reasons for a 503')[1].split('\n\n')[0]
+    # the page's own count, read rather than assumed: comparing anything derived from
+    # WEBHOOK_CAUSES against WEBHOOK_REFUSALS compares two constants written in this file,
+    # which held for every possible state of the page and of the view
+    stated = re.search(r'All (\w+) reasons for a 503', page)
+    assert stated, 'Webhook.md no longer says how many reasons there are'
+    assert NUMBER_WORDS[stated.group(1)] == len(WEBHOOK_REFUSALS), (
+        f'the page says {stated.group(1)} reasons, the view refuses for {len(WEBHOOK_REFUSALS)}'
+    )
+
+    paragraph = page[stated.end() :].split('\n\n')[0]
     positions = [paragraph.find(cause) for cause in WEBHOOK_CAUSES]
     absent = [cause for cause, position in zip(WEBHOOK_CAUSES, positions, strict=True) if position < 0]
 
     assert not absent, f'Webhook.md no longer names {absent}'
     assert positions == sorted(positions), 'the causes are no longer in the order the view checks them'
-    # against the page, not against the other constant in this file: both are written by
-    # hand here, so the old form held for every possible state of Webhook.md and the view
-    assert len(positions) == len(WEBHOOK_REFUSALS), (
-        f'Webhook.md describes {len(positions)} causes, the view refuses for {len(WEBHOOK_REFUSALS)}'
-    )
 
 
 def test_the_catalogue_and_the_view_agree_on_how_many_refusals_there_are():
