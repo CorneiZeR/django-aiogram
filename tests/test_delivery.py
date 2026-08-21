@@ -438,6 +438,9 @@ def test_the_consumer_pops_for_what_the_shared_ceiling_says(redis_server, monkey
     thread = delivery.start_thread()
     thread.join(timeout=5)
 
+    # the join alone proves nothing: a `run()` that stopped honouring `stop()` times out here
+    # and leaks the thread for the rest of the session while the assertions below still pass
+    assert not thread.is_alive(), 'the consumer did not stop'
     assert asked, 'the consumer never popped, so nothing is being tested'
     assert asked[0] == 4, f'popped for {asked[0]}s while the ceiling says 4'
 

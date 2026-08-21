@@ -600,6 +600,26 @@ def test_reclaim_requeues_a_dead_workers_messages(redis_server):
 
 
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+def test_a_bounded_reclaim_takes_the_newest_in_flight_first(redis_server):
+    """`--limit` has a direction, and the help text said the opposite of it.
+
+    A message is taken with ``LEFT`` → ``RIGHT``, so the tail of the in-flight list is the
+    most recent one — and a reclaim pops that tail. Draining the whole list therefore
+    restores the original order, which is what the order test below asserts, but a run
+    stopped by ``--limit`` has moved the *newest* and left the older ones in place. An
+    operator reading "oldest first" would have expected the opposite of what they got.
+    """
+    for chat_id in (1, 2, 3):
+        redis_server.rpush(f'{QUEUE}:processing:gone', payload(chat_id))
+
+    call_command('tgbot_reclaim', worker='gone', limit=1, stdout=StringIO())
+
+    assert redis_server.llen(f'{QUEUE}:processing:gone') == 2, 'the limit did not hold'
+    front = JsonSerializer().loads(redis_server.lrange(QUEUE, 0, -1)[0])
+    assert front['chat_id'] == 3, f'a bounded run took {front["chat_id"]}, not the newest'
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
 def test_reclaim_does_not_stop_on_a_message_that_happens_to_be_empty(redis_server):
     """The walk stopped on any falsy element, and only nil means the list is empty.
 

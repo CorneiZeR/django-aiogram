@@ -43,13 +43,20 @@ class Command(BaseCommand):
             '--limit',
             type=int,
             default=0,
-            help='stop after this many messages, so one run has a bounded blast radius. 0 means no limit',
+            help='stop after this many messages, so one run has a bounded blast radius. 0 means no '
+            'limit. A bounded run takes the newest in flight first, because that is the end of the '
+            'list a reclaim pops from',
         )
         parser.add_argument('--dry-run', action='store_true', help='report what is there, and move nothing')
 
     @staticmethod
     def _move_one(connection: Redis, source: str, destination: str) -> object:
-        """Move one message back to the front of the queue, oldest first.
+        """Move the newest in-flight message back to the front of the queue.
+
+        Newest, because a message is taken with ``LEFT`` → ``RIGHT`` and so the tail of the
+        in-flight list is the most recent one — and this pops that tail. Draining the whole
+        list therefore restores the original order, the oldest ending up at the front; a run
+        stopped by ``--limit`` has reclaimed the newest and left the older ones in place.
 
         ``LMOVE ... RIGHT LEFT`` is what ``reclaim()`` uses, so the order a real run
         produces is the order a dry run promises. On a Redis older than 6.2 that command

@@ -1,9 +1,13 @@
 """The signal a project gets metrics out of, and the three gates behind it.
 
-Every test here has the event log **off**. That is the whole point: the table and
-the metrics are separate decisions, and a gate that reads the table flag where it
-should read "is anyone listening" produces an advertised metric that is silently
-empty. Each of these fails against a gate left on `recorder.enabled`.
+The gate tests here have the event log **off**. That is their whole point: the table
+and the metrics are separate decisions, and a gate that reads the table flag where it
+should read "is anyone listening" produces an advertised metric that is silently empty.
+Each of those fails against a gate left on `recorder.enabled`.
+
+The rest turn `EVENT_LOG` on deliberately — what a receiver sees when rows are being
+written too, and what a writer does to the connection it used. A new receiver-only test
+belongs with the first group, off, or it stops measuring the gate.
 """
 
 import asyncio

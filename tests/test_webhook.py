@@ -968,7 +968,7 @@ def test_a_non_ascii_secret_is_refused_rather_than_raised():
 
 
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'WEBHOOK_SECRET': 'пароль'})
-def test_a_matching_non_ascii_secret_passes():
+def test_a_matching_non_ascii_secret_passes(handled):
     """Comparing bytes means comparing, not refusing.
 
     The other half of that fix, and the half the documentation first got wrong: a secret

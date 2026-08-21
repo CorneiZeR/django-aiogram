@@ -472,6 +472,8 @@ def test_the_consumer_is_not_started_by_the_shutdown_itself(monkeypatch, caplog)
         call_command('start_tgbot')
 
     assert 'stopped' in events, events
-    if 'consumer-started' in events:
-        assert events.index('consumer-started') < events.index('stopped'), events
+    # stated rather than guarded: `if 'consumer-started' in events` skipped the check when it
+    # was absent, and when it was present the callback had already run before `stop()`, which
+    # is the passing case — so neither branch could fail
+    assert 'consumer-started' not in events, f'the shutdown started a consumer: {events}'
     assert 'not starting the consumer' in caplog.text
