@@ -90,7 +90,12 @@ module as it stands, the calls above have no `monkeypatch` to reach and raise
 `NameError`. Take `fake_redis` in the test and read the queue off its return value.
 
 One `FakeServer` behind both, so a message queued through `asend` is visible to a
-synchronous read of the queue. This package's own `redis_server` fixture is exactly
+synchronous read of the queue.
+
+This is the queue path, which is what a web or Celery process takes. In the *worker*
+process `asend` calls Telegram directly through `send_raw` and never reaches
+`aget_redis`, so a test asserting on the queue there should call `asend_redis`
+explicitly rather than rely on the routing. This package's own `redis_server` fixture is exactly
 this, and patches `aget_redis`'s *builder* rather than `aget_redis` itself for the
 same reason the note above gives: patching the accessor leaves the thing under test
 untested.

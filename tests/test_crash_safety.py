@@ -126,8 +126,12 @@ class OldRedis:
 
     def __init__(self, inner):
         self._inner = inner
+        #: whether anything actually asked for LMOVE, so a test can prove the fallback
+        #: is what ran rather than assume it from the outcome
+        self.refused = False
 
     def lmove(self, *args, **kwargs):
+        self.refused = True
         msg = "unknown command 'LMOVE'"
         raise ResponseError(msg)
 
@@ -857,6 +861,36 @@ def test_a_callback_called_twice_counts_once(redis_server):
     assert delivery._in_flight == 0, f'the in-flight count drifted to {delivery._in_flight}'
 
 
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'ENABLED': False, 'MAX_IN_FLIGHT': 2})
+def test_a_disabled_bot_gives_the_slot_back_too(redis_server):
+    """`ENABLED` is read live, so a consumer can reach that branch mid-run.
+
+    `send_raw` returns the correlation id and sends nothing when the bot is off — and it
+    was returning without either callback, so a slot taken for the message was never
+    given back. Under `MAX_IN_FLIGHT` the bound then closed one message at a time until
+    a restart. The same defect as the refusal paths, one branch earlier.
+    """
+    for chat_id in (1, 2, 3, 4):
+        redis_server.rpush(QUEUE, payload(chat_id))
+    instance = TelegramBot()
+    delivery = Deferring()
+    handed: list[object] = []
+
+    def handler(function='send_message', on_complete=None, on_refused=None, **kwargs):
+        """The real `send_raw` on a disabled bot, which returns having sent nothing."""
+        handed.append(kwargs)
+        instance.send_raw(function, on_complete=on_complete, on_refused=on_refused, **kwargs)
+
+    delivery.handler = handler
+    delivery._defers = True
+    delivery._releases = True
+
+    delivery.consume_pending()
+
+    assert len(handed) == 4, f'the bound never reopened: {len(handed)} of 4 taken'
+    assert delivery._in_flight == 0, f'the in-flight count drifted to {delivery._in_flight}'
+
+
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'MAX_IN_FLIGHT': 2})
 def test_a_refused_send_gives_its_slot_back(redis_server):
     """A refusal is not a completion, and it is not a leak either.
@@ -1052,10 +1086,17 @@ def test_reclaim_works_on_a_server_older_than_lmove(redis_server, monkeypatch):
         'django_redis_aiogram.management.commands.tgbot_reclaim.get_redis',
     )
     for target in targets:
-        monkeypatch.setattr(target, lambda *args, **kwargs: old, raising=False)
+        # no `raising=False`: it would create the attribute instead of failing, so a
+        # rename or a move to `redis.get_redis(...)` at the call site would leave this
+        # patch attached to nothing — the command would resolve a modern client and every
+        # assertion below would still pass, reporting that the pre-6.2 path works without
+        # ever taking it
+        monkeypatch.setattr(target, lambda *args, **kwargs: old)
     out = StringIO()
 
     call_command('tgbot_reclaim', worker='gone', stdout=out)
+
+    assert old.refused, 'LMOVE was never attempted, so the fallback was not what ran'
 
     assert redis_server.llen(f'{QUEUE}:processing:gone') == 0, 'the messages were left stranded'
     assert redis_server.llen(QUEUE) == 2

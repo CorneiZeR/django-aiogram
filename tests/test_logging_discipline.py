@@ -256,7 +256,13 @@ def _is_logging_call(node: ast.Call, receivers: 'set[str]') -> bool:
     """
     if not isinstance(node.func, ast.Attribute) or node.func.attr not in LEVELS:
         return False
-    return isinstance(node.func.value, ast.Name) and node.func.value.id in receivers
+    receiver = node.func.value
+    if isinstance(receiver, ast.Name):
+        return receiver.id in receivers
+    # `self.logger.warning(...)`: `LoggingUse` records that binding under the attribute's
+    # own name, so refusing the shape here would have missed every field such a module
+    # logs — no module in `src/` does today, which is exactly why nothing noticed
+    return isinstance(receiver, ast.Attribute) and receiver.attr in receivers
 
 
 def _keys_of(mapping: ast.expr, where: str) -> set[str]:
@@ -373,7 +379,9 @@ def test_every_structured_field_is_documented():
         # logs nothing, so counting its `extra` would fail the documentation check over a
         # field nobody emits
         ("handler.info('x', extra={'tg_unrelated': 1})", set()),
-        ("self.logger.info('x', extra={'tg_attribute': 1})", set()),
+        ("self.logger.info('x', extra={'tg_attribute': 1})", {'tg_attribute'}),
+        # a receiver that holds no logger, whatever it is called
+        ("self.handler.info('x', extra={'tg_unrelated': 1})", set()),
         ("logger.fatal('x', **{'extra': {'tg_f': 1}})", {'tg_f'}),
         ("logger.warn('x', extra={'tg_w': 1})", {'tg_w'}),
     ],

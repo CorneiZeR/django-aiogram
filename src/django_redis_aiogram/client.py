@@ -887,6 +887,10 @@ class TelegramBot:
         identifier = resolve_correlation_id(correlation_id)
         if not self.enabled:
             logger.debug('send skipped: bot disabled', extra={'tg_function': function})
+            # the same slot-return as the refusals below: `ENABLED` is read live, so a
+            # consumer that took a slot can reach this branch after the setting changed,
+            # and without this the bound closes one message at a time until a restart
+            _settle(on_refused)
             return identifier
 
         async def send() -> None:

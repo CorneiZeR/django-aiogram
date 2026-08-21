@@ -97,6 +97,7 @@ Asked often enough to be worth answering with a number rather than a preference.
 
 ```python
 import json
+import statistics
 import timeit
 import uuid
 
@@ -112,8 +113,18 @@ payload = pack(
 serializer = get_serializer()  # bound once, the way the queueing path binds it
 
 calls = 200_000
-print(timeit.timeit(lambda: serializer.dumps(payload), number=calls) / calls * 1e6)
-print(timeit.timeit(lambda: json.dumps(payload), number=calls) / calls * 1e6)
+rounds = 5  # the median of five, so one slow round cannot set the number
+
+
+def per_call(what):
+    """Microseconds per call, median of `rounds` runs of `calls` each."""
+    return statistics.median(timeit.timeit(what, number=calls) / calls * 1e6 for _ in range(rounds))
+
+
+print(per_call(lambda: serializer.dumps(payload)))
+print(per_call(lambda: json.dumps(payload)))
+print(per_call(lambda: get_serializer().dumps(payload)))
+print(per_call(lambda: json.dumps(payload, separators=(',', ':'))))
 ```
 
 A fixed correlation id and timestamp, so the payload is byte-stable between runs: a

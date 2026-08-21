@@ -201,10 +201,12 @@ def test_the_upgrade_page_covers_the_version_being_shipped():
     series = '.'.join(__version__.split('.')[:2])
     # `visible()` for the same reason: a heading in a code block is not a section
     page = visible((WIKI / 'Upgrading.md').read_text(encoding='utf-8'))
-    headings = [line for line in page.splitlines() if line.startswith('# ')]
+    headings = [line for line in page.splitlines() if re.match(r'#{1,6} ', line)]
 
     # the heading, not the page text: `to 3.1` appears in any prose that mentions
-    # upgrading to it, so the broad search passed on a page with no such section
+    # upgrading to it, so the broad search passed on a page with no such section.
+    # Any level: `startswith('# ')` matched only level one, so moving the section under
+    # `## ` would have failed a page that documents the series perfectly well
     assert any(line.endswith(f' to {series}') for line in headings), (
         f'no section heading upgrading to {series}: {headings}'
     )

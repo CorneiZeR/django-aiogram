@@ -134,7 +134,8 @@ redeliver — which is what you want. Four reasons, each with its own log line:
 - `webhook received an update while the bot is disabled` — `ENABLED` is off here
 - `webhook received an update while this deployment polls` — `MODE` is not `webhook`, so
   a worker is polling and this process must not also feed the dispatcher
-- `webhook cannot build the bot` — `TOKEN` is missing or malformed
+- `webhook cannot build the bot` — building it raised `ImproperlyConfigured`; a
+  missing or malformed `TOKEN` is the common example, not the only one
 - `webhook refused an update` — nothing ran it: the process is shutting down, its loop was
   already closed by an earlier `close()`, or the loop's own thread had not started yet.
   The closed-loop case is worth knowing about in a web worker that stays up — something

@@ -48,7 +48,7 @@ feeding the dispatcher, reusing the connection — and that keeps working;
 | `bot.send(function='send_message', **kwargs)` | queue it, or call Telegram directly inside the bot container |
 | `bot.send_redis(...)` | always queue |
 | `bot.send_raw(...)` | always call Telegram from this process |
-| `bot.send_many(chat_ids, function='send_message', *, chunk_size=100, **kwargs)` | always queue, one message per chat, a chunk per round trip |
+| `bot.send_many(chat_ids, function='send_message', *, chunk_size=100, **kwargs)` | queue rather than call, one message per chat, a chunk per round trip |
 
 `function` must name a Telegram API method aiogram exposes; anything else raises
 `ValueError` before it reaches the queue. See **[[Sending-messages|Sending messages]]**.
