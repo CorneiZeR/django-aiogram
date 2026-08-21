@@ -8,6 +8,7 @@ rather than re-testing the queueing.
 """
 
 import asyncio
+import re
 import threading
 import uuid
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ from redis.exceptions import (
 )
 
 from django_redis_aiogram import TelegramBot
+from django_redis_aiogram import redis as redis_module
 from django_redis_aiogram.context import correlation_scope
 from django_redis_aiogram.envelope import unpack
 from django_redis_aiogram.exceptions import UnknownApiMethodError
@@ -582,3 +584,28 @@ def test_closing_releases_this_loops_client(redis_server):
     asyncio.run(open_then_close())
 
     assert closed, 'aclose() did not reach the client'
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+@pytest.mark.parametrize(
+    ('accessor', 'expected'),
+    [('aget_redis', 'aget_redis()'), ('aclose_redis', 'aclose_redis()')],
+    ids=['get', 'close'],
+)
+def test_each_async_accessor_names_itself_when_there_is_no_loop(accessor, expected):
+    """The message told a caller trying to *close* that `aget_redis()` needs a loop.
+
+    Both accessors resolve the loop through one helper, and the helper had the getter's
+    name written into its text — so the advice a closing caller got named a function it
+    had not called, and pointed at `get_redis()`, which is not the way to close anything.
+
+    Reached by stepping the coroutine rather than awaiting it, because awaiting is what
+    supplies the running loop: this is the shape a framework driving a coroutine by hand
+    produces, and it is the only way into the branch.
+    """
+    coroutine = getattr(redis_module, accessor)()
+    try:
+        with pytest.raises(RuntimeError, match=re.escape(expected)):
+            coroutine.send(None)
+    finally:
+        coroutine.close()

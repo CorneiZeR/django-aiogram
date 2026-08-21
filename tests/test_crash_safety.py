@@ -520,6 +520,21 @@ def test_a_finished_send_leaves_the_in_flight_list(redis_server):
     assert redis_server.llen(QUEUE) == 0
 
 
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'MAX_IN_FLIGHT': 'two'})
+def test_an_unreadable_in_flight_limit_refuses_at_construction(redis_server):
+    """A value the consumer cannot read has to stop the container, not the delivery thread.
+
+    `at_capacity` read the setting on every message and again on every turn of
+    `hold_for_capacity`, so `MAX_IN_FLIGHT: 'two'` raised `ValueError` out of `run()` — on
+    the consumer thread, where nothing catches it. The container stayed up, polling
+    updates with no consumer behind it, which is the one failure mode `REQUIRE_CRASH_SAFE`
+    exists to make loud. `run()` resolves `BLPOP_TIMEOUT` once before its loop for the same
+    reason; this is now read in the same place.
+    """
+    with pytest.raises(ValueError, match='two'):
+        Deferring()
+
+
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'MAX_IN_FLIGHT': 2})
 def test_the_consumer_stops_taking_messages_at_the_limit(redis_server):
     """Acknowledging is an LREM, which scans the in-flight list — so letting a
@@ -582,6 +597,26 @@ def test_reclaim_requeues_a_dead_workers_messages(redis_server):
     assert redis_server.llen(f'{QUEUE}:processing:gone') == 0
     assert redis_server.llen(QUEUE) == 2
     assert 'Requeued 2' in out.getvalue()
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+def test_reclaim_does_not_stop_on_a_message_that_happens_to_be_empty(redis_server):
+    """The walk stopped on any falsy element, and only nil means the list is empty.
+
+    `LMOVE` and `RPOPLPUSH` return the element they moved, or nil when the source list has
+    nothing left — so `if not moved` treated an empty payload as exhaustion, left every
+    later message in the in-flight list, and reported a count lower than the list held.
+    An empty payload is not something this package writes, which is exactly why the bug
+    could sit here: the loop's stop condition has to mean what it says regardless.
+    """
+    redis_server.rpush(f'{QUEUE}:processing:gone', payload(1), b'', payload(2))
+    out = StringIO()
+
+    call_command('tgbot_reclaim', worker='gone', stdout=out)
+
+    assert redis_server.llen(f'{QUEUE}:processing:gone') == 0, 'the walk stopped short'
+    assert redis_server.llen(QUEUE) == 3, 'a message was left behind'
+    assert 'Requeued 3' in out.getvalue(), out.getvalue()
 
 
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})

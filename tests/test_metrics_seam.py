@@ -335,7 +335,7 @@ def test_one_broken_receiver_does_not_cost_the_others_their_batch(redis_server, 
     assert named, 'the line did not name the receiver that raised'
 
 
-def test_one_writers_exit_does_not_clear_another_writers_mark():
+def test_one_writers_exit_does_not_clear_another_writers_mark(clean_counters):
     """Two writers can overlap, and the mark has to survive the wrong one leaving.
 
     `stop()` detaches the queue before it joins, so a join that times out leaves the old

@@ -116,7 +116,8 @@ to finish an in-flight send:
     stop_grace_period: 30s
 ```
 
-The grace period has to cover the three waits shutdown makes, in order:
+The grace period has to cover the waits shutdown makes, in order. For the bot
+container, which is what this table is about:
 
 | wait | bounded by | default |
 | --- | --- | --- |
@@ -124,7 +125,13 @@ The grace period has to cover the three waits shutdown makes, in order:
 | draining in-flight sends | `DRAIN_TIMEOUT` | 5s |
 | flushing the event log | `recorder.STOP_TIMEOUT` | 5s |
 
-So 21 seconds at the defaults, and `30s` leaves room. Raise `DRAIN_TIMEOUT` if
+So 21 seconds at the defaults, and `30s` leaves room.
+
+A process that serves the **webhook** spends more inside `close()` alone, because it
+has updates and a loop thread of its own to let go of: up to `DRAIN_TIMEOUT` waiting on
+updates in flight, then up to five seconds joining the loop thread, then
+`DRAIN_TIMEOUT` again draining sends — 15 seconds at the defaults rather than 5. If your
+web tier calls `bot.close()` on shutdown, size its grace period on that. Raise `DRAIN_TIMEOUT` if
 your sends spend long in the rate limiter — before 3.1.0 it was hardcoded at five
 seconds and no grace period could buy more. Watch the other direction too:
 raising `REDIS_TIMEOUT` raises the join, and a grace period shorter than the sum

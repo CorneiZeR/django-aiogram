@@ -10,7 +10,7 @@ from django.test import override_settings
 
 from django_redis_aiogram import conf as conf_object
 from django_redis_aiogram import settings as settings_module
-from django_redis_aiogram.checks import check_settings
+from django_redis_aiogram.checks import _a_pop_inside_the_deadline, check_settings
 from django_redis_aiogram.defaults import no_default_kwargs
 from django_redis_aiogram.settings import Settings, conf
 
@@ -220,3 +220,20 @@ def test_an_environment_variable_for_a_settings_only_key_says_it_is_ignored(monk
     reported = [record for record in caplog.records if getattr(record, 'tg_setting', None) == key]
     assert reported, f'the warning did not name {key}'
     assert reported[0].tg_variable == f'DJANGO_REDIS_AIOGRAM_{key}'
+
+
+@override_settings(TELEGRAM_BOT=['not', 'a', 'mapping'])
+def test_the_pop_deadline_rule_falls_back_rather_than_raising():
+    """`W004` reads three settings now, and caught only the failures one of them makes.
+
+    `blpop_ceiling()` weighs `HEARTBEAT_INTERVAL` and `REDIS_TIMEOUT` against the rule's
+    own key, and each of those reads resolves the whole settings dict on a cold cache —
+    so an unresolvable `TELEGRAM_BOT` raises `ImproperlyConfigured` from inside a `try`
+    that named only `TypeError` and `ValueError`. Its neighbours in this module catch it;
+    this one had grown past its own guard.
+
+    Asserted on the rule rather than on `check_settings()`: with a dict this broken an
+    earlier rule refuses first, so the run never reaches this one and the whole-suite
+    assertion would pass either way.
+    """
+    assert _a_pop_inside_the_deadline('BLPOP_TIMEOUT') == [], 'the rule raised instead of standing down'

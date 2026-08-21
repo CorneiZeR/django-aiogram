@@ -58,8 +58,9 @@ checks what each of them carries, installs the wheel into a throwaway project an
 checks that Django boots with no credentials at all.
 
 CI splits those up: `ruff`, `ruff format` and `mypy` run once on Python 3.13,
-while `pytest` runs across Python 3.10–3.14 × Django 5.2/6.0/6.1, plus a job
-pinning the lowest supported versions of every dependency. Every version the package
+while `pytest` runs on Python 3.10–3.14 with Django 5.2 and on Python 3.12–3.14 with
+Django 6.0 and 6.1 — those two require 3.12 — plus a job pinning the lowest supported
+versions of every dependency. Every version the package
 advertises has to pass before a merge.
 
 ## What the tests care about

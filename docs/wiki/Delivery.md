@@ -116,7 +116,7 @@ already stranded. It is deliberately manual: naming a worker is a human saying i
 is gone, and nothing here probes for liveness, because a slow worker looks
 exactly like a dead one and taking its message back sends it twice.
 
-Two flags exist because that judgement can be wrong. `--dry-run` reports what is
+Two flags exist because that judgment can be wrong. `--dry-run` reports what is
 there and moves nothing, so you can name a worker before committing to the claim
 that it is gone — it applies `--limit` to its report, so what it says it would
 move is what a real run moves. `--limit <n>` bounds a single run, which keeps the

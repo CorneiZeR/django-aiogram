@@ -887,11 +887,19 @@ def test_forgetting_an_update_waits_for_the_shutdown_snapshot():
     done = threading.Event()
 
     try:
+        entered = threading.Event()
+
+        def remove():
+            # signalled before the call, so `held_off` cannot be satisfied by a thread
+            # the interpreter simply had not started yet — which is the only other way
+            # `done` stays unset for the whole wait
+            entered.set()
+            instance._forget_update(finished)  # type: ignore[arg-type]
+            done.set()
+
         with loop_lock(loop):
-            threading.Thread(
-                target=lambda: (instance._forget_update(finished), done.set()),  # type: ignore[arg-type,func-returns-value]
-                daemon=True,
-            ).start()
+            threading.Thread(target=remove, daemon=True).start()
+            assert entered.wait(5), 'the removal thread never ran, so nothing was held off'
             # it must not get in while the snapshot could be running
             held_off = not done.wait(0.3)
 

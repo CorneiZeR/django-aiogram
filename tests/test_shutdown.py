@@ -74,6 +74,75 @@ def running_loop(instance):
         runner.join(timeout=5)
 
 
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'MODE': 'webhook', 'RATE_LIMIT': None, 'REDIS_TIMEOUT': 2})
+def test_the_join_bound_is_read_before_the_threads_it_bounds(monkeypatch):
+    """A setting read inside `finally` takes the whole teardown with it when it refuses.
+
+    `read_timeout()` raises `ValueError` on a non-numeric `REDIS_TIMEOUT`, and in polling
+    mode nothing else in the process reads that setting — so the *first* call could be the
+    `thread.join(timeout=read_timeout() + 1)` inside the teardown. From there the exception
+    skipped `bot.close()`, `delivery.collect()` and `recorder.stop()`, and without
+    `collect()` every message the drain had finished stays in the in-flight list for the
+    next start to send again: a graceful stop duplicating what only a kill should.
+
+    Asserted on the *order*, which is the whole claim: the bound is read before any thread
+    exists. A call count cannot separate the two designs — a consumer thread that has
+    already finished is joined without the second read the warning branch would make — and
+    a count of one is what both produce.
+    """
+    from django_redis_aiogram.management.commands import start_tgbot as command_module
+
+    class Quiet:
+        class session:
+            @staticmethod
+            async def close():
+                """aiogram's session, reduced to what `close()` calls."""
+
+    instance = TelegramBot()
+    instance._bot = Quiet()
+    collected = []
+    monkeypatch.setattr(command_module, 'bot', instance)
+    order: list[str] = []
+
+    def started_thread():
+        """A consumer thread that exists and is already done, so the joins have work."""
+        order.append('thread')
+        thread = threading.Thread(target=lambda: None, daemon=True)
+        thread.start()
+        return thread
+
+    monkeypatch.setattr(
+        command_module,
+        'get_delivery',
+        lambda handler: SimpleNamespace(
+            start_thread=started_thread,
+            stop=lambda: None,
+            collect=lambda: collected.append('collected'),
+            crash_safe=True,
+        ),
+    )
+
+    real = command_module.read_timeout
+
+    def note_the_read():
+        order.append('bound')
+        return real()
+
+    monkeypatch.setattr(command_module, 'read_timeout', note_the_read)
+    release = threading.Event()
+    monkeypatch.setattr(StartCommand, 'idle_event', release)
+    # released from another thread, not pre-set: the consumer starts from a `call_soon`
+    # callback, so a loop that stops before its first turn leaves `threads` empty — and
+    # the join loop this test is about would never run at all
+    threading.Timer(0.3, release.set).start()
+
+    call_command('start_tgbot', stdout=StringIO())
+
+    assert 'thread' in order, 'no consumer thread was started, so the joins never ran'
+    assert order[:2] == ['bound', 'thread'], f'the bound was read after the thread it bounds: {order}'
+    assert collected == ['collected'], 'the teardown did not reach collect()'
+
+
 @override_settings(TELEGRAM_BOT={'ENABLED': False})
 def test_idle_blocks_until_interrupted(monkeypatch):
     """A clean exit is a restart loop under `restart: always`, hence --idle."""

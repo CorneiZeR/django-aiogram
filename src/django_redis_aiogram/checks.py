@@ -415,7 +415,7 @@ def _a_pop_inside_the_deadline(key: str) -> list[Problem]:
     try:
         asked = int(conf[key])
         ceiling = blpop_ceiling()
-    except (TypeError, ValueError):
+    except (ImproperlyConfigured, TypeError, ValueError):
         return []  # E014, E023 and E030 own the type complaints
     if asked <= ceiling.seconds:
         return []

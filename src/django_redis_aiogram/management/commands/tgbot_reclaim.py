@@ -115,7 +115,9 @@ class Command(BaseCommand):
         moved = 0
         while not limit or moved < limit:
             try:
-                if not self._move_one(connection, source, destination):
+                # `is None`, not falsy: nil is how both commands say the source list is
+                # empty, and a payload that happens to be empty is still a message
+                if self._move_one(connection, source, destination) is None:
                     break
             except Exception as error:
                 msg = f'moved {moved} message(s), then failed: {error}'

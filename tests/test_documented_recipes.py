@@ -476,7 +476,11 @@ def test_the_other_page_names_the_same_four_causes():
 
     assert not absent, f'Webhook.md no longer names {absent}'
     assert positions == sorted(positions), 'the causes are no longer in the order the view checks them'
-    assert len(WEBHOOK_CAUSES) == len(WEBHOOK_REFUSALS), 'the two pages describe a different number of causes'
+    # against the page, not against the other constant in this file: both are written by
+    # hand here, so the old form held for every possible state of Webhook.md and the view
+    assert len(positions) == len(WEBHOOK_REFUSALS), (
+        f'Webhook.md describes {len(positions)} causes, the view refuses for {len(WEBHOOK_REFUSALS)}'
+    )
 
 
 def test_the_catalogue_and_the_view_agree_on_how_many_refusals_there_are():

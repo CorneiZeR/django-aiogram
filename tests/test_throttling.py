@@ -475,10 +475,11 @@ def test_a_backlog_wakes_once_per_admitted_call():
     Falsified by giving `acquire` a recompute-and-re-sleep tail, which is what the
     token counter did: 120 251 wakeups for these forty sends, against 35.
 
-    It does not pin the *order* admissions come out in — the
-    changelog's "admission becomes strict FIFO" follows from claiming under the lock
-    in call order, and no edit to this module makes it observably false, so a test
-    asserting it would be one that cannot fail.
+    It does not pin the *order* admissions come out in. That is
+    `test_admission_is_strict_fifo` above, which does — the first attempt at an ordering
+    test here was unfalsifiable and removed, and the one that replaced it reproduces the
+    token counter's interleaving on a real loop. This paragraph used to say no such test
+    could fail, which stopped being true when that one was written.
     """
     waits = []
 

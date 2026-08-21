@@ -298,7 +298,7 @@ class _LoopConnections:
 
     async def close(self) -> None:
         """Close and forget this loop's client, if it has one."""
-        loop = _running_loop()
+        loop = _running_loop('aclose_redis()')
         with self._guard:
             entry = self._clients.pop(loop, None)
         if entry is not None:
@@ -310,13 +310,13 @@ class _LoopConnections:
             self._generation += 1
 
 
-def _running_loop() -> asyncio.AbstractEventLoop:
+def _running_loop(caller: str = 'aget_redis()') -> asyncio.AbstractEventLoop:
     """Return the loop the caller is on, or refuse with what to call instead."""
     try:
         return asyncio.get_running_loop()
     except RuntimeError as error:
         msg = (
-            'aget_redis() needs a running event loop; call get_redis() from '
+            f'{caller} needs a running event loop; call get_redis() from '
             'synchronous code instead. The async client exists for callers that '
             'are already on a loop — an ASGI view, say — and a client built off '
             'one could not be used from it.'

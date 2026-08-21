@@ -112,6 +112,10 @@ class Delivery(ABC):
         self._defers = defers_completion(handler)
         # asked separately: a handler may take the completion callback and not its pair
         self._releases = accepts_keyword(handler, 'on_refused')
+        # read here rather than per message: `at_capacity` runs inside `run`'s loop, where
+        # an unreadable value would raise out of the consumer thread and end delivery for
+        # the life of the container. `run` resolves `BLPOP_TIMEOUT` once for the same reason
+        self._limit = max(0, int(conf['MAX_IN_FLIGHT']))
 
     @property
     def crash_safe(self) -> bool:
@@ -291,8 +295,7 @@ class Delivery(ABC):
 
     def at_capacity(self) -> bool:
         """Whether this consumer is already holding as many sends as it may."""
-        limit = max(0, int(conf['MAX_IN_FLIGHT']))
-        return bool(limit) and self._in_flight >= limit
+        return bool(self._limit) and self._in_flight >= self._limit
 
     def hold_for_capacity(self) -> None:
         """Stop taking messages while too many are still in flight.

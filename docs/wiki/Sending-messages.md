@@ -27,8 +27,9 @@ bot.send('send_chat_action', chat_id=CHAT_ID, action='typing')
 | `send_redis()` | always queue |
 | `send_raw()` | always call Telegram from this process |
 
-`send_raw` from a web process builds its own event loop and HTTP session. That
-works, but it does not share the bot's rate-limit budget. Prefer `send()`.
+`send_raw` from a web process that does not serve the webhook builds its own event
+loop and HTTP session. That works, but it does not share the bot's rate-limit budget.
+Prefer `send()`. A process that *does* serve the webhook is the case below.
 
 **Whether it waits changed in 3.1.0, in a web process that also serves the
 webhook.** A process serving the webhook gives the loop a thread of its own from

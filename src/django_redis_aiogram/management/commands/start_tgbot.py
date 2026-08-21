@@ -95,6 +95,10 @@ class Command(BaseCommand):
 
         delivery = get_delivery(handler=bot.send_raw)
         self._preflight(delivery)
+        # before a thread exists, because `read_timeout()` refuses a non-numeric
+        # `REDIS_TIMEOUT` — and raised from the `finally` below it would skip `close()`,
+        # `collect()` and `recorder.stop()`, stranding the drain's own messages
+        join_timeout = read_timeout() + 1
         threads: list[threading.Thread] = []
 
         # Both modes: starting the consumer before the loop runs would let a
@@ -145,11 +149,11 @@ class Command(BaseCommand):
                 # by one less than that. BLPOP_TIMEOUT + 1 was six seconds against
                 # a worst case of ten, so a consumer that outlived the join went on
                 # to acknowledge a message close() had already refused
-                thread.join(timeout=read_timeout() + 1)
+                thread.join(timeout=join_timeout)
                 if thread.is_alive():
                     logger.warning(
                         'the delivery consumer did not stop in time',
-                        extra={'tg_timeout': read_timeout() + 1},
+                        extra={'tg_timeout': join_timeout},
                     )
             try:
                 bot.close()

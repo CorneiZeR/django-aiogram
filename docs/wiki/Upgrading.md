@@ -8,9 +8,15 @@ version you are on and work down.
 ## Make your handlers idempotent, on your own key
 
 3.0 acknowledged a message when the send was *scheduled*; 3.1 acknowledges it when the
-send has actually finished. That is the guarantee the documentation always claimed, and
-it changes what a crash does: before, a `kill -9` mid-send lost the message silently —
-now it is redelivered, so a handler can run twice.
+send has actually finished, for a handler that takes an `on_complete` keyword and calls
+it. `bot.send_raw` does, and `manage.py start_tgbot` uses it, so a normal worker has the
+guarantee the documentation always claimed. It changes what a crash does: before, a
+`kill -9` mid-send lost the message silently — now it is redelivered, so a handler can
+run twice.
+
+A handler of your own that takes only `**kwargs` is still acknowledged the moment it
+returns, which is the pre-3.1.0 behavior and is deliberate — see **[[Delivery]]**. If
+you want the message held until your send finishes, take `on_complete`.
 
 **Do not use `correlation_id` as the key.** A handler's own replies inherit the id of the
 update that caused them, so it is one per *conversation turn*, not one per message: a
