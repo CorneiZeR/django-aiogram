@@ -58,8 +58,13 @@ TELEGRAM_BOT = {
 
 A payload names the method to call, so that name is validated before anything is
 looked up on the bot. Only the Telegram API methods aiogram exposes are
-accepted — the ones matching `aiogram.methods`, 185 of them at the time of
-writing. Anything else is refused with a `ValueError`.
+accepted: **185** names match `aiogram.methods` at the time of writing, and **181**
+are allowed once four are denied. Anything else is refused with a `ValueError`.
+
+Those four of aiogram's own are denied on purpose: `set_webhook` and `delete_webhook`
+reconfigure where Telegram delivers, `log_out` invalidates the token, and `close`
+tears down the session the consumer is using. None is a message, and a queue is
+not the place to reach them from — `manage.py tgbot_webhook` is.
 
 That closes off the other public attributes a `Bot` carries: `download_file`
 would write to the container's filesystem, `token` would hand out the
@@ -112,24 +117,28 @@ print(timeit.timeit(lambda: json.dumps(payload), number=calls) / calls * 1e6)
 ```
 
 A fixed correlation id and timestamp, so the payload is byte-stable between runs: a
-32-character body, 202 bytes encoded. Per-call means over 200 000 calls, CPython
+32-character body, 189 bytes encoded. Per-call means over 200 000 calls, CPython
 3.13.14 on arm64 macOS.
 
 | | |
 | --- | --- |
-| `serializer.dumps(payload)`, serializer bound | **0.91 µs** |
-| `json.dumps(payload)` — same bytes | 0.83 µs |
-| `get_serializer().dumps(payload)` — lookup included | 1.00 µs |
-| `json.dumps(payload, separators=(',', ':'))` — 190 bytes, different output | 1.01 µs |
+| `serializer.dumps(payload)`, serializer bound | **0.90 µs** |
+| `json.dumps(payload)` — same bytes | 0.80 µs |
+| `get_serializer().dumps(payload)` — lookup included | 0.98 µs |
+| `json.dumps(payload, separators=(',', ':'))` — 177 bytes, different output | 0.96 µs |
 
-So the tagging costs about **0.08 µs** over a bare `json.dumps` producing the same
+Every row from one run, median of five, so the differences below are subtractions of
+these numbers rather than separate measurements — which is how they came to disagree.
+
+So the tagging costs about **0.10 µs** over a bare `json.dumps` producing the same
 bytes: the price of `default` being available to encode aiogram models. The third row
-is a separate 0.09 µs for resolving the serializer, which the queueing path pays once
+is a separate 0.08 µs for resolving the serializer, which the queueing path pays once
 per write rather than once per message — worth separating, because it is the same size
 as the overhead and easy to attribute to the wrong thing.
 
-A faster library has to beat 0.08 µs *plus* the 0.83 µs underneath it — roughly a
-microsecond in total, against a Redis round trip measured at 14 µs and a Telegram call
+A faster library has to beat 0.10 µs *plus* the 0.80 µs underneath it — roughly a
+microsecond in total, against a Redis round trip measured at 14 µs on Linux (105 µs on
+macOS, so treat it as an order of magnitude) and a Telegram call
 in tens of milliseconds. `orjson` would also change what is representable, since it
 has its own rules about `dict` keys and subclasses while the tagging here depends on
 `default` being called for exactly the types it registers.

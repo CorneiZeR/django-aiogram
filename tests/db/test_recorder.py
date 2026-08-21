@@ -22,6 +22,7 @@ from django_redis_aiogram.enums import EventKind
 from django_redis_aiogram.eventlog import ROW_BY_ROW, EventLogRefusedError, write_batch
 from django_redis_aiogram.models import TelegramEvent
 from django_redis_aiogram.recorder import FAILURE_LIMIT, Event, EventRecorder
+from django_redis_aiogram.signals import events_recorded
 
 ON = {'EVENT_LOG': True}
 
@@ -467,6 +468,108 @@ def test_stopping_the_writer_does_not_leave_the_stopper_marked():
 
     assert threading.get_ident() not in recorder._touched_database, 'the thread that stopped it stayed marked'
     assert TelegramEvent.objects.filter(chat_id=41).exists(), 'nothing was written, so nothing is on trial'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_FLUSH_INTERVAL': 1})
+def test_a_receiver_that_stops_the_log_does_not_strand_the_writer(monkeypatch):
+    """Receivers run on the writer's thread, and one of them may turn the log off.
+
+    `stop()` from there used to leave the writer running for the life of the process,
+    holding a database connection: the loop only ended when it had *seen* the wake that
+    `stop()` queues, and `stop()` drains that same buffer through `_abandon` — taking the
+    wake with it. The flag and an empty queue say everything the wake said.
+
+    Two things asserted, because the leak had two halves: the thread ends, and it closes
+    the connection it opened. That second half is the `stop()`-from-the-writer branch of
+    the mark handling, which nothing else can reach.
+    """
+    closed = []
+    monkeypatch.setattr(EventRecorder, '_close_connections', staticmethod(lambda: closed.append(True)))
+    recorder = EventRecorder()
+    # the receiver waits, so the handle can be read before `stop()` clears it: otherwise
+    # the writer can stop and detach itself between `record()` and the read below, and the
+    # test fails on a correct implementation
+    reached = threading.Event()
+    proceed = threading.Event()
+
+    def stop_from_the_writer(sender, **kwargs):
+        reached.set()
+        proceed.wait(10)
+        recorder.stop(timeout=0.1)
+
+    events_recorded.connect(stop_from_the_writer, dispatch_uid='stop-from-the-writer')
+    try:
+        recorder.record(an_event(chat_id=44))
+        assert reached.wait(10), 'the receiver never ran, so nothing is on trial'
+        writer = recorder._thread
+        assert writer is not None, 'no writer was started, so nothing is on trial'
+        # who asked for a join, by name: `stop()` must not join the thread it is running
+        # on. Suppressing the `RuntimeError` hides that, and the writer still exits and
+        # closes — so nothing else here would notice the guard going away
+        joined_by: list[str] = []
+        real_join = writer.join
+
+        def recording_join(timeout=None):
+            """Note the caller, then join for real."""
+            joined_by.append(threading.current_thread().name)
+            return real_join(timeout)
+
+        writer.join = recording_join  # type: ignore[method-assign]  # a spy, for this test only
+        proceed.set()
+        writer.join(10)
+
+        assert not writer.is_alive(), 'the writer outlived the stop that came from inside it'
+        assert closed == [True], 'it left the connection it had opened'
+        assert writer.name not in joined_by, f'stop() joined the writer from the writer: {joined_by}'
+    finally:
+        events_recorded.disconnect(dispatch_uid='stop-from-the-writer')
+        recorder.stop(timeout=1)
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_FLUSH_INTERVAL': 1})
+def test_a_replacement_writer_does_not_strand_the_one_it_replaced():
+    """`_stopping` is shared, so a replacement can clear the signal meant for its elder.
+
+    `stop()` detaches the old queue and sets the flag; a `record()` that lands next calls
+    `_buffer()`, which **clears** that same flag and starts a new writer. The old one then
+    found an empty queue with the flag down and waited on it for the life of the process,
+    holding the connection it had opened — the #136 leak again, reached from the other
+    side.
+
+    Its own buffer no longer being the recorder's queue is the per-writer half of the
+    answer: nobody else can undo it. Held inside a receiver so the elder is still running
+    when the replacement starts, rather than hoping to lose a race.
+    """
+    reached = threading.Event()
+    proceed = threading.Event()
+
+    def hold(sender, **kwargs):
+        reached.set()
+        proceed.wait(10)
+
+    recorder = EventRecorder()
+    events_recorded.connect(hold, dispatch_uid='hold-the-writer')
+    try:
+        recorder.record(an_event(chat_id=45))
+        assert reached.wait(10), 'the receiver never ran, so nothing is on trial'
+        elder = recorder._thread
+        assert elder is not None
+
+        recorder.stop(timeout=0.1)  # detaches the elder's queue and sets the flag
+        recorder.record(an_event(chat_id=46))  # `_buffer()` clears it and starts a replacement
+        assert recorder._thread is not elder, 'no replacement was started, so nothing is on trial'
+        assert not recorder._stopping.is_set(), 'the replacement did not clear the flag'
+
+        proceed.set()
+        elder.join(10)
+
+        assert not elder.is_alive(), 'the replacement stranded the writer it replaced'
+    finally:
+        events_recorded.disconnect(dispatch_uid='hold-the-writer')
+        proceed.set()
+        recorder.stop(timeout=2)
 
 
 @pytest.mark.django_db(transaction=True)

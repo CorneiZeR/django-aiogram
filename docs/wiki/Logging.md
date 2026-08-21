@@ -36,13 +36,12 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_delivery` | the consumer that started, always `blpop` |
 | `tg_key` | Redis list being consumed |
 | `tg_timeout` | blocking-pop timeout, or how long a shutdown waited |
-| `tg_error` | text of a non-fatal error |
+| `tg_error` | the class name of a non-fatal error, not its text — a webhook secret or a chat id can end up in the message, and this field is what a log aggregator groups on |
 | `tg_crash_safe` | whether the consumer holds messages in flight; false on a Redis without `LMOVE` |
 | `tg_mode` | `polling` or `webhook` |
 | `tg_update` | the update id being handled |
 | `tg_correlation_id` | the id every event about one message carries |
 | `tg_alternative` | the awaitable method a synchronous send from a loop should move to |
-| `tg_router` | a router module autodiscovery imported |
 | `tg_pending` | work still in flight at shutdown: sends, or the updates a webhook process is answering |
 | `tg_drain_timeout` | how long shutdown gave them |
 | `tg_kind` | the event log kind of a row |

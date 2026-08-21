@@ -17,7 +17,8 @@ That is enough. `TOKEN` and `REDIS_URL` may stay empty — they are only read wh
 something actually reaches Telegram or Redis.
 
 Setting `'ENABLED': False` goes further: every send becomes a no-op, the `await`
-and bulk forms included. Convenient when Telegram is irrelevant to the suite,
+and bulk forms included — though not `queue_depth()` and `inflight_depth()`, which
+are reads and still want a reachable Redis. Convenient when Telegram is irrelevant to the suite,
 wrong if any test asserts that a message was queued — those assertions would pass
 over nothing, and they would pass over nothing *quietly*, because each call still
 returns the id it would have used.
@@ -58,6 +59,41 @@ and `bot.send()` returns the same value.
 Patch `django_redis_aiogram.client.get_redis` — the name the sending code looks
 up. Patching `django_redis_aiogram.redis.get_redis` alone leaves the real
 connection in place.
+
+**That covers the synchronous sends only.** `asend`, `asend_redis`, `asend_many`,
+`aqueue_depth` and `ainflight_depth` go through `aget_redis`, which keeps one
+client per running loop — so a test that patched the synchronous name and then
+awaited one of these opened a real connection. Patch the builder underneath it and
+the registry still runs for real:
+
+```python
+import fakeredis
+import fakeredis.aioredis
+import pytest
+
+
+@pytest.fixture
+def fake_redis(monkeypatch):
+    """One in-memory server behind both halves, sync and async."""
+    server = fakeredis.FakeServer()
+    client = fakeredis.FakeRedis(server=server)
+    monkeypatch.setattr('django_redis_aiogram.client.get_redis', lambda: client)
+    monkeypatch.setattr(
+        'django_redis_aiogram.redis.build_async_client',
+        lambda: fakeredis.aioredis.FakeRedis(server=server),
+    )
+    return client
+```
+
+A fixture rather than four loose lines, because `monkeypatch` is one: copied into a
+module as it stands, the calls above have no `monkeypatch` to reach and raise
+`NameError`. Take `fake_redis` in the test and read the queue off its return value.
+
+One `FakeServer` behind both, so a message queued through `asend` is visible to a
+synchronous read of the queue. This package's own `redis_server` fixture is exactly
+this, and patches `aget_redis`'s *builder* rather than `aget_redis` itself for the
+same reason the note above gives: patching the accessor leaves the thing under test
+untested.
 
 ## Faking the send instead
 

@@ -10,8 +10,8 @@ from django_redis_aiogram import bot
 does appears on first use — so importing it anywhere is safe, including in a
 process that never talks to Telegram.
 
-`import django_redis_aiogram` costs about a millisecond, because the package
-resolves its exports on attribute access. Naming `bot` is what loads aiogram and
+`import django_redis_aiogram` costs about 0.17 ms, because the package resolves its
+exports on attribute access — it was roughly a millisecond and a half before 3.1.0. Naming `bot` is what loads aiogram and
 the pydantic stack under it (~900 ms), so `from django_redis_aiogram import bot`
 pays that once, at the moment of import. Put it in the modules that send —
 router modules, the views and tasks that call `bot.send()` — and a process that
@@ -104,6 +104,17 @@ the shutdown recipe.
 | `bot.inflight_depth(worker=None)` | messages one worker is part-way through sending |
 | `await bot.aqueue_depth()` / `await bot.ainflight_depth(...)` | the same read, without holding the loop |
 
+`aget_redis()` and `aclose_redis()` in `django_redis_aiogram.redis` are **not** part
+of this surface, deliberately: the async client is one per running loop, and its
+lifetime belongs to `bot.aclose()` rather than to a caller. Reach the queue through
+the four methods above; if you hold a client of your own, you own closing it on the
+loop that made it.
+
+These four are reads rather than sends, so `ENABLED=0` does not turn them into
+no-ops the way it does every send: they still connect, and without `REDIS_URL` they
+raise `ImproperlyConfigured` rather than answering zero. A monitor that runs in a
+disabled process needs the URL.
+
 `inflight_depth` defaults to this process's own worker identity; naming another is
 how a monitor reads a list left behind by a worker that is gone. The key scheme
 behind them is this package's business — an exporter should not have to reproduce
@@ -138,10 +149,16 @@ bot.start_polling()  # attaches the router, then blocks on long polling
 bot.close()  # drains in-flight sends, releases the storage, session and loop
 ```
 
-`close(drain_timeout=5.0)` waits that long for sends still pacing behind the rate
-limiter, cancels whatever outlasts it with a warning, then releases the FSM
-storage's own Redis client, the bot's HTTP session and the loop. A closed
-instance builds itself again on next use.
+`close(drain_timeout=None)` waits for sends still pacing behind the rate limiter,
+cancels whatever outlasts the wait with a warning, then releases the FSM storage's
+own Redis client, the bot's HTTP session and the loop. A closed instance builds
+itself again on next use.
+
+The wait defaults to `DRAIN_TIMEOUT`, five seconds, and passing a number overrides
+it for that call. It was a hardcoded five before 3.1.0, which `start_tgbot` never
+passed — so a deployment could raise `stop_grace_period` all it liked and never buy
+the drain a second more. Set the setting rather than the argument: the arithmetic on
+**[[Deployment]]** adds it up for you.
 
 `start_tgbot` does both around the delivery consumer; you only need them when
 running the bot yourself.
@@ -260,6 +277,9 @@ from django_redis_aiogram.exceptions import DjangoRedisAiogramError
 | `DjangoRedisAiogramError` | base of everything this package raises |
 | `SerializationError` | a payload cannot be encoded, or cannot be decoded |
 | `UnknownApiMethodError` | a call names something that is not a Telegram API method |
+| `LoopUnavailableError` | there is no event loop this call can use; also a `RuntimeError` |
+| `ShuttingDownError` | the bot is closing, so the send was refused rather than queued for a loop that will not run it — a webhook view answers 503 on this, and Telegram redelivers |
+| `LoopThreadNotStartedError` | the loop exists but nothing is turning it, so a hand-off would never be stepped |
 
 Catching `DjangoRedisAiogramError` catches all of them. The two you are likely
 to name keep the bases they had before the family existed —

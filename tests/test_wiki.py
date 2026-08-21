@@ -1,6 +1,7 @@
 """The wiki is published verbatim, so a broken link ships as a broken link."""
 
 import re
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -46,7 +47,7 @@ def test_every_link_resolves(path):
 def test_piped_links_name_the_page_first(path):
     """[[Page-Name|Link Text]], not the other way round.
 
-    Reversed, GitHub still resolves the page — it normalises spaces to dashes —
+    Reversed, GitHub still resolves the page — it normalizes spaces to dashes —
     but renders the file name as the label, so the resolve check above cannot
     catch it. This requires the first field to match a page exactly.
     """
@@ -61,7 +62,7 @@ def test_piped_links_name_the_page_first(path):
 
 @pytest.mark.parametrize('path', PAGES, ids=lambda path: path.name)
 def test_a_multi_word_page_is_linked_by_its_file_name(path):
-    """`[[Sending messages]]` does resolve — GitHub normalises spaces to dashes,
+    """`[[Sending messages]]` does resolve — GitHub normalizes spaces to dashes,
     which is why the check above accepts it — but it names no file, so a rename
     breaks it in a way only a published wiki shows. Both forms were in use here
     at once. Spell the page, let the label carry the spaces.
@@ -139,7 +140,34 @@ CHANGELOG = ROOT / 'CHANGELOG.md'
 #: here and no test noticed
 HISTORY_BEGINS = '## 3.0.0 - 2026-08-09'
 #: words the released entries spell the way those releases spelled them
+#: written the way those releases wrote them, and **not** to be Americanised: this tuple
+#: is the guard, so a sweep that edits it here edits the thing doing the guarding — which
+#: a mechanical en-US pass did, and this test caught
 HISTORICAL_SPELLINGS = ('`VACUUM` afterwards', 'about its behaviour changed', 'for the old behaviour.')
+
+
+def test_the_newest_changelog_entry_is_this_version_and_is_dated():
+    """A release shipped as `unreleased` reads as a nightly to whoever installs it.
+
+    Two ways to get this wrong, and one test for both: publishing with the heading still
+    saying `unreleased`, and bumping `__version__` without writing the entry. Read from
+    `__version__` so the next release inherits the demand rather than the date.
+    """
+    from django_redis_aiogram import __version__
+
+    # `visible()`, because a heading inside a fenced block is not a release: without it
+    # the real one could be deleted and an example in a code block would satisfy this
+    lines = visible(CHANGELOG.read_text(encoding='utf-8')).splitlines()
+    heading = next(line for line in lines if line.startswith('## '))
+
+    assert heading.startswith(f'## {__version__} - '), f'the newest entry is not {__version__}: {heading!r}'
+    stamp = heading.removeprefix(f'## {__version__} - ')
+    # parsed, not pattern-matched: `2026-13-45` has the shape of a date and is not one,
+    # and a release dated by hand is exactly where that typo lands
+    try:
+        date.fromisoformat(stamp)
+    except ValueError as wrong:
+        raise AssertionError(f'not a date: {stamp!r} ({wrong})') from wrong
 
 
 def test_the_released_entries_keep_the_words_they_shipped_with():
@@ -158,6 +186,28 @@ def test_the_released_entries_keep_the_words_they_shipped_with():
     rewritten = [phrase for phrase in HISTORICAL_SPELLINGS if phrase not in history]
 
     assert not rewritten, f'a released entry was reworded: {rewritten}'
+
+
+def test_the_upgrade_page_covers_the_version_being_shipped():
+    """`Upgrading.md` had no 3.1 section while `__version__` already said 3.1.0.
+
+    Nothing pointed it out, because the page is prose and the version is code — so the
+    release that changed the acknowledgement point, added a migration and moved the
+    shutdown arithmetic shipped with an upgrade page whose newest entry was the release
+    before it. Read from `__version__`, so the next release inherits the same demand.
+    """
+    from django_redis_aiogram import __version__
+
+    series = '.'.join(__version__.split('.')[:2])
+    # `visible()` for the same reason: a heading in a code block is not a section
+    page = visible((WIKI / 'Upgrading.md').read_text(encoding='utf-8'))
+    headings = [line for line in page.splitlines() if line.startswith('# ')]
+
+    # the heading, not the page text: `to 3.1` appears in any prose that mentions
+    # upgrading to it, so the broad search passed on a page with no such section
+    assert any(line.endswith(f' to {series}') for line in headings), (
+        f'no section heading upgrading to {series}: {headings}'
+    )
 
 
 def test_home_and_sidebar_exist():
@@ -199,17 +249,17 @@ def sections(text: str) -> list[str]:
     return ATX.findall(text) + SETEXT.findall(text)
 
 
-def normalised(title: str) -> str:
+def normalized(title: str) -> str:
     """`## Rate  limits ##` and `## Rate-limits` name the same page."""
     return '-'.join(re.sub(r'\s*#+\s*$', '', title).split()).lower()
 
 
-def test_normalised_reads_the_heading_forms_markdown_allows():
+def test_normalized_reads_the_heading_forms_markdown_allows():
     """Written out, because each of these once slipped past the check below."""
-    assert normalised('Delivery') == 'delivery'
-    assert normalised('Delivery ##') == 'delivery'
-    assert normalised('  Rate   limits  ') == 'rate-limits'
-    assert normalised('Rate-limits') == 'rate-limits'
+    assert normalized('Delivery') == 'delivery'
+    assert normalized('Delivery ##') == 'delivery'
+    assert normalized('  Rate   limits  ') == 'rate-limits'
+    assert normalized('Rate-limits') == 'rate-limits'
 
 
 def test_visible_drops_what_is_not_rendered():
@@ -245,9 +295,9 @@ def test_the_readme_stays_a_front_page():
 
 def test_no_readme_section_duplicates_a_wiki_page():
     """A section named after a page is that page's material coming back."""
-    pages = {normalised(name) for name in page_names()} - {'home', '_sidebar'}
+    pages = {normalized(name) for name in page_names()} - {'home', '_sidebar'}
     duplicated = [
-        title for title in sections(visible(README.read_text(encoding='utf-8'))) if normalised(title) in pages
+        title for title in sections(visible(README.read_text(encoding='utf-8'))) if normalized(title) in pages
     ]
 
     assert not duplicated, f'these belong in the wiki, not the README: {duplicated}'
@@ -256,13 +306,13 @@ def test_no_readme_section_duplicates_a_wiki_page():
 def test_the_readme_links_to_every_page():
     """A new page nobody can find from the front page is a page nobody reads.
 
-    Both sides are normalised: GitHub resolves a wiki link case-insensitively and
+    Both sides are normalized: GitHub resolves a wiki link case-insensitively and
     treats spaces as dashes, so `../../wiki/rate-limits` reaches the page and has
     to count as reaching it.
     """
-    linked = {normalised(target) for target in README_WIKI_LINK.findall(visible(README.read_text(encoding='utf-8')))}
-    pages = {normalised(name) for name in page_names()}
-    missing = pages - linked - {normalised('Home'), normalised('_Sidebar')}
+    linked = {normalized(target) for target in README_WIKI_LINK.findall(visible(README.read_text(encoding='utf-8')))}
+    pages = {normalized(name) for name in page_names()}
+    missing = pages - linked - {normalized('Home'), normalized('_Sidebar')}
 
     assert not missing, f'pages the README does not link to: {sorted(missing)}'
 
@@ -270,7 +320,7 @@ def test_the_readme_links_to_every_page():
 def test_a_link_spelled_the_way_github_accepts_it_counts(tmp_path, monkeypatch):
     """Otherwise the test demands one spelling of a link that has several."""
     readme = tmp_path / 'README.md'
-    rows = '\n'.join(f'[{name}]({WIKI_URL}{normalised(name)})' for name in page_names() if name != '_Sidebar')
+    rows = '\n'.join(f'[{name}]({WIKI_URL}{normalized(name)})' for name in page_names() if name != '_Sidebar')
     readme.write_text(rows + '\n', encoding='utf-8')
     monkeypatch.setattr('tests.test_wiki.README', readme)
 
@@ -280,7 +330,7 @@ def test_a_link_spelled_the_way_github_accepts_it_counts(tmp_path, monkeypatch):
 def a_readme(tmp_path, monkeypatch, body: str):
     """Point the checks at a README of our own, through the name they read."""
     readme = tmp_path / 'README.md'
-    rows = '\n'.join(f'[{name}]({WIKI_URL}{normalised(name)})' for name in page_names() if name != '_Sidebar')
+    rows = '\n'.join(f'[{name}]({WIKI_URL}{normalized(name)})' for name in page_names() if name != '_Sidebar')
     readme.write_text(rows + '\n' + body, encoding='utf-8')
     monkeypatch.setattr('tests.test_wiki.README', readme)
     return readme

@@ -11,7 +11,7 @@ processing list while it is being sent and removed once the send has actually
 finished, so a worker killed mid-send leaves it behind to be reclaimed on the
 next start. That makes delivery at-least-once — after a crash a message may be
 sent twice. Servers older than Redis 6.2 lack ``LMOVE``; there the consumer
-falls back to plain pops, which is the 1.x at-most-once behaviour, and says so
+falls back to plain pops, which is the 1.x at-most-once behavior, and says so
 in the log.
 
 "Once the send has finished" is doing real work in that sentence. Until 3.1.0 the
@@ -94,7 +94,7 @@ class Delivery(ABC):
         self._finished: queue.SimpleQueue[bytes | str] = queue.SimpleQueue()
         self._in_flight = 0
         # asked once: a handler that cannot take the callback is acknowledged the
-        # moment it returns, which is the behaviour every existing caller has
+        # moment it returns, which is the behavior every existing caller has
         self._defers = defers_completion(handler)
 
     @property
@@ -262,7 +262,7 @@ class Delivery(ABC):
         The bound is on the in-flight list as much as on memory: acknowledging is
         an ``LREM``, which scans that list, so letting a backlog accumulate there
         turns draining it into quadratic work. Zero, the default, is the
-        behaviour that shipped before deferred acknowledgement existed.
+        behavior that shipped before deferred acknowledgement existed.
 
         The wait keeps writing the heartbeat, for the same reason ``run()`` caps
         the blocking pop at ``HEARTBEAT_INTERVAL``: a worker at its limit is busy,
@@ -339,11 +339,26 @@ class Delivery(ABC):
         A bad payload is one message's problem, so everything short of a kill is
         logged and dropped: the consumer has to survive it to deliver the rest.
 
-        Returns whether the message should be acknowledged. Two cases say no: a
-        pickle the configuration refuses, and an envelope from a newer version.
-        Both are valid payloads somebody else can deliver, so they stay in
-        flight — acknowledging would destroy them over a setting or a deploy
-        order.
+        Returns whether the message should be acknowledged. Four paths say no, in
+        two kinds. Three are refusals that leave a valid payload for somebody else:
+        a pickle the configuration refuses, an envelope from a newer version, and a
+        handler raising ``CancelledError``, whose outcome is *unknown* rather than
+        nothing — a send can be cancelled after Telegram has taken the request — at
+        shutdown usually, but the ``except`` is unqualified, so any cancellation counts.
+        Acknowledging any of the three would destroy a message over a setting, a deploy
+        order or a restart. The fourth is
+        :meth:`_hand_over` returning ``not deferring``, which is not a refusal: a handler
+        that took ``on_complete`` *signals* completion through it, the handle goes into a
+        queue, and :meth:`collect` takes the message off the in-flight list on the
+        consumer's next turn. That is what makes at-least-once true — **where there is an
+        in-flight list**. Without ``LMOVE`` the plain pop has already removed the message
+        and :meth:`acknowledge` is a no-op, so deferring the acknowledgement defers
+        nothing: that server is at-most-once whatever the handler does.
+
+        Those three refusals save the message only where there *is* an in-flight list.
+        Against a server without ``LMOVE`` the consumer falls back to a plain pop, so the
+        message is gone before the refusal happens and ``False`` buys nothing: what they
+        avoid there is a second delete, not a loss.
         """
         if handle is None:
             handle = raw
@@ -379,8 +394,10 @@ class Delivery(ABC):
 
         Cancellation is the reason this is not one ``except``: it is a
         ``BaseException``, so letting it through would leave :meth:`run` and end
-        the consumer for the life of the container. The message stays in flight,
-        which is right — nothing sent it — but this worker has to keep reading.
+        the consumer for the life of the container. The message stays in flight because
+        the outcome is *unknown*: a send can be cancelled after Telegram has taken the
+        request, so leaving it risks a duplicate rather than a loss. This worker has to
+        keep reading either way.
         """
         deferring = self._defers
         if deferring:

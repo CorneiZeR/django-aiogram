@@ -88,8 +88,8 @@ def restates_the_name(name: str, docstring: str) -> bool:
     word is either filler or a word of the name itself. Judging whether a longer docstring
     *earns* its length is not something a test can do, and a check that guessed would be
     worse than none: a false positive here fails the build on a docstring somebody wrote
-    on purpose. Measured against all 511 definitions in `src/` when it was added, it
-    reported none of them.
+    on purpose. Run against every definition in `src/` — 484 of them, all documented,
+    modules excluded because a separate test covers those — it reports none.
     """
     own = set(re.findall(r'[a-z]+', name.lower()))
     summary = docstring.strip().splitlines()[0]
@@ -193,7 +193,7 @@ def test_every_definition_in_the_module_has_a_docstring(path):
         ('once', 'Report the first finish and drop every later one.', False),
     ],
 )
-def test_a_summary_that_only_restates_the_name_is_recognised(name, docstring, expected):
+def test_a_summary_that_only_restates_the_name_is_recognized(name, docstring, expected):
     """Both directions, because a predicate that flagged everything would also pass.
 
     The negative cases are real docstrings from this package, so a future tightening that

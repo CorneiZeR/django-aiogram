@@ -220,7 +220,7 @@ class EventRecorder:
         structure and bounds the result — measured in tens of microseconds, against
         nothing for a counter keyed on ``kind`` and ``function``. So unless the log
         is on too, a receiver gets ``Event`` objects whose ``detail`` carries what
-        the seam measured itself and not the summarised arguments. Rows are what the
+        the seam measured itself and not the summarized arguments. Rows are what the
         table gets; with the log off there are none.
         """
         return self.enabled
@@ -441,7 +441,20 @@ class EventRecorder:
                     # after the write, never before: a waiter released early was
                     # told the batch was durable while it was still in flight
                     _acknowledge(wakes)
-                if wakes and self._stopping.is_set() and buffer.empty():
+                # not `wakes and ...`: the wake `stop()` queues is the usual way this
+                # thread learns, but it is not the only one — `stop()` called from a
+                # receiver runs on *this* thread and drains this very buffer through
+                # `_abandon`, taking that wake with it. The loop then never saw one and
+                # spun for the life of the process, holding a connection.
+                #
+                # `_queue is not buffer` is the other half, and it is per writer where the
+                # flag is not: `stop()` detaches this queue and sets `_stopping`, and a
+                # `record()` that lands next calls `_buffer()`, which *clears* the flag and
+                # starts a replacement. This writer then saw an empty detached queue with
+                # the flag down and waited on it for the life of the process. Its own
+                # buffer no longer being the recorder's queue says the same thing and
+                # cannot be undone by anybody else
+                if buffer.empty() and (self._stopping.is_set() or self._queue is not buffer):
                     return
         except Exception:
             logger.exception('the event writer stopped; it restarts on the next event')
@@ -844,13 +857,19 @@ class EventRecorder:
         self._stopping.set()
         with contextlib.suppress(queue.Full):
             buffer.put_nowait(Wake())
-        if thread is not None:
+        if thread is not None and thread is not threading.current_thread():
             # a thread that never started cannot be joined, and this runs from
             # atexit where raising is noise nobody can act on
             with contextlib.suppress(RuntimeError):
                 thread.join(timeout)
             if thread.is_alive():
                 logger.warning('the event writer did not finish in time', extra={'tg_timeout': timeout})
+        elif thread is not None:
+            # `stop()` from a receiver, which runs on the writer's own thread: joining
+            # would be waiting for itself, and the old code reported that as a writer
+            # that missed its deadline. It has not missed anything — it unwinds through
+            # the loop below as soon as this returns
+            logger.debug('stop() was called on the writer thread; it will unwind on its own')
         # a record() that read self._queue before the swap above puts into a queue
         # this method has already detached, and nothing else will ever look at it.
         # Draining after the join is what keeps those events; the few instructions
@@ -865,10 +884,10 @@ class EventRecorder:
             # receiver-only writer through a reused ident.
             #
             # Unless `stop()` was called *from* the writer, where `_run` is still on the
-            # stack below and has that mark to consume on its way out. Not covered by a
-            # test: reaching it means a receiver calling `stop()`, and doing that leaves
-            # the writer alive — measured, a 10 second join and it never exits — so the
-            # test would pin a hang rather than this branch. Tracked in #136
+            # stack below and has that mark to consume on its way out. Reached by a
+            # receiver calling `stop()`, since receivers run on that thread —
+            # `test_a_receiver_that_stops_the_log_does_not_strand_the_writer` covers both
+            # halves and fails without either
             if threading.current_thread() is not thread:
                 self._forget_touch()
 

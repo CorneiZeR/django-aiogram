@@ -16,11 +16,18 @@ waits until the worker comes back.
 `BLPOP_TIMEOUT` is only how often the block is interrupted to check whether the
 worker is shutting down. It does not delay delivery.
 
-It is also capped just below `REDIS_TIMEOUT`, the deadline on any single Redis
-call. A pop asked to wait longer than the socket will wait for an answer turns
-every idle round into an error, so raising `BLPOP_TIMEOUT` above the deadline
-would break a consumer that is doing nothing wrong. Check `W004` says so before
-deployment; raise `REDIS_TIMEOUT` too if you want longer blocks.
+It is also capped, at whichever of two bounds is smaller: one second inside
+`REDIS_TIMEOUT`, the deadline on any single Redis call, and `HEARTBEAT_INTERVAL`,
+which is how often the consumer refreshes the key that says it is alive. A pop
+asked to wait longer than the socket will wait for an answer turns every idle
+round into an error. A pop that outlasts the refresh interval does not lose the
+key — it survives three intervals — but it does let the heartbeat go stale, and a
+probe reading it sees a worker that has not reported recently.
+
+Configure a value above the ceiling and the pop is silently shortened to it;
+`W004` says so before deployment, and its hint names the bound that binds —
+raising `REDIS_TIMEOUT` does nothing when `HEARTBEAT_INTERVAL` is the smaller of
+the two. A value *equal* to the ceiling is neither warned about nor shortened.
 
 `DELIVERY` names the consumer and `'blpop'` is its only value. The `keyspace`
 consumer 1.x used — write a key with a TTL, react to its expiry event — was
@@ -129,11 +136,28 @@ the in-flight list — and `False` means it does not, leaving the message there
 for a later run to reclaim. Withholding the acknowledgement only saves the
 message where there *is* an in-flight list: without `LMOVE` the message was
 already popped before it was refused, so `False` and `True` come to the same
-thing and it is gone. Three cases return `False` today. A pickled payload
-refused because `ALLOW_PICKLE` is off, which is the one failure a change of
-configuration can undo; a handler that accepted `on_complete`, where the
-acknowledgement is not withheld but deferred to the send; and a send canceled
-rather than failed, which reached nothing and is left for a reclaim. Everything
+thing and it is gone.
+
+`False` comes back for four reasons, in two kinds. Three leave the message for
+somebody else: a pickled payload refused because `ALLOW_PICKLE` is off, which is
+the one failure a change of configuration can undo; an envelope written by a
+**newer version than this consumer understands**, which is the deploy-order case —
+roll the consumers first and it drains; and a handler raising `CancelledError`,
+whose outcome is **unknown** — at shutdown usually, though the `except` is
+unqualified, so any cancellation counts. Unknown rather than "reached nothing": a
+send can be cancelled after Telegram has already taken the request, so the message
+is kept for a redelivery that may turn out to be a duplicate. That is the trade
+this release makes everywhere — losing a message is worse than sending it twice, and
+handlers are asked to be idempotent for exactly this. The fourth is not a refusal at all: a handler that accepted
+`on_complete` *signals* completion through it, and the consumer takes the message
+off the in-flight list on its next turn. That is what makes at-least-once true —
+where there is an in-flight list. Without `LMOVE` the message is already gone when
+the handler is called, so deferring the acknowledgement defers nothing and that
+server stays at-most-once.
+
+All three refusals rest on the in-flight list, as the paragraph above says: on a
+server without `LMOVE` the message was already popped, so none of them recovers it.
+There, `False` only means this consumer will not delete it twice. Everything
 else — undecodable bytes, a method that is not Telegram API, a handler that
 raised before it scheduled anything — returns `True`, because redelivering it
 would only fail again.
