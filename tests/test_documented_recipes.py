@@ -109,10 +109,17 @@ def test_a_catch_all_registered_earlier_swallows_the_update():
         seen.append(message.text)
 
     dispatcher = Dispatcher()
-    dispatcher.include_router(bot.router)
-
+    # any test that drove the webhook view built the real `bot.dispatcher`, which holds
+    # this same router for the rest of the session — so borrow it rather than assume it
+    # is free, and give it back to whoever had it
+    parent = bot.router.parent_router
+    bot.router._parent_router = None  # the public setter refuses None
     observers = bot.router.observers['message'].handlers
     try:
+        # inside the try, because it can raise: attaching is the step that fails when the
+        # router is already held, and failing it above the `finally` left the singleton
+        # detached and this handler registered for every test after
+        dispatcher.include_router(bot.router)
         asyncio.run(dispatcher.feed_update(Bot(token='42:x'), types.Update(update_id=2, message=a_message('/late'))))
 
         assert seen == [], 'a later handler received an update the catch-all should have taken'
@@ -121,7 +128,7 @@ def test_a_catch_all_registered_earlier_swallows_the_update():
         # answer updates in every test after this one, and a router left
         # attached makes the next include_router() raise
         observers[:] = [handler for handler in observers if handler.callback is not late]
-        bot.router._parent_router = None  # the public setter refuses None
+        bot.router._parent_router = parent
 
     assert observers == before, 'the recipe left the shared router changed'
 
@@ -194,6 +201,24 @@ def test_every_package_attribute_a_snippet_uses_exists(snippet):
         and not hasattr(bound[node.value.id], node.attr)
     ]
     assert not missing, f'the page uses what no longer exists: {missing}'
+
+
+def test_the_page_binds_names_the_attribute_check_can_read():
+    """The check above is a scan for absences, so an empty resolver passes it.
+
+    `imported_from_the_package` walks imports and factory assignments; if it ever
+    stopped resolving — a renamed package prefix, an import form it does not
+    handle — every snippet would report no missing attributes and the page could
+    rot freely. This pins both halves: something is bound, and a name that does
+    not exist on the bound object is actually reported.
+    """
+    bound = [imported_from_the_package(ast.parse(snippet)) for snippet in SNIPPETS]
+    assert any(bound), 'no snippet on the page binds anything from the package'
+
+    tree = ast.parse('from django_redis_aiogram import bot\nbot.no_such_attribute\n')
+    resolved = imported_from_the_package(tree)
+    assert 'bot' in resolved, 'a plain package import is no longer resolved'
+    assert not hasattr(resolved['bot'], 'no_such_attribute')
 
 
 def test_the_page_documents_every_recipe_here():

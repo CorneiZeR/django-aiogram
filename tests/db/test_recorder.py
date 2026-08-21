@@ -443,6 +443,54 @@ def test_a_batch_too_big_to_save_one_by_one_is_bisected(paused_writer):
 
 
 @pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=ON)
+def test_stopping_the_writer_does_not_leave_the_stopper_marked():
+    """`stop()` drains the queue it just detached, on whoever called it.
+
+    That write goes through `_deliver`, so the caller gets marked — and `stop()` is the
+    one path that never cleared it. A management command or `atexit` ends that thread,
+    Python reuses its ident for a later writer that only has receivers, and the writer
+    closes a connection it never opened: `eventlog` imported, and `django.db` with it, on
+    the path that exists to keep them out.
+
+    Not cleared when `stop()` is called *from* the writer, because `_run` is still below
+    on the stack with that mark to consume — asserted separately, since clearing it there
+    would trade this leak for the one it replaced.
+    """
+    recorder = EventRecorder()
+    recorder.record(an_event(chat_id=41))  # starts the writer and gives it something
+    recorder.flush()
+    with recorder._counter:
+        recorder._touched_database.add(threading.get_ident())  # as `_abandon` would leave it
+
+    recorder.stop()
+
+    assert threading.get_ident() not in recorder._touched_database, 'the thread that stopped it stayed marked'
+    assert TelegramEvent.objects.filter(chat_id=41).exists(), 'nothing was written, so nothing is on trial'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_SYNC': True})
+def test_a_caller_that_wrote_does_not_stay_marked():
+    """Only the writer's exit closes connections, so only the writer's mark is read.
+
+    Under `EVENT_LOG_SYNC` the row is written on the caller's thread, where Django owns
+    the connection — so the mark is bookkeeping nobody reads, and thread idents get
+    reused. Left behind, a request thread's mark could be inherited by a later
+    receiver-only writer, which would close a connection it never opened: importing
+    `eventlog`, and `django.db` with it, on the one path that must not need them.
+    """
+    recorder = EventRecorder()
+    with recorder._counter:
+        recorder._touched_database.discard(threading.get_ident())
+
+    recorder.record(an_event(chat_id=99))
+
+    assert TelegramEvent.objects.filter(chat_id=99).exists(), 'nothing was written, so nothing is on trial'
+    assert threading.get_ident() not in recorder._touched_database, 'the calling thread stayed marked'
+
+
+@pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_SYNC': True})
 def test_recording_does_not_doom_the_transaction_it_runs_inside(monkeypatch):
     """The one bug here that destroyed the caller's own data.
@@ -463,6 +511,10 @@ def test_recording_does_not_doom_the_transaction_it_runs_inside(monkeypatch):
     monkeypatch.setattr(connection, 'is_in_memory_db', lambda: False)
     monkeypatch.setattr(connection, '_close', lambda: None)
     recorder = EventRecorder()
+    # the premise, asserted rather than assumed: without it `record()` queues the event and
+    # `_buffer()` starts a writer that drains it, so the row below would exist having gone
+    # nowhere near this transaction — the regression this test exists for, passing
+    assert recorder._write_here(), 'the event would be queued, so nothing here is on trial'
 
     try:
         with transaction.atomic():
@@ -472,6 +524,10 @@ def test_recording_does_not_doom_the_transaction_it_runs_inside(monkeypatch):
         connection.needs_rollback = False
         connection.closed_in_transaction = False
 
+    # the row first: a flag that stayed False because nothing touched the database says
+    # nothing. Forcing `_write_here()` to False sends the event to the queue instead, and
+    # the assertion below would pass having tested the queue
+    assert TelegramEvent.objects.filter(chat_id=321).exists(), 'the event was queued, not written here'
     assert doomed is False
 
 
@@ -572,10 +628,18 @@ def test_the_writer_suspends_itself_after_repeated_refusals(paused_writer, monke
     monkeypatch.setattr(TelegramEvent, 'save', refuse)
     recorder = EventRecorder()
 
+    # five is documented twice — Logging.md's table of messages and Troubleshooting.md's
+    # walkthrough — so moving the constant means moving them
+    assert FAILURE_LIMIT == 5, 'the documented number of refusals changed'
+
     failures = 0
     blocked_until = 0.0
-    for _ in range(FAILURE_LIMIT):
+    for attempt in range(1, FAILURE_LIMIT + 1):
         failures, blocked_until = recorder._flush([an_event(chat_id=5)], failures=failures)
+        if attempt < FAILURE_LIMIT:
+            # the boundary, not just the end state: without this the test passes with
+            # FAILURE_LIMIT lowered to 1, proving `eventually` where it promises `after five`
+            assert blocked_until <= time.monotonic(), f'suspended after {attempt} of {FAILURE_LIMIT}'
 
     assert blocked_until > time.monotonic()
 
@@ -767,13 +831,16 @@ def test_an_obsolete_connection_is_still_recycled(monkeypatch):
     monkeypatch.setattr(connection, 'is_in_memory_db', lambda: False)
     monkeypatch.setattr(connection, '_close', lambda: closed.append('closed'))
     # obsolete by age: `close_if_unusable_or_obsolete` closes once `close_at` has passed
+    # saved, not cleared: under `CONN_MAX_AGE` there is a real deadline here, and putting
+    # `None` back would hand the next test this one's idea of the connection
+    close_at = connection.close_at
     connection.close_at = time.monotonic() - 1
     recorder = EventRecorder()
 
     try:
         recorder.record(an_event(chat_id=8765))
     finally:
-        connection.close_at = None
+        connection.close_at = close_at
         connection.closed_in_transaction = False
 
     assert closed == ['closed'], 'a connection past its CONN_MAX_AGE was kept'

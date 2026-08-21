@@ -14,7 +14,11 @@ from aiogram import exceptions
 from aiogram.methods import SendMessage
 from django.core.management import CommandError, call_command
 from django.test import override_settings
-from redis.exceptions import ResponseError
+
+# ConnectionError shadows the builtin deliberately: this is the one redis-py raises, and a
+# fake raising the builtin proved nothing — `redis.exceptions.ConnectionError` is a
+# `RedisError` and not an `OSError`, so a guard narrowed to either would stay green
+from redis.exceptions import ConnectionError, ResponseError  # noqa: A004
 
 from django_redis_aiogram import TelegramBot
 from django_redis_aiogram.api import API_METHODS, check_function
@@ -477,14 +481,19 @@ def test_a_finished_send_leaves_the_in_flight_list(redis_server):
             break
         threading.Event().wait(0.01)
 
-    assert delivery.finish, 'the handler was never called'
-    delivery.finish[0]()  # what the send's done-callback does
-    for _ in range(500):
-        if redis_server.llen(PROCESSING) == 0:
-            break
-        threading.Event().wait(0.01)
-    delivery.stop()
-    thread.join(timeout=5)
+    try:
+        assert delivery.finish, 'the handler was never called'
+        delivery.finish[0]()  # what the send's done-callback does
+        for _ in range(500):
+            if redis_server.llen(PROCESSING) == 0:
+                break
+            threading.Event().wait(0.01)
+    finally:
+        # in a finally, because the assertion above can fail: the consumer would then keep
+        # polling Redis beside whatever ran next, and the report would show that test's
+        # confusion rather than this one's failure
+        delivery.stop()
+        thread.join(timeout=5)
 
     assert redis_server.llen(PROCESSING) == 0
     assert redis_server.llen(QUEUE) == 0
@@ -552,6 +561,28 @@ def test_reclaim_requeues_a_dead_workers_messages(redis_server):
     assert redis_server.llen(f'{QUEUE}:processing:gone') == 0
     assert redis_server.llen(QUEUE) == 2
     assert 'Requeued 2' in out.getvalue()
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+def test_reclaim_by_hand_preserves_the_original_order(redis_server):
+    """`Delivery.reclaim` has this test; its manual twin had counts only.
+
+    `'RIGHT', 'LEFT'` to `'LEFT', 'LEFT'` left the whole suite green while the messages
+    came back reversed: measured here, `2, 1, 3` instead of `1, 2, 3` — and an operator
+    running this command is already having a bad day. Asserted by draining the queue
+    rather than by reading it, because the order that matters is the order a consumer
+    sees, and this is the same shape the `Delivery.reclaim` test uses.
+    """
+    for chat_id in (1, 2):
+        redis_server.rpush(f'{QUEUE}:processing:gone', payload(chat_id))
+    redis_server.rpush(QUEUE, payload(3))
+
+    call_command('tgbot_reclaim', worker='gone', stdout=StringIO())
+
+    survivor = Recording()
+    drain(survivor, expected_handled=3)
+
+    assert [item['chat_id'] for item in survivor.handled] == [1, 2, 3]
 
 
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})

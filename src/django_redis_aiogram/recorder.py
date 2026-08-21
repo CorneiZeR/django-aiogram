@@ -171,11 +171,14 @@ class EventRecorder:
         self._owner_pid = os.getpid()
         self._fork_hook = False
         self._dropped = 0
-        # whether this process has ever handed a batch to the ORM, and so whether
-        # there is a connection to close on the way out
-        self._touched_database = False
-        # its own lock, not _guard: _guard is held across starting a thread, and
-        # the counter is touched from inside paths that must not wait on that
+        # which threads have handed a batch to the ORM, and so have a connection to
+        # close on the way out. Per thread rather than one flag: this object is
+        # process-wide, `close_old_connections()` acts on the calling thread, and two
+        # writers can overlap — a `stop()` whose join times out leaves the old one
+        # running while a replacement starts
+        self._touched_database: set[int] = set()
+        # its own lock, not _guard: _guard is held across starting a thread, and the
+        # counter and the touch set are reached from paths that must not wait on that
         self._counter = threading.Lock()
         # far enough back that the first drop always reports: monotonic() is
         # time since boot on Linux, so a fresh container starts it near zero
@@ -271,6 +274,13 @@ class EventRecorder:
                 except Exception:
                     self._drop(1)
                     logger.exception('could not record an event on the calling thread', extra={'tg_kind': event.kind})
+                finally:
+                    # this thread wrote, and this thread is not the one that closes: the
+                    # mark exists for the writer's exit, and a caller's mark left behind
+                    # outlives the caller. Thread idents are reused, so a receiver-only
+                    # writer could inherit one and close a connection it never opened —
+                    # importing `eventlog`, and `django.db` with it
+                    self._forget_touch()
                 return
             buffer = self._buffer()
             buffer.put_nowait(event)
@@ -403,7 +413,7 @@ class EventRecorder:
         self._queue = None
         self._thread = None
         self._owner_pid = os.getpid()
-        self._touched_database = False
+        self._touched_database = set()
         self._dropped = 0
         self._reported_at = -DROP_REPORT_INTERVAL
 
@@ -443,11 +453,42 @@ class EventRecorder:
             # again: without this, everything still in it disappears with no row
             # and no counter, and the gap reads as quiet traffic
             self._abandon(buffer)
-            if self._touched_database:
+            if self._took_the_touch():
                 # a process that only has receivers never opened one, and importing
                 # `eventlog` to close it would pull in `django.db` — the one import
                 # this module exists to keep out of a process that does not need it
                 self._close_connections()
+
+    def _forget_touch(self) -> None:
+        """Drop this thread's mark without acting on it, for a thread that does not close.
+
+        Only the writer's exit closes connections. `record()` under ``EVENT_LOG_SYNC`` and
+        `drain_once()` write on their caller's thread, and Django owns that thread's
+        connection — so their marks are bookkeeping nobody reads, and idents get reused.
+        """
+        with self._counter:
+            self._touched_database.discard(threading.get_ident())
+
+    def _took_the_touch(self) -> bool:
+        """Whether *this* thread handed a batch to the ORM, clearing the mark as it answers.
+
+        Read and cleared together, because the mark describes this writer: left set it
+        outlives the thread that earned it, and a later writer with only receivers closes
+        a connection it never opened — importing `eventlog`, and with it `django.db`, into
+        the one process this module exists to keep it out of. Only a fork cleared it before,
+        so a process that wrote once and then had the log turned off carried it for good.
+
+        Per thread, because one flag was not enough either: `stop()` detaches the queue
+        before joining, so a join that times out leaves the old writer running while a
+        replacement starts, and the old one's exit cleared the new one's flag — the
+        replacement then skipped closing the connection it had opened. It is also what the
+        mark always meant, since `close_old_connections()` acts on the calling thread.
+        """
+        ident = threading.get_ident()
+        with self._counter:
+            touched = ident in self._touched_database
+            self._touched_database.discard(ident)
+        return touched
 
     @staticmethod
     def _empty(buffer: 'queue.Queue[Event | Wake]') -> tuple[list[Event], list[Wake]]:
@@ -724,7 +765,8 @@ class EventRecorder:
         refused = 0
         try:
             if self.enabled:
-                self._touched_database = True
+                with self._counter:
+                    self._touched_database.add(threading.get_ident())
                 refused = self._write(batch)
         finally:
             self._publish(batch)
@@ -765,6 +807,9 @@ class EventRecorder:
             if batch:
                 self._flush(batch, failures=0)
         finally:
+            # same reason as the synchronous `record()` path: this thread wrote, and it is
+            # not the thread whose exit closes connections
+            self._forget_touch()
             _acknowledge(wakes)
         return len(batch)
 
@@ -811,7 +856,21 @@ class EventRecorder:
         # Draining after the join is what keeps those events; the few instructions
         # between this drain and the producer's put stay a gap, because closing it
         # would mean a lock on the one path that may never wait
-        self._abandon(buffer)
+        try:
+            self._abandon(buffer)
+        finally:
+            # the same rule as the synchronous `record()` and `drain_once()`: this ran on
+            # whoever called `stop()`, and that thread is not the one whose exit closes
+            # connections. Left behind, its mark can be inherited by a later
+            # receiver-only writer through a reused ident.
+            #
+            # Unless `stop()` was called *from* the writer, where `_run` is still on the
+            # stack below and has that mark to consume on its way out. Not covered by a
+            # test: reaching it means a receiver calling `stop()`, and doing that leaves
+            # the writer alive — measured, a 10 second join and it never exits — so the
+            # test would pin a hang rather than this branch. Tracked in #136
+            if threading.current_thread() is not thread:
+                self._forget_touch()
 
     def reset(self) -> None:
         """Re-read the settings next time; used by override_settings.
