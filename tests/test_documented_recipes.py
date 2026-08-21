@@ -300,6 +300,23 @@ def test_the_message_the_handler_receives_is_not_the_one_constructed():
     assert received[0] is not original, 'patching the original would have worked'
 
 
+def test_a_recipe_that_pins_a_hostname_says_what_a_second_worker_would_do():
+    """A fixed `hostname:` is the survival half of worker identity, and only that half.
+
+    The comment above it explained why the name has to outlive the container and stopped
+    there — so the obvious next step, `--scale telegram_bot=3`, gives three replicas one
+    resolved name, one in-flight list, and each reclaiming what the others are still
+    sending. `Delivery.md` states the collision rule; the recipe a reader copies did not.
+    """
+    page = (pathlib.Path(__file__).resolve().parent.parent / 'docs' / 'wiki' / 'Deployment.md').read_text(
+        encoding='utf-8'
+    )
+    recipe = page.split('hostname: telegram-bot-1')[0].rsplit('telegram_bot:', 1)[1]
+
+    assert 'scale' in recipe, 'the recipe pins a hostname without saying what scaling it does'
+    assert 'WORKER_NAME' in recipe, 'nothing tells the reader how to run more than one worker'
+
+
 def test_the_deployment_healthcheck_recipe_names_a_runnable_module():
     """The page tells readers what to put in `test:`, so it has to be real.
 

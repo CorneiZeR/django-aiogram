@@ -20,7 +20,10 @@ services:
     command: python manage.py start_tgbot
     restart: always
     # not decoration: the in-flight list is keyed on this name, and without it
-    # Docker invents a new one for each container it creates — see Delivery
+    # Docker invents a new one for each container it creates — see Delivery.
+    # One name is one worker: scale this service and every replica resolves to
+    # this hostname, shares one in-flight list, and reclaims what the others are
+    # still sending. Give each replica its own WORKER_NAME to run more than one
     hostname: telegram-bot-1
     env_file: .env
     environment:
