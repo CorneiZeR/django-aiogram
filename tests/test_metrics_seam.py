@@ -64,12 +64,18 @@ SETTINGS = {'REDIS_URL': 'redis://localhost:6379/0', 'RATE_LIMIT': None}
 
 
 @pytest.fixture
-def collected():
+def collected(clean_counters):
     """Connect a receiver for the duration of one test, and hand back what it saw.
 
     Connected strongly, with the list as the collector: a bound method of a local
     object would be weakly referenced, and a receiver collected mid-test looks
     exactly like a gate that never fired.
+
+    Takes `clean_counters` rather than repeating a subset of it: this fixture used to
+    clear `_dropped` alone, which left the two things that page below it describes —
+    the touch marks and `_reported_at` — surviving a test that had a writer running.
+    Thread idents are reused, so a mark left behind makes a later receiver-only test
+    close a connection it never opened, and only in some orders.
     """
     seen: list[Event] = []
 
@@ -78,19 +84,13 @@ def collected():
         seen.extend(events)
 
     events_recorded.connect(receiver, weak=False, dispatch_uid='tests.metrics')
-    # several of these tests drive a failing write on purpose, which leaves a real
-    # drop counted — and the next successful flush then records a `log.dropped` row,
-    # correctly, in whichever test happens to run next. Cleared at both ends so each
-    # one starts from zero rather than from its predecessor's failures
-    with recorder._counter:
-        recorder._dropped = 0
     try:
         yield seen
     finally:
         events_recorded.disconnect(dispatch_uid='tests.metrics')
+        # before `clean_counters` clears: a writer still running would otherwise add a
+        # mark after the clear, which is the leak this ordering exists to prevent
         recorder.stop(timeout=5)
-        with recorder._counter:
-            recorder._dropped = 0
 
 
 @pytest.fixture

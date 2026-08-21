@@ -433,8 +433,15 @@ def test_every_reason_the_webhook_refuses_is_catalogued(fragment):
 
 
 #: what each of the four 503 branches is called on Webhook.md, where the causes are prose
-#: rather than log lines. Ordered as the view checks them, which is what the page claims
-WEBHOOK_CAUSES = ('`ENABLED` is off', '`MODE` is not `webhook`', 'cannot be built', 'nothing ran the update')
+#: rather than log lines. Ordered as the view checks them, which is what the page claims.
+#: The third names the exception, because the view catches `ImproperlyConfigured` and a
+#: bad `TOKEN` is only its most common cause
+WEBHOOK_CAUSES = (
+    '`ENABLED` is off',
+    '`MODE` is not `webhook`',
+    'raised `ImproperlyConfigured`',
+    'nothing ran the update',
+)
 
 
 def test_the_other_page_names_the_same_four_causes():

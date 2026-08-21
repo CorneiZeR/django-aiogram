@@ -286,10 +286,15 @@ consumer does. Several are safe if you want the redundancy: the pop is atomic,
 so a queued message goes to exactly one worker.
 
 On Redis 6.2+ a message is moved to a per-worker processing list while it is
-being sent, and stays there until the send has actually finished; a restarted
-worker reclaims what it left behind — delivery is **at-least-once**, so a crash
-mid-send can produce a duplicate. Before 3.1.0 it was removed as soon as the send
-was *scheduled*, which meant polling mode did not have that guarantee at all.
+being sent, and stays there until the send has actually finished; a replacement
+worker reclaims what it left behind **when it resolves the same identity**, which
+is `WORKER_NAME` or, without one, the hostname. Given that, delivery is
+**at-least-once**, so a crash mid-send can produce a duplicate — and each worker
+needs an identity of its own, since the list is per worker. A replacement under a
+different name strands the old list instead: `I001` reports the risk, and
+`manage.py tgbot_reclaim --worker <name>` is the way back. Before 3.1.0 the
+message was removed as soon as the send was *scheduled*, which meant polling mode
+did not have that guarantee at all.
 Waiting for the send is something the handler opts into: `bot.send_raw`, which
 this command uses, does — a handler of your own taking only `**kwargs` is still
 acknowledged when it returns. Older servers lack `LMOVE` and fall back to plain

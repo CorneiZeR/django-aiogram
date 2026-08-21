@@ -193,7 +193,10 @@ def _write_half(rows: list[TelegramEvent], alias: str) -> int:
     try:
         with transaction.atomic(using=alias):
             TelegramEvent.objects.using(alias).bulk_create(rows)
-    except DatabaseError:
+    except (DatabaseError, InterfaceError):
+        # both, because Django defines them as siblings under `Error`: a connection the
+        # server dropped raises `InterfaceError`, which `DatabaseError` alone lets escape
+        # `write_batch` — with no refused count and no `EventLogRefusedError`
         return _write_one_by_one(rows, alias)
     return len(rows)
 
@@ -205,7 +208,7 @@ def _write_row(row: TelegramEvent, alias: str) -> bool:
         # the transaction, so one bad row would take every later one with it
         with transaction.atomic(using=alias):
             row.save(force_insert=True, using=alias)
-    except DatabaseError:
+    except (DatabaseError, InterfaceError):
         logger.exception('dropping an event the database refused', extra={'tg_kind': row.kind})
         return False
     return True

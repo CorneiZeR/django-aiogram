@@ -89,7 +89,8 @@ Missing credentials are reported as warnings, not errors, so a build or a
 migration container is not blocked by them.
 
 Run it somewhere the bot is enabled: a process with `ENABLED` off registers no
-checks, so it reports nothing either way.
+checks, so it reports nothing either way — unless the event log is on there, which
+registers all of them on its own, bot settings included.
 
 ## Next
 

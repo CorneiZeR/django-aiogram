@@ -7,6 +7,7 @@ because Django settings are not readable while the app registry is loading.
 """
 
 import asyncio
+import logging
 import threading
 import weakref
 from collections.abc import Callable
@@ -24,6 +25,10 @@ from django_redis_aiogram.settings import SETTINGS_NAME, conf
 #: redis-py ships py.typed but leaves parse_url unannotated, and strict mode refuses
 #: to call it. Naming the shape here keeps the call site honest without an ignore
 parse_url: Callable[[str], dict[str, Any]] = _parse_url
+
+
+#: the package logger, so a contained failure here is still visible
+logger = logging.getLogger('django_redis_aiogram')
 
 
 def read_timeout() -> int:
@@ -280,8 +285,15 @@ class _LoopConnections:
         # their collection runs, and no other loop should wait behind it
         abandoned.clear()
         if stale is not None:
-            # on its own loop, which is the only place it may be closed
-            await stale.aclose()
+            # on its own loop, which is the only place it may be closed. Contained,
+            # because the replacement is already cached and healthy: a client whose socket
+            # is broken can raise on close, and this path runs right after a settings
+            # change — so letting it out would fail the first `asend` after every reset
+            # for something that has already been replaced
+            try:
+                await stale.aclose()
+            except Exception:
+                logger.exception('could not close the client a settings change replaced')
         return client
 
     async def close(self) -> None:

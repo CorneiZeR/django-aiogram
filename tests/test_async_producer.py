@@ -281,12 +281,17 @@ def test_send_off_a_loop_says_nothing(redis_server, caplog, monkeypatch):
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
-def test_a_refused_method_does_not_spend_the_mention(caplog, monkeypatch):
+@pytest.mark.parametrize('producer', ['send', 'send_redis', 'send_many'])
+def test_a_refused_method_does_not_spend_the_mention(caplog, monkeypatch, producer):
     """The line is latched once per process, so whoever emits it takes it from everyone else.
 
     `send()` named the twin before delegating, and `send_redis` validates the method after
     that — so a call that was about to raise `UnknownApiMethodError` emitted the advice and
     left the first caller who could have acted on it in silence.
+
+    `send_many` had the same hole for a different reason: the check lived in `_chunks`,
+    which is a generator, so it ran on the first chat rather than on the call — and the
+    mention had gone out one line earlier.
 
     Asserted on the refusal alone. Counting mentions across a refusal *and* a good send
     gives one either way: without the fix the refusal spends it, with the fix the good
@@ -296,9 +301,15 @@ def test_a_refused_method_does_not_spend_the_mention(caplog, monkeypatch):
     monkeypatch.setattr('django_redis_aiogram.client._asend_mentioned', latch)
     instance = TelegramBot()
 
+    def refused():
+        if producer == 'send_many':
+            instance.send_many([1], 'no_such_method')
+        else:
+            getattr(instance, producer)('no_such_method', chat_id=1)
+
     async def only_the_refusal():
         with pytest.raises(UnknownApiMethodError):
-            instance.send('no_such_method', chat_id=1)
+            refused()
 
     with caplog.at_level('WARNING', logger='django_redis_aiogram'):
         asyncio.run(only_the_refusal())
@@ -378,15 +389,26 @@ def test_every_synchronous_route_that_writes_names_its_own_twin(
 @override_settings(TELEGRAM_BOT=SETTINGS)
 @pytest.mark.parametrize('bulk', ['send_many', 'asend_many'])
 @pytest.mark.parametrize('chat_ids', [[1, 2], []], ids=['with chats', 'no chats'])
-def test_the_bulk_pair_refuses_an_unknown_method_before_writing(redis_server, bulk, chat_ids):
+def test_the_bulk_pair_refuses_an_unknown_method_before_writing(redis_server, bulk, chat_ids, monkeypatch):
     """The promise that an unknown method raises before the queue now covers four.
 
-    The check lives in `_chunks`, which is a generator — its body does not run
-    until the first `next()`. That makes the empty-chat case worth asserting
-    rather than assuming: a caller broadcasting to a queryset that turned out
-    empty would otherwise get silence for a typo, and learn about it on the day
+    The check used to live in `_chunks`, which is a generator — its body did not run
+    until the first `next()`, so a refused method got as far as spending the
+    once-per-process `asend` mention and, on the async side, awaiting a client. It
+    is `_accept_bulk` that validates now, on the call. The empty-chat case stays
+    asserted rather than assumed: a caller broadcasting to a queryset that turned
+    out empty would otherwise get silence for a typo, and learn about it on the day
     the queryset is not empty.
+
+    The client factories are made to raise, which is what pins the check *before*
+    the connection rather than merely before the write.
     """
+
+    def refuse(*args, **kwargs):
+        raise AssertionError('a refused method asked for a Redis client')
+
+    monkeypatch.setattr('django_redis_aiogram.client.get_redis', refuse)
+    monkeypatch.setattr('django_redis_aiogram.client.aget_redis', refuse)
     bot = TelegramBot()
 
     def broadcast():

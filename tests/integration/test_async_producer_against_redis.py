@@ -10,6 +10,7 @@ one can you see whether letting go of a loop lets go of its client.
 
 import asyncio
 import gc
+import time
 import weakref
 
 import pytest
@@ -99,7 +100,14 @@ def test_closing_releases_the_connection_on_the_loop_that_owns_it(server, redis_
 
         during = asyncio.run(queue_then_close())
 
+    # polled, not read once: `aclose()` returning means this end sent the close, and the
+    # server drops the client when it gets round to processing it — which on a loaded box
+    # is after this line. A single read measures that scheduling, not the release
     after = len(server.client_list())
+    deadline = time.monotonic() + 5
+    while after >= during and time.monotonic() < deadline:
+        time.sleep(0.05)
+        after = len(server.client_list())
     assert after < during, f'{after} connections after closing against {during} while queueing'
 
 

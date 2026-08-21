@@ -81,6 +81,7 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `the event log is suspended after repeated failures` | ERROR | five failed batches in a row, usually a missing `migrate` |
 | `leaving a refused pickle message in flight` | ERROR | `ALLOW_PICKLE` is off and a pickled payload is waiting for it |
 | `leaving a message from a newer version in flight` | ERROR | the web tier was deployed ahead of the bot container |
+| `could not close the client a settings change replaced` | ERROR | a settings change replaced the async Redis client and closing the old one raised; its replacement is already in use, so nothing was refused |
 
 ## The database event log
 

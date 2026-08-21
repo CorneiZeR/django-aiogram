@@ -311,7 +311,10 @@ def drain_budget() -> float:
     """
     try:
         budget = float(conf['DRAIN_TIMEOUT'])
-    except (TypeError, ValueError):
+    except (ImproperlyConfigured, TypeError, ValueError):
+        # `ImproperlyConfigured` too: `conf[...]` resolves the whole settings dict on a
+        # cold cache, so a non-mapping `TELEGRAM_BOT` or a non-finite value from the
+        # environment raises here — and this function exists not to raise
         budget = float(DEFAULTS['DRAIN_TIMEOUT'])
     return budget if math.isfinite(budget) and budget >= 0 else float(DEFAULTS['DRAIN_TIMEOUT'])
 
@@ -1173,6 +1176,9 @@ class TelegramBot:
             coroutine.close()
             self._record_drop(outbound, 'the event loop is closed')
             logger.exception('send dropped: the event loop is closed')
+            # the same slot-return as `start`'s own refusal above: the loop closed between
+            # the check under `loop_lock` and this call, so nothing will ever run it
+            _settle(on_refused)
 
     @staticmethod
     def _start(
@@ -1306,7 +1312,13 @@ class TelegramBot:
         A disabled bot reaches neither Telegram nor Redis, and still returns an id
         per message — the same contract :meth:`send_redis` has, so a caller can
         store the ids beside its own rows whether or not this deployment sends.
+
+        Validates first, for the same reason :meth:`_accept` does: `_chunks` is a
+        generator, so the check inside it used to run on the first chat rather than
+        on the call — after the batch had spent the once-per-process mention, and
+        after `asend_many` had built a client a refused method never needed.
         """
+        check_function(function)
         if self.enabled:
             return True
         logger.debug('queueing skipped: bot disabled', extra={'tg_function': function})
@@ -1341,7 +1353,7 @@ class TelegramBot:
         if writing:
             _mention_asend('asend_many')
         identifiers: list[uuid.UUID] = []
-        for chunk in self._chunks(chat_ids, function, chunk_size, kwargs):
+        for chunk in self._chunks(chat_ids, chunk_size, kwargs):
             if writing:
                 with queueing(function, chunk) as write:
                     get_redis().rpush(write.key, *write.payloads)
@@ -1368,7 +1380,7 @@ class TelegramBot:
         # at all, and building a client would raise where the point is to do nothing
         client = await aget_redis() if writing else None
         identifiers: list[uuid.UUID] = []
-        for chunk in self._chunks(chat_ids, function, chunk_size, kwargs):
+        for chunk in self._chunks(chat_ids, chunk_size, kwargs):
             if client is not None:
                 with queueing(function, chunk) as write:
                     await client.rpush(write.key, *write.payloads)
@@ -1378,7 +1390,6 @@ class TelegramBot:
     def _chunks(
         self,
         chat_ids: 'Iterable[int | str]',
-        function: str,
         chunk_size: int,
         kwargs: dict[str, Any],
     ) -> 'Iterator[list[tuple[uuid.UUID, dict[str, Any]]]]':
@@ -1387,8 +1398,10 @@ class TelegramBot:
         Serialization happens inside :func:`queueing`, one chunk at a time, which
         is what keeps peak memory bounded: a ``BufferedInputFile`` payload times
         fifty thousand chats would otherwise all exist at once.
+
+        The method is validated by :meth:`_accept_bulk` before either caller gets
+        here, so a refused one never reaches this generator.
         """
-        check_function(function)
         size = max(1, int(chunk_size))
         chunk: list[tuple[uuid.UUID, dict[str, Any]]] = []
         for chat_id in chat_ids:

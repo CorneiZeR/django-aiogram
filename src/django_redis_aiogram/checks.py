@@ -536,18 +536,19 @@ def worker_name_problems() -> list[Problem]:
 
 
 def _a_routed_log_database(key: str) -> list[Problem]:
-    """Warn when the log is pointed at its own alias with nothing routing it there.
+    """Say when the log is pointed at its own alias with nothing routing it there.
 
     ``EVENT_LOG_DATABASE`` names where the rows belong; ``TelegramEventLogRouter`` is
     what puts them there. Set the first and forget the second and every existing check
     passes — E040 sees a string, E041 sees a configured alias with a real engine, W005
     sees a database — while a plain ``migrate`` does not create the table on it and the
     writer logs ``no such table`` once per batch for ever. ``migrate --database=<alias>``
-    still would, which is why this is a warning: someone may be doing exactly that.
+    still would, which is why this is information: someone may be doing exactly that.
 
-    A warning rather than an error, because a project may route this app by hand:
-    a router of its own that returns the same alias is a legitimate way to do it, and
-    this rule cannot see inside one.
+    I002 rather than a warning, because a project may route this app by hand: a router
+    of its own that returns the same alias is a legitimate way to do it, and this rule
+    cannot see inside one. The hint says so too, and `Settings.md` lists it under the
+    information ids.
 
     Compared through ``import_string`` so both spellings count. ``DATABASE_ROUTERS``
     accepts dotted paths and instances alike, and a project mixing the two — a path

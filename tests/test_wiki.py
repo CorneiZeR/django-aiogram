@@ -113,7 +113,15 @@ def test_every_documented_log_message_is_still_emitted():
             if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
                 emitted.append(node.args[0].value)
 
-    stale = [message for message in documented if not any(message in line for line in emitted)]
+    # matched on the name of the event, by equality — not by containment anywhere in any
+    # literal, which kept a row green after its own event was renamed away as long as its
+    # words survived inside some other message. A row names either the whole line or the
+    # part before the remedy, because the table carries the remedy in its own column; both
+    # are anchored at the start of the literal and end where its punctuation does
+    names = set(emitted)
+    for literal in emitted:
+        names.update(literal.split(separator, 1)[0] for separator in (':', ';') if separator in literal)
+    stale = [message for message in documented if message not in names]
     assert not stale, f'documented but no longer emitted: {stale}'
 
 
