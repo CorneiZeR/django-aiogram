@@ -357,7 +357,11 @@ def test_every_published_healthcheck_carries_the_settings_module(page_name):
         encoding='utf-8'
     )
 
-    blocks = [block for block in page.split('```') if 'django_redis_aiogram.healthcheck' in block]
+    # odd indices only: `split` alternates prose, fenced block, prose — so taking every
+    # segment made a paragraph that merely *names* the module into a "block" that then had
+    # to contain a settings assignment. This page has exactly such a paragraph
+    fenced = page.split('```')[1::2]
+    blocks = [block for block in fenced if 'django_redis_aiogram.healthcheck' in block]
     assert blocks, f'{page_name} publishes no healthcheck recipe any more'
     for block in blocks:
         # an assignment with a value, not the name anywhere in the block: the prose that

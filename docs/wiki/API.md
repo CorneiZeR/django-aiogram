@@ -55,6 +55,9 @@ feeding the dispatcher, reusing the connection — and that keeps working;
 
 `send`, `send_redis` and `send_raw` return a **correlation id** — a `uuid.UUID`
 that ties every row about that message together, whichever process wrote it.
+It is not one per message and not an idempotency key: a handler's replies inherit
+the id of the update that caused them, so one id can cover several messages.
+Deduplicate on a key your own domain owns.
 `send_many` returns one per chat, in the order the chats were given. Store it
 beside your own model if you want to join your records to the feed later. Each of
 them also accepts one as a keyword argument, and a handler replying to an update

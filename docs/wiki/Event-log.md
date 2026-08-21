@@ -54,7 +54,7 @@ gives you `sent` rows with no `queued` rows to match. That is not a bug.
 | `outbound.sent` | Telegram accepted it |
 | `outbound.retried` | Telegram refused it with a rate limit; backing off |
 | `outbound.failed` | the call raised |
-| `outbound.dropped` | it never got sent: queueing refused it, retries were exhausted, or shutdown canceled it. `detail.stage` says which |
+| `outbound.dropped` | it had not completed when the row was written: serialising failed, queueing refused it, retries were exhausted, or shutdown canceled it. `detail.stage` says which. Not the same as *never sent* — a queueing error can follow a write that landed, and a cancellation can land after Telegram took the request |
 | `inbound.received` | an update arrived, by polling or webhook |
 | `inbound.handled` | the handlers finished |
 | `inbound.failed` | a handler raised |

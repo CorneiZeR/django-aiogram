@@ -103,7 +103,9 @@ class Command(BaseCommand):
         # until the loop picks up this callback keeps the loop single-threaded.
         # Webhook mode used to start it directly because nothing ran the loop
         # there — something does now, which is what this change is about.
-        # and refused once the shutdown starts. close() runs one turn of the loop
+        #
+        # Started through a callback on the loop, so it cannot begin before the loop is
+        # turning, and refused once the shutdown starts. close() runs one turn of the loop
         # on purpose, so a callback still queued when we reach the finally would
         # start the consumer *after* stop() and after the joins — a thread nobody
         # waits for, doing Redis work, whose first act is reclaim()

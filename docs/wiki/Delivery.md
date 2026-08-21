@@ -46,8 +46,11 @@ in **[[Rate-limits|Rate limits]]** bind long before the consumer does.
 
 On Redis 6.2+ a message is moved to `<queue>:processing` while it is being
 sent and removed once the send has actually finished. A worker killed mid-send
-leaves it there, and the next start reclaims it — delivery is **at-least-once**,
-so a crash can cause a duplicate send.
+leaves it there, and the next start reclaims it **if it resolves the same worker
+name** — the list is keyed on that name, so a replacement container with a fresh
+hostname strands it instead, which is what `I001` reports and what
+`manage.py tgbot_reclaim` is the way back from. With a stable name, delivery is
+**at-least-once**, so a crash can cause a duplicate send.
 
 Before 3.1.0 it was removed when the *handler returned*, and `send_raw` returns
 as soon as the coroutine is scheduled. In polling mode that meant the message

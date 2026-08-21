@@ -70,9 +70,21 @@ def defers_completion(handler: Handler) -> bool:
     ``TypeError``, and that lands in the handler-failed branch — acknowledging a
     message nothing ever sent.
     """
+    return accepts_keyword(handler, 'on_complete')
+
+
+def accepts_keyword(handler: Handler, name: str) -> bool:
+    """Whether ``handler`` has a parameter of that name a keyword call can reach.
+
+    Asked once per callback rather than for the pair together: a handler written to the
+    documented recipe takes ``on_complete`` and nothing else, and handing it
+    ``on_refused`` would be an unexpected keyword — a ``TypeError`` landing in the
+    handler-failed branch, acknowledging a message nothing sent. ``send_raw`` takes both,
+    so the consumer's real handler gets both.
+    """
     takes_keyword = (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
     try:
-        parameter = inspect.signature(handler).parameters.get('on_complete')
+        parameter = inspect.signature(handler).parameters.get(name)
     except (TypeError, ValueError):
         # a callable signature cannot always be read; the old semantics are safe
         return False
@@ -88,14 +100,18 @@ class Delivery(ABC):
         self._stop = threading.Event()
         self._reliable = True
         self._beat_at = 0.0
-        #: messages whose send has finished and which may now leave the in-flight
-        #: list. Filled from the bot's event loop, drained on this thread, because
-        #: every Redis call in this class belongs to the consumer
-        self._finished: queue.SimpleQueue[bytes | str] = queue.SimpleQueue()
+        #: messages whose send is over, and whether each may leave the in-flight list.
+        #: `(handle, True)` is a finished send and gets acknowledged; `(handle, False)` is
+        #: one the producer refused outright, which releases the slot and leaves the
+        #: message for a redelivery. Filled from the bot's event loop, drained on this
+        #: thread, because every Redis call in this class belongs to the consumer
+        self._finished: queue.SimpleQueue[tuple[bytes | str, bool]] = queue.SimpleQueue()
         self._in_flight = 0
         # asked once: a handler that cannot take the callback is acknowledged the
         # moment it returns, which is the behavior every existing caller has
         self._defers = defers_completion(handler)
+        # asked separately: a handler may take the completion callback and not its pair
+        self._releases = accepts_keyword(handler, 'on_refused')
 
     @property
     def crash_safe(self) -> bool:
@@ -223,11 +239,33 @@ class Delivery(ABC):
         """
         while True:
             try:
-                raw = self._finished.get_nowait()
+                raw, delivered = self._finished.get_nowait()
             except queue.Empty:
                 return
             self._in_flight -= 1
-            self.acknowledge(raw)
+            if delivered:
+                self.acknowledge(raw)
+
+    def _release_for(self, handle: bytes | str) -> Callable[[], None]:
+        """Give back the slot a refused send took, without acknowledging the message.
+
+        The slot has to come back — `_hand_over` took one before the handler ran — but
+        the message must **not** be acknowledged: nothing sent it, so leaving it in the
+        in-flight list is what lets the next start pick it up. Without this a refusal
+        held its slot for the life of the process, and under ``MAX_IN_FLIGHT`` the
+        consumer stopped taking messages entirely once enough had piled up.
+
+        Latched like its pair, and for the same reason: two reports would take another
+        message's place in the count.
+        """
+        latch = threading.Lock()
+
+        def once() -> None:
+            """Give the slot back, once."""
+            if latch.acquire(blocking=False):
+                self._finished.put((handle, False))
+
+        return once
 
     def _completion_for(self, handle: bytes | str) -> Callable[[], None]:
         """One report per message, however many times the send says it finished.
@@ -247,7 +285,7 @@ class Delivery(ABC):
             should reach the in-flight count.
             """
             if latch.acquire(blocking=False):
-                self._finished.put(handle)
+                self._finished.put((handle, True))
 
         return once
 
@@ -273,11 +311,12 @@ class Delivery(ABC):
         while self.at_capacity() and not self._stop.is_set():
             self.heartbeat()
             try:
-                raw = self._finished.get(timeout=1)
+                raw, delivered = self._finished.get(timeout=1)
             except queue.Empty:
                 continue
             self._in_flight -= 1
-            self.acknowledge(raw)
+            if delivered:
+                self.acknowledge(raw)
 
     def acknowledge(self, raw: bytes | str) -> None:
         """Drop a delivered message from the processing list."""
@@ -407,6 +446,9 @@ class Delivery(ABC):
             # values", a TypeError landing in the failure branch below, which
             # acknowledges a message nothing sent. Assigning simply wins
             call['on_complete'] = self._completion_for(handle)
+            if self._releases:
+                # its pair, so a producer that refuses the send gives the slot back
+                call['on_refused'] = self._release_for(handle)
             self._in_flight += 1
         try:
             self.handler(**call)

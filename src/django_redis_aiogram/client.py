@@ -860,6 +860,7 @@ class TelegramBot:
         correlation_id: uuid.UUID | str | None = None,
         queued_at: float = 0.0,
         on_complete: Callable[[], None] | None = None,
+        on_refused: Callable[[], None] | None = None,
         **kwargs: Any,
     ) -> uuid.UUID:
         """Call an aiogram bot method, retrying on Telegram rate limits.
@@ -874,6 +875,13 @@ class TelegramBot:
         can acknowledge the message then rather than now: this method returns as
         soon as the coroutine is *scheduled*, which is long before Telegram has
         seen anything.
+
+        ``on_refused`` is its pair, for exactly the cases ``on_complete`` skips: called
+        when this method refuses the send outright, so a caller holding a slot for the
+        message can take the slot back **without** acknowledging it. The consumer passes
+        both; nothing else needs to. Without it a refusal held its slot for the life of
+        the process, and under ``MAX_IN_FLIGHT`` that stops the consumer taking messages
+        at all.
         """
         check_function(function)
         identifier = resolve_correlation_id(correlation_id)
@@ -968,7 +976,7 @@ class TelegramBot:
 
         call_kwargs = {**conf['DEFAULT_KWARGS'](function), **kwargs}
         outbound = Outbound(identifier, function, call_kwargs)
-        self._schedule(send(), outbound, on_complete)
+        self._schedule(send(), outbound, on_complete, on_refused)
         return identifier
 
     @staticmethod
@@ -1034,6 +1042,7 @@ class TelegramBot:
         coroutine: Coroutine[Any, Any, None],
         outbound: 'Outbound',
         on_complete: Callable[[], None] | None = None,
+        on_refused: Callable[[], None] | None = None,
     ) -> None:
         """Run a coroutine on the bot loop from whichever thread we are on.
 
@@ -1049,6 +1058,9 @@ class TelegramBot:
             coroutine.close()
             self._record_drop(outbound, 'the bot is shutting down')
             logger.error('send refused: the bot is shutting down')
+            # the slot back, not the acknowledgement: the message was not sent, so it
+            # stays in flight for a redelivery, but the consumer must stop counting it
+            _settle(on_refused)
             return
 
         try:
@@ -1082,12 +1094,13 @@ class TelegramBot:
                 coroutine.close()
                 self._record_drop(outbound, 'the event loop was closed')
                 logger.error('send refused: the event loop was closed')
+                _settle(on_refused)
                 return
             if loop.is_running():
                 # decided under the lock: seen from outside it, a loop another
                 # thread drives for one run_until_complete looks running right
                 # up to the moment it stops, and the handoff would be lost
-                self._hand_off(coroutine, loop, outbound, on_complete)
+                self._hand_off(coroutine, loop, outbound, on_complete, on_refused)
                 return
             with self._build_guard:
                 # guard inside the lock, the order that already exists here
@@ -1099,7 +1112,7 @@ class TelegramBot:
                 # `_runner_ready` on the way, because this call ran the `call_soon` the
                 # dead thread had queued. `feed_update` consults `owned` for exactly
                 # this; nothing here did
-                self._hand_off(coroutine, loop, outbound, on_complete)
+                self._hand_off(coroutine, loop, outbound, on_complete, on_refused)
                 return
             try:
                 loop.run_until_complete(coroutine)
@@ -1107,7 +1120,7 @@ class TelegramBot:
                 # polling started between the check above and this call
                 if not loop.is_running():
                     raise
-                self._hand_off(coroutine, loop, outbound, on_complete)
+                self._hand_off(coroutine, loop, outbound, on_complete, on_refused)
                 return
             # only a return settles. Cancellation is not completion — the same
             # rule the task path follows — and a failure RAISE_EXCEPTION let
@@ -1126,6 +1139,7 @@ class TelegramBot:
         loop: AbstractEventLoop,
         outbound: 'Outbound',
         on_complete: Callable[[], None] | None = None,
+        on_refused: Callable[[], None] | None = None,
     ) -> None:
         """Create the task on the loop thread, so it is registered before it runs."""
 
@@ -1144,6 +1158,8 @@ class TelegramBot:
                 coroutine.close()
                 self._record_drop(outbound, 'the bot started shutting down')
                 logger.error('send dropped: the bot started shutting down')
+                # the slot back, not the acknowledgement — as in `_schedule`'s refusals
+                _settle(on_refused)
                 return
             self._register(self._start(coroutine, loop, outbound), outbound, on_complete)
 

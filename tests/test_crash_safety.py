@@ -451,6 +451,23 @@ class Deferring(BlpopDelivery):
         self.finish.append(on_complete)
 
 
+class Refusing(BlpopDelivery):
+    """A handler that takes both callbacks and refuses every send, as `send_raw` can.
+
+    `_schedule` has three refusal paths — closing, a closed loop, and a hand-off that
+    lands after `close()` began — and none of them calls `on_complete`, by contract.
+    """
+
+    def __init__(self):
+        self.handled = []
+        super().__init__(handler=self._handle)
+
+    def _handle(self, on_complete=None, on_refused=None, **kwargs):
+        self.handled.append(kwargs)
+        if on_refused is not None:
+            on_refused()
+
+
 @override_settings(TELEGRAM_BOT=SETTINGS)
 def test_a_message_stays_in_flight_until_its_send_finishes(redis_server):
     """The whole at-least-once promise.
@@ -838,6 +855,29 @@ def test_a_callback_called_twice_counts_once(redis_server):
 
     assert delivery.handled, 'the handler never ran'
     assert delivery._in_flight == 0, f'the in-flight count drifted to {delivery._in_flight}'
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'MAX_IN_FLIGHT': 2})
+def test_a_refused_send_gives_its_slot_back(redis_server):
+    """A refusal is not a completion, and it is not a leak either.
+
+    `_hand_over` takes a slot before the handler runs, and `send_raw`'s three refusal
+    paths do not call `on_complete` — by contract, because the message was not sent and
+    must stay in flight. So the slot was never returned: under `MAX_IN_FLIGHT` a handful
+    of refusals stopped the consumer taking messages at all, until `stop()`.
+
+    Four messages against a limit of two: with the slot returned every one is handled and
+    none is acknowledged; without it the second pair never gets taken.
+    """
+    for chat_id in (1, 2, 3, 4):
+        redis_server.rpush(QUEUE, payload(chat_id))
+    delivery = Refusing()
+
+    delivery.consume_pending()
+
+    assert len(delivery.handled) == 4, f'the bound never reopened: {len(delivery.handled)} of 4 taken'
+    assert delivery._in_flight == 0, f'the in-flight count drifted to {delivery._in_flight}'
+    assert redis_server.llen(PROCESSING) == 4, 'a refused send was acknowledged'
 
 
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'MAX_IN_FLIGHT': 1})

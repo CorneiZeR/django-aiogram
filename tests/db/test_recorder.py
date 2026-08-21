@@ -765,7 +765,11 @@ def test_events_left_by_a_dying_writer_are_written_not_lost(monkeypatch):
     monkeypatch.setattr(EventRecorder, '_collect', die)
     recorder = EventRecorder()
     recorder.record(an_event(chat_id=11))
+    # `_collect` raises on the writer's first turn, and `_run`'s finally clears the slot —
+    # so this read can come back `None` and fail with an `AttributeError` instead of the
+    # assertion the test is about
     writer = recorder._thread
+    assert writer is not None, 'the writer had already gone; the test cannot see its exit'
 
     writer.join(timeout=5)
 

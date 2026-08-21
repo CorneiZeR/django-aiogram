@@ -65,7 +65,9 @@ def test_the_loop_keeps_running_while_a_message_is_queued(redis_server, monkeypa
 
     asyncio.run(drive())
 
-    assert len(ticks) > 1, f'the loop did not advance while the write was in flight: {len(ticks)} turns'
+    # not `> 1`: any `await` inside the write yields twice on its own, so the old bound
+    # held even when the write blocked the loop. 50 ms of `sleep(0)` turns is thousands
+    assert len(ticks) > 100, f'the loop did not advance while the write was in flight: {len(ticks)} turns'
     assert redis_server.llen(QUEUE) == 1
 
 

@@ -11,6 +11,14 @@ them, so it is not one per message.
 
 ### Fixed
 
+- **A refused send gives its in-flight slot back.** `MAX_IN_FLIGHT` bounds how many
+  sends a consumer holds, and `send_raw` takes a slot before the send is scheduled —
+  but its three refusal paths deliberately do not report completion, because the
+  message was not sent and must stay in flight for a redelivery. So the slot was never
+  returned: a handful of refusals during a shutdown, and the consumer stopped taking
+  messages at all until it was restarted. `send_raw` takes an `on_refused` callback
+  beside `on_complete` now, and the consumer passes both — the slot comes back, the
+  message does not get acknowledged.
 - **A replacement writer no longer strands the one it replaced.** `stop()` detaches
   the old queue and sets the stop flag; a `record()` landing next starts a
   replacement, and starting one *clears* that flag. The old writer then found an empty
