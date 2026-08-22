@@ -1,0 +1,104 @@
+"""Which transport this process uses, decided once and never guessed.
+
+The dotted path is read from ``BROKER``. Nothing is inferred from what happens to be
+installed: two drivers present would make the choice ambiguous, and one present would make
+a typo in the setting look like a working configuration.
+"""
+
+import threading
+from typing import TYPE_CHECKING
+
+from django.core.signals import setting_changed
+from django.dispatch import receiver
+from django.utils.module_loading import import_string
+
+from django_aiogram.broker.base import Broker
+from django_aiogram.broker.exceptions import BrokerDependencyError, BrokerNotConfiguredError
+from django_aiogram.settings import SETTINGS_NAME, conf
+
+if TYPE_CHECKING:
+    from typing import Any
+
+__all__ = ('SHIPPED', 'broker_class', 'close_broker', 'get_broker')
+
+#: what each shipped broker needs, keyed by dotted path — readable *without* importing the
+#: module, so a check can name the missing extra even where the import would fail
+SHIPPED: dict[str, tuple[str, str]] = {
+    'django_aiogram.broker.redis_list.RedisListBroker': ('redis', 'redis'),
+}
+
+_lock = threading.Lock()
+_broker: Broker | None = None
+
+
+def broker_class() -> type[Broker]:
+    """Resolve ``BROKER`` to a class, and refuse anything that is not one.
+
+    Separate from :func:`get_broker` because the checks want the class and its declared
+    requirement without building a connection, and a check must never be the thing that
+    opens a socket.
+    """
+    path = str(conf['BROKER'] or '').strip()
+    if not path:
+        msg = f"{SETTINGS_NAME}['BROKER'] is empty, so no transport is chosen."
+        raise BrokerNotConfiguredError(msg)
+    if path in SHIPPED:
+        # verified before the import, because a shipped broker imports its driver lazily
+        # but a *missing* driver should still be named rather than discovered by traceback
+        module, extra = SHIPPED[path]
+        _require(path, module, extra)
+    try:
+        resolved = import_string(path)
+    except ImportError as error:
+        msg = f"{SETTINGS_NAME}['BROKER'] is {path!r}, which cannot be imported: {error}"
+        raise BrokerNotConfiguredError(msg) from error
+    if not (isinstance(resolved, type) and issubclass(resolved, Broker)):
+        msg = f"{SETTINGS_NAME}['BROKER'] is {path!r}, which is not a Broker subclass."
+        raise BrokerNotConfiguredError(msg)
+    return resolved
+
+
+def _require(path: str, module: str, extra: str) -> None:
+    """Raise the install line for a shipped broker whose driver is absent."""
+    import importlib.util  # noqa: PLC0415 - only when a broker is being resolved
+
+    if importlib.util.find_spec(module) is None:
+        raise BrokerDependencyError(path.rsplit('.', 1)[-1], module, extra)
+
+
+def get_broker() -> Broker:
+    """Return the one broker this process uses, building it on the first ask.
+
+    Cached like the Redis client was, and for the same reason: a transport holds a
+    connection, and building one per send is what the 3.x accessor existed to avoid.
+    """
+    global _broker  # noqa: PLW0603 - one per process, like the connection it holds
+    if _broker is not None:
+        return _broker
+    with _lock:
+        if _broker is None:
+            cls = broker_class()
+            cls.verify()
+            _broker = cls()
+    return _broker
+
+
+def close_broker() -> None:
+    """Drop the cached broker, closing it first. Safe to call when there is none."""
+    global _broker
+    with _lock:
+        current, _broker = _broker, None
+    if current is not None:
+        current.close()
+
+
+@receiver(setting_changed)
+def _forget_the_broker(**kwargs: 'Any') -> None:
+    """Rebuild on the next ask when the settings change, as the client does.
+
+    Only for this app's own setting: every ``override_settings`` in a project's test suite
+    fires this, and closing a connection because an unrelated setting moved is a cost
+    nobody asked for.
+    """
+    if kwargs.get('setting') == SETTINGS_NAME:
+        close_broker()
