@@ -12,7 +12,7 @@ correctly, short enough to sit in a system prompt or a `CLAUDE.md` /
 `AGENTS.md` / `.cursor/rules` file:
 
 ```text
-Project uses django-aiogram 3.x. Rules:
+Project uses django-aiogram 4.x. Rules:
 
 - Import the shared instance: `from django_aiogram import bot`. Never
   construct TelegramBot() per task or per request — that builds an event loop and
@@ -103,10 +103,11 @@ so message bodies stay out of the table, and grant support only
 `view_telegramevent`."* See **[[Event-log|Event log]]**.
 
 **Migrate an older project.** *"This project imports `telegram_bot`, which
-django-aiogram 3.0 removed. Move it to `django_aiogram` 3.x
-following the wiki's Upgrading page: rename it in `INSTALLED_APPS`, replace the
-imports, move `parse_mode` into `DEFAULT_BOT_PROPERTIES`, drop the placeholder
-token from settings, and use `bot.router` instead of `bot._router`."* See
+`django-redis-aiogram` 3.0 removed, and that distribution is now `django-aiogram`.
+Move it to `django_aiogram` 4.x following the wiki's Upgrading page, newest section
+first: rename it in `INSTALLED_APPS`, replace the imports with the 4.0 layout, move
+`parse_mode` into `DEFAULT_BOT_PROPERTIES`, drop the placeholder token from settings,
+and use `bot.router` instead of `bot._router`."* See
 **[[Upgrading]]**.
 
 **Debug delivery.** *"Messages are queued but never arrive. Check in this order:
