@@ -16,15 +16,8 @@ from redis.exceptions import ResponseError
 
 from django_aiogram.broker.base import Broker
 from django_aiogram.broker.models import Liveness, Taken
-from django_aiogram.redis import (
-    aget_redis,
-    as_bytes,
-    get_redis,
-    heartbeat_key,
-    heartbeat_ttl,
-    processing_key,
-    queue_key,
-)
+from django_aiogram.eventlog.events import worker_identity
+from django_aiogram.redis import aget_redis, as_bytes, get_redis, heartbeat_key, heartbeat_ttl
 
 logger = logging.getLogger('django_aiogram')
 
@@ -40,6 +33,24 @@ class RedisListBroker(Broker):
         'BLPOP_TIMEOUT': 5,
     }
 
+    def _queue(self) -> str:
+        """Name the list this broker writes to and reads from, from its own declared option.
+
+        Through :meth:`option` rather than the package-wide settings, because the key belongs
+        to this transport: a stream has a name and a group, a topic has partitions, and none
+        of them is a Redis list key. Each broker declares what it needs and reads it here.
+        """
+        return str(self.option('REDIS_MESSAGES_KEY'))
+
+    def _inflight(self, worker: str | None = None) -> str:
+        """Where one worker keeps what it is sending, derived from the queue's own name.
+
+        Per worker, so a restarting one reclaims only its own — a shared list would let a
+        starting worker pull a message out from under another still sending it. Takes a name
+        so `tgbot_reclaim` can address a worker that is gone.
+        """
+        return f'{self._queue()}:processing:{worker or worker_identity()}'
+
     def __init__(self) -> None:
         """Assume crash safety until a server proves it does not have ``LMOVE``."""
         # discovered rather than configured: the first `LMOVE` against a pre-6.2 server
@@ -50,12 +61,12 @@ class RedisListBroker(Broker):
 
     def publish(self, payloads: Sequence[bytes]) -> None:
         """One variadic ``RPUSH``, so a chunk is one round trip."""
-        get_redis().rpush(queue_key(), *payloads)
+        get_redis().rpush(self._queue(), *payloads)
 
     async def apublish(self, payloads: Sequence[bytes]) -> None:
         """Queue the same write, on the loop the caller is already on."""
         client = await aget_redis()
-        await client.rpush(queue_key(), *payloads)
+        await client.rpush(self._queue(), *payloads)
 
     # ------------------------------------------------------------------ consumer
 
@@ -69,9 +80,9 @@ class RedisListBroker(Broker):
         waiting = max(1, math.ceil(timeout))
         connection = get_redis()
         if self._reliable:
-            raw = connection.blmove(queue_key(), processing_key(), waiting, 'LEFT', 'RIGHT')
+            raw = connection.blmove(self._queue(), self._inflight(), waiting, 'LEFT', 'RIGHT')
         else:
-            item = connection.blpop([queue_key()], timeout=waiting)
+            item = connection.blpop([self._queue()], timeout=waiting)
             raw = None if item is None else item[1]
         return None if raw is None else Taken(as_bytes(raw), raw)
 
@@ -81,7 +92,7 @@ class RedisListBroker(Broker):
         raw: bytes | str | None
         if self._reliable:
             try:
-                raw = connection.lmove(queue_key(), processing_key(), 'LEFT', 'RIGHT')
+                raw = connection.lmove(self._queue(), self._inflight(), 'LEFT', 'RIGHT')
             except ResponseError as error:
                 # a caller draining by hand never ran `reclaim`, so this is where it can
                 # first meet a server without LMOVE; without the downgrade the raw error
@@ -91,7 +102,7 @@ class RedisListBroker(Broker):
                 return self.take_nowait()
         else:
             # lpop only widens to a list when given a count
-            raw = connection.lpop(queue_key())  # type: ignore[assignment]
+            raw = connection.lpop(self._queue())  # type: ignore[assignment]
         return None if raw is None else Taken(as_bytes(raw), raw)
 
     def ack(self, handle: object) -> None:
@@ -111,10 +122,10 @@ class RedisListBroker(Broker):
         try:
             # redis-py's stubs say str, but bytes round-trip identically
             # redis-py's stubs say str, but bytes round-trip identically
-            get_redis().lrem(processing_key(), 1, handle)  # type: ignore[arg-type]
+            get_redis().lrem(self._inflight(), 1, handle)  # type: ignore[arg-type]
         except Exception:
             # worst case the message is redelivered on the next start
-            logger.exception('failed to acknowledge a delivered message', extra={'tg_key': processing_key()})
+            logger.exception('failed to acknowledge a delivered message', extra={'tg_key': self._inflight()})
 
     def release(self, handle: object) -> None:
         """Nothing, and that is the whole implementation.
@@ -141,7 +152,7 @@ class RedisListBroker(Broker):
         count = 0
         try:
             # RIGHT->LEFT keeps the original order at the front of the queue
-            while connection.lmove(processing_key(), queue_key(), 'RIGHT', 'LEFT'):
+            while connection.lmove(self._inflight(), self._queue(), 'RIGHT', 'LEFT'):
                 count += 1
         except ResponseError as error:
             # WRONGTYPE, NOPERM and friends say nothing about LMOVE support
@@ -152,11 +163,11 @@ class RedisListBroker(Broker):
 
     def depth(self) -> int:
         """One ``LLEN`` on the queue."""
-        return int(get_redis().llen(queue_key()) or 0)
+        return int(get_redis().llen(self._queue()) or 0)
 
     def inflight_depth(self) -> int:
         """One ``LLEN`` on this worker's in-flight list."""
-        return int(get_redis().llen(processing_key()) or 0)
+        return int(get_redis().llen(self._inflight()) or 0)
 
     def alive(self) -> None:
         """Write the key the healthcheck reads, with a TTL a stalled loop cannot renew."""
@@ -192,6 +203,6 @@ class RedisListBroker(Broker):
             logger.warning(
                 'crash-safe delivery unavailable: this Redis predates LMOVE (6.2); '
                 'a worker killed mid-send may lose that one message',
-                extra={'tg_key': queue_key()},
+                extra={'tg_key': self._queue()},
             )
         return True

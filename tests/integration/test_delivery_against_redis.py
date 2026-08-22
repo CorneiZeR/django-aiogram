@@ -16,6 +16,7 @@ from redis import Redis
 from redis.exceptions import ResponseError
 
 from django_aiogram import TelegramBot
+from django_aiogram.broker.redis_list import RedisListBroker
 from django_aiogram.consumer.delivery import BlpopDelivery
 from django_aiogram.wire.serializers import JsonSerializer, PickleSerializer
 
@@ -77,7 +78,7 @@ def test_the_server_supports_the_crash_safe_path(server, redis_url, version):
     with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url}):
         delivery = Recording()
         assert delivery.reclaim() is True
-        assert delivery._reliable is True, 'the consumer downgraded on a server that has LMOVE'
+        assert delivery.crash_safe is True, 'the consumer downgraded on a server that has LMOVE'
 
 
 def test_a_message_left_in_flight_is_reclaimed(server, redis_url):
@@ -127,14 +128,29 @@ def test_two_workers_split_the_queue_without_duplicating(server, redis_url):
     documenting.
     """
 
-    class Named(Recording):
+    class NamedBroker(RedisListBroker):
+        """A broker whose in-flight list carries a name the test chose."""
+
         def __init__(self, name):
+            """Keep the name this instance answers with."""
             self._name = name
             super().__init__()
 
-        @property
-        def processing_key(self):
-            return f'{self.queue_key}:processing:{self._name}'
+        def _inflight(self, worker=None):
+            """Answer with that name rather than the worker identity.
+
+            The keys belong to the transport in 4.0, so this is where two consumers on one
+            queue are told apart — the 3.x version overrode a `Delivery` property.
+            """
+            return f'{self._queue()}:processing:{self._name}'
+
+    class Named(Recording):
+        """A consumer whose broker keeps a list of its own."""
+
+        def __init__(self, name):
+            """Swap in a broker that names its in-flight list after `name`."""
+            super().__init__()
+            self.broker = NamedBroker(name)
 
     with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url}):
         for chat_id in range(20):

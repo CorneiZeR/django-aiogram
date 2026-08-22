@@ -18,6 +18,10 @@ DEFAULTS: dict[str, Any] = {
     'MODULE_NAME': 'tg_router',
     # blpop; the keyspace consumer 1.x used was removed in 3.0
     'DELIVERY': 'blpop',
+    # which transport carries messages, by dotted path and never by looking at what happens
+    # to be installed. Defaulted to the Redis list so a 3.x project changes its imports and
+    # nothing else; a project on another transport names it here and installs that extra
+    'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker',
     # either json or pickle, json recommended
     'SERIALIZER': 'json',
     # the escape hatch for payloads JSON cannot describe. Off by default because

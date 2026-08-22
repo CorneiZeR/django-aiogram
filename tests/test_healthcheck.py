@@ -80,7 +80,7 @@ def test_a_redis_that_refuses_the_write_does_not_stop_the_loop(redis_server, cap
 
     delivery = BlpopDelivery(handler=lambda **kwargs: None)
     with pytest.MonkeyPatch.context() as patch, caplog.at_level('ERROR'):
-        patch.setattr('django_aiogram.consumer.delivery.get_redis', Refuses)
+        patch.setattr('django_aiogram.broker.redis_list.broker.get_redis', Refuses)
         delivery.heartbeat()  # must not raise
 
     assert 'could not write the heartbeat' in caplog.text
@@ -182,7 +182,7 @@ def test_a_long_blocking_read_cannot_outlast_the_heartbeat(redis_server, monkeyp
         def __getattr__(self, name):
             return getattr(redis_server, name)
 
-    monkeypatch.setattr('django_aiogram.consumer.delivery.get_redis', Spy)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', Spy)
     delivery = BlpopDelivery(handler=lambda **kwargs: None)
     thread = delivery.start_thread()
     try:

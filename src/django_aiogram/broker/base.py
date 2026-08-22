@@ -16,10 +16,29 @@ from collections.abc import Mapping
 from collections.abc import Sequence as Seq
 from typing import Any, ClassVar
 
+from django.core.exceptions import ImproperlyConfigured
+
 from django_aiogram.broker.exceptions import BrokerDependencyError
 from django_aiogram.broker.models import Liveness, Taken
+from django_aiogram.config.settings import SETTINGS_NAME, conf
 
-__all__ = ('Broker',)
+__all__ = ('REQUIRED', 'Broker')
+
+
+class _Required:
+    """A default that says there is none: this option has to be configured.
+
+    A sentinel rather than ``None``, because ``None`` is a legitimate default for an
+    optional setting and the two must not read the same to a check.
+    """
+
+    def __repr__(self) -> str:
+        """Show why a value is missing, wherever this leaks into a message."""
+        return 'REQUIRED'
+
+
+#: no default: the broker cannot run until the project sets it
+REQUIRED = _Required()
 
 
 class Broker(ABC):
@@ -34,11 +53,47 @@ class Broker(ABC):
     table per broker rather than one table of everything anyone might need.
     """
 
-    #: this broker's settings and their defaults, read by the checks and the docs
+    #: this broker's own settings: name to default, or :data:`REQUIRED` where there is no
+    #: sensible one. Read by :meth:`option`, by the checks, and by the settings table for
+    #: this broker — which is why the keys live here and not in the package-wide defaults:
+    #: `REDIS_MESSAGES_KEY` means nothing to Kafka, and a topic means nothing to a list.
     OPTIONS: ClassVar[Mapping[str, Any]] = {}
 
     #: importable module name, and the extra that installs it. Empty means no driver.
     REQUIRES: ClassVar[tuple[str, str] | None] = None
+
+    def option(self, key: str) -> object:
+        """Read one of this broker's own settings, with its own default.
+
+        Returns ``object``, so the caller narrows: a setting can arrive from the environment
+        as a string whatever its declared default, and the existing code already writes
+        ``int(...)`` and ``str(...)`` at the point of use for exactly that reason.
+
+        Not through the package-wide defaults, because a key that belongs to one transport
+        is noise in every other one's namespace. The broker declares what it needs, reads it
+        here, and a project that names this broker configures exactly those keys.
+
+        Raises when a :data:`REQUIRED` option is unset, naming the broker and the key —
+        a check calls this at startup so the failure is a report rather than a traceback
+        from the first send.
+        """
+        if key not in self.OPTIONS:
+            msg = f'{type(self).__name__} declares no option {key!r}'
+            raise KeyError(msg)
+        default = self.OPTIONS[key]
+        value = conf.get(key, None if default is REQUIRED else default)
+        if default is REQUIRED and (value is None or (isinstance(value, str) and not value.strip())):
+            msg = (
+                f"{type(self).__name__} needs {SETTINGS_NAME}['{key}'], which is not set. "
+                'It has no default: this transport cannot say where to put a message without it.'
+            )
+            raise ImproperlyConfigured(msg)
+        return value
+
+    @classmethod
+    def required(cls) -> tuple[str, ...]:
+        """Which of this broker's options a project has to set. Used by the checks."""
+        return tuple(key for key, default in cls.OPTIONS.items() if default is REQUIRED)
 
     @classmethod
     def verify(cls) -> None:
