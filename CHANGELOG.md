@@ -16,6 +16,30 @@ Entries land here as the work does; nothing below is released.
   `django_aiogram`, check ids read `django_aiogram.EXXX`, and the event log's table is
   `django_aiogram_event`. `TELEGRAM_BOT` stays as the settings key: it names what it
   configures rather than the package that reads it.
+- **`src/` groups by what a thing is for**, so several import paths moved. The root keeps
+  what cannot move — Django's `apps`, `models`, `admin` and `migrations`, and
+  `python -m django_aiogram.healthcheck`, which a compose file runs — together with the
+  five modules every cluster needs and none of them owns: `api`, `exceptions`, `context`,
+  `_singleton` and `redis`. Everything else lives in `config/`, `producer/`, `consumer/`,
+  `wire/`, `eventlog/` or `broker/`.
+
+  Two moved paths are ones a project wrote down itself. `DATABASE_ROUTERS` becomes
+  `django_aiogram.eventlog.dbrouter.TelegramEventLogRouter`, and the webhook view in your
+  `urls.py` becomes `django_aiogram.consumer.webhook.telegram_webhook`. `DELIVERY` and
+  `SERIALIZER` are unaffected — they hold short names, not paths.
+
+  | was | is |
+  | --- | --- |
+  | `django_aiogram.settings`, `defaults`, `enums`, `checks` | `django_aiogram.config.*` |
+  | `django_aiogram.client`, `throttling` | `django_aiogram.producer.*` |
+  | `django_aiogram.delivery`, `webhook`, `routers` | `django_aiogram.consumer.*` |
+  | `django_aiogram.serializers`, `envelope`, `payloads` | `django_aiogram.wire.*` |
+  | `django_aiogram.recorder`, `events`, `instrumentation`, `signals`, `dbrouter` | `django_aiogram.eventlog.*` |
+  | `django_aiogram.eventlog` | `django_aiogram.eventlog.writer` |
+
+  The settings package is `config` and not `conf` for one reason worth writing down:
+  `django_aiogram.conf` is the settings *object*, public since 2.x, and a subpackage at
+  that path would shadow it.
 
 ## 3.1.0 - 2026-08-22
 

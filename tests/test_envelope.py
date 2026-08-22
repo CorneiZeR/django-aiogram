@@ -10,7 +10,8 @@ import uuid
 import pytest
 
 from django_aiogram.context import correlation_scope, current_correlation_id
-from django_aiogram.envelope import (
+from django_aiogram.eventlog.events import new_correlation_id
+from django_aiogram.wire.envelope import (
     ENVELOPE_KEY,
     ENVELOPE_VERSION,
     MalformedEnvelopeError,
@@ -18,8 +19,7 @@ from django_aiogram.envelope import (
     pack,
     unpack,
 )
-from django_aiogram.events import new_correlation_id
-from django_aiogram.serializers import JsonSerializer, PickleSerializer
+from django_aiogram.wire.serializers import JsonSerializer, PickleSerializer
 
 
 def test_an_envelope_round_trips():

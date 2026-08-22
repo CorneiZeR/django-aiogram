@@ -14,28 +14,39 @@ onto a Redis list, and the bot container consumes it.
 src/django_aiogram/
     __init__.py     lazy exports: bot, conf, redis_conn, get_redis, __version__
     apps.py         AppConfig.ready(): checks and autodiscover, both behind ENABLED
-    client.py       TelegramBot: bot/dispatcher/loop, send, send_raw, send_redis
-    api.py          the allowlist of Telegram API method names a payload may use
-    delivery.py     BlpopDelivery, the one consumer
-    serializers.py  tagged JSON, and pickle behind ALLOW_PICKLE
-    throttling.py   token buckets, one budget per token
-    checks.py       system checks E001-E046, W001-W009, I001-I002
-    settings.py     lazy settings with an environment fallback
-    redis.py        lazy connection
-    healthcheck.py  the container probe; must import nothing needing the app registry
-    routers.py      autodiscover
     models.py       TelegramEvent, the append-only feed; migrations/ beside it
-    events.py       the event-kind registry and the correlation id
-    recorder.py     the bounded queue and the writer thread; no django.db here
-    signals.py      events_recorded, the metrics seam; imports only django.dispatch
-    eventlog.py     the only module that touches the ORM
-    dbrouter.py     optional routing of the log to its own database
     admin.py        the read-only changelist; registered from ready(), not on import
-    instrumentation.py  the update middleware and the storage wrapper
-    envelope.py     what a queued payload looks like, both shapes
+    healthcheck.py  the container probe; must import nothing needing the app registry
+    api.py          the allowlist of Telegram API method names a payload may use
+    exceptions.py   one error family for the whole package
     context.py      the correlation id a handler's replies inherit
-    payloads.py     summarize, redact, cap — in that order, and never lossless
-docs/wiki/          the wiki, published from master
+    _singleton.py   once-per-process construction, under the import lock
+    redis.py        lazy connection
+    config/
+        settings.py     lazy settings with an environment fallback
+        defaults.py     the only place a default lives
+        enums.py        the values a setting accepts
+        checks.py       system checks E001-E046, W001-W009, I001-I002
+    broker/         one transport per package, and the contract they answer
+    producer/
+        client.py       TelegramBot: bot/dispatcher/loop, send, send_raw
+        throttling.py   GCRA reservations, one budget per name
+    consumer/
+        delivery.py     BlpopDelivery, the one consumer
+        webhook.py      the view an update arrives at
+        routers.py      autodiscover
+    wire/
+        serializers.py  tagged JSON, and pickle behind ALLOW_PICKLE
+        envelope.py     what a queued payload looks like, both shapes
+        payloads.py     summarize, redact, cap — in that order, and never lossless
+    eventlog/
+        recorder.py     the bounded queue and the writer thread; no django.db here
+        writer.py       the only module that touches the ORM
+        events.py       the event-kind registry and the correlation id
+        instrumentation.py  the update middleware and the storage wrapper
+        signals.py      events_recorded, the metrics seam; imports only django.dispatch
+        dbrouter.py     optional routing of the log to its own database
+docs/wiki/          the wiki, published from main
 tests/              pytest, fakeredis, no network
 ```
 
@@ -109,7 +120,10 @@ Packaging-only work does not need the Redis suite, and vice versa.
   every `django.setup()`, before `ready()` and regardless of `ENABLED`, and
   `admin.autodiscover` imports the other on every boot of a project with the
   admin installed — so a migration container pays for whatever either pulls.
-  `django.db.models` and `django_aiogram.enums`/`events` only — never
+  `models.py` takes `django.db.models` and `django_aiogram.eventlog.events`, and nothing
+  else. `admin.py` needs more — `config.settings`, `eventlog.events` and
+  `eventlog.writer` — because a changelist reads settings and knows which alias the rows
+  are on. Neither takes
   `client`, `serializers` or `api`. A subprocess test pins each:
   `tests/test_event_log_off.py` for the model, `tests/db/test_admin.py` for the
   admin.
@@ -117,11 +131,11 @@ Packaging-only work does not need the Redis suite, and vice versa.
   `python -m django_aiogram.healthcheck` can answer without `django.setup()`,
   which in one measured consumer cost 17.9s of `AppConfig.ready()` against 0.01s of
   probing — more than any Docker `timeout` the wiki could publish. So: no models, no
-  aiogram, no `django_aiogram.client`, and nothing that reaches them
+  aiogram, no `django_aiogram.producer.client`, and nothing that reaches them
   transitively. `tests/test_lazy_init.py` proves it with a settings module whose app
   writes a file from `ready()`, and asserts the file is absent — plus a control that
   the file appears under `django.setup()`, so its absence means something.
-- **`recorder.py` imports no `django.db`.** Only `eventlog.py` does, and the
+- **`recorder.py` imports no `django.db`.** Only `eventlog/writer.py` does, and the
   writer thread imports it on its first *write* — not its first flush, which since
   3.1.0 are different things. That is what makes a disabled log
   cost nothing and what makes `record()` legal from a coroutine — `put_nowait`
@@ -130,7 +144,7 @@ Packaging-only work does not need the Redis suite, and vice versa.
   also why it refuses to act inside a running loop, where the ORM is `@async_unsafe`. Since 3.1.0
   the writer also runs with the log *off*, for `events_recorded` receivers alone.
   Such a process writes no rows, so `EventRecorder._run` must not call
-  `_close_connections()` on its way out: that imports `eventlog.py`, which imports
+  `_close_connections()` on its way out: that imports `eventlog/writer.py`, which imports
   `django.db`, to close a connection nothing ever opened. It is gated on
   `_touched_database`, set only where a batch is actually handed to the ORM and
   **read and cleared when the writer stops** — the recorder is a process-wide
@@ -166,6 +180,55 @@ Packaging-only work does not need the Redis suite, and vice versa.
   `pyproject.toml` records as `"D", # test names are the documentation`.
 - Public API is annotated; the package ships `py.typed` and mypy runs on it.
 - No new runtime dependencies without a reason that survives being questioned.
+
+## Package layout
+
+`src/django_aiogram/` groups by what a thing *is for*, not by what it is made of.
+
+| package | what belongs in it |
+| --- | --- |
+| `config/` | what a project configures, and what refuses a bad value |
+| `broker/` | one transport per package; the contract they answer |
+| `producer/` | the send side: the bot, the producer, the pacing |
+| `consumer/` | the receive side: the queue consumer, the webhook view, router discovery |
+| `wire/` | how a message becomes bytes and comes back |
+| `eventlog/` | the optional table, the writer thread, the metrics seam |
+
+**The root keeps two kinds of thing**, and nothing else:
+
+- **What cannot move.** Django looks for `apps.py`, `models.py`, `admin.py` and
+  `migrations/` there — moving them costs an `app_label` on every model and a
+  `MIGRATION_MODULES` in every consuming project. And `python -m
+  django_aiogram.healthcheck` sits in a compose file, where nothing can rewrite it and no
+  check can see it.
+- **What every cluster needs and none of them owns**: `api.py`, `exceptions.py`,
+  `context.py`, `_singleton.py` and `redis.py`. A package for five small modules would
+  add a directory and answer no question — and putting a shared one *inside* a cluster
+  would make every other cluster import that cluster to reach it.
+
+Everything else moves, including paths a project wrote down. Two of those exist and are
+worth knowing by name, because neither is found by an import a test would notice:
+`DATABASE_ROUTERS` holds `django_aiogram.eventlog.dbrouter.TelegramEventLogRouter`, and a
+project's own `urls.py` names the webhook view. `FSM_STORAGE` takes a dotted path too, but
+to a class of the project's choosing rather than one of ours.
+
+`DELIVERY` and `SERIALIZER` are *not* in that list, however much they look like it: they
+hold short names — `blpop`, `json`, `pickle` — validated against an enum, so moving the
+classes behind them breaks nothing a project wrote.
+
+So a module's location is still an API decision rather than a filing decision, and a move
+belongs in the changelog table and in `Upgrading.md` with the old path against the new.
+
+Two rules that are not style:
+
+- **`__init__.py` exports deliberately.** Every package declares `__all__`. The cluster
+  packages declare it *empty*: callers import from the modules, because a re-export makes
+  a second path to every name and the one nobody chose is the one that cannot be moved.
+  `tests/test_package_layout.py` fails when a package has no `__all__`.
+- **A transport imports its driver lazily, never at module scope.** The base install pulls
+  no driver, so `import django_aiogram.broker.kafka` must not fail on a machine without
+  Kafka — otherwise the check that names the missing extra can never run, and the reader
+  gets an `ImportError` instead of `pip install "django-aiogram[kafka]"`.
 
 ## Documentation
 

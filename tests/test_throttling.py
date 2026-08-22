@@ -12,10 +12,10 @@ from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 
 from django_aiogram import TelegramBot
-from django_aiogram.checks import check_settings
-from django_aiogram.defaults import DEFAULTS
-from django_aiogram.enums import RateLimitKey, choices
-from django_aiogram.throttling import (
+from django_aiogram.config.checks import check_settings
+from django_aiogram.config.defaults import DEFAULTS
+from django_aiogram.config.enums import RateLimitKey, choices
+from django_aiogram.producer.throttling import (
     KNOWN_RATE_LIMIT_KEYS,
     MAX_TRACKED_CHATS,
     RateLimiter,

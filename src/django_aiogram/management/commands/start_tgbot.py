@@ -17,13 +17,13 @@ from typing import Any
 from django.core.management import BaseCommand, CommandError
 
 from django_aiogram import bot
-from django_aiogram.delivery import Delivery, get_delivery
-from django_aiogram.enums import UpdateMode
-from django_aiogram.events import worker_identity
-from django_aiogram.recorder import recorder
+from django_aiogram.config.enums import UpdateMode
+from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
+from django_aiogram.consumer.delivery import Delivery, get_delivery
+from django_aiogram.consumer.webhook import MODES, current_mode
+from django_aiogram.eventlog.events import worker_identity
+from django_aiogram.eventlog.recorder import recorder
 from django_aiogram.redis import read_timeout
-from django_aiogram.settings import SETTINGS_NAME, coerce_bool, conf
-from django_aiogram.webhook import MODES, current_mode
 
 logger = logging.getLogger('django_aiogram')
 
@@ -241,7 +241,7 @@ class Command(BaseCommand):
         This process is the consumer. The same rule, reused rather than restated, so the
         two cannot drift.
         """
-        from django_aiogram.checks import worker_name_problems  # noqa: PLC0415 - no aiogram at import
+        from django_aiogram.config.checks import worker_name_problems  # noqa: PLC0415 - no aiogram at import
 
         for problem in worker_name_problems():
             logger.warning(

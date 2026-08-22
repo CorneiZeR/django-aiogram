@@ -6,7 +6,7 @@ imported, so discovery is nothing more than importing one module per app.
 
 from django.utils.module_loading import autodiscover_modules
 
-from django_aiogram.settings import conf
+from django_aiogram.config.settings import conf
 
 
 def autodiscover_tg_routers() -> None:

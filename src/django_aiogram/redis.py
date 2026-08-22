@@ -19,8 +19,8 @@ from redis import Redis
 from redis.asyncio import Redis as AsyncRedis
 from redis.connection import parse_url as _parse_url
 
-from django_aiogram.events import worker_identity
-from django_aiogram.settings import SETTINGS_NAME, conf
+from django_aiogram.config.settings import SETTINGS_NAME, conf
+from django_aiogram.eventlog.events import worker_identity
 
 #: redis-py ships py.typed but leaves parse_url unannotated, and strict mode refuses
 #: to call it. Naming the shape here keeps the call site honest without an ignore
@@ -124,7 +124,7 @@ def build_client() -> Redis:
     redis-py only started defaulting to a read deadline in 8.0; on the 6.2 floor
     a server that accepts the connection and then stops answering blocks the
     caller until the process is killed. Blocking reads stay inside the deadline
-    by asking for less than it — see :class:`~django_aiogram.delivery.BlpopDelivery`.
+    by asking for less than it — see :class:`~django_aiogram.consumer.delivery.BlpopDelivery`.
 
     Commands are deliberately **not** retried. ``Redis.from_url`` builds the pool
     first, so redis-py's client-level retry default never reaches the connection

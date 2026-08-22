@@ -8,11 +8,11 @@ from aiogram.methods import SendMessage
 from django.test import override_settings
 
 from django_aiogram import TelegramBot
-from django_aiogram.client import Outbound
-from django_aiogram.delivery import BlpopDelivery, get_delivery
-from django_aiogram.events import new_correlation_id
+from django_aiogram.consumer.delivery import BlpopDelivery, get_delivery
+from django_aiogram.eventlog.events import new_correlation_id
+from django_aiogram.producer.client import Outbound
 from django_aiogram.redis import processing_key
-from django_aiogram.serializers import JsonSerializer, PickleSerializer
+from django_aiogram.wire.serializers import JsonSerializer, PickleSerializer
 
 
 def an_outbound(function='send_message', **kwargs):
@@ -60,6 +60,58 @@ def test_blpop_delivers_queued_messages(redis_server):
     delivery = RecordingBlpop()
     drain(delivery, expected=1)
     assert delivery.handled == [{'function': 'send_message', 'chat_id': 7}]
+
+
+@override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop', 'BLPOP_TIMEOUT': 1})
+def test_a_payload_cannot_overwrite_what_the_envelope_says(redis_server):
+    """The queue is a trust boundary, and the envelope's own fields are the trusted half.
+
+    `kwargs` in a versioned envelope is a nested mapping — whatever the payload carried —
+    so it can hold a key called `function`. Spread *after* the envelope's fields it replaced
+    the name `check_function` had just validated: the check saw `send_message`, the handler
+    got the other one. `send_raw` validates again and so refuses an unknown method, but a
+    handler taking only `**kwargs` — which every documented recipe does — does not.
+
+    `correlation_id` and `queued_at` were replaceable either way, and those are the event
+    log's correlation and its queue latency. `_hand_over` already reasons this way about
+    `on_complete`; this is the same rule one method earlier.
+    """
+    mine = new_correlation_id()
+    redis_server.rpush(
+        'TELEGRAM_BOT_MESSAGE',
+        JsonSerializer().dumps(
+            {
+                '__envelope__': 1,
+                'function': 'send_message',
+                'correlation_id': str(mine),
+                'queued_at': 1000.0,
+                'kwargs': {
+                    'chat_id': 7,
+                    'function': 'send_dice',
+                    'correlation_id': 'not-a-uuid',
+                    'queued_at': 0.0,
+                },
+            }
+        ),
+    )
+
+    class KeepingEverything(BlpopDelivery):
+        """Records the whole call, unlike `RecordingBlpop`, which peels two fields off."""
+
+        def __init__(self):
+            """Collect each call into `handled`, which is what `drain` waits on."""
+            self.handled = []
+            super().__init__(handler=lambda **kwargs: self.handled.append(kwargs))
+
+    delivery = KeepingEverything()
+    drain(delivery, expected=1)
+
+    assert len(delivery.handled) == 1, delivery.handled
+    seen = delivery.handled[0]
+    assert seen['function'] == 'send_message', 'the payload replaced the validated method'
+    assert seen['correlation_id'] == mine, 'the payload replaced the correlation id'
+    assert seen['queued_at'] == 1000.0, 'the payload replaced the queue timestamp'
+    assert seen['chat_id'] == 7, 'the real arguments stopped arriving'
 
 
 @override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop', 'BLPOP_TIMEOUT': 1})
@@ -310,7 +362,7 @@ def test_a_zero_blpop_timeout_is_clamped(redis_server, monkeypatch):
         def __getattr__(self, name):
             return getattr(redis_server, name)
 
-    monkeypatch.setattr('django_aiogram.delivery.get_redis', Spy)
+    monkeypatch.setattr('django_aiogram.consumer.delivery.get_redis', Spy)
     # one message, so the consumer actually reaches the blocking call
     redis_server.rpush('TELEGRAM_BOT_MESSAGE', JsonSerializer().dumps({'function': 'send_message', 'chat_id': 1}))
     drain(RecordingBlpop(), expected=1, timeout=2)

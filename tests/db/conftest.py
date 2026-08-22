@@ -10,7 +10,7 @@ import threading
 import pytest
 from django.conf import settings
 
-from django_aiogram.recorder import WRITER_THREAD, recorder
+from django_aiogram.eventlog.recorder import WRITER_THREAD, recorder
 
 
 @pytest.fixture(autouse=True)

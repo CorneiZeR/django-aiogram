@@ -13,12 +13,12 @@ from django.core.management import call_command
 from django.core.management.base import SystemCheckError
 from django.test import override_settings
 
-from django_aiogram.checks import CHECKS, check_settings, worker_name_problems
-from django_aiogram.dbrouter import TelegramEventLogRouter
-from django_aiogram.defaults import DEFAULTS
-from django_aiogram.events import worker_identity
+from django_aiogram.config.checks import CHECKS, check_settings, worker_name_problems
+from django_aiogram.config.defaults import DEFAULTS
+from django_aiogram.config.settings import blpop_ceiling
+from django_aiogram.eventlog.dbrouter import TelegramEventLogRouter
+from django_aiogram.eventlog.events import worker_identity
 from django_aiogram.redis import read_timeout
-from django_aiogram.settings import blpop_ceiling
 
 
 @pytest.fixture(autouse=True)
@@ -537,7 +537,7 @@ def test_a_log_database_nothing_routes_to_is_reported():
 
 @override_settings(
     TELEGRAM_BOT=ROUTED_LOG,
-    DATABASE_ROUTERS=['django_aiogram.dbrouter.TelegramEventLogRouter'],
+    DATABASE_ROUTERS=['django_aiogram.eventlog.dbrouter.TelegramEventLogRouter'],
 )
 def test_a_dotted_path_router_satisfies_it():
     """The spelling Django's own documentation uses."""
@@ -716,7 +716,7 @@ def test_the_worker_name_rule_is_information_and_the_consumer_warns_for_itself(m
     Being the consumer is knowable in the command and not in a check, and this is the
     one place the same rule is asked twice — so it is asked of one function.
     """
-    monkeypatch.setattr('django_aiogram.checks.socket.gethostname', lambda: 'ba333cb79e00')
+    monkeypatch.setattr('django_aiogram.config.checks.socket.gethostname', lambda: 'ba333cb79e00')
     monkeypatch.delenv('HOSTNAME', raising=False)
 
     reported = [message for message in check_settings() if str(message.id).endswith('I001')]

@@ -20,9 +20,9 @@ from aiogram.client.session.base import BaseSession
 from django.test import override_settings
 
 from django_aiogram import bot
-from django_aiogram.delivery import BlpopDelivery
-from django_aiogram.envelope import unpack
-from django_aiogram.serializers import loads
+from django_aiogram.consumer.delivery import BlpopDelivery
+from django_aiogram.wire.envelope import unpack
+from django_aiogram.wire.serializers import loads
 
 QUEUE = 'TELEGRAM_BOT_MESSAGE'
 
@@ -40,7 +40,7 @@ def a_message(text):
 def test_the_fakeredis_queue_assertion(monkeypatch):
     """Patching client.get_redis is what the page tells the reader to patch."""
     server = fakeredis.FakeRedis()
-    monkeypatch.setattr('django_aiogram.client.get_redis', lambda: server)
+    monkeypatch.setattr('django_aiogram.producer.client.get_redis', lambda: server)
 
     approve({'reviewer': 42})
 
@@ -226,7 +226,7 @@ def test_the_page_documents_every_recipe_here():
     text = PAGE.read_text(encoding='utf-8')
     for needle in (
         'fakeredis',
-        'django_aiogram.client.get_redis',
+        'django_aiogram.producer.client.get_redis',
         "monkeypatch.setattr(bot, 'send'",
         'object.__setattr__',
         'feed_update',
@@ -420,6 +420,7 @@ PROBE_REFUSALS = (
 #: operator can grep the line they have. Same bidirectional pin as the probe's refusals
 WEBHOOK_REFUSALS = (
     'webhook received an update while the bot is disabled',
+    'webhook is not configured to serve updates',
     'webhook received an update while this deployment polls',
     'webhook cannot build the bot',
     'webhook refused an update',
@@ -429,7 +430,7 @@ WEBHOOK_REFUSALS = (
 def webhook_source():
     """The view, as text."""
     root = pathlib.Path(__file__).resolve().parent.parent
-    return (root / 'src' / 'django_aiogram' / 'webhook.py').read_text(encoding='utf-8')
+    return (root / 'src' / 'django_aiogram' / 'consumer' / 'webhook.py').read_text(encoding='utf-8')
 
 
 def catalogued_refusals():
@@ -462,13 +463,14 @@ NUMBER_WORDS = {'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7
 #: bad `TOKEN` is only its most common cause
 WEBHOOK_CAUSES = (
     '`ENABLED` is off',
+    'cannot be read',
     '`MODE` is not `webhook`',
     'raised `ImproperlyConfigured`',
     'nothing ran the update',
 )
 
 
-def test_the_other_page_names_the_same_four_causes():
+def test_the_other_page_names_the_same_causes():
     """The helpers above read Troubleshooting, and Webhook.md carries the causes too.
 
     Dropping one from that page left every assertion here true — the same gap this file was
@@ -486,7 +488,10 @@ def test_the_other_page_names_the_same_four_causes():
         f'the page says {stated.group(1)} reasons, the view refuses for {len(WEBHOOK_REFUSALS)}'
     )
 
-    paragraph = page[stated.end() :].split('\n\n')[0]
+    # whitespace collapsed: the causes are prose, so a fragment straddles whatever line
+    # break the author's wrapping happened to land on — and where a paragraph wraps is not
+    # something this test has any business pinning
+    paragraph = ' '.join(page[stated.end() :].split('\n\n')[0].split())
     positions = [paragraph.find(cause) for cause in WEBHOOK_CAUSES]
     absent = [cause for cause, position in zip(WEBHOOK_CAUSES, positions, strict=True) if position < 0]
 

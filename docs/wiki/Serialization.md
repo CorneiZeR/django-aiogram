@@ -101,8 +101,8 @@ import statistics
 import timeit
 import uuid
 
-from django_aiogram.envelope import pack
-from django_aiogram.serializers import get_serializer
+from django_aiogram.wire.envelope import pack
+from django_aiogram.wire.serializers import get_serializer
 
 payload = pack(
     'send_message',

@@ -17,7 +17,7 @@ Going through the queue also avoids what a synchronous insert would do
 inside a caller's ``atomic()`` block: on PostgreSQL a failed statement aborts
 the whole transaction, so logging would corrupt the caller's data.
 
-This module must not import ``django.db``. :mod:`django_aiogram.eventlog`
+This module must not import ``django.db``. :mod:`django_aiogram.eventlog.writer`
 does, and the writer thread imports it on its first flush — on its *first write*,
 more precisely, because since 3.1.0 the writer also runs with the log off, for
 ``events_recorded`` receivers alone, and such a process never reaches it at all.
@@ -39,11 +39,11 @@ from typing import Any
 from django.core.exceptions import ImproperlyConfigured
 from django.core.signals import setting_changed
 
-from django_aiogram.defaults import DEFAULTS
-from django_aiogram.enums import EventKind
-from django_aiogram.events import known_kinds, new_correlation_id, worker_identity
-from django_aiogram.settings import SETTINGS_NAME, coerce_bool, conf
-from django_aiogram.signals import events_recorded
+from django_aiogram.config.defaults import DEFAULTS
+from django_aiogram.config.enums import EventKind
+from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
+from django_aiogram.eventlog.events import known_kinds, new_correlation_id, worker_identity
+from django_aiogram.eventlog.signals import events_recorded
 
 logger = logging.getLogger('django_aiogram')
 
@@ -690,7 +690,7 @@ class EventRecorder:
 
         Returns how many rows did not land, which only a partial refusal produces.
         """
-        from django_aiogram.eventlog import write_batch  # noqa: PLC0415 - the point: no django.db above
+        from django_aiogram.eventlog.writer import write_batch  # noqa: PLC0415 - the point: no django.db above
 
         return write_batch(batch)
 
@@ -789,14 +789,19 @@ class EventRecorder:
     def _close_connections() -> None:
         """Release the writer thread's own connection on the way out."""
         try:
-            from django_aiogram.eventlog import close_connections  # noqa: PLC0415 - as above
+            from django_aiogram.eventlog.writer import close_connections  # noqa: PLC0415 - as above
         except Exception:
             logger.exception('could not import the event log to close its connection')
             return
         close_connections()
 
     def drain_once(self, timeout: float = 0.0) -> int:
-        """Write whatever is buffered, on the calling thread. Returns rows written.
+        """Write whatever is buffered, on the calling thread. Returns events processed.
+
+        Events taken off the queue, not rows that landed: `_flush` swallows a failed write
+        and the refused count `_deliver` returns is dropped here, so a batch the database
+        rejected still counts. A caller reading this as a durability signal is reading the
+        wrong number — the gap rows and `log.dropped` are what say what was lost.
 
         Goes through the same flush the writer uses, gap recording included, so
         a test driving this exercises the path production takes.
@@ -914,4 +919,4 @@ def _reset_on_setting_change(setting: str, **_kwargs: object) -> None:
 
 
 # dispatch_uid keeps autoreload from stacking duplicate receivers
-setting_changed.connect(_reset_on_setting_change, dispatch_uid='django_aiogram.recorder')
+setting_changed.connect(_reset_on_setting_change, dispatch_uid='django_aiogram.eventlog.recorder')

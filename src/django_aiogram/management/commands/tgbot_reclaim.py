@@ -20,7 +20,7 @@ from django.core.management import BaseCommand, CommandError
 from redis import Redis
 from redis.exceptions import ResponseError
 
-from django_aiogram.events import worker_identity
+from django_aiogram.eventlog.events import worker_identity
 from django_aiogram.redis import get_redis, processing_key, queue_key
 
 logger = logging.getLogger('django_aiogram')

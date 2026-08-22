@@ -20,19 +20,19 @@ __all__ = ('TelegramBot', '__version__', 'bot', 'conf', 'get_redis', 'redis_conn
 if TYPE_CHECKING:
     from typing import Any
 
-    from django_aiogram.client import TelegramBot as TelegramBot
+    from django_aiogram.config.settings import conf as conf
+    from django_aiogram.producer.client import TelegramBot as TelegramBot
     from django_aiogram.redis import get_redis as get_redis
     from django_aiogram.redis import redis_conn as redis_conn
-    from django_aiogram.settings import conf as conf
 
     bot: TelegramBot
 
 #: which module each lazy export lives in
 _EXPORTS = {
-    'TelegramBot': 'django_aiogram.client',
+    'TelegramBot': 'django_aiogram.producer.client',
     'get_redis': 'django_aiogram.redis',
     'redis_conn': 'django_aiogram.redis',
-    'conf': 'django_aiogram.settings',
+    'conf': 'django_aiogram.config.settings',
 }
 
 

@@ -1,6 +1,6 @@
 """Turning call arguments into something safe to keep in a row.
 
-Deliberately lossy, which is why it is not :func:`~django_aiogram.serializers.encode`.
+Deliberately lossy, which is why it is not :func:`~django_aiogram.wire.serializers.encode`.
 That one is lossless by contract: it base64s a whole ``BufferedInputFile``, so a
 photo send would arrive in the table as megabytes of base64.
 
@@ -20,8 +20,8 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any
 
-from django_aiogram.enums import PayloadDetail
-from django_aiogram.settings import conf
+from django_aiogram.config.enums import PayloadDetail
+from django_aiogram.config.settings import conf
 
 logger = logging.getLogger('django_aiogram')
 

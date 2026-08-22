@@ -19,15 +19,15 @@ from django.core.management import CommandError, call_command
 from django.test import RequestFactory, override_settings
 
 from django_aiogram import TelegramBot
-from django_aiogram.checks import check_settings
-from django_aiogram.client import Outbound, loop_lock
-from django_aiogram.exceptions import LoopThreadNotStartedError, ShuttingDownError
-from django_aiogram.webhook import (
+from django_aiogram.config.checks import check_settings
+from django_aiogram.consumer.webhook import (
     SECRET_HEADER,
     current_mode,
     telegram_webhook,
     webhook_settings,
 )
+from django_aiogram.exceptions import LoopThreadNotStartedError, ShuttingDownError
+from django_aiogram.producer.client import Outbound, loop_lock
 
 SECRET = 'a-long-random-string'
 #: what the deliberately failing handler below raises with
@@ -70,7 +70,7 @@ def handled(monkeypatch):
     async def record(message: types.Message) -> None:
         seen.append(message.text)
 
-    monkeypatch.setattr('django_aiogram.webhook.bot', instance)
+    monkeypatch.setattr('django_aiogram.consumer.webhook.bot', instance)
     try:
         yield seen, instance
     finally:
@@ -115,10 +115,44 @@ def test_a_secret_that_is_a_prefix_is_refused(handled):
     assert response.status_code == 403
 
 
+@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://x', 'MODE': 'polling'})
+def test_a_polling_deployment_is_told_it_polls_and_not_about_its_secret(handled, caplog):
+    """The commonest configuration there is, and the one a guard put in the wrong bucket.
+
+    A polling deployment has no reason to set `WEBHOOK_SECRET`, so reading the secret before
+    judging the mode reported every one of them as unreadable configuration — the same 503,
+    the wrong diagnosis, for whoever finds the URL of a process that simply does not serve
+    it. The secret is read only once the mode says to serve.
+    """
+    seen, _ = handled
+    with caplog.at_level('INFO', logger='django_aiogram'):
+        response = post(an_update())
+
+    assert response.status_code == 503
+    assert 'while this deployment polls' in caplog.text
+    assert 'not configured to serve updates' not in caplog.text
+    assert seen == [], 'the update was dispatched before the refusal'
+
+
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'WEBHOOK_SECRET': ''})
-def test_serving_without_a_secret_refuses_to_run(handled):
-    with pytest.raises(ImproperlyConfigured, match='WEBHOOK_SECRET'):
-        post(an_update())
+def test_serving_without_a_secret_answers_503_rather_than_raising(handled, caplog):
+    """No update is accepted either way, so the only question is what the caller gets.
+
+    `webhook_secret()` raises before the comparison, so an empty secret has never let an
+    update through — and `E027` reports it at startup with the reason. Raising here made
+    that a 500 with a traceback on an unauthenticated path, which is the exact shape the
+    comment two branches down warns about. 503 is what every other configuration failure
+    in this view answers, and Telegram retries it.
+    """
+    seen, _ = handled
+    with caplog.at_level('ERROR', logger='django_aiogram'):
+        response = post(an_update())
+
+    assert response.status_code == 503
+    assert 'webhook is not configured to serve updates' in caplog.text
+    # and nothing ran: a 503 returned *after* dispatch would satisfy both assertions above
+    # while the update had already been handled, which is the half that matters
+    assert seen == [], 'the update was dispatched before the refusal'
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
@@ -165,7 +199,7 @@ def test_a_failing_handler_still_answers_200(monkeypatch, caplog):
     async def explode(message: types.Message) -> None:
         raise RuntimeError(BOOM)
 
-    monkeypatch.setattr('django_aiogram.webhook.bot', instance)
+    monkeypatch.setattr('django_aiogram.consumer.webhook.bot', instance)
     try:
         with caplog.at_level('ERROR', logger='django_aiogram'):
             response = post(an_update())
@@ -340,9 +374,19 @@ def test_the_view_refuses_while_the_deployment_polls(handled):
 
 
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'MODE': 'nonsense'})
-def test_an_unknown_mode_is_refused(handled):
-    with pytest.raises(ImproperlyConfigured, match="\\['MODE'\\]"):
-        post(an_update())
+def test_an_unknown_mode_answers_503_rather_than_raising(handled, caplog):
+    """The same rule as the empty secret: a misconfiguration is ours to answer for.
+
+    `current_mode()` raises `ImproperlyConfigured` for a mode it does not know, and the
+    view used to let that out — a 500 for something `E028` already reports at startup.
+    """
+    seen, _ = handled
+    with caplog.at_level('ERROR', logger='django_aiogram'):
+        response = post(an_update())
+
+    assert response.status_code == 503
+    assert 'webhook is not configured to serve updates' in caplog.text
+    assert seen == [], 'the update was dispatched before the refusal'
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://x'})
@@ -399,8 +443,8 @@ def test_concurrent_first_requests_share_one_dispatcher(monkeypatch):
         built.append(made)
         return made
 
-    monkeypatch.setattr('django_aiogram.client.Dispatcher', slow_dispatcher)
-    monkeypatch.setattr('django_aiogram.webhook.bot', instance)
+    monkeypatch.setattr('django_aiogram.producer.client.Dispatcher', slow_dispatcher)
+    monkeypatch.setattr('django_aiogram.consumer.webhook.bot', instance)
 
     ready = threading.Barrier(4, timeout=10)
     errors = []
@@ -451,7 +495,7 @@ def test_a_handler_sending_from_the_web_process_queues(monkeypatch):
 
     monkeypatch.setattr(instance, 'send_redis', lambda *args, correlation_id=None, **kwargs: queued.append(kwargs))
     monkeypatch.setattr(instance, 'send_raw', lambda *args, correlation_id=None, **kwargs: direct.append(kwargs))
-    monkeypatch.setattr('django_aiogram.webhook.bot', instance)
+    monkeypatch.setattr('django_aiogram.consumer.webhook.bot', instance)
 
     try:
         assert post(an_update()).status_code == 200
@@ -516,7 +560,7 @@ def test_updates_in_one_process_are_handled_concurrently(monkeypatch):
             # so letting it propagate would leave the test green
             broken.append(message.text)
 
-    monkeypatch.setattr('django_aiogram.webhook.bot', instance)
+    monkeypatch.setattr('django_aiogram.consumer.webhook.bot', instance)
 
     errors = []
 
@@ -611,7 +655,7 @@ def test_a_handlers_send_does_not_warn_on_the_normal_path(monkeypatch, caplog):
         instance._schedule(asyncio.sleep(0), Outbound(uuid.uuid4(), 'send_message', {}))
         sent.append(message.text)
 
-    monkeypatch.setattr('django_aiogram.webhook.bot', instance)
+    monkeypatch.setattr('django_aiogram.consumer.webhook.bot', instance)
 
     try:
         with caplog.at_level('WARNING', logger='django_aiogram'):
@@ -701,7 +745,7 @@ def test_close_does_not_strand_a_request_waiting_on_its_update(monkeypatch, capl
         inside.set()
         await asyncio.sleep(30)  # far longer than the drain: it must be canceled
 
-    monkeypatch.setattr('django_aiogram.webhook.bot', instance)
+    monkeypatch.setattr('django_aiogram.consumer.webhook.bot', instance)
 
     def deliver():
         try:
@@ -738,7 +782,7 @@ def test_a_slow_loop_thread_is_not_driven_by_the_request(monkeypatch):
     the loop every later update depends on.
     """
     instance = TelegramBot()
-    monkeypatch.setattr('django_aiogram.client.RUNNER_TIMEOUT', 0.05)
+    monkeypatch.setattr('django_aiogram.producer.client.RUNNER_TIMEOUT', 0.05)
     real_set_event_loop = asyncio.set_event_loop
 
     def slow_set_event_loop(loop):
@@ -748,7 +792,7 @@ def test_a_slow_loop_thread_is_not_driven_by_the_request(monkeypatch):
         return real_set_event_loop(loop)
 
     monkeypatch.setattr(asyncio, 'set_event_loop', slow_set_event_loop)
-    monkeypatch.setattr('django_aiogram.webhook.bot', instance)
+    monkeypatch.setattr('django_aiogram.consumer.webhook.bot', instance)
 
     try:
         with pytest.raises(LoopThreadNotStartedError):
@@ -757,7 +801,7 @@ def test_a_slow_loop_thread_is_not_driven_by_the_request(monkeypatch):
         # let the late thread finish arriving before tearing down, or `close()`
         # races the very loop this test delayed
         monkeypatch.setattr(asyncio, 'set_event_loop', real_set_event_loop)
-        monkeypatch.setattr('django_aiogram.client.RUNNER_TIMEOUT', 5.0)
+        monkeypatch.setattr('django_aiogram.producer.client.RUNNER_TIMEOUT', 5.0)
         instance._runner_ready.wait(5)
         instance.close()
 
@@ -800,7 +844,7 @@ def test_the_view_asks_telegram_to_redeliver_a_refused_update(monkeypatch):
     """
     instance = TelegramBot()
     instance._ensure_loop_runs()
-    monkeypatch.setattr('django_aiogram.webhook.bot', instance)
+    monkeypatch.setattr('django_aiogram.consumer.webhook.bot', instance)
     try:
         instance._closing = True
         response = post(an_update('/mid-restart'))
@@ -824,7 +868,7 @@ def test_a_loop_thread_that_dies_is_replaced(monkeypatch):
     restarts it, five seconds at a time.
     """
     instance = TelegramBot()
-    monkeypatch.setattr('django_aiogram.client.RUNNER_TIMEOUT', 0.05)
+    monkeypatch.setattr('django_aiogram.producer.client.RUNNER_TIMEOUT', 0.05)
     real_set_event_loop = asyncio.set_event_loop
     attempts = []
 
@@ -836,7 +880,7 @@ def test_a_loop_thread_that_dies_is_replaced(monkeypatch):
         return real_set_event_loop(loop)
 
     monkeypatch.setattr(asyncio, 'set_event_loop', fail_the_first)
-    monkeypatch.setattr('django_aiogram.webhook.bot', instance)
+    monkeypatch.setattr('django_aiogram.consumer.webhook.bot', instance)
     handled = []
 
     @instance.message(F.text)
@@ -858,7 +902,7 @@ def test_a_loop_thread_that_dies_is_replaced(monkeypatch):
         # and the replacement gets the real deadline: 50 ms was only needed to
         # make the first request give up quickly, and a loaded machine can take
         # longer than that to start a thread and reach run_forever
-        monkeypatch.setattr('django_aiogram.client.RUNNER_TIMEOUT', 5.0)
+        monkeypatch.setattr('django_aiogram.producer.client.RUNNER_TIMEOUT', 5.0)
 
         # the second must not inherit that corpse
         assert post(an_update('/second', update_id=2)).status_code == 200
@@ -996,7 +1040,7 @@ def test_an_update_reaching_a_closed_loop_is_refused_not_swallowed(monkeypatch):
     closed = asyncio.new_event_loop()
     closed.close()
     monkeypatch.setattr(type(instance), 'loop', property(lambda self: closed))
-    monkeypatch.setattr('django_aiogram.webhook.bot', instance)
+    monkeypatch.setattr('django_aiogram.consumer.webhook.bot', instance)
 
     with pytest.raises(ShuttingDownError):
         instance.feed_update(an_update())
@@ -1013,7 +1057,7 @@ def test_a_loop_thread_that_outlives_the_join_is_kept_so_close_can_retry(monkeyp
     in no time without asking the orphan to stop again, and the loop, the aiogram session
     and the FSM client stayed open for the life of the process.
     """
-    monkeypatch.setattr('django_aiogram.client.RUNNER_TIMEOUT', 0.1)
+    monkeypatch.setattr('django_aiogram.producer.client.RUNNER_TIMEOUT', 0.1)
     instance = TelegramBot()
     blocked = threading.Event()
     released = threading.Event()
@@ -1118,7 +1162,7 @@ def test_a_close_that_gave_up_still_cancels_what_arrived_after_it(monkeypatch):
     an update submitted after a give-up `close()` held its worker until SIGKILL. Keeping
     the runner is what makes the retry cancel it.
     """
-    monkeypatch.setattr('django_aiogram.client.RUNNER_TIMEOUT', 0.1)
+    monkeypatch.setattr('django_aiogram.producer.client.RUNNER_TIMEOUT', 0.1)
     instance = TelegramBot()
     blocked = threading.Event()
     released = threading.Event()

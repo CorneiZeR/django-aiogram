@@ -22,9 +22,9 @@ from django.views.decorators.csrf import csrf_exempt
 from pydantic import ValidationError
 
 from django_aiogram import bot
-from django_aiogram.enums import UpdateMode, choices
+from django_aiogram.config.enums import UpdateMode, choices
+from django_aiogram.config.settings import SETTINGS_NAME, conf
 from django_aiogram.exceptions import LoopUnavailableError
-from django_aiogram.settings import SETTINGS_NAME, conf
 
 logger = logging.getLogger('django_aiogram')
 
@@ -72,12 +72,29 @@ def telegram_webhook(request: HttpRequest) -> HttpResponse:  # noqa: PLR0911 - a
         logger.warning('webhook received an update while the bot is disabled')
         return HttpResponse(status=503)
 
-    if current_mode() != UpdateMode.WEBHOOK:
+    try:
+        # guarded, because an unknown `MODE` and an empty `WEBHOOK_SECRET` each raise
+        # `ImproperlyConfigured` — and unguarded that left an unauthenticated 500 with a
+        # traceback from a view whose every other refusal is a status code. The bot build
+        # below already treats a configuration failure as ours to answer for.
+        #
+        # The secret only when the mode says to serve: a polling deployment has no reason
+        # to set one, and reading it first told every such deployment its configuration was
+        # unreadable instead of that it polls. Each setting is judged where it matters, and
+        # the order the documentation promises is the order here
+        mode = current_mode()
+        polling = mode != UpdateMode.WEBHOOK
+        secret = '' if polling else webhook_secret()
+    except ImproperlyConfigured:
+        logger.exception('webhook is not configured to serve updates')
+        return HttpResponse(status=503)
+
+    if polling:
         # serving updates here while a worker polls for them would mean two
         # sources of updates and no way to tell which handled what
         logger.warning(
             'webhook received an update while this deployment polls',
-            extra={'tg_mode': current_mode()},
+            extra={'tg_mode': mode},
         )
         return HttpResponse(status=503)
 
@@ -85,7 +102,7 @@ def telegram_webhook(request: HttpRequest) -> HttpResponse:  # noqa: PLR0911 - a
     # bytes, not str: `compare_digest` refuses str arguments outside ASCII, so a header
     # with one non-ASCII character used to raise TypeError here — an unauthenticated
     # 500 with a traceback, from the branch whose whole job is to answer 403
-    if not hmac.compare_digest(given.encode(), webhook_secret().encode()):
+    if not hmac.compare_digest(given.encode(), secret.encode()):
         logger.warning('webhook rejected an update with a wrong secret')
         return HttpResponse(status=403)
 

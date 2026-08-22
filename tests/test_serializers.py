@@ -20,8 +20,8 @@ from aiogram.types.input_file import BufferedInputFile, FSInputFile, URLInputFil
 from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 
-from django_aiogram.enums import PayloadDetail, SerializationTag, SerializerKind
-from django_aiogram.serializers import (
+from django_aiogram.config.enums import PayloadDetail, SerializationTag, SerializerKind
+from django_aiogram.wire.serializers import (
     _CODECS,
     JsonSerializer,
     PickleSerializer,
@@ -358,7 +358,7 @@ def test_a_payload_too_deep_to_read_back_is_refused():
 
 def test_an_ordinary_payload_never_pays_for_the_guard(monkeypatch):
     """The guard re-encodes the slow way, so it must not fire on real messages."""
-    from django_aiogram import serializers
+    from django_aiogram.wire import serializers
 
     calls = []
     original = serializers.encode

@@ -39,9 +39,9 @@ from aiogram.types.input_file import (
 )
 from django.core.exceptions import ImproperlyConfigured
 
-from django_aiogram.enums import SerializationTag, SerializerKind
+from django_aiogram.config.enums import SerializationTag, SerializerKind
+from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 from django_aiogram.exceptions import DjangoRedisAiogramError, SerializationError
-from django_aiogram.settings import SETTINGS_NAME, coerce_bool, conf
 
 #: the module's public surface; listing SerializationError keeps its 2.0 import path alive
 __all__ = [

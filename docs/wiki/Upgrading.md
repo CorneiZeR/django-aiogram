@@ -23,7 +23,7 @@ INSTALLED_APPS = ['django_aiogram']
 
 ```python
 from django_aiogram import bot, conf
-from django_aiogram.client import TelegramBot
+from django_aiogram.producer.client import TelegramBot
 ```
 
 `TELEGRAM_BOT` stays as the settings key — it names what it configures, not the package

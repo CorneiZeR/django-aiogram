@@ -14,14 +14,14 @@ from aiogram.types import Chat, Message, Update, User
 from django.test import override_settings
 
 from django_aiogram import TelegramBot
-from django_aiogram.enums import EventKind
-from django_aiogram.instrumentation import (
+from django_aiogram.config.enums import EventKind
+from django_aiogram.eventlog.instrumentation import (
     RecordingStorage,
     install_instrumentation,
     instrumented,
 )
+from django_aiogram.eventlog.recorder import recorder
 from django_aiogram.models import TelegramEvent
-from django_aiogram.recorder import recorder
 
 # sync mode falls back to the writer thread inside a running loop, which is
 # where every one of these runs, so flush() is what waits for the rows

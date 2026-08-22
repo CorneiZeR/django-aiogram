@@ -25,7 +25,7 @@ class TelegramBotAppConfig(AppConfig):
     def ready(self) -> None:
         """Register the checks and autodiscover routers, unless disabled here."""
         # deferred: apps.py is imported while the app registry is still loading
-        from django_aiogram.settings import SETTINGS_NAME, coerce_bool, conf  # noqa: PLC0415 - as above
+        from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf  # noqa: PLC0415 - as above
 
         # parsed, not truthiness-tested: 'false' has to disable startup the same
         # way it disables sending, otherwise the two disagree
@@ -46,11 +46,11 @@ class TelegramBotAppConfig(AppConfig):
 
         # after the gate: checks are the only reason a disabled boot would pay
         # for anything beyond the settings module
-        from django_aiogram.checks import check_settings  # noqa: PLC0415 - only when there is something to report
+        from django_aiogram.config.checks import check_settings  # noqa: PLC0415 - only when there is a report to make
 
         register(check_settings)
 
         if enabled and coerce_bool(conf['AUTODISCOVER'], f"{SETTINGS_NAME}['AUTODISCOVER']"):
-            from django_aiogram.routers import autodiscover_tg_routers  # noqa: PLC0415 - only when enabled
+            from django_aiogram.consumer.routers import autodiscover_tg_routers  # noqa: PLC0415 - only when enabled
 
             autodiscover_tg_routers()

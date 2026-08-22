@@ -205,7 +205,7 @@ Every choice a setting offers exists as an enum member, so a project can import
 the value instead of spelling the string:
 
 ```python
-from django_aiogram.enums import DeliveryKind, StorageKind, UpdateMode
+from django_aiogram.config.enums import DeliveryKind, StorageKind, UpdateMode
 
 TELEGRAM_BOT = {
     'DELIVERY': DeliveryKind.BLPOP,
@@ -234,9 +234,9 @@ member may be renamed but never revalued.
 ## The event log
 
 ```python
-from django_aiogram.events import failure_kinds, kind_choices, register_kind
+from django_aiogram.eventlog.events import failure_kinds, kind_choices, register_kind
 from django_aiogram.models import TelegramEvent
-from django_aiogram.signals import events_recorded
+from django_aiogram.eventlog.signals import events_recorded
 ```
 
 `TelegramEvent` is the append-only feed: one row per thing that happened, insert

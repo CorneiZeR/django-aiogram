@@ -14,10 +14,10 @@ from django.core.management import call_command
 from django.test import override_settings
 
 from django_aiogram import TelegramBot, bot
-from django_aiogram.client import Outbound, loop_lock
-from django_aiogram.defaults import DEFAULTS
-from django_aiogram.events import new_correlation_id
+from django_aiogram.config.defaults import DEFAULTS
+from django_aiogram.eventlog.events import new_correlation_id
 from django_aiogram.management.commands.start_tgbot import Command as StartCommand
+from django_aiogram.producer.client import Outbound, loop_lock
 
 
 async def stub_close():
@@ -438,7 +438,7 @@ def test_close_refuses_to_tear_down_a_running_loop(caplog):
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': True})
 def test_the_recorder_is_stopped_even_when_close_raises(monkeypatch, redis_server):
     """A close() that raises must not also lose the rows the shutdown produced."""
-    from django_aiogram.recorder import recorder
+    from django_aiogram.eventlog.recorder import recorder
 
     stopped = []
     monkeypatch.setattr(recorder, 'stop', lambda *args, **kwargs: stopped.append(True))

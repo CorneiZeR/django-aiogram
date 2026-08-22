@@ -8,8 +8,8 @@ from aiogram.methods import SendMessage
 from django.test import override_settings
 
 from django_aiogram import TelegramBot
-from django_aiogram.envelope import unpack
-from django_aiogram.serializers import JsonSerializer
+from django_aiogram.wire.envelope import unpack
+from django_aiogram.wire.serializers import JsonSerializer
 
 SETTINGS = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'}
 
@@ -60,7 +60,7 @@ def test_disabled_send_is_a_noop(monkeypatch):
         msg = 'a disabled send reached for Redis'
         raise AssertionError(msg)
 
-    monkeypatch.setattr('django_aiogram.client.get_redis', forbidden)
+    monkeypatch.setattr('django_aiogram.producer.client.get_redis', forbidden)
 
     instance = TelegramBot()
     instance.send(chat_id=1, text='hi')

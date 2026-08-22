@@ -15,9 +15,9 @@ import uuid
 import pytest
 from django.test import override_settings
 
-from django_aiogram.dbrouter import TelegramEventLogRouter, event_log_database
-from django_aiogram.enums import EventKind
-from django_aiogram.events import (
+from django_aiogram.config.enums import EventKind
+from django_aiogram.eventlog.dbrouter import TelegramEventLogRouter, event_log_database
+from django_aiogram.eventlog.events import (
     MAX_KIND_LENGTH,
     failure_kinds,
     kind_choices,
@@ -25,8 +25,8 @@ from django_aiogram.events import (
     new_correlation_id,
     register_kind,
 )
+from django_aiogram.eventlog.recorder import WRITER_THREAD, Event, EventRecorder
 from django_aiogram.models import TelegramEvent
-from django_aiogram.recorder import WRITER_THREAD, Event, EventRecorder
 
 
 def test_recording_is_free_while_the_flag_is_off():
@@ -90,13 +90,13 @@ def test_the_model_module_never_imports_aiogram():
 
         django.setup()
 
-        from django_aiogram.recorder import Event, recorder
+        from django_aiogram.eventlog.recorder import Event, recorder
 
         recorder.record(Event(kind='outbound.sent'))
 
         assert 'django_aiogram.models' in sys.modules, 'models did not load with the registry'
         assert 'aiogram' not in sys.modules, 'the model or the recorder pulled aiogram'
-        assert 'django_aiogram.eventlog' not in sys.modules, 'a disabled recorder imported the ORM layer'
+        assert 'django_aiogram.eventlog.writer' not in sys.modules, 'a disabled recorder imported the ORM layer'
         print('models stay cheap')
     """)
     result = subprocess.run(  # noqa: S603 - our own interpreter, and a script written right above
@@ -192,7 +192,7 @@ def test_every_setting_is_documented():
     """
     import pathlib
 
-    from django_aiogram.defaults import DEFAULTS
+    from django_aiogram.config.defaults import DEFAULTS
 
     page = pathlib.Path(__file__).resolve().parent.parent / 'docs' / 'wiki' / 'Settings.md'
     text = page.read_text(encoding='utf-8')

@@ -17,12 +17,12 @@ from django.db.models import QuerySet
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 
-from django_aiogram.defaults import DEFAULTS
-from django_aiogram.enums import EventKind
-from django_aiogram.eventlog import ROW_BY_ROW, EventLogRefusedError, write_batch
+from django_aiogram.config.defaults import DEFAULTS
+from django_aiogram.config.enums import EventKind
+from django_aiogram.eventlog.recorder import FAILURE_LIMIT, Event, EventRecorder
+from django_aiogram.eventlog.signals import events_recorded
+from django_aiogram.eventlog.writer import ROW_BY_ROW, EventLogRefusedError, write_batch
 from django_aiogram.models import TelegramEvent
-from django_aiogram.recorder import FAILURE_LIMIT, Event, EventRecorder
-from django_aiogram.signals import events_recorded
 
 ON = {'EVENT_LOG': True}
 
@@ -164,7 +164,7 @@ def test_the_very_first_drop_is_reported(paused_writer, caplog):
     with caplog.at_level('ERROR', logger='django_aiogram'), pytest.MonkeyPatch.context() as patch:
         # one second since boot: with _reported_at at 0.0 the first drop is
         # inside the report interval and says nothing at all
-        patch.setattr('django_aiogram.recorder.time.monotonic', lambda: 1.0)
+        patch.setattr('django_aiogram.eventlog.recorder.time.monotonic', lambda: 1.0)
         recorder.record(an_event(chat_id=1))
         recorder.record(an_event(chat_id=2))
 
@@ -207,7 +207,7 @@ def test_flush_waits_for_the_write_not_for_the_queue():
 
     recorder = EventRecorder()
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr('django_aiogram.eventlog.write_batch', slow_write)
+        patch.setattr('django_aiogram.eventlog.writer.write_batch', slow_write)
         recorder.record(an_event(chat_id=77))
         try:
             assert started.wait(5), 'the writer never picked the event up'
@@ -666,7 +666,7 @@ def test_the_redaction_constants_are_resolved_once_for_a_whole_batch(monkeypatch
     for output that is byte-for-byte the same. A batch is 200 rows, so the only
     thing that changes is the bill.
     """
-    from django_aiogram import eventlog
+    from django_aiogram.eventlog import writer as eventlog
 
     calls = []
 

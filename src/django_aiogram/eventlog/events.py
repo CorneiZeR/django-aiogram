@@ -15,8 +15,8 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from django_aiogram.enums import EventKind
-from django_aiogram.settings import conf
+from django_aiogram.config.enums import EventKind
+from django_aiogram.config.settings import conf
 
 #: the width of the model's ``kind`` column; a longer code would be truncated by
 #: MySQL in non-strict mode and rejected in strict mode, so it is refused here

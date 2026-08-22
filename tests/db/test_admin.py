@@ -18,8 +18,8 @@ from django_aiogram.admin import (
     TelegramEventAdmin,
     register_event_log_admin,
 )
-from django_aiogram.enums import EventKind
-from django_aiogram.events import new_correlation_id
+from django_aiogram.config.enums import EventKind
+from django_aiogram.eventlog.events import new_correlation_id
 from django_aiogram.models import TelegramEvent
 
 ON = {'EVENT_LOG': True}

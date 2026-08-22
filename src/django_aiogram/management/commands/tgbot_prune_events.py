@@ -21,9 +21,9 @@ from django.core.management import BaseCommand, CommandError
 from django.db import connections, models, transaction
 from django.utils import timezone
 
-from django_aiogram.eventlog import log_alias
+from django_aiogram.config.settings import conf
+from django_aiogram.eventlog.writer import log_alias
 from django_aiogram.models import TelegramEvent
-from django_aiogram.settings import conf
 
 logger = logging.getLogger('django_aiogram')
 

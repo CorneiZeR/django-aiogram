@@ -12,7 +12,7 @@ from typing import Any
 
 from django.db.models import Model
 
-from django_aiogram.settings import conf
+from django_aiogram.config.settings import conf
 
 APP_LABEL = 'django_aiogram'
 

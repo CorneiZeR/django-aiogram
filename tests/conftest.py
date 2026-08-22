@@ -8,8 +8,8 @@ from django_aiogram import conf
 # `client`; patching the wrong one silently leaves the real connection in place.
 PATCH_TARGETS = (
     'django_aiogram.redis.get_redis',
-    'django_aiogram.delivery.get_redis',
-    'django_aiogram.client.get_redis',
+    'django_aiogram.consumer.delivery.get_redis',
+    'django_aiogram.producer.client.get_redis',
     'django_aiogram.get_redis',
     # the probe's decision moved out of the command in 3.1.0, so it can run without
     # django.setup(); the command is a wrapper and holds no connection of its own

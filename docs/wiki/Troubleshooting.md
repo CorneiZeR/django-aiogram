@@ -132,6 +132,10 @@ that part rather than fail the container over it:
 redeliver — which is what you want. Four reasons, each with its own log line:
 
 - `webhook received an update while the bot is disabled` — `ENABLED` is off here
+- `webhook is not configured to serve updates` — `MODE` or `WEBHOOK_SECRET` cannot be
+  read: an unknown mode and an empty secret each raise `ImproperlyConfigured`, and this is
+  the view answering for it rather than raising through. The secret is only read once the
+  mode says to serve, so a polling deployment is told it polls instead
 - `webhook received an update while this deployment polls` — `MODE` is not `webhook`, so
   a worker is polling and this process must not also feed the dispatcher
 - `webhook cannot build the bot` — building it raised `ImproperlyConfigured`; a
@@ -211,8 +215,8 @@ Telegram will start refusing.
 
 The 1.x package name was a deprecated shim in 2.x and is gone in 3.0. The
 package is `django_aiogram`: use it in `INSTALLED_APPS`, import from it,
-and note that `TelegramBot` lives in `django_aiogram.client` while the
-settings module is `django_aiogram.settings`. See **[[Upgrading]]**.
+and note that `TelegramBot` lives in `django_aiogram.producer.client` while the
+settings module is `django_aiogram.config.settings`. See **[[Upgrading]]**.
 
 ## The event log writes nothing
 

@@ -23,8 +23,9 @@ from django.core.checks import Warning as CheckWarning
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 
-from django_aiogram.defaults import DEFAULTS
-from django_aiogram.enums import (
+from django_aiogram.config.defaults import DEFAULTS
+from django_aiogram.config.enums import (
+    KNOWN_RATE_LIMIT_KEYS,
     DeliveryKind,
     PayloadDetail,
     SerializerKind,
@@ -32,9 +33,8 @@ from django_aiogram.enums import (
     UpdateMode,
     choices,
 )
-from django_aiogram.events import known_kinds
-from django_aiogram.settings import SETTINGS_NAME, blpop_ceiling, coerce_bool, conf
-from django_aiogram.throttling import KNOWN_RATE_LIMIT_KEYS
+from django_aiogram.config.settings import SETTINGS_NAME, blpop_ceiling, coerce_bool, conf
+from django_aiogram.eventlog.events import known_kinds
 
 DELIVERY_CHOICES = choices(DeliveryKind)
 MODE_CHOICES = choices(UpdateMode)
@@ -562,7 +562,7 @@ def _a_routed_log_database(key: str) -> list[Problem]:
         return []  # nothing was pointed anywhere, so nothing needs routing
     from django.conf import settings as django_settings  # noqa: PLC0415 - as above
 
-    from django_aiogram.dbrouter import TelegramEventLogRouter  # noqa: PLC0415 - no django.db at import
+    from django_aiogram.eventlog.dbrouter import TelegramEventLogRouter  # noqa: PLC0415 - no django.db at import
 
     for entry in getattr(django_settings, 'DATABASE_ROUTERS', ()) or ():
         candidate = entry
@@ -577,7 +577,7 @@ def _a_routed_log_database(key: str) -> list[Problem]:
         Problem(
             f'is {alias!r}, and this check cannot see a router that sends this app there.',
             hint=(
-                "Add 'django_aiogram.dbrouter.TelegramEventLogRouter' to DATABASE_ROUTERS, "
+                "Add 'django_aiogram.eventlog.dbrouter.TelegramEventLogRouter' to DATABASE_ROUTERS, "
                 f'or leave {key} unset so the log uses the default database. A router of your own '
                 'returning that alias is equally correct and is what this cannot read, which is why '
                 'this is information rather than a warning.'
