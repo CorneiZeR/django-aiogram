@@ -61,7 +61,7 @@ def test_recovery_steps_over_an_entry_this_package_cannot_read(broker, redis_ser
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
-def test_the_async_half_does_not_reach_for_the_synchronous_client(broker, monkeypatch):
+def test_the_async_half_does_not_reach_for_the_synchronous_client(broker, redis_server, monkeypatch):
     """Creating the group is two round trips, and on `apublish` they belong on the loop.
 
     The async methods all need the consumer group to exist. Making it with the synchronous
@@ -80,9 +80,14 @@ def test_the_async_half_does_not_reach_for_the_synchronous_client(broker, monkey
 
     async def on_a_loop():
         await broker.apublish([payload(2)])
+        # both of the other `a*` methods, because each has its own `_aensure` call and one
+        # left reaching for the synchronous client would fail here and nowhere else
         return await broker.adepth(), await broker.ainflight_depth()
 
-    depth, inflight = asyncio.run(on_a_loop())
+    _depth, inflight = asyncio.run(on_a_loop())
 
-    assert depth >= 0, 'the awaited publish did not complete'
+    # counted with XLEN rather than from what `adepth()` returned: this runs on fakeredis,
+    # whose `lag` is one short — measured — so the awaited depth is exactly the number this
+    # test must not depend on. What it is about is that the publish landed
+    assert redis_server.xlen(STREAM) == 1, 'the awaited publish did not queue anything'
     assert inflight == 0, 'nothing was taken, so nothing is in flight'
