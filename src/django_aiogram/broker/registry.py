@@ -43,8 +43,10 @@ def broker_class() -> type[Broker]:
         msg = f"{SETTINGS_NAME}['BROKER'] is empty, so no transport is chosen."
         raise BrokerNotConfiguredError(msg)
     if path in SHIPPED:
-        # verified before the import, because a shipped broker imports its driver lazily
-        # but a *missing* driver should still be named rather than discovered by traceback
+        # verified before the import, and that order is what carries the promise: the Redis
+        # list still reaches its driver through a module-scope import one level down, so
+        # importing the class would raise `ImportError` before `verify` could name the extra.
+        # Checking `SHIPPED` first means a missing driver is reported either way
         module, extra = SHIPPED[path]
         _require(path, module, extra)
     try:

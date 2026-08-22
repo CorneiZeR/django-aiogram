@@ -1273,8 +1273,14 @@ class TelegramBot:
             return identifier
 
         _mention_asend('asend_redis')
+        # before the context manager, like the awaiting twin does: a `BROKER` that cannot be
+        # resolved is a misconfiguration, and inside `queueing` it would be recorded as a
+        # *queueing* drop — which the event log defines as a write that may still have been
+        # applied, so re-sending may duplicate. Nothing was written, and the two producers
+        # promise the same rows
+        broker = get_broker()
         with queueing(function, [(identifier, kwargs)]) as write:
-            get_broker().publish(write.payloads)
+            broker.publish(write.payloads)
         return identifier
 
     async def asend_redis(
@@ -1344,13 +1350,16 @@ class TelegramBot:
         is why the drops are recorded rather than left to the caller to infer.
         """
         writing = self._accept_bulk(function)
+        # resolved before the first chunk, as above: a broker that cannot be resolved is not
+        # a chunk that failed to write
+        broker = get_broker() if writing else None
         if writing:
             _mention_asend('asend_many')
         identifiers: list[uuid.UUID] = []
         for chunk in self._chunks(chat_ids, chunk_size, kwargs):
-            if writing:
+            if broker is not None:
                 with queueing(function, chunk) as write:
-                    get_broker().publish(write.payloads)
+                    broker.publish(write.payloads)
             identifiers.extend(identifier for identifier, _ in chunk)
         return identifiers
 

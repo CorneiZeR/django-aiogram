@@ -20,6 +20,7 @@ from django.core.exceptions import ImproperlyConfigured
 
 from django_aiogram.broker.exceptions import BrokerDependencyError
 from django_aiogram.broker.models import Liveness, Taken
+from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.settings import SETTINGS_NAME, conf
 
 __all__ = ('REQUIRED', 'Broker')
@@ -76,11 +77,36 @@ class Broker(ABC):
         Raises when a :data:`REQUIRED` option is unset, naming the broker and the key —
         a check calls this at startup so the failure is a report rather than a traceback
         from the first send.
+
+        **A key that also lives in the package-wide defaults resolves there**, because
+        `conf` has already folded those in and cannot say whether a value came from the
+        project or from the table. The four the Redis list declares are in both today, for
+        the releases that read them from `conf` directly; they leave that table when the
+        extras work makes each driver optional. Declaring a different default here than the
+        package-wide one would therefore be a lie, and this refuses to tell it.
         """
         if key not in self.OPTIONS:
             msg = f'{type(self).__name__} declares no option {key!r}'
             raise KeyError(msg)
         default = self.OPTIONS[key]
+        if key in DEFAULTS:
+            if default is REQUIRED:
+                # a contradiction, and a bug in the broker rather than the project: `conf`
+                # would answer with the package-wide default and the refusal below would
+                # never run, so a required option would silently become optional
+                msg = (
+                    f'{type(self).__name__} declares {key!r} as REQUIRED, but it is also in the '
+                    'package-wide defaults, where it would always resolve. A required option '
+                    'has to belong to one broker alone.'
+                )
+                raise ImproperlyConfigured(msg)
+            if default != DEFAULTS[key]:
+                msg = (
+                    f'{type(self).__name__} declares {key!r} defaulting to {default!r} while the '
+                    f'package-wide default is {DEFAULTS[key]!r}, which is what would be used. '
+                    'Declare the same value or take the key out of the package-wide table.'
+                )
+                raise ImproperlyConfigured(msg)
         value = conf.get(key, None if default is REQUIRED else default)
         if default is REQUIRED and (value is None or (isinstance(value, str) and not value.strip())):
             msg = (
@@ -103,9 +129,15 @@ class Broker(ABC):
         importing a driver to see whether it exists would pay for it on every
         ``manage.py`` invocation of every project — and the answer is the same either way.
 
-        A broker whose module imports its driver at module scope makes this unreachable,
-        which is why ``AGENTS.md`` forbids it: the ``ImportError`` would arrive first and
-        the reader would never see the extra they need.
+        A broker whose module imports its driver at module scope makes this unreachable:
+        the ``ImportError`` arrives first and the reader never sees the extra they need.
+        ``AGENTS.md`` forbids it for that reason, and the Redis list does **not** satisfy it
+        yet — it reaches the connection through ``django_aiogram.redis``, which imports the
+        driver itself. Measured: importing that broker imports ``redis``. What covers the
+        shipped brokers meanwhile is :data:`~django_aiogram.broker.registry.SHIPPED`, which
+        the registry checks *before* importing anything, so the install line is still what a
+        misconfigured project gets. The rule becomes true for this one when the connection
+        module moves into the transport's own package, with the extras work.
         """
         if cls.REQUIRES is None:
             return

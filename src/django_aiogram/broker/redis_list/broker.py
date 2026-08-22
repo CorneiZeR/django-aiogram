@@ -12,8 +12,6 @@ import time
 from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
-from redis.exceptions import ResponseError
-
 from django_aiogram.broker.base import Broker
 from django_aiogram.broker.models import Liveness, Taken
 from django_aiogram.eventlog.events import worker_identity
@@ -22,12 +20,26 @@ from django_aiogram.redis import aget_redis, as_bytes, get_redis, heartbeat_key,
 logger = logging.getLogger('django_aiogram')
 
 
+def _response_error() -> type[Exception]:
+    """Fetch the driver's own error class when it is needed, and not before.
+
+    `except _response_error() as error:` rather than a module-scope import, because
+    importing this module must not fail on a machine without redis installed — that is what
+    lets `Broker.verify` name the missing extra instead of a bare `ImportError` reaching a
+    reader. `except` takes an expression, so the lazy fetch costs one attribute lookup on a
+    path that is already handling an error.
+    """
+    from redis.exceptions import ResponseError  # noqa: PLC0415 - the whole point of this function
+
+    return ResponseError
+
+
 class RedisListBroker(Broker):
     """``RPUSH`` to publish, ``BLMOVE`` to take, ``LREM`` to settle."""
 
     #: this broker's own keys, which stopped being everyone's in 4.0
     OPTIONS: ClassVar[Mapping[str, Any]] = {
-        'REDIS_URL': 'redis://localhost:6379/0',
+        'REDIS_URL': '',
         'REDIS_MESSAGES_KEY': 'TELEGRAM_BOT_MESSAGE',
         'REDIS_TIMEOUT': 10,
         'BLPOP_TIMEOUT': 5,
@@ -80,8 +92,18 @@ class RedisListBroker(Broker):
         waiting = max(1, math.ceil(timeout))
         connection = get_redis()
         if self._reliable:
-            raw = connection.blmove(self._queue(), self._inflight(), waiting, 'LEFT', 'RIGHT')
-        else:
+            try:
+                raw = connection.blmove(self._queue(), self._inflight(), waiting, 'LEFT', 'RIGHT')
+            except _response_error() as error:
+                # the same downgrade `take_nowait` and `reclaim` do. `run` calls `reclaim`
+                # before the first take, so the ordinary pre-6.2 server downgrades there —
+                # but a connection that reaches a server without LMOVE *after* a reclaim
+                # succeeded, a failover for one, left this raising on every iteration with
+                # `run` logging and retrying for ever
+                if not self._downgrade_without_lmove(error):
+                    raise
+                return self.take(timeout)
+        if not self._reliable:
             item = connection.blpop([self._queue()], timeout=waiting)
             raw = None if item is None else item[1]
         return None if raw is None else Taken(as_bytes(raw), raw)
@@ -93,7 +115,7 @@ class RedisListBroker(Broker):
         if self._reliable:
             try:
                 raw = connection.lmove(self._queue(), self._inflight(), 'LEFT', 'RIGHT')
-            except ResponseError as error:
+            except _response_error() as error:
                 # a caller draining by hand never ran `reclaim`, so this is where it can
                 # first meet a server without LMOVE; without the downgrade the raw error
                 # would come out of a documented helper
@@ -154,7 +176,7 @@ class RedisListBroker(Broker):
             # RIGHT->LEFT keeps the original order at the front of the queue
             while connection.lmove(self._inflight(), self._queue(), 'RIGHT', 'LEFT'):
                 count += 1
-        except ResponseError as error:
+        except _response_error() as error:
             # WRONGTYPE, NOPERM and friends say nothing about LMOVE support
             if not self._downgrade_without_lmove(error):
                 raise
@@ -204,7 +226,7 @@ class RedisListBroker(Broker):
         """True: the in-flight list is keyed on the worker's name and nothing else is."""
         return True
 
-    def _downgrade_without_lmove(self, error: ResponseError) -> bool:
+    def _downgrade_without_lmove(self, error: Exception) -> bool:
         """Fall back to plain pops when the server has no ``LMOVE``, and say whether it did."""
         if 'unknown command' not in str(error).lower():
             return False
