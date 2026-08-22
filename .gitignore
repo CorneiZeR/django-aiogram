@@ -21,3 +21,6 @@ htmlcov/
 
 # JetBrains AI plugin checkpoints: 45 MB of local cache, not source
 .proxyai/
+
+# macOS
+.DS_Store
