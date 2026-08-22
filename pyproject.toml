@@ -3,7 +3,7 @@ requires = ["hatchling>=1.27"]  # PEP 639 license metadata
 build-backend = "hatchling.build"
 
 [project]
-name = "django-redis-aiogram"
+name = "django-aiogram"
 dynamic = ["version"]
 description = "Run aiogram in a neighbour container and send Telegram messages from Django through Redis"
 readme = "README.md"
@@ -66,18 +66,18 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/CorneiZeR/django-redis-aiogram"
-Documentation = "https://github.com/CorneiZeR/django-redis-aiogram/wiki"
-Changelog = "https://github.com/CorneiZeR/django-redis-aiogram/blob/master/CHANGELOG.md"
-Issues = "https://github.com/CorneiZeR/django-redis-aiogram/issues"
-Repository = "https://github.com/CorneiZeR/django-redis-aiogram"
+Homepage = "https://github.com/CorneiZeR/django-aiogram"
+Documentation = "https://github.com/CorneiZeR/django-aiogram/wiki"
+Changelog = "https://github.com/CorneiZeR/django-aiogram/blob/master/CHANGELOG.md"
+Issues = "https://github.com/CorneiZeR/django-aiogram/issues"
+Repository = "https://github.com/CorneiZeR/django-aiogram"
 Funding = "https://github.com/sponsors/CorneiZeR"
 
 [tool.hatch.version]
-path = "src/django_redis_aiogram/__init__.py"
+path = "src/django_aiogram/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/django_redis_aiogram"]
+packages = ["src/django_aiogram"]
 
 [tool.hatch.build.targets.sdist]
 # hatchling searches for licence files by name, at any depth, whatever the anchoring
@@ -111,7 +111,7 @@ testpaths = ["tests"]
 # as a second invocation with --ds=tests.db_settings
 addopts = "--ignore=tests/db"
 markers = [
-    "integration: needs a real Redis; set DJANGO_REDIS_AIOGRAM_TEST_REDIS_URL to run",
+    "integration: needs a real Redis; set DJANGO_AIOGRAM_TEST_REDIS_URL to run",
 ]
 # deliberately not a bare "error": that escalates ResourceWarning into
 # PytestUnraisableExceptionWarning, whose attribution follows GC timing and so
@@ -137,7 +137,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["django_redis_aiogram"]
+known-first-party = ["django_aiogram"]
 
 [tool.ruff.lint.flake8-annotations]
 # Any is unavoidable for **kwargs passthroughs into aiogram bot methods

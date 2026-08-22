@@ -15,9 +15,9 @@ from django.test import override_settings
 from redis import Redis
 from redis.exceptions import ResponseError
 
-from django_redis_aiogram import TelegramBot
-from django_redis_aiogram.delivery import BlpopDelivery
-from django_redis_aiogram.serializers import JsonSerializer, PickleSerializer
+from django_aiogram import TelegramBot
+from django_aiogram.delivery import BlpopDelivery
+from django_aiogram.serializers import JsonSerializer, PickleSerializer
 
 pytestmark = pytest.mark.integration
 

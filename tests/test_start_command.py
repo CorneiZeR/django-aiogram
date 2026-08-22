@@ -10,8 +10,8 @@ import pytest
 from django.core.management import CommandError, call_command
 from django.test import override_settings
 
-from django_redis_aiogram import bot
-from django_redis_aiogram.management.commands.start_tgbot import Command
+from django_aiogram import bot
+from django_aiogram.management.commands.start_tgbot import Command
 
 
 class RecordingDelivery:
@@ -45,7 +45,7 @@ class RecordingDelivery:
 def test_consumer_starts_only_after_the_loop_is_running(monkeypatch):
     events = []
     monkeypatch.setattr(
-        'django_redis_aiogram.management.commands.start_tgbot.get_delivery',
+        'django_aiogram.management.commands.start_tgbot.get_delivery',
         lambda handler: RecordingDelivery(events),
     )
 
@@ -70,7 +70,7 @@ def test_shutdown_is_safe_when_the_consumer_never_started(monkeypatch):
     """Polling can fail before the loop runs the deferred start."""
     events = []
     monkeypatch.setattr(
-        'django_redis_aiogram.management.commands.start_tgbot.get_delivery',
+        'django_aiogram.management.commands.start_tgbot.get_delivery',
         lambda handler: RecordingDelivery(events),
     )
 
@@ -99,7 +99,7 @@ def test_the_previous_sigterm_handler_is_restored(monkeypatch):
     previous = signal.signal(signal.SIGTERM, sentinel)
     try:
         monkeypatch.setattr(
-            'django_redis_aiogram.management.commands.start_tgbot.get_delivery',
+            'django_aiogram.management.commands.start_tgbot.get_delivery',
             lambda handler: _NoDelivery(),
         )
         monkeypatch.setattr(bot, 'close', lambda: None)
@@ -144,7 +144,7 @@ def test_webhook_mode_consumes_without_calling_telegram(monkeypatch):
 
     handlers = []
     monkeypatch.setattr(
-        'django_redis_aiogram.management.commands.start_tgbot.get_delivery',
+        'django_aiogram.management.commands.start_tgbot.get_delivery',
         lambda handler: handlers.append(handler) or Delivery(),
     )
     monkeypatch.setattr(bot, 'close', lambda: events.append('closed'))
@@ -188,7 +188,7 @@ def test_a_disabled_container_idling_still_unwinds_like_the_enabled_path(monkeyp
     """
     stopped = []
     monkeypatch.setattr(
-        'django_redis_aiogram.management.commands.start_tgbot.recorder',
+        'django_aiogram.management.commands.start_tgbot.recorder',
         SimpleNamespace(stop=lambda: stopped.append('stopped')),
     )
     released = threading.Event()
@@ -229,10 +229,10 @@ def test_an_ephemeral_worker_name_is_warned_about_where_the_process_is_known(mon
     sending, and this is the process that owns that list. Said before the thread exists,
     so an operator reading the first lines of the log sees it.
     """
-    monkeypatch.setattr('django_redis_aiogram.checks.socket.gethostname', lambda: 'ba333cb79e00')
+    monkeypatch.setattr('django_aiogram.checks.socket.gethostname', lambda: 'ba333cb79e00')
     monkeypatch.delenv('HOSTNAME', raising=False)
 
-    with caplog.at_level('WARNING', logger='django_redis_aiogram'):
+    with caplog.at_level('WARNING', logger='django_aiogram'):
         printed, _ = run_start_command(mode='webhook')
 
     assert 'WORKER_NAME' in printed, 'the operator was told nothing'
@@ -260,7 +260,7 @@ def run_start_command(**options):
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(
-            'django_redis_aiogram.management.commands.start_tgbot.get_delivery',
+            'django_aiogram.management.commands.start_tgbot.get_delivery',
             lambda handler: Delivery(),
         )
         patch.setattr(bot, 'close', lambda: None)
@@ -339,7 +339,7 @@ def test_the_consumer_join_is_derived_from_the_read_deadline(monkeypatch):
             return SimpleNamespace(join=lambda timeout=None: joined.append(timeout), is_alive=lambda: False)
 
     monkeypatch.setattr(
-        'django_redis_aiogram.management.commands.start_tgbot.get_delivery',
+        'django_aiogram.management.commands.start_tgbot.get_delivery',
         lambda handler: SlowDelivery([]),
     )
     monkeypatch.setattr(bot, 'start_polling', lambda: bot.loop.run_until_complete(asyncio.sleep(0)))
@@ -360,13 +360,13 @@ def test_a_consumer_that_outlives_its_join_is_reported(monkeypatch, caplog):
             return SimpleNamespace(join=lambda timeout=None: None, is_alive=lambda: True)
 
     monkeypatch.setattr(
-        'django_redis_aiogram.management.commands.start_tgbot.get_delivery',
+        'django_aiogram.management.commands.start_tgbot.get_delivery',
         lambda handler: StuckDelivery([]),
     )
     monkeypatch.setattr(bot, 'start_polling', lambda: bot.loop.run_until_complete(asyncio.sleep(0)))
     monkeypatch.setattr(bot, 'close', lambda: None)
 
-    with caplog.at_level('WARNING', logger='django_redis_aiogram'):
+    with caplog.at_level('WARNING', logger='django_aiogram'):
         call_command('start_tgbot')
 
     assert 'the delivery consumer did not stop in time' in caplog.text
@@ -395,7 +395,7 @@ def test_a_server_without_lmove_is_refused_when_crash_safety_is_required(monkeyp
 
     started = []
     monkeypatch.setattr(
-        'django_redis_aiogram.management.commands.start_tgbot.get_delivery',
+        'django_aiogram.management.commands.start_tgbot.get_delivery',
         lambda handler: OldServer(started),
     )
     # recorded too: asserting only on the consumer would let the probe move after
@@ -429,7 +429,7 @@ def test_an_unreachable_redis_does_not_read_as_an_old_server(monkeypatch, caplog
             return False
 
     monkeypatch.setattr(
-        'django_redis_aiogram.management.commands.start_tgbot.get_delivery',
+        'django_aiogram.management.commands.start_tgbot.get_delivery',
         lambda handler: Unreachable(events),
     )
 
@@ -440,7 +440,7 @@ def test_an_unreachable_redis_does_not_read_as_an_old_server(monkeypatch, caplog
     monkeypatch.setattr(bot, 'start_polling', polled)
     monkeypatch.setattr(bot, 'close', lambda: None)
 
-    with caplog.at_level('WARNING', logger='django_redis_aiogram'):
+    with caplog.at_level('WARNING', logger='django_aiogram'):
         call_command('start_tgbot')
 
     # not merely "it did not raise": a command that returned early over the failed
@@ -462,13 +462,13 @@ def test_the_consumer_is_not_started_by_the_shutdown_itself(monkeypatch, caplog)
     """
     events = []
     monkeypatch.setattr(
-        'django_redis_aiogram.management.commands.start_tgbot.get_delivery',
+        'django_aiogram.management.commands.start_tgbot.get_delivery',
         lambda handler: RecordingDelivery(events),
     )
     # the loop never runs, so the queued start is still queued in the finally
     monkeypatch.setattr(Command, '_idle_on_the_loop', lambda self: None)
 
-    with caplog.at_level('INFO', logger='django_redis_aiogram'):
+    with caplog.at_level('INFO', logger='django_aiogram'):
         call_command('start_tgbot')
 
     assert 'stopped' in events, events

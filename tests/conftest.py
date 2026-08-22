@@ -2,19 +2,19 @@ import fakeredis
 import fakeredis.aioredis
 import pytest
 
-from django_redis_aiogram import conf
+from django_aiogram import conf
 
-# `django_redis_aiogram.bot` is the singleton instance, so the class lives in
+# `django_aiogram.bot` is the singleton instance, so the class lives in
 # `client`; patching the wrong one silently leaves the real connection in place.
 PATCH_TARGETS = (
-    'django_redis_aiogram.redis.get_redis',
-    'django_redis_aiogram.delivery.get_redis',
-    'django_redis_aiogram.client.get_redis',
-    'django_redis_aiogram.get_redis',
+    'django_aiogram.redis.get_redis',
+    'django_aiogram.delivery.get_redis',
+    'django_aiogram.client.get_redis',
+    'django_aiogram.get_redis',
     # the probe's decision moved out of the command in 3.1.0, so it can run without
     # django.setup(); the command is a wrapper and holds no connection of its own
-    'django_redis_aiogram.healthcheck.get_redis',
-    'django_redis_aiogram.management.commands.tgbot_reclaim.get_redis',
+    'django_aiogram.healthcheck.get_redis',
+    'django_aiogram.management.commands.tgbot_reclaim.get_redis',
 )
 
 
@@ -26,7 +26,7 @@ def _uncached_settings():
     tests clean up after themselves. `monkeypatch.setenv` fires nothing: the variable is
     restored at teardown and the value read through it stays cached, so the next test to
     ask for that key gets an answer from an environment that no longer exists. Measured
-    before this existed — a test setting `DJANGO_REDIS_AIOGRAM_BLPOP_TIMEOUT=3` and calling
+    before this existed — a test setting `DJANGO_AIOGRAM_BLPOP_TIMEOUT=3` and calling
     `conf.reset()` left the next test reading 3 with the variable already gone.
     """
     yield
@@ -47,7 +47,7 @@ def redis_server(monkeypatch):
     for target in PATCH_TARGETS:
         monkeypatch.setattr(target, lambda *args, client=client, **kwargs: client)
     monkeypatch.setattr(
-        'django_redis_aiogram.redis.build_async_client',
+        'django_aiogram.redis.build_async_client',
         lambda server=server: fakeredis.aioredis.FakeRedis(server=server),
     )
     return client

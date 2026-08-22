@@ -2,7 +2,7 @@ name: Publish
 
 # Publishing uses PyPI Trusted Publishing (OIDC), so there is no API token in
 # secrets. Configure the publisher once at
-# https://pypi.org/manage/project/django-redis-aiogram/settings/publishing/
+# https://pypi.org/manage/project/django-aiogram/settings/publishing/
 # with this repository, workflow name `publish.yml` and environment `pypi`.
 
 on:
@@ -37,7 +37,7 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           tag="$RELEASE_TAG"
-          version=$(python -c "import re, pathlib; print(re.search(r\"__version__ = '(.+?)'\", pathlib.Path('src/django_redis_aiogram/__init__.py').read_text()).group(1))")
+          version=$(python -c "import re, pathlib; print(re.search(r\"__version__ = '(.+?)'\", pathlib.Path('src/django_aiogram/__init__.py').read_text()).group(1))")
           if [ "${tag#v}" != "$version" ]; then
             echo "release tag ${tag} does not match __version__ ${version}" >&2
             exit 1
@@ -71,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/django-redis-aiogram
+      url: https://pypi.org/p/django-aiogram
     permissions:
       id-token: write
     steps:

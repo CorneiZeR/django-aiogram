@@ -16,11 +16,11 @@ import weakref
 import pytest
 from django.test import override_settings
 
-from django_redis_aiogram import TelegramBot
-from django_redis_aiogram import redis as redis_module
-from django_redis_aiogram.envelope import unpack
-from django_redis_aiogram.redis import as_bytes
-from django_redis_aiogram.serializers import loads
+from django_aiogram import TelegramBot
+from django_aiogram import redis as redis_module
+from django_aiogram.envelope import unpack
+from django_aiogram.redis import as_bytes
+from django_aiogram.serializers import loads
 
 pytestmark = pytest.mark.integration
 

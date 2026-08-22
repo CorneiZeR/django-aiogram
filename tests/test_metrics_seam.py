@@ -26,17 +26,17 @@ from redis.exceptions import (
     ConnectionError,  # noqa: A004 - shadowing the builtin is the point: this is what redis-py raises
 )
 
-from django_redis_aiogram import TelegramBot
-from django_redis_aiogram import recorder as recorder_module
-from django_redis_aiogram.instrumentation import install_instrumentation, instrumented
-from django_redis_aiogram.recorder import (
+from django_aiogram import TelegramBot
+from django_aiogram import recorder as recorder_module
+from django_aiogram.instrumentation import install_instrumentation, instrumented
+from django_aiogram.recorder import (
     DROP_REPORT_INTERVAL,
     WRITER_THREAD,
     Event,
     EventRecorder,
     recorder,
 )
-from django_redis_aiogram.signals import events_recorded
+from django_aiogram.signals import events_recorded
 
 
 def a_bot():
@@ -174,7 +174,7 @@ def test_the_payload_is_not_summarized_for_a_receiver(redis_server, collected, m
     about — the cost, not the value.
     """
     called = []
-    monkeypatch.setattr('django_redis_aiogram.client.describe', lambda kwargs: called.append(kwargs) or {})
+    monkeypatch.setattr('django_aiogram.client.describe', lambda kwargs: called.append(kwargs) or {})
 
     TelegramBot().send_redis(chat_id=7, text='hi')
     recorder.flush(timeout=5)
@@ -327,7 +327,7 @@ def test_one_broken_receiver_does_not_cost_the_others_their_batch(redis_server, 
 
     events_recorded.connect(broken, weak=False, dispatch_uid='tests.metrics.broken')
     try:
-        with caplog.at_level('ERROR', logger='django_redis_aiogram'):
+        with caplog.at_level('ERROR', logger='django_aiogram'):
             TelegramBot().send_redis(chat_id=7, text='hi')
             recorder.flush(timeout=5)
     finally:
@@ -370,7 +370,7 @@ def test_a_metrics_only_writer_does_not_close_a_connection_it_never_opened(redis
 
     Which is the one import `recorder.py`'s own docstring exists to keep out of a
     process that does not need it — and a process with receivers and no table does
-    not. Measured before the fix: `django_redis_aiogram.eventlog` appeared in
+    not. Measured before the fix: `django_aiogram.eventlog` appeared in
     `sys.modules` the moment the writer stopped, having written nothing.
 
     Asserted on the call rather than on `sys.modules`, because by the time this test
@@ -499,7 +499,7 @@ def test_a_receiver_still_gets_the_detail_a_seam_measured_itself(redis_server, c
         message = 'redis is gone'
         raise ConnectionError(message)
 
-    monkeypatch.setattr('django_redis_aiogram.client.get_redis', refuse)
+    monkeypatch.setattr('django_aiogram.client.get_redis', refuse)
 
     with pytest.raises(ConnectionError):
         TelegramBot().send_redis(chat_id=7, text='hi')
@@ -522,12 +522,12 @@ def test_a_failed_write_still_reaches_a_receiver(redis_server, collected, monkey
 
     def refuse(batch):
         """Fail the way an unmigrated database fails."""
-        message = 'no such table: django_redis_aiogram_telegramevent'
+        message = 'no such table: django_aiogram_telegramevent'
         raise RuntimeError(message)
 
     monkeypatch.setattr(recorder, '_write', refuse)
 
-    with caplog.at_level('ERROR', logger='django_redis_aiogram'):
+    with caplog.at_level('ERROR', logger='django_aiogram'):
         TelegramBot().send_redis(chat_id=7, text='hi')
         recorder.flush(timeout=5)
 
@@ -691,7 +691,7 @@ def test_a_receiver_that_cannot_even_be_named_costs_nobody_their_batch(redis_ser
 
     events_recorded.connect(receiver, weak=False, dispatch_uid='tests.metrics.hostile')
     try:
-        with caplog.at_level('ERROR', logger='django_redis_aiogram'):
+        with caplog.at_level('ERROR', logger='django_aiogram'):
             TelegramBot().send_redis(chat_id=7, text='hi')
             recorder.flush(timeout=5)
     finally:
@@ -760,7 +760,7 @@ def test_a_gap_row_that_cannot_be_written_keeps_its_count(redis_server, monkeypa
     """
 
     def refuse(batch):
-        raise OperationalError('no such table: django_redis_aiogram_event')
+        raise OperationalError('no such table: django_aiogram_event')
 
     monkeypatch.setattr(recorder, '_write', refuse)
     recorder._dropped = 7
@@ -886,7 +886,7 @@ def test_a_gap_row_the_database_refuses_one_at_a_time_keeps_its_count(
     monkeypatch.setattr(recorder, '_write', refuse_every_row)
     recorder._dropped = 5
 
-    with caplog.at_level('ERROR', logger='django_redis_aiogram'):
+    with caplog.at_level('ERROR', logger='django_aiogram'):
         recorder._record_gap(5)
 
     assert recorder._dropped == 5, 'the gap was lost to a refusal nobody checked'
@@ -906,7 +906,7 @@ def test_dropping_nothing_says_nothing(redis_server, caplog, clean_counters):
     """
     recorder._reported_at = time.monotonic() - DROP_REPORT_INTERVAL - 1
 
-    with caplog.at_level('ERROR', logger='django_redis_aiogram'):
+    with caplog.at_level('ERROR', logger='django_aiogram'):
         recorder._drop(0)
 
     assert recorder._dropped == 0

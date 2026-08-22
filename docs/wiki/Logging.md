@@ -1,6 +1,6 @@
 # Logging
 
-Everything goes to the `django_redis_aiogram` logger. Values are attached as
+Everything goes to the `django_aiogram` logger. Values are attached as
 structured fields rather than interpolated into the message, so a JSON or
 structlog backend can index and filter them.
 
@@ -12,7 +12,7 @@ LOGGING = {
         'console': {'class': 'logging.StreamHandler'},
     },
     'loggers': {
-        'django_redis_aiogram': {
+        'django_aiogram': {
             'handlers': ['console'],
             'level': 'INFO',
             'propagate': False,
@@ -107,13 +107,13 @@ handler.setFormatter(
         foreign_pre_chain=[structlog.stdlib.ExtraAdder()],
     )
 )
-logging.getLogger('django_redis_aiogram').addHandler(handler)
+logging.getLogger('django_aiogram').addHandler(handler)
 ```
 
 With it in place the `tg_` fields arrive as event keys:
 
 ```python
-logger = logging.getLogger('django_redis_aiogram')
+logger = logging.getLogger('django_aiogram')
 logger.warning('rate limited by telegram', extra={'tg_function': 'send_message'})
 # -> {"event": "rate limited by telegram", "tg_function": "send_message", ...}
 ```

@@ -19,10 +19,10 @@ from aiogram import Bot, Dispatcher, F, Router, types
 from aiogram.client.session.base import BaseSession
 from django.test import override_settings
 
-from django_redis_aiogram import bot
-from django_redis_aiogram.delivery import BlpopDelivery
-from django_redis_aiogram.envelope import unpack
-from django_redis_aiogram.serializers import loads
+from django_aiogram import bot
+from django_aiogram.delivery import BlpopDelivery
+from django_aiogram.envelope import unpack
+from django_aiogram.serializers import loads
 
 QUEUE = 'TELEGRAM_BOT_MESSAGE'
 
@@ -40,7 +40,7 @@ def a_message(text):
 def test_the_fakeredis_queue_assertion(monkeypatch):
     """Patching client.get_redis is what the page tells the reader to patch."""
     server = fakeredis.FakeRedis()
-    monkeypatch.setattr('django_redis_aiogram.client.get_redis', lambda: server)
+    monkeypatch.setattr('django_aiogram.client.get_redis', lambda: server)
 
     approve({'reviewer': 42})
 
@@ -157,7 +157,7 @@ def imported_from_the_package(tree: ast.Module) -> dict[str, object]:
     """What a snippet bound by importing from this package, resolved for real."""
     bound: dict[str, object] = {}
     for node in ast.walk(tree):
-        if not isinstance(node, ast.ImportFrom) or not (node.module or '').startswith('django_redis_aiogram'):
+        if not isinstance(node, ast.ImportFrom) or not (node.module or '').startswith('django_aiogram'):
             continue
         module = importlib.import_module(node.module or '')
         for alias in node.names:
@@ -215,7 +215,7 @@ def test_the_page_binds_names_the_attribute_check_can_read():
     bound = [imported_from_the_package(ast.parse(snippet)) for snippet in SNIPPETS]
     assert any(bound), 'no snippet on the page binds anything from the package'
 
-    tree = ast.parse('from django_redis_aiogram import bot\nbot.no_such_attribute\n')
+    tree = ast.parse('from django_aiogram import bot\nbot.no_such_attribute\n')
     resolved = imported_from_the_package(tree)
     assert 'bot' in resolved, 'a plain package import is no longer resolved'
     assert not hasattr(resolved['bot'], 'no_such_attribute')
@@ -226,7 +226,7 @@ def test_the_page_documents_every_recipe_here():
     text = PAGE.read_text(encoding='utf-8')
     for needle in (
         'fakeredis',
-        'django_redis_aiogram.client.get_redis',
+        'django_aiogram.client.get_redis',
         "monkeypatch.setattr(bot, 'send'",
         'object.__setattr__',
         'feed_update',
@@ -333,12 +333,12 @@ def test_the_deployment_healthcheck_recipe_names_a_runnable_module():
         encoding='utf-8'
     )
 
-    assert "test: ['CMD', 'python', '-m', 'django_redis_aiogram.healthcheck']" in page
+    assert "test: ['CMD', 'python', '-m', 'django_aiogram.healthcheck']" in page
     assert "test: ['CMD', 'python', 'manage.py', 'tgbot_healthcheck']" not in page, (
         'the page still tells readers to put the management command in a healthcheck'
     )
 
-    module = importlib.import_module('django_redis_aiogram.healthcheck')
+    module = importlib.import_module('django_aiogram.healthcheck')
     assert callable(module.main), 'the module the page names has no main() to run'
 
     # run it, rather than grep the source for `if __name__`: that string is equally
@@ -346,7 +346,7 @@ def test_the_deployment_healthcheck_recipe_names_a_runnable_module():
     # settings nor a Redis, so it answers "is this runnable with python -m" and nothing
     # else — the probe's real exit codes are pinned in tests/test_lazy_init.py
     helped = subprocess.run(
-        [sys.executable, '-m', 'django_redis_aiogram.healthcheck', '--help'],
+        [sys.executable, '-m', 'django_aiogram.healthcheck', '--help'],
         capture_output=True,
         text=True,
         check=False,
@@ -354,7 +354,7 @@ def test_the_deployment_healthcheck_recipe_names_a_runnable_module():
     )
 
     assert helped.returncode == 0, helped.stderr
-    assert 'python -m django_redis_aiogram.healthcheck' in helped.stdout, helped.stdout
+    assert 'python -m django_aiogram.healthcheck' in helped.stdout, helped.stdout
     for flag in ('--max-queue', '--max-age', '--stranded', '--guarantee'):
         assert flag in helped.stdout, f'{flag} is not on the module the page names'
 
@@ -382,7 +382,7 @@ def test_every_published_healthcheck_carries_the_settings_module(page_name):
     # segment made a paragraph that merely *names* the module into a "block" that then had
     # to contain a settings assignment. This page has exactly such a paragraph
     fenced = page.split('```')[1::2]
-    blocks = [block for block in fenced if 'django_redis_aiogram.healthcheck' in block]
+    blocks = [block for block in fenced if 'django_aiogram.healthcheck' in block]
     assert blocks, f'{page_name} publishes no healthcheck recipe any more'
     for block in blocks:
         # an assignment with a value, not the name anywhere in the block: the prose that
@@ -429,7 +429,7 @@ WEBHOOK_REFUSALS = (
 def webhook_source():
     """The view, as text."""
     root = pathlib.Path(__file__).resolve().parent.parent
-    return (root / 'src' / 'django_redis_aiogram' / 'webhook.py').read_text(encoding='utf-8')
+    return (root / 'src' / 'django_aiogram' / 'webhook.py').read_text(encoding='utf-8')
 
 
 def catalogued_refusals():
@@ -516,7 +516,7 @@ def test_every_line_the_probe_prints_is_catalogued(fragment):
     catalogue quietly describing a line the probe no longer prints.
     """
     root = pathlib.Path(__file__).resolve().parent.parent
-    source = (root / 'src' / 'django_redis_aiogram' / 'healthcheck.py').read_text(encoding='utf-8')
+    source = (root / 'src' / 'django_aiogram' / 'healthcheck.py').read_text(encoding='utf-8')
     page = (root / 'docs' / 'wiki' / 'Troubleshooting.md').read_text(encoding='utf-8')
 
     assert fragment in source, 'the probe no longer says this; the page and this list still do'

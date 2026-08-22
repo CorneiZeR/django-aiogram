@@ -20,13 +20,13 @@ from django.test import override_settings
 # `RedisError` and not an `OSError`, so a guard narrowed to either would stay green
 from redis.exceptions import ConnectionError, ResponseError  # noqa: A004
 
-from django_redis_aiogram import TelegramBot
-from django_redis_aiogram.api import API_METHODS, check_function
-from django_redis_aiogram.delivery import BlpopDelivery, defers_completion
-from django_redis_aiogram.management.commands.start_tgbot import Command
-from django_redis_aiogram.serializers import JsonSerializer, PickleSerializer
+from django_aiogram import TelegramBot
+from django_aiogram.api import API_METHODS, check_function
+from django_aiogram.delivery import BlpopDelivery, defers_completion
+from django_aiogram.management.commands.start_tgbot import Command
+from django_aiogram.serializers import JsonSerializer, PickleSerializer
 
-LOGGER = 'django_redis_aiogram'
+LOGGER = 'django_aiogram'
 QUEUE = 'TELEGRAM_BOT_MESSAGE'
 # the in-flight list is per worker, so ask the delivery for its own name
 SETTINGS = {'DELIVERY': 'blpop', 'BLPOP_TIMEOUT': 1, 'WORKER_NAME': 'tests'}
@@ -147,9 +147,9 @@ class OldRedis:
 def old_redis_server(redis_server, monkeypatch):
     wrapped = OldRedis(redis_server)
     for target in (
-        'django_redis_aiogram.redis.get_redis',
-        'django_redis_aiogram.delivery.get_redis',
-        'django_redis_aiogram.client.get_redis',
+        'django_aiogram.redis.get_redis',
+        'django_aiogram.delivery.get_redis',
+        'django_aiogram.client.get_redis',
     ):
         monkeypatch.setattr(target, lambda wrapped=wrapped: wrapped)
     return redis_server
@@ -243,7 +243,7 @@ def test_reclaim_survives_a_redis_that_is_not_up_yet(redis_server, monkeypatch):
         def __getattr__(self, name):
             return getattr(redis_server, name)
 
-    monkeypatch.setattr('django_redis_aiogram.delivery.get_redis', Unreachable)
+    monkeypatch.setattr('django_aiogram.delivery.get_redis', Unreachable)
 
     delivery = Recording()
     delivery.reclaim()  # must not raise
@@ -288,7 +288,7 @@ def test_reclaim_is_retried_when_redis_was_down_at_startup(redis_server):
     delivery = Recording()
 
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr('django_redis_aiogram.delivery.get_redis', FlakyOnce)
+        patch.setattr('django_aiogram.delivery.get_redis', FlakyOnce)
         drain(delivery, expected_handled=1)
 
     assert [item['chat_id'] for item in delivery.handled] == [1]
@@ -310,7 +310,7 @@ def test_a_response_error_that_is_not_a_missing_lmove_keeps_crash_safety(redis_s
 
     delivery = Recording()
     with pytest.MonkeyPatch.context() as patch, caplog.at_level('ERROR', logger=LOGGER):
-        patch.setattr('django_redis_aiogram.delivery.get_redis', WrongType)
+        patch.setattr('django_aiogram.delivery.get_redis', WrongType)
         assert delivery.reclaim() is False, 'the caller was not asked to retry'
 
     assert delivery._reliable is True, 'crash-safe mode was given up on the wrong error'
@@ -397,7 +397,7 @@ def test_the_refused_message_is_delivered_once_the_operator_relents(redis_server
 def test_administrative_methods_are_denied_even_though_telegram_has_them(method):
     """Sending is not administering: set_webhook would point updates at someone
     else's URL, and log_out or close ends the session for the deployment."""
-    from django_redis_aiogram.api import API_METHODS, DENIED_METHODS, check_function
+    from django_aiogram.api import API_METHODS, DENIED_METHODS, check_function
 
     assert method in DENIED_METHODS
     assert method not in API_METHODS
@@ -412,7 +412,7 @@ def test_the_deny_list_only_removes_methods_that_exist():
     import aiogram.methods
     from aiogram import Bot
 
-    from django_redis_aiogram.api import DENIED_METHODS
+    from django_aiogram.api import DENIED_METHODS
 
     discovered = {regex.sub(r'(?<!^)(?=[A-Z])', '_', name).lower() for name in aiogram.methods.__all__}
     public = {name for name in dir(Bot) if not name.startswith('_')}
@@ -1098,9 +1098,9 @@ def test_a_send_the_drain_finishes_is_acknowledged_before_the_command_returns(re
     sent: list[int] = []
     instance = TelegramBot()
     instance._bot = SlowTelegram()
-    monkeypatch.setattr('django_redis_aiogram.management.commands.start_tgbot.bot', instance)
+    monkeypatch.setattr('django_aiogram.management.commands.start_tgbot.bot', instance)
     monkeypatch.setattr(
-        'django_redis_aiogram.management.commands.start_tgbot.get_delivery',
+        'django_aiogram.management.commands.start_tgbot.get_delivery',
         lambda handler: BlpopDelivery(handler=handler),
     )
     release = threading.Event()
@@ -1137,8 +1137,8 @@ def test_reclaim_works_on_a_server_older_than_lmove(redis_server, monkeypatch):
     redis_server.rpush(f'{QUEUE}:processing:gone', payload(1), payload(2))
     old = OldRedis(redis_server)
     targets = (
-        'django_redis_aiogram.redis.get_redis',
-        'django_redis_aiogram.management.commands.tgbot_reclaim.get_redis',
+        'django_aiogram.redis.get_redis',
+        'django_aiogram.management.commands.tgbot_reclaim.get_redis',
     )
     for target in targets:
         # no `raising=False`: it would create the attribute instead of failing, so a

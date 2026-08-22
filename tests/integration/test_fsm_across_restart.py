@@ -13,7 +13,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.storage.redis import RedisStorage
 from django.test import override_settings
 
-from django_redis_aiogram import TelegramBot
+from django_aiogram import TelegramBot
 
 pytestmark = pytest.mark.integration
 

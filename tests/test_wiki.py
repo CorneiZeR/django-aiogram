@@ -75,7 +75,7 @@ README = ROOT / 'README.md'
 PYPROJECT = ROOT / 'pyproject.toml'
 # absolute, because the README is also the PyPI description and PyPI does not
 # rewrite relative links — ../../wiki/<page> resolves to pypi.org/wiki/<page>
-WIKI_URL = 'https://github.com/CorneiZeR/django-redis-aiogram/wiki/'
+WIKI_URL = 'https://github.com/CorneiZeR/django-aiogram/wiki/'
 README_WIKI_LINK = re.compile(rf'\]\({re.escape(WIKI_URL)}([^)#]+)')
 
 
@@ -104,7 +104,7 @@ def test_every_documented_log_message_is_still_emitted():
     assert documented, 'no message rows found on the Logging page'
 
     emitted = []
-    for path in sorted((ROOT / 'src' / 'django_redis_aiogram').rglob('*.py')):
+    for path in sorted((ROOT / 'src' / 'django_aiogram').rglob('*.py')):
         for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
             if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
                 continue
@@ -161,15 +161,23 @@ def test_the_newest_changelog_entry_is_this_version_and_is_dated():
     saying `unreleased`, and bumping `__version__` without writing the entry. Read from
     `__version__` so the next release inherits the demand rather than the date.
     """
-    from django_redis_aiogram import __version__
+    from django_aiogram import __version__
 
     # `visible()`, because a heading inside a fenced block is not a release: without it
     # the real one could be deleted and an example in a code block would satisfy this
     lines = visible(CHANGELOG.read_text(encoding='utf-8')).splitlines()
     heading = next(line for line in lines if line.startswith('## '))
 
-    assert heading.startswith(f'## {__version__} - '), f'the newest entry is not {__version__}: {heading!r}'
-    stamp = heading.removeprefix(f'## {__version__} - ')
+    # a version under development announces the entry it is preparing — `4.0.0.dev0`
+    # belongs to the `4.0.0` heading — and only a final version may carry a date. Dating
+    # an entry while the version still says `dev` is how a nightly reads as shipped
+    release, prerelease = re.match(r'(\d+\.\d+\.\d+)(.*)', __version__).groups()
+
+    assert heading.startswith(f'## {release} - '), f'the newest entry is not {release}: {heading!r}'
+    stamp = heading.removeprefix(f'## {release} - ')
+    if prerelease:
+        assert stamp == 'unreleased', f'{__version__} is not released, so the entry cannot be dated {stamp!r}'
+        return
     # parsed, not pattern-matched: `2026-13-45` has the shape of a date and is not one,
     # and a release dated by hand is exactly where that typo lands
     try:
@@ -204,7 +212,7 @@ def test_the_upgrade_page_covers_the_version_being_shipped():
     shutdown arithmetic shipped with an upgrade page whose newest entry was the release
     before it. Read from `__version__`, so the next release inherits the same demand.
     """
-    from django_redis_aiogram import __version__
+    from django_aiogram import __version__
 
     series = '.'.join(__version__.split('.')[:2])
     # `visible()` for the same reason: a heading in a code block is not a section
@@ -292,7 +300,7 @@ def test_visible_drops_what_is_not_rendered():
 
 def test_an_unclosed_fence_hides_everything_after_it():
     """Which is what GitHub renders: the rest of the file becomes code."""
-    text = '## Real\n```\n## Never closed\n[API](https://github.com/CorneiZeR/django-redis-aiogram/wiki/API)\n'
+    text = '## Real\n```\n## Never closed\n[API](https://github.com/CorneiZeR/django-aiogram/wiki/API)\n'
 
     rendered = visible(text)
 

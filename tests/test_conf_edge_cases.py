@@ -8,11 +8,11 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.signals import setting_changed
 from django.test import override_settings
 
-from django_redis_aiogram import conf as conf_object
-from django_redis_aiogram import settings as settings_module
-from django_redis_aiogram.checks import _a_pop_inside_the_deadline, check_settings
-from django_redis_aiogram.defaults import no_default_kwargs
-from django_redis_aiogram.settings import Settings, conf
+from django_aiogram import conf as conf_object
+from django_aiogram import settings as settings_module
+from django_aiogram.checks import _a_pop_inside_the_deadline, check_settings
+from django_aiogram.defaults import no_default_kwargs
+from django_aiogram.settings import Settings, conf
 
 
 @override_settings(TELEGRAM_BOT=['not', 'a', 'mapping'])
@@ -56,9 +56,9 @@ def test_an_absent_setting_is_still_absent_rather_than_wrong(value):
 @pytest.mark.parametrize(
     ('module', 'uid'),
     [
-        ('django_redis_aiogram.settings', 'django_redis_aiogram.settings'),
-        ('django_redis_aiogram.redis', 'django_redis_aiogram.redis'),
-        ('django_redis_aiogram.throttling', 'django_redis_aiogram.throttling'),
+        ('django_aiogram.settings', 'django_aiogram.settings'),
+        ('django_aiogram.redis', 'django_aiogram.redis'),
+        ('django_aiogram.throttling', 'django_aiogram.throttling'),
     ],
 )
 def test_reset_receiver_is_deduplicated(module, uid):
@@ -101,7 +101,7 @@ def test_a_number_setting_reads_a_number_from_the_environment(monkeypatch, raw, 
     `close()` reads one, and the Settings page promises an environment twin for every
     scalar; the environment was the only one of the three that refused.
     """
-    monkeypatch.setenv('DJANGO_REDIS_AIOGRAM_DRAIN_TIMEOUT', raw)
+    monkeypatch.setenv('DJANGO_AIOGRAM_DRAIN_TIMEOUT', raw)
     conf.reset()
 
     assert conf['DRAIN_TIMEOUT'] == expected
@@ -109,7 +109,7 @@ def test_a_number_setting_reads_a_number_from_the_environment(monkeypatch, raw, 
 
 def test_a_number_setting_the_environment_cannot_read_is_refused(monkeypatch):
     """The other direction: silently ignoring it would be worse than either behavior."""
-    monkeypatch.setenv('DJANGO_REDIS_AIOGRAM_DRAIN_TIMEOUT', 'soon')
+    monkeypatch.setenv('DJANGO_AIOGRAM_DRAIN_TIMEOUT', 'soon')
     conf.reset()
 
     with pytest.raises(ImproperlyConfigured, match='must be a number'):
@@ -126,7 +126,7 @@ def test_a_number_the_environment_cannot_bound_a_wait_with_is_refused(monkeypatc
     `manage.py check` runs — and the environment reaches every process, the ones that
     never run checks included, which is the case this branch exists for.
     """
-    monkeypatch.setenv('DJANGO_REDIS_AIOGRAM_DRAIN_TIMEOUT', raw)
+    monkeypatch.setenv('DJANGO_AIOGRAM_DRAIN_TIMEOUT', raw)
     conf.reset()
 
     with pytest.raises(ImproperlyConfigured, match='must be a finite number'):
@@ -141,10 +141,10 @@ def test_the_flush_interval_is_read_the_way_its_check_demands():
     helper below it — the first version of this test asked `_number` directly and passed
     with the float read still in place.
     """
-    from django_redis_aiogram.recorder import EventRecorder
+    from django_aiogram.recorder import EventRecorder
 
     with override_settings(TELEGRAM_BOT={'EVENT_LOG_FLUSH_INTERVAL': 0.5}):
-        assert 'django_redis_aiogram.E038' in {str(m.id) for m in check_settings()}
+        assert 'django_aiogram.E038' in {str(m.id) for m in check_settings()}
         assert EventRecorder.flush_interval() == 1, 'the writer honoured an interval the check refuses'
 
     with override_settings(TELEGRAM_BOT={'EVENT_LOG_FLUSH_INTERVAL': 3}):
@@ -161,8 +161,8 @@ def test_a_writer_dial_that_cannot_be_read_falls_back_instead_of_ending_the_thre
     dict can, and `E038` — the check that owns this setting — only reports it where
     `manage.py check` runs.
     """
-    from django_redis_aiogram.defaults import DEFAULTS
-    from django_redis_aiogram.recorder import EventRecorder
+    from django_aiogram.defaults import DEFAULTS
+    from django_aiogram.recorder import EventRecorder
 
     with override_settings(TELEGRAM_BOT={'EVENT_LOG_FLUSH_INTERVAL': value}):
         assert EventRecorder.flush_interval() == DEFAULTS['EVENT_LOG_FLUSH_INTERVAL']
@@ -178,7 +178,7 @@ def test_the_writer_waits_the_interval_its_reader_returns():
     """
     import queue
 
-    from django_redis_aiogram.recorder import EventRecorder
+    from django_aiogram.recorder import EventRecorder
 
     class RecordingBuffer:
         """Answers `_collect` the way an empty queue does, and remembers the deadline."""
@@ -205,13 +205,13 @@ def test_an_environment_variable_for_a_settings_only_key_says_it_is_ignored(monk
 
     A container or a callable has no textual form, so the variable cannot be honoured —
     but the Settings page promises an environment twin for every scalar, and an operator
-    throttling the bot with `DJANGO_REDIS_AIOGRAM_RATE_LIMIT` got the default rate and no
+    throttling the bot with `DJANGO_AIOGRAM_RATE_LIMIT` got the default rate and no
     word about it. Honoured, refused or reported: this is the third.
     """
-    monkeypatch.setenv(f'DJANGO_REDIS_AIOGRAM_{key}', 'anything')
+    monkeypatch.setenv(f'DJANGO_AIOGRAM_{key}', 'anything')
     conf.reset()
 
-    with caplog.at_level('WARNING', logger='django_redis_aiogram'):
+    with caplog.at_level('WARNING', logger='django_aiogram'):
         _ = conf[key]
 
     assert 'ignoring an environment variable' in caplog.text
@@ -219,7 +219,7 @@ def test_an_environment_variable_for_a_settings_only_key_says_it_is_ignored(monk
     # the reason the first version of this assertion looked for it in the text and failed
     reported = [record for record in caplog.records if getattr(record, 'tg_setting', None) == key]
     assert reported, f'the warning did not name {key}'
-    assert reported[0].tg_variable == f'DJANGO_REDIS_AIOGRAM_{key}'
+    assert reported[0].tg_variable == f'DJANGO_AIOGRAM_{key}'
 
 
 @override_settings(TELEGRAM_BOT=['not', 'a', 'mapping'])

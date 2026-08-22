@@ -13,11 +13,11 @@ import pytest
 from django.core.management import call_command
 from django.test import override_settings
 
-from django_redis_aiogram import TelegramBot, bot
-from django_redis_aiogram.client import Outbound, loop_lock
-from django_redis_aiogram.defaults import DEFAULTS
-from django_redis_aiogram.events import new_correlation_id
-from django_redis_aiogram.management.commands.start_tgbot import Command as StartCommand
+from django_aiogram import TelegramBot, bot
+from django_aiogram.client import Outbound, loop_lock
+from django_aiogram.defaults import DEFAULTS
+from django_aiogram.events import new_correlation_id
+from django_aiogram.management.commands.start_tgbot import Command as StartCommand
 
 
 async def stub_close():
@@ -90,7 +90,7 @@ def test_the_join_bound_is_read_before_the_threads_it_bounds(monkeypatch):
     already finished is joined without the second read the warning branch would make — and
     a count of one is what both produce.
     """
-    from django_redis_aiogram.management.commands import start_tgbot as command_module
+    from django_aiogram.management.commands import start_tgbot as command_module
 
     class Quiet:
         class session:
@@ -201,7 +201,7 @@ def test_sigterm_unwinds_polling(monkeypatch):
             events.append('collected')
 
     monkeypatch.setattr(
-        'django_redis_aiogram.management.commands.start_tgbot.get_delivery',
+        'django_aiogram.management.commands.start_tgbot.get_delivery',
         lambda handler: Delivery(),
     )
     monkeypatch.setattr(bot, 'close', lambda: events.append('closed'))
@@ -299,7 +299,7 @@ def test_shutdown_cancels_a_send_that_outlasts_the_drain(caplog):
     assert [task for task in instance._sends if not task.done()], 'nothing was left tracked'
 
     instance._bot = stub_bot(sent)
-    with caplog.at_level('WARNING', logger='django_redis_aiogram'):
+    with caplog.at_level('WARNING', logger='django_aiogram'):
         instance.close(drain_timeout=0.1)
 
     assert 'dropped in-flight sends at shutdown' in caplog.text
@@ -342,7 +342,7 @@ def test_a_send_started_during_shutdown_is_refused_loudly(caplog):
     instance._bot = stub_bot()
     instance._closing = True
 
-    with caplog.at_level('ERROR', logger='django_redis_aiogram'):
+    with caplog.at_level('ERROR', logger='django_aiogram'):
         instance.send_raw(chat_id=1, text='x')
 
     assert 'send refused: the bot is shutting down' in caplog.text
@@ -359,7 +359,7 @@ def test_a_handoff_queued_before_shutdown_is_dropped_loudly(caplog):
     with running_loop(instance) as loop:
         instance._closing = True
         instance._hand_off(instance.bot.send_message(chat_id=1, text='x'), loop, an_outbound())
-        with caplog.at_level('ERROR', logger='django_redis_aiogram'):
+        with caplog.at_level('ERROR', logger='django_aiogram'):
             done = threading.Event()
             loop.call_soon_threadsafe(done.set)
             assert done.wait(5), 'the loop never ran the queued callback'
@@ -403,7 +403,7 @@ def test_a_send_waiting_on_the_lock_finds_the_loop_closed(caplog):
     assert entered.wait(5), 'the lock was never taken'
 
     sender = threading.Thread(target=lambda: instance.send_raw(chat_id=1, text='x'), daemon=True)
-    with caplog.at_level('ERROR', logger='django_redis_aiogram'):
+    with caplog.at_level('ERROR', logger='django_aiogram'):
         sender.start()
         # close the loop underneath the send, and leave _closing alone: it is
         # read before the lock, so setting it races the sender's start-up and
@@ -423,7 +423,7 @@ def test_close_refuses_to_tear_down_a_running_loop(caplog):
     instance._bot = stub_bot()
     assert instance.dispatcher is not None  # so there is something to tear down
 
-    with running_loop(instance), caplog.at_level('WARNING', logger='django_redis_aiogram'):
+    with running_loop(instance), caplog.at_level('WARNING', logger='django_aiogram'):
         instance.close(drain_timeout=0.1)
 
     assert 'skipping close: stop polling, or the loop thread, before closing the bot' in caplog.text
@@ -438,7 +438,7 @@ def test_close_refuses_to_tear_down_a_running_loop(caplog):
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': True})
 def test_the_recorder_is_stopped_even_when_close_raises(monkeypatch, redis_server):
     """A close() that raises must not also lose the rows the shutdown produced."""
-    from django_redis_aiogram.recorder import recorder
+    from django_aiogram.recorder import recorder
 
     stopped = []
     monkeypatch.setattr(recorder, 'stop', lambda *args, **kwargs: stopped.append(True))
@@ -450,7 +450,7 @@ def test_the_recorder_is_stopped_even_when_close_raises(monkeypatch, redis_serve
         raise RuntimeError(msg)
 
     monkeypatch.setattr(instance, 'close', explode)
-    monkeypatch.setattr('django_redis_aiogram.management.commands.start_tgbot.bot', instance)
+    monkeypatch.setattr('django_aiogram.management.commands.start_tgbot.bot', instance)
 
     command = StartCommand()
     command.idle_event = threading.Event()

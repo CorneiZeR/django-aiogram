@@ -12,9 +12,9 @@ from django.test import override_settings
 from django.utils import module_loading
 from django.utils.module_loading import module_has_submodule
 
-from django_redis_aiogram import bot
-from django_redis_aiogram.routers import autodiscover_tg_routers
-from django_redis_aiogram.settings import conf
+from django_aiogram import bot
+from django_aiogram.routers import autodiscover_tg_routers
+from django_aiogram.settings import conf
 
 
 def test_router_module_was_imported():

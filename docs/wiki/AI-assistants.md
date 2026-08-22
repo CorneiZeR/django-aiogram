@@ -12,9 +12,9 @@ correctly, short enough to sit in a system prompt or a `CLAUDE.md` /
 `AGENTS.md` / `.cursor/rules` file:
 
 ```text
-Project uses django-redis-aiogram 3.x. Rules:
+Project uses django-aiogram 3.x. Rules:
 
-- Import the shared instance: `from django_redis_aiogram import bot`. Never
+- Import the shared instance: `from django_aiogram import bot`. Never
   construct TelegramBot() per task or per request — that builds an event loop and
   an HTTP session nothing closes.
 - To send from anywhere (view, task, signal): `bot.send(chat_id=..., text=...)`.
@@ -36,15 +36,15 @@ Project uses django-redis-aiogram 3.x. Rules:
 - Bot-wide defaults such as parse_mode belong in
   TELEGRAM_BOT['DEFAULT_BOT_PROPERTIES'], not in every send call.
 - Settings live in the TELEGRAM_BOT dict; scalars can come from
-  DJANGO_REDIS_AIOGRAM_<NAME> environment variables.
+  DJANGO_AIOGRAM_<NAME> environment variables.
 - The package is safe to import with no TOKEN and no Redis. Do not add
   placeholder credentials to make imports work, and do not guard imports in
   try/except.
-- `from django_redis_aiogram import bot` loads aiogram (~900 ms), which is the
+- `from django_aiogram import bot` loads aiogram (~900 ms), which is the
   cost of sending and is paid once. Import it in the modules that send, not in a
   package `__init__` that every process loads.
 - Only the container running `manage.py start_tgbot` runs the bot. Do not set
-  DJANGO_REDIS_AIOGRAM_ENABLED=0 on web or Celery processes: it turns their
+  DJANGO_AIOGRAM_ENABLED=0 on web or Celery processes: it turns their
   sends into no-ops and the messages are dropped.
 - Queued payloads are JSON. Keep SERIALIZER='json'. Writing pickle takes BOTH
   SERIALIZER='pickle' and ALLOW_PICKLE=True — the flag alone only lets the
@@ -61,7 +61,7 @@ Project uses django-redis-aiogram 3.x. Rules:
 - bot.send() returns a correlation id. Store it next to your own model if you
   want to join your records to the event log later.
 - For metrics, connect a receiver to `events_recorded` from
-  `django_redis_aiogram.signals` in an AppConfig.ready(). Do not invent a settings
+  `django_aiogram.signals` in an AppConfig.ready(). Do not invent a settings
   hook: there is none. It fires with EVENT_LOG off, so metrics need no table and no
   migration, and the exporter must run in the start_tgbot container because that is
   where send outcomes are recorded.
@@ -74,28 +74,28 @@ Project uses django-redis-aiogram 3.x. Rules:
 ## Prompts that work
 
 **Add a notification.** *"In `orders/views.py`, notify the reviewer over Telegram
-when an order is approved. Use `bot.send` from `django_redis_aiogram` so the
+when an order is approved. Use `bot.send` from `django_aiogram` so the
 request does not wait on Telegram, and add a test that asserts the message was
-queued — see the Testing page of the django-redis-aiogram wiki for the fakeredis
+queued — see the Testing page of the django-aiogram wiki for the fakeredis
 recipe."*
 
 **Add a handler.** *"Add `support/tg_router.py` with a `/status` command that
 answers with the caller's open ticket count. Register it with `@bot.message`
-from `django_redis_aiogram`, keep the ORM access async, and do not touch
+from `django_aiogram`, keep the ORM access async, and do not touch
 `INSTALLED_APPS` — autodiscover imports `tg_router` from every installed app."*
 
 **Set up the containers.** *"Add a `telegram_bot` service to
 `docker-compose.yml` running `python manage.py start_tgbot`, restarting always,
 depending on redis, sharing the same image and `.env` as `back`. Give it a
-healthcheck running `python -m django_redis_aiogram.healthcheck` with
+healthcheck running `python -m django_aiogram.healthcheck` with
 `DJANGO_SETTINGS_MODULE` in its `environment:` — the probe is a separate process, and
 `manage.py` only sets that variable inside its own process. Not
 `manage.py tgbot_healthcheck` in a healthcheck: it runs `django.setup()` first and
-Docker kills it at the timeout. Leave `DJANGO_REDIS_AIOGRAM_ENABLED` unset on the other services
+Docker kills it at the timeout. Leave `DJANGO_AIOGRAM_ENABLED` unset on the other services
 — they queue messages."*
 
 **Turn on the event log.** *"Run `manage.py migrate` first, then enable
-`TELEGRAM_BOT['EVENT_LOG']` in django-redis-aiogram — a process that starts
+`TELEGRAM_BOT['EVENT_LOG']` in django-aiogram — a process that starts
 recording before the table exists drops everything it records until someone
 notices. Then set `EVENT_LOG_RETENTION_DAYS` and schedule
 `manage.py tgbot_prune_events` daily. Leave `EVENT_LOG_PAYLOAD` at its default
@@ -103,7 +103,7 @@ so message bodies stay out of the table, and grant support only
 `view_telegramevent`."* See **[[Event-log|Event log]]**.
 
 **Migrate an older project.** *"This project imports `telegram_bot`, which
-django-redis-aiogram 3.0 removed. Move it to `django_redis_aiogram` 3.x
+django-aiogram 3.0 removed. Move it to `django_aiogram` 3.x
 following the wiki's Upgrading page: rename it in `INSTALLED_APPS`, replace the
 imports, move `parse_mode` into `DEFAULT_BOT_PROPERTIES`, drop the placeholder
 token from settings, and use `bot.router` instead of `bot._router`."* See
@@ -112,7 +112,7 @@ token from settings, and use `bot.router` instead of `bot._router`."* See
 **Debug delivery.** *"Messages are queued but never arrive. Check in this order:
 is the `start_tgbot` container running and is `ENABLED` true there, does
 `redis-cli -n <db> llen TELEGRAM_BOT_MESSAGE` grow, and what does the
-`django_redis_aiogram` logger say. The wiki's Troubleshooting page lists the
+`django_aiogram` logger say. The wiki's Troubleshooting page lists the
 causes per symptom."*
 
 ## What assistants get wrong
@@ -123,7 +123,7 @@ Each of these has been seen in real integrations, and each is a 1.x habit:
 | --- | --- | --- |
 | A placeholder `TOKEN` in settings so imports work | 1.x built the bot at import time and crashed without one | Nothing. Since 2.0 it imports fine with no credentials |
 | `parse_mode` in every `send` call | 1.x had no other way | `DEFAULT_BOT_PROPERTIES` once |
-| `DJANGO_REDIS_AIOGRAM_ENABLED=0` on web and Celery | it reads like "do not run the bot here" | Leave it unset; only `start_tgbot` runs the bot |
+| `DJANGO_AIOGRAM_ENABLED=0` on web and Celery | it reads like "do not run the bot here" | Leave it unset; only `start_tgbot` runs the bot |
 | `TelegramBot()` inside a task | the shared instance looks stateful | Import `bot` |
 | `bot._router` | it was private for a long time | `bot.router` |
 | `try/except` around the import | defensive habit from the crashing version | Import it plainly |

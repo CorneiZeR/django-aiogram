@@ -3,16 +3,16 @@
 The shared instance is what you normally use:
 
 ```python
-from django_redis_aiogram import bot
+from django_aiogram import bot
 ```
 
 `bot` is a `TelegramBot`. Building one needs no credentials — everything that
 does appears on first use — so importing it anywhere is safe, including in a
 process that never talks to Telegram.
 
-`import django_redis_aiogram` costs about 0.17 ms, because the package resolves its
+`import django_aiogram` costs about 0.17 ms, because the package resolves its
 exports on attribute access — it was roughly a millisecond and a half before 3.1.0. Naming `bot` is what loads aiogram and
-the pydantic stack under it (~900 ms), so `from django_redis_aiogram import bot`
+the pydantic stack under it (~900 ms), so `from django_aiogram import bot`
 pays that once, at the moment of import. Put it in the modules that send —
 router modules, the views and tasks that call `bot.send()` — and a process that
 imports none of them never loads aiogram at all.
@@ -107,7 +107,7 @@ the shutdown recipe.
 | `bot.inflight_depth(worker=None)` | messages one worker is part-way through sending |
 | `await bot.aqueue_depth()` / `await bot.ainflight_depth(...)` | the same read, without holding the loop |
 
-`aget_redis()` and `aclose_redis()` in `django_redis_aiogram.redis` are **not** part
+`aget_redis()` and `aclose_redis()` in `django_aiogram.redis` are **not** part
 of this surface, deliberately: the async client is one per running loop, and its
 lifetime belongs to `bot.aclose()` rather than to a caller. Reach the queue through
 the four methods above; if you hold a client of your own, you own closing it on the
@@ -191,11 +191,11 @@ fresh event loop and HTTP session that nothing closes — see **[[Sending-messag
 ## Module level
 
 ```python
-from django_redis_aiogram import TelegramBot, bot, conf, get_redis, redis_conn, __version__
+from django_aiogram import TelegramBot, bot, conf, get_redis, redis_conn, __version__
 ```
 
 `conf` reads `settings.TELEGRAM_BOT` on first access, falls back to
-`DJANGO_REDIS_AIOGRAM_<NAME>` for scalars, and resets itself on
+`DJANGO_AIOGRAM_<NAME>` for scalars, and resets itself on
 `override_settings`. `redis_conn` is a lazy proxy over `get_redis()`; both hand
 back the one connection.
 
@@ -205,7 +205,7 @@ Every choice a setting offers exists as an enum member, so a project can import
 the value instead of spelling the string:
 
 ```python
-from django_redis_aiogram.enums import DeliveryKind, StorageKind, UpdateMode
+from django_aiogram.enums import DeliveryKind, StorageKind, UpdateMode
 
 TELEGRAM_BOT = {
     'DELIVERY': DeliveryKind.BLPOP,
@@ -234,9 +234,9 @@ member may be renamed but never revalued.
 ## The event log
 
 ```python
-from django_redis_aiogram.events import failure_kinds, kind_choices, register_kind
-from django_redis_aiogram.models import TelegramEvent
-from django_redis_aiogram.signals import events_recorded
+from django_aiogram.events import failure_kinds, kind_choices, register_kind
+from django_aiogram.models import TelegramEvent
+from django_aiogram.signals import events_recorded
 ```
 
 `TelegramEvent` is the append-only feed: one row per thing that happened, insert
@@ -272,7 +272,7 @@ nor the ORM so a metrics module can import it at settings time. See
 ## Errors
 
 ```python
-from django_redis_aiogram.exceptions import DjangoRedisAiogramError
+from django_aiogram.exceptions import DjangoRedisAiogramError
 ```
 
 | | Raised when |

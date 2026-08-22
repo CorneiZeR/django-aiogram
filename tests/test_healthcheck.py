@@ -18,9 +18,9 @@ from django.test import override_settings
 # no real client produces — which `except Exception` in the probe used to hide
 from redis.exceptions import ConnectionError, RedisError, ResponseError  # noqa: A004 - the point is to shadow it
 
-from django_redis_aiogram.delivery import BlpopDelivery
-from django_redis_aiogram.healthcheck import build_parser, check, main
-from django_redis_aiogram.management.commands.tgbot_healthcheck import Command as TgbotHealthcheck
+from django_aiogram.delivery import BlpopDelivery
+from django_aiogram.healthcheck import build_parser, check, main
+from django_aiogram.management.commands.tgbot_healthcheck import Command as TgbotHealthcheck
 
 QUEUE = 'TELEGRAM_BOT_MESSAGE'
 WORKER = 'tests'
@@ -80,7 +80,7 @@ def test_a_redis_that_refuses_the_write_does_not_stop_the_loop(redis_server, cap
 
     delivery = BlpopDelivery(handler=lambda **kwargs: None)
     with pytest.MonkeyPatch.context() as patch, caplog.at_level('ERROR'):
-        patch.setattr('django_redis_aiogram.delivery.get_redis', Refuses)
+        patch.setattr('django_aiogram.delivery.get_redis', Refuses)
         delivery.heartbeat()  # must not raise
 
     assert 'could not write the heartbeat' in caplog.text
@@ -119,7 +119,7 @@ def test_unhealthy_when_redis_is_unreachable(monkeypatch):
         def ping(self):
             raise ConnectionError(REFUSED)
 
-    monkeypatch.setattr('django_redis_aiogram.healthcheck.get_redis', Down)
+    monkeypatch.setattr('django_aiogram.healthcheck.get_redis', Down)
 
     with pytest.raises(CommandError, match='redis is unreachable'):
         healthcheck()
@@ -182,7 +182,7 @@ def test_a_long_blocking_read_cannot_outlast_the_heartbeat(redis_server, monkeyp
         def __getattr__(self, name):
             return getattr(redis_server, name)
 
-    monkeypatch.setattr('django_redis_aiogram.delivery.get_redis', Spy)
+    monkeypatch.setattr('django_aiogram.delivery.get_redis', Spy)
     delivery = BlpopDelivery(handler=lambda **kwargs: None)
     thread = delivery.start_thread()
     try:
@@ -212,7 +212,7 @@ def test_a_heartbeat_read_that_fails_after_ping_is_reported(redis_server, monkey
             return getattr(redis_server, name)
 
     monkeypatch.setattr(
-        'django_redis_aiogram.healthcheck.get_redis',
+        'django_aiogram.healthcheck.get_redis',
         FailsTheRead,
     )
 
@@ -236,7 +236,7 @@ def test_a_queue_read_that_fails_is_reported(redis_server, monkeypatch):
             return getattr(redis_server, name)
 
     monkeypatch.setattr(
-        'django_redis_aiogram.healthcheck.get_redis',
+        'django_aiogram.healthcheck.get_redis',
         FailsTheCount,
     )
 
@@ -429,7 +429,7 @@ def test_a_heartbeat_that_cannot_be_decoded_is_reported(redis_server, monkeypatc
         def __getattr__(self, name):
             return getattr(redis_server, name)
 
-    monkeypatch.setattr('django_redis_aiogram.healthcheck.get_redis', CannotDecode)
+    monkeypatch.setattr('django_aiogram.healthcheck.get_redis', CannotDecode)
 
     with pytest.raises(CommandError, match='could not read the heartbeat'):
         healthcheck()
@@ -599,7 +599,7 @@ def test_a_probe_with_no_settings_module_says_so_instead_of_raising(monkeypatch,
         )
         raise ImproperlyConfigured(message)
 
-    monkeypatch.setattr('django_redis_aiogram.healthcheck.check', unreadable)
+    monkeypatch.setattr('django_aiogram.healthcheck.check', unreadable)
 
     code = main([])
 
@@ -643,7 +643,7 @@ def test_a_probe_with_a_mistyped_settings_module_says_so_instead_of_raising(monk
         raise ModuleNotFoundError("No module named 'core.settingz'", name='core.settingz')
 
     monkeypatch.setenv('DJANGO_SETTINGS_MODULE', 'core.settingz')
-    monkeypatch.setattr('django_redis_aiogram.healthcheck.check', mistyped)
+    monkeypatch.setattr('django_aiogram.healthcheck.check', mistyped)
 
     code = main([])
 
@@ -666,7 +666,7 @@ def test_a_dependency_the_settings_module_imports_keeps_its_traceback(monkeypatc
         raise ModuleNotFoundError("No module named 'yaml'", name='yaml')
 
     monkeypatch.setenv('DJANGO_SETTINGS_MODULE', 'core.settings')
-    monkeypatch.setattr('django_redis_aiogram.healthcheck.check', missing_dependency)
+    monkeypatch.setattr('django_aiogram.healthcheck.check', missing_dependency)
 
     with pytest.raises(ModuleNotFoundError, match='yaml'):
         main([])
@@ -683,7 +683,7 @@ def test_a_settings_module_whose_parent_package_is_missing_is_still_ours(monkeyp
         raise ModuleNotFoundError("No module named 'coree'", name='coree')
 
     monkeypatch.setenv('DJANGO_SETTINGS_MODULE', 'coree.settings')
-    monkeypatch.setattr('django_redis_aiogram.healthcheck.check', missing_parent)
+    monkeypatch.setattr('django_aiogram.healthcheck.check', missing_parent)
 
     assert main([]) == 1
     assert capsys.readouterr().err == "cannot read the settings: No module named 'coree'\n"
@@ -789,7 +789,7 @@ def test_the_sweep_matches_the_keys_workers_actually_write(redis_server):
     every failing test would be one that hardcodes the literal, so updating those is how
     the rename gets done — and the probe reports no stranded messages for ever, green.
     """
-    from django_redis_aiogram.redis import processing_key
+    from django_aiogram.redis import processing_key
 
     redis_server.set(f'{QUEUE}:heartbeat:mine', str(int(time.time())))
     redis_server.rpush(processing_key('gone'), b'{}')
@@ -828,8 +828,8 @@ def test_a_queue_key_with_glob_characters_is_still_swept(redis_server, key, deco
     messages as its own in flight.
     """
     with override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine', 'REDIS_MESSAGES_KEY': key}):
-        from django_redis_aiogram.healthcheck import _stranded
-        from django_redis_aiogram.redis import processing_key
+        from django_aiogram.healthcheck import _stranded
+        from django_aiogram.redis import processing_key
 
         redis_server.rpush(processing_key('gone'), b'{}')
         if decoy:

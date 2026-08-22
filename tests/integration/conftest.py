@@ -11,17 +11,17 @@ import os
 import pytest
 from redis import Redis
 
-from django_redis_aiogram.redis import reset_redis
-from django_redis_aiogram.throttling import reset_rate_limiters
+from django_aiogram.redis import reset_redis
+from django_aiogram.throttling import reset_rate_limiters
 
 # the marker is registered in pyproject.toml, and each module carries it itself
-REDIS_URL = os.environ.get('DJANGO_REDIS_AIOGRAM_TEST_REDIS_URL', '')
+REDIS_URL = os.environ.get('DJANGO_AIOGRAM_TEST_REDIS_URL', '')
 
 
 @pytest.fixture(scope='session')
 def redis_url():
     if not REDIS_URL:
-        pytest.skip('set DJANGO_REDIS_AIOGRAM_TEST_REDIS_URL to run the integration suite')
+        pytest.skip('set DJANGO_AIOGRAM_TEST_REDIS_URL to run the integration suite')
     return REDIS_URL
 
 
@@ -30,7 +30,7 @@ def server(redis_url):
     """A real client, flushed before each test so nothing leaks between them.
 
     **This erases the whole selected database**, before and after every test.
-    Point `DJANGO_REDIS_AIOGRAM_TEST_REDIS_URL` at a throwaway server or at
+    Point `DJANGO_AIOGRAM_TEST_REDIS_URL` at a throwaway server or at
     least a database nothing else uses.
     """
     client = Redis.from_url(redis_url)

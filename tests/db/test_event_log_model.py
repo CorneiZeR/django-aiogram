@@ -8,13 +8,13 @@ from django.contrib.auth.models import Permission
 from django.core.management import call_command
 from django.db import connection
 
-from django_redis_aiogram.events import new_correlation_id
-from django_redis_aiogram.models import TelegramEvent
+from django_aiogram.events import new_correlation_id
+from django_aiogram.models import TelegramEvent
 
 
 @pytest.mark.django_db
 def test_the_migration_creates_the_table():
-    assert 'django_redis_aiogram_event' in connection.introspection.table_names()
+    assert 'django_aiogram_event' in connection.introspection.table_names()
 
 
 @pytest.mark.django_db
@@ -26,7 +26,7 @@ def test_the_migrations_match_the_models():
     """
     out = io.StringIO()
     try:
-        call_command('makemigrations', 'django_redis_aiogram', check=True, dry_run=True, stdout=out)
+        call_command('makemigrations', 'django_aiogram', check=True, dry_run=True, stdout=out)
     except SystemExit:
         pytest.fail(f'the models have drifted from the migrations:\n{out.getvalue()}')
 
@@ -60,7 +60,7 @@ def test_the_permissions_are_the_stock_four_plus_one():
     there are no field-level permissions, so 'saw that it went out' and 'read
     what it said' cannot otherwise be granted separately."""
     codenames = set(
-        Permission.objects.filter(content_type__app_label='django_redis_aiogram').values_list('codename', flat=True)
+        Permission.objects.filter(content_type__app_label='django_aiogram').values_list('codename', flat=True)
     )
 
     assert codenames == {

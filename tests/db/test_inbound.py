@@ -13,15 +13,15 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Chat, Message, Update, User
 from django.test import override_settings
 
-from django_redis_aiogram import TelegramBot
-from django_redis_aiogram.enums import EventKind
-from django_redis_aiogram.instrumentation import (
+from django_aiogram import TelegramBot
+from django_aiogram.enums import EventKind
+from django_aiogram.instrumentation import (
     RecordingStorage,
     install_instrumentation,
     instrumented,
 )
-from django_redis_aiogram.models import TelegramEvent
-from django_redis_aiogram.recorder import recorder
+from django_aiogram.models import TelegramEvent
+from django_aiogram.recorder import recorder
 
 # sync mode falls back to the writer thread inside a running loop, which is
 # where every one of these runs, so flush() is what waits for the rows
@@ -138,7 +138,7 @@ def test_a_reply_inherits_the_update_it_answers():
     seen = {}
 
     async def handler(message):
-        from django_redis_aiogram.context import current_correlation_id
+        from django_aiogram.context import current_correlation_id
 
         seen['inside'] = current_correlation_id()
 

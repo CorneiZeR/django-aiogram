@@ -9,8 +9,8 @@ the commands, and the invariants that must stay covered.
 ## Getting set up
 
 ```shell
-git clone git@github.com:CorneiZeR/django-redis-aiogram.git
-cd django-redis-aiogram
+git clone git@github.com:CorneiZeR/django-aiogram.git
+cd django-aiogram
 python -m venv .venv && source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -e . --group dev
@@ -43,7 +43,7 @@ A third suite needs a real Redis and is skipped without one:
 ```shell
 docker run -d --name drai-redis -p 6399:6379 redis:7-alpine
 until docker exec drai-redis redis-cli ping >/dev/null 2>&1; do sleep 0.3; done
-DJANGO_REDIS_AIOGRAM_TEST_REDIS_URL=redis://localhost:6399/0 python -m pytest -m integration
+DJANGO_AIOGRAM_TEST_REDIS_URL=redis://localhost:6399/0 python -m pytest -m integration
 ```
 
 `docker run` returns before the server accepts connections, hence the wait. Give

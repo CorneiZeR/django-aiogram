@@ -27,7 +27,7 @@ services:
     hostname: telegram-bot-1
     env_file: .env
     environment:
-      DJANGO_REDIS_AIOGRAM_ENABLED: 1
+      DJANGO_AIOGRAM_ENABLED: 1
     depends_on: [redis]
 
   redis:
@@ -150,7 +150,7 @@ the loop that created it, so each loop gets its own, and only that loop may clos
 it. If your server has a lifespan hook, close it there:
 
 ```python
-from django_redis_aiogram import bot
+from django_aiogram import bot
 
 
 # an ASGI lifespan shutdown, or django-ninja's
@@ -173,7 +173,7 @@ than clean.
 ## hiredis, if the consumer is busy
 
 ```shell
-pip install 'django-redis-aiogram[hiredis]'
+pip install 'django-aiogram[hiredis]'
 ```
 
 redis-py parses replies in Python unless `hiredis` is present, and then in C. Nothing
@@ -212,7 +212,7 @@ itself.
       # inside its own — so without it here the probe cannot read your settings at all
       DJANGO_SETTINGS_MODULE: core.settings
     healthcheck:
-      test: ['CMD', 'python', '-m', 'django_redis_aiogram.healthcheck']
+      test: ['CMD', 'python', '-m', 'django_aiogram.healthcheck']
       interval: 30s
       timeout: 5s
       start_period: 30s

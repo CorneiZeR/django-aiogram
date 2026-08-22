@@ -16,15 +16,15 @@ from redis.exceptions import (
     ConnectionError,  # noqa: A004 - shadowing the builtin is the point: this is what redis-py raises
 )
 
-from django_redis_aiogram import TelegramBot
-from django_redis_aiogram.client import resolve_correlation_id, task_correlation_id
-from django_redis_aiogram.context import correlation_scope
-from django_redis_aiogram.delivery import BlpopDelivery
-from django_redis_aiogram.enums import EventKind
-from django_redis_aiogram.events import new_correlation_id
-from django_redis_aiogram.models import TelegramEvent
-from django_redis_aiogram.recorder import as_identifier, recorder
-from django_redis_aiogram.serializers import JsonSerializer
+from django_aiogram import TelegramBot
+from django_aiogram.client import resolve_correlation_id, task_correlation_id
+from django_aiogram.context import correlation_scope
+from django_aiogram.delivery import BlpopDelivery
+from django_aiogram.enums import EventKind
+from django_aiogram.events import new_correlation_id
+from django_aiogram.models import TelegramEvent
+from django_aiogram.recorder import as_identifier, recorder
+from django_aiogram.serializers import JsonSerializer
 
 QUEUE = 'TELEGRAM_BOT_MESSAGE'
 SETTINGS = {

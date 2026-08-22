@@ -10,7 +10,7 @@ With pickle that means arbitrary code. JSON is narrower, but not merely "a
 different Telegram call": a payload naming an `FSInputFile` picks a path, so a
 queue writer can make the bot upload any file its container can read. Treat the
 queue as a trust boundary either way — see
-[SECURITY.md](https://github.com/CorneiZeR/django-redis-aiogram/blob/master/SECURITY.md).
+[SECURITY.md](https://github.com/CorneiZeR/django-aiogram/blob/master/SECURITY.md).
 
 1.0.4 moved *to* pickle because keyboards would not survive as plain dicts.
 That is no longer true: aiogram 3 models are pydantic v2 and round-trip
@@ -72,7 +72,7 @@ credential. Neither is reachable from the queue.
 
 This narrows what a queue writer can do; it does not make the queue safe. Redis
 remains a trust boundary — see
-[SECURITY.md](https://github.com/CorneiZeR/django-redis-aiogram/blob/master/SECURITY.md).
+[SECURITY.md](https://github.com/CorneiZeR/django-aiogram/blob/master/SECURITY.md).
 
 ## Two details that make it work
 
@@ -101,8 +101,8 @@ import statistics
 import timeit
 import uuid
 
-from django_redis_aiogram.envelope import pack
-from django_redis_aiogram.serializers import get_serializer
+from django_aiogram.envelope import pack
+from django_aiogram.serializers import get_serializer
 
 payload = pack(
     'send_message',

@@ -1,4 +1,4 @@
-# django-redis-aiogram
+# django-aiogram
 
 Run [aiogram](https://docs.aiogram.dev/) in a container next to Django, write
 handlers as ordinary Django app code, and send Telegram messages from anywhere
@@ -9,7 +9,7 @@ message through Redis and returns; `send_raw()` skips the queue and talks to
 Telegram from the calling process.
 
 ```python
-from django_redis_aiogram import bot
+from django_aiogram import bot
 
 bot.send(chat_id=CHAT_ID, text='hello')
 ```
@@ -42,6 +42,6 @@ bot.send(chat_id=CHAT_ID, text='hello')
 ---
 
 Requires Python 3.10–3.14, Django 5.2+, aiogram 3.30+, redis 6.2+.
-[Source](https://github.com/CorneiZeR/django-redis-aiogram) ·
-[PyPI](https://pypi.org/project/django-redis-aiogram/) ·
-[Changelog](https://github.com/CorneiZeR/django-redis-aiogram/blob/master/CHANGELOG.md)
+[Source](https://github.com/CorneiZeR/django-aiogram) ·
+[PyPI](https://pypi.org/project/django-aiogram/) ·
+[Changelog](https://github.com/CorneiZeR/django-aiogram/blob/master/CHANGELOG.md)

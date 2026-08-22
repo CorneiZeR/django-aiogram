@@ -17,7 +17,7 @@ import pytest
 
 SOURCE = Path(__file__).resolve().parent.parent / 'src'
 MODULES = sorted(SOURCE.rglob('*.py'))
-PACKAGE_LOGGER = 'django_redis_aiogram'
+PACKAGE_LOGGER = 'django_aiogram'
 # `fatal` and `warn` are deprecated aliases, but they still write to the root
 LEVELS = frozenset({'debug', 'info', 'warning', 'warn', 'error', 'exception', 'critical', 'fatal', 'log'})
 # basicConfig configures the root logger for the whole host process
@@ -190,16 +190,16 @@ IGNORED = [
 ]
 
 BOUND = [
-    ("import logging\nlogger = logging.getLogger('django_redis_aiogram')", 'logger'),
-    ("import logging\nlogger = logging.getLogger(name='django_redis_aiogram')", 'logger'),
+    ("import logging\nlogger = logging.getLogger('django_aiogram')", 'logger'),
+    ("import logging\nlogger = logging.getLogger(name='django_aiogram')", 'logger'),
     (
         (
             'import logging\nclass Worker:\n    def __init__(self):\n'
-            "        self.logger = logging.getLogger('django_redis_aiogram')"
+            "        self.logger = logging.getLogger('django_aiogram')"
         ),
         'logger',
     ),
-    ("from logging import getLogger\nlog = getLogger('django_redis_aiogram')", 'log'),
+    ("from logging import getLogger\nlog = getLogger('django_aiogram')", 'log'),
 ]
 
 NOT_OURS = [

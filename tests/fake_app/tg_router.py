@@ -2,7 +2,7 @@
 
 from aiogram import types
 
-from django_redis_aiogram import bot
+from django_aiogram import bot
 
 IMPORTED = True
 

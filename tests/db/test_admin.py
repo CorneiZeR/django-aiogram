@@ -11,19 +11,19 @@ from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 
-from django_redis_aiogram import admin as admin_module
-from django_redis_aiogram.admin import (
+from django_aiogram import admin as admin_module
+from django_aiogram.admin import (
     COUNT_LIMIT,
     MAX_STAGES,
     TelegramEventAdmin,
     register_event_log_admin,
 )
-from django_redis_aiogram.enums import EventKind
-from django_redis_aiogram.events import new_correlation_id
-from django_redis_aiogram.models import TelegramEvent
+from django_aiogram.enums import EventKind
+from django_aiogram.events import new_correlation_id
+from django_aiogram.models import TelegramEvent
 
 ON = {'EVENT_LOG': True}
-CHANGELIST = '/admin/django_redis_aiogram/telegramevent/'
+CHANGELIST = '/admin/django_aiogram/telegramevent/'
 
 
 def an_event(**kwargs):
@@ -318,10 +318,10 @@ def test_the_admin_module_pulls_no_aiogram():
 
         admin.autodiscover()
 
-        assert 'django_redis_aiogram.admin' in sys.modules, 'the admin never loaded, so nothing was checked'
+        assert 'django_aiogram.admin' in sys.modules, 'the admin never loaded, so nothing was checked'
         assert 'aiogram' not in sys.modules, 'the admin pulled aiogram into a process that has no bot'
 
-        from django_redis_aiogram.models import TelegramEvent
+        from django_aiogram.models import TelegramEvent
 
         # ready() is what registers it, and it runs during setup() — before the
         # autodiscover above. Without this the suite's own fixture registers the
@@ -337,8 +337,8 @@ def test_the_admin_module_pulls_no_aiogram():
         env={
             **os.environ,
             'DJANGO_SETTINGS_MODULE': 'tests.db_settings',
-            'DJANGO_REDIS_AIOGRAM_ENABLED': '0',
-            'DJANGO_REDIS_AIOGRAM_EVENT_LOG': '1',
+            'DJANGO_AIOGRAM_ENABLED': '0',
+            'DJANGO_AIOGRAM_EVENT_LOG': '1',
         },
     )
 
@@ -367,7 +367,7 @@ def test_the_changelist_does_not_fetch_the_payload_columns(client):
     with CaptureQueriesContext(connection) as queries:
         client.get(CHANGELIST)
 
-    selects = [q['sql'] for q in queries if 'django_redis_aiogram_event' in q['sql'] and 'COUNT(' not in q['sql']]
+    selects = [q['sql'] for q in queries if 'django_aiogram_event' in q['sql'] and 'COUNT(' not in q['sql']]
     assert selects, 'the changelist issued no query at all'
     assert not any('"error"' in sql or '"detail"' in sql for sql in selects), selects
 
@@ -385,7 +385,7 @@ def test_a_reader_without_the_payload_permission_never_fetches_them(client):
         response = client.get(f'{CHANGELIST}{event.pk}/change/')
 
     assert response.status_code == 200
-    rows = [q['sql'] for q in queries if 'django_redis_aiogram_event' in q['sql']]
+    rows = [q['sql'] for q in queries if 'django_aiogram_event' in q['sql']]
     assert rows, 'the detail page issued no query at all'
     assert not any('"error"' in sql or '"detail"' in sql for sql in rows), rows
 
@@ -405,7 +405,7 @@ def test_the_detail_page_still_fetches_them_in_one_query(client):
     assert response.status_code == 200
     body = response.content.decode()
     assert 'boom' in body
-    rows = [q['sql'] for q in queries if 'django_redis_aiogram_event' in q['sql'] and 'WHERE' in q['sql'].upper()]
+    rows = [q['sql'] for q in queries if 'django_aiogram_event' in q['sql'] and 'WHERE' in q['sql'].upper()]
     assert any('"error"' in sql and '"detail"' in sql for sql in rows), rows
 
 
@@ -413,7 +413,7 @@ def test_the_detail_page_still_fetches_them_in_one_query(client):
 @override_settings(TELEGRAM_BOT=ON)
 def test_only_indexed_columns_are_sortable():
     """One click on an unindexed header sorts a table sized by traffic."""
-    from django_redis_aiogram.admin import TelegramEventAdmin
+    from django_aiogram.admin import TelegramEventAdmin
 
     assert set(TelegramEventAdmin.sortable_by) == {'created_at', 'kind', 'chat_id'}
 
@@ -436,7 +436,7 @@ def test_a_kind_filtered_changelist_needs_no_sort(client):
     with CaptureQueriesContext(connection) as queries:
         client.get(f'{CHANGELIST}?kind={EventKind.OUTBOUND_SENT.value}')
 
-    touched = [q['sql'] for q in queries if 'django_redis_aiogram_event' in q['sql']]
+    touched = [q['sql'] for q in queries if 'django_aiogram_event' in q['sql']]
     assert touched, 'the changelist issued no query at all'
     with connection.cursor() as cursor:
         for sql in touched:
@@ -514,7 +514,7 @@ def test_an_o_param_for_an_unindexed_column_does_not_sort(client, index, column)
         response = client.get(f'{CHANGELIST}?o={index}')
 
     assert response.status_code == 200, 'an old link should still render the page'
-    touched = [q['sql'] for q in queries if 'django_redis_aiogram_event' in q['sql']]
+    touched = [q['sql'] for q in queries if 'django_aiogram_event' in q['sql']]
     assert touched, 'the changelist issued no query at all'
     for sql in touched:
         assert f'"{column}" ASC' not in sql, f'ordered by {column}: {sql}'
@@ -544,7 +544,7 @@ def test_the_outcome_filters_count_is_served_by_the_index(client):
     with CaptureQueriesContext(connection) as queries:
         assert client.get(f'{CHANGELIST}?outcome=failed').status_code == 200
 
-    counts = [q['sql'] for q in queries if 'COUNT(' in q['sql'].upper() and 'django_redis_aiogram_event' in q['sql']]
+    counts = [q['sql'] for q in queries if 'COUNT(' in q['sql'].upper() and 'django_aiogram_event' in q['sql']]
     assert counts, 'the changelist counted nothing, so this proves nothing'
     with connection.cursor() as cursor:
         for sql in counts:

@@ -3,6 +3,58 @@
 What each major release changed, newest first. Start at the section for the
 version you are on and work down.
 
+# From 3.1 to 4.0
+
+## Install the new distribution
+
+`django-redis-aiogram` is not updated any more. `pip install django-aiogram`, and drop the
+old one — nothing imports it after the steps below.
+
+Redis is no longer a hard dependency. Pick the transport you run and install it with the
+package: `pip install django-aiogram[redis]` for the queue 3.x used. A project that names a
+transport whose driver is not installed is refused by a system check at startup rather than
+by an `ImportError` on the first send.
+
+## Rename the app and the imports
+
+```python
+INSTALLED_APPS = ['django_aiogram']
+```
+
+```python
+from django_aiogram import bot, conf
+from django_aiogram.client import TelegramBot
+```
+
+`TELEGRAM_BOT` stays as the settings key — it names what it configures, not the package
+that reads it. Environment variables move from `DJANGO_REDIS_AIOGRAM_*` to
+`DJANGO_AIOGRAM_*`, the logger from `django_redis_aiogram` to `django_aiogram`, and check
+ids from `django_redis_aiogram.EXXX` to `django_aiogram.EXXX` — so re-silence anything you
+had silenced by id.
+
+## Move the event log's rows, or leave them
+
+The table is `django_aiogram_event` now, and `migrate` creates it empty. The old
+`django_redis_aiogram_event` is left exactly where it is: nothing reads it and nothing
+drops it.
+
+If the history matters, copy it across before the first write, with the app's own
+`migrate` already run:
+
+```sql
+INSERT INTO django_aiogram_event
+SELECT * FROM django_redis_aiogram_event;
+```
+
+The columns are unchanged from 3.1, which is what makes the plain `SELECT *` safe. Check
+that first on a copy, then drop the old table when you are satisfied — `DROP TABLE
+django_redis_aiogram_event` is yours to run, and this package will never run it for you.
+
+## Choose the transport explicitly
+
+Nothing is detected from what happens to be installed. Name the broker you want, and the
+absence of its driver is a startup complaint rather than a runtime surprise.
+
 # From 3.0 to 3.1
 
 ## Make your handlers idempotent, on your own key

@@ -8,7 +8,7 @@ would pass whether or not they behave. This module exists so that question can b
 SECRET_KEY = 'test-only'
 USE_TZ = True
 DATABASES: dict[str, dict[str, str]] = {}
-INSTALLED_APPS = ['django_redis_aiogram']
+INSTALLED_APPS = ['django_aiogram']
 
 # set, so the checks report nothing and the assertion is about imports alone; neither
 # value is ever connected to, because running the checks reaches no network

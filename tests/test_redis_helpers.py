@@ -12,11 +12,11 @@ import pytest
 from django.test import override_settings
 from redis import Redis
 
-from django_redis_aiogram import TelegramBot
-from django_redis_aiogram import redis as redis_module
-from django_redis_aiogram.delivery import BlpopDelivery
-from django_redis_aiogram.envelope import unpack
-from django_redis_aiogram.redis import (
+from django_aiogram import TelegramBot
+from django_aiogram import redis as redis_module
+from django_aiogram.delivery import BlpopDelivery
+from django_aiogram.envelope import unpack
+from django_aiogram.redis import (
     aclose_redis,
     aget_redis,
     as_bytes,
@@ -26,8 +26,8 @@ from django_redis_aiogram.redis import (
     reset_redis,
     url_decodes_responses,
 )
-from django_redis_aiogram.serializers import JsonSerializer, loads
-from django_redis_aiogram.settings import conf
+from django_aiogram.serializers import JsonSerializer, loads
+from django_aiogram.settings import conf
 
 
 @pytest.mark.parametrize(
@@ -47,9 +47,9 @@ def decoded_server(monkeypatch):
     """A connection configured the way decode_responses=True behaves."""
     server = fakeredis.FakeRedis(decode_responses=True)
     for target in (
-        'django_redis_aiogram.redis.get_redis',
-        'django_redis_aiogram.delivery.get_redis',
-        'django_redis_aiogram.client.get_redis',
+        'django_aiogram.redis.get_redis',
+        'django_aiogram.delivery.get_redis',
+        'django_aiogram.client.get_redis',
     ):
         monkeypatch.setattr(target, lambda server=server: server)
     return server
@@ -189,7 +189,7 @@ def test_get_reads_the_slot_exactly_once_on_the_fast_path():
     answers None, exactly what a concurrent reset() makes it. Code that keeps
     one local read never performs a second one.
     """
-    from django_redis_aiogram.redis import _SharedConnection
+    from django_aiogram.redis import _SharedConnection
 
     sentinel = object()
     reads = {'count': 0}

@@ -31,7 +31,7 @@ why the package sets the deadline itself rather than relying on the client.
 ## Messages pile up in Redis
 
 ```python
-from django_redis_aiogram import bot
+from django_aiogram import bot
 
 bot.queue_depth()  # messages waiting for a worker
 bot.inflight_depth()  # what this worker is part-way through sending
@@ -85,7 +85,7 @@ seconds. Use the form that does not:
     environment:
       DJANGO_SETTINGS_MODULE: core.settings   # a healthcheck is a separate process
     healthcheck:
-      test: ['CMD', 'python', '-m', 'django_redis_aiogram.healthcheck']
+      test: ['CMD', 'python', '-m', 'django_aiogram.healthcheck']
       timeout: 5s
 ```
 
@@ -153,7 +153,7 @@ posting to that URL.
 ## Handlers never fire
 
 ```python
-from django_redis_aiogram import bot
+from django_aiogram import bot
 
 len(bot.router.observers['message'].handlers)
 ```
@@ -210,9 +210,9 @@ Telegram will start refusing.
 ## `ModuleNotFoundError: No module named 'telegram_bot'`
 
 The 1.x package name was a deprecated shim in 2.x and is gone in 3.0. The
-package is `django_redis_aiogram`: use it in `INSTALLED_APPS`, import from it,
-and note that `TelegramBot` lives in `django_redis_aiogram.client` while the
-settings module is `django_redis_aiogram.settings`. See **[[Upgrading]]**.
+package is `django_aiogram`: use it in `INSTALLED_APPS`, import from it,
+and note that `TelegramBot` lives in `django_aiogram.client` while the
+settings module is `django_aiogram.settings`. See **[[Upgrading]]**.
 
 ## The event log writes nothing
 
@@ -263,7 +263,7 @@ LOGGING = {
     'disable_existing_loggers': False,
     'handlers': {'console': {'class': 'logging.StreamHandler'}},
     'loggers': {
-        'django_redis_aiogram': {'handlers': ['console'], 'level': 'DEBUG'},
+        'django_aiogram': {'handlers': ['console'], 'level': 'DEBUG'},
     },
 }
 ```

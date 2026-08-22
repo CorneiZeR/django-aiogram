@@ -8,8 +8,8 @@ exception messages, and those messages are exactly what an `error` column holds.
 import pytest
 from django.test import override_settings
 
-from django_redis_aiogram.eventlog import to_row
-from django_redis_aiogram.recorder import Event
+from django_aiogram.eventlog import to_row
+from django_aiogram.recorder import Event
 
 TOKEN = '123456789:AAFakeTokenThatLooksExactlyLikeARealOne'
 SETTINGS = {'EVENT_LOG': True, 'TOKEN': TOKEN, 'WEBHOOK_SECRET': 'hunter2'}

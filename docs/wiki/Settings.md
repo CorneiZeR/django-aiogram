@@ -1,7 +1,7 @@
 # Settings
 
 Everything lives under `TELEGRAM_BOT` in `settings.py`. Scalar values can also
-come from `DJANGO_REDIS_AIOGRAM_<NAME>`; Django settings take precedence.
+come from `DJANGO_AIOGRAM_<NAME>`; Django settings take precedence.
 
 All of it is validated by `manage.py check` — in processes where the bot is
 enabled **or** the event log is on. A container with `ENABLED=0` and the log
@@ -143,8 +143,8 @@ carry, and a string from it would be read one character per item.
 
 ## Check ids
 
-Errors are `django_redis_aiogram.EXXX`, warnings `django_redis_aiogram.WXXX`,
-and information `django_redis_aiogram.IXXX`. An error refuses the boot; a warning
+Errors are `django_aiogram.EXXX`, warnings `django_aiogram.WXXX`,
+and information `django_aiogram.IXXX`. An error refuses the boot; a warning
 fails `manage.py check --fail-level WARNING`, which is what a CI step or an
 entrypoint usually runs; information fails neither, and is there for conditions
 this package can see but cannot judge from inside a check — `I001` and `I002`

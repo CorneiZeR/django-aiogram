@@ -7,7 +7,7 @@ from pathlib import Path
 from django.apps import AppConfig
 
 #: where the mark lands, overridable so a test can point it at a temporary path
-MARKER_ENV = 'DJANGO_REDIS_AIOGRAM_TEST_MARKER'
+MARKER_ENV = 'DJANGO_AIOGRAM_TEST_MARKER'
 
 
 def marker_path() -> Path:

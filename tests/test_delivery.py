@@ -7,12 +7,12 @@ from aiogram import exceptions
 from aiogram.methods import SendMessage
 from django.test import override_settings
 
-from django_redis_aiogram import TelegramBot
-from django_redis_aiogram.client import Outbound
-from django_redis_aiogram.delivery import BlpopDelivery, get_delivery
-from django_redis_aiogram.events import new_correlation_id
-from django_redis_aiogram.redis import processing_key
-from django_redis_aiogram.serializers import JsonSerializer, PickleSerializer
+from django_aiogram import TelegramBot
+from django_aiogram.client import Outbound
+from django_aiogram.delivery import BlpopDelivery, get_delivery
+from django_aiogram.events import new_correlation_id
+from django_aiogram.redis import processing_key
+from django_aiogram.serializers import JsonSerializer, PickleSerializer
 
 
 def an_outbound(function='send_message', **kwargs):
@@ -310,7 +310,7 @@ def test_a_zero_blpop_timeout_is_clamped(redis_server, monkeypatch):
         def __getattr__(self, name):
             return getattr(redis_server, name)
 
-    monkeypatch.setattr('django_redis_aiogram.delivery.get_redis', Spy)
+    monkeypatch.setattr('django_aiogram.delivery.get_redis', Spy)
     # one message, so the consumer actually reaches the blocking call
     redis_server.rpush('TELEGRAM_BOT_MESSAGE', JsonSerializer().dumps({'function': 'send_message', 'chat_id': 1}))
     drain(RecordingBlpop(), expected=1, timeout=2)
@@ -346,7 +346,7 @@ def test_exhausting_the_retries_is_logged(caplog):
     attempts = []
     instance._bot = rate_limited_bot(attempts)
 
-    with caplog.at_level('ERROR', logger='django_redis_aiogram'):
+    with caplog.at_level('ERROR', logger='django_aiogram'):
         instance.send_raw(chat_id=1, text='x')
 
     assert len(attempts) == 3, 'MAX_RETRIES=2 means the first try plus two retries'

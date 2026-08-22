@@ -2,7 +2,7 @@
 
 Instructions for coding agents working on **this repository**. For agents
 integrating the package into a project, see the wiki page
-[AI assistants](https://github.com/CorneiZeR/django-redis-aiogram/wiki/AI-assistants).
+[AI assistants](https://github.com/CorneiZeR/django-aiogram/wiki/AI-assistants).
 
 ## What this is
 
@@ -11,7 +11,7 @@ messages through Redis. The Django processes never poll; they push a payload
 onto a Redis list, and the bot container consumes it.
 
 ```text
-src/django_redis_aiogram/
+src/django_aiogram/
     __init__.py     lazy exports: bot, conf, redis_conn, get_redis, __version__
     apps.py         AppConfig.ready(): checks and autodiscover, both behind ENABLED
     client.py       TelegramBot: bot/dispatcher/loop, send, send_raw, send_redis
@@ -61,7 +61,7 @@ build. Run them locally when you touch delivery, packaging or the public
 surface:
 
 ```shell
-DJANGO_REDIS_AIOGRAM_TEST_REDIS_URL=redis://localhost:6399/0 python -m pytest -m integration
+DJANGO_AIOGRAM_TEST_REDIS_URL=redis://localhost:6399/0 python -m pytest -m integration
 bash scripts/smoke_install.sh
 ```
 
@@ -81,7 +81,7 @@ Packaging-only work does not need the Redis suite, and vice versa.
   validates credentials goes behind a property or a function. This is the defect
   2.0 existed to fix; re-introducing it breaks every consumer's test suite.
 - **Importing the package stays cheap.** `__init__` resolves its exports lazily
-  (PEP 562) so `import django_redis_aiogram` costs about 0.17 ms — it was ~1.4 ms
+  (PEP 562) so `import django_aiogram` costs about 0.17 ms — it was ~1.4 ms
   before 3.1.0, and the changelog's 0.134 ms is the same measurement on another
   machine — and a disabled Django
   boot never loads aiogram (~900 ms). `tests/test_lazy_init.py` pins both in
@@ -92,7 +92,7 @@ Packaging-only work does not need the Redis suite, and vice versa.
 - **Values go in `extra`, not in the message.** `logger.warning('rate limited',
   extra={'tg_function': name})`, never an f-string. Keys are `tg_`-prefixed so
   they cannot collide with `LogRecord` attributes.
-- **Never log through the root logger.** `logging.getLogger('django_redis_aiogram')`
+- **Never log through the root logger.** `logging.getLogger('django_aiogram')`
   only; `tests/test_logging_discipline.py` enforces it, `logging.basicConfig()`
   included.
 - **Thread boundaries are real.** The delivery consumer runs in its own thread
@@ -109,15 +109,15 @@ Packaging-only work does not need the Redis suite, and vice versa.
   every `django.setup()`, before `ready()` and regardless of `ENABLED`, and
   `admin.autodiscover` imports the other on every boot of a project with the
   admin installed — so a migration container pays for whatever either pulls.
-  `django.db.models` and `django_redis_aiogram.enums`/`events` only — never
+  `django.db.models` and `django_aiogram.enums`/`events` only — never
   `client`, `serializers` or `api`. A subprocess test pins each:
   `tests/test_event_log_off.py` for the model, `tests/db/test_admin.py` for the
   admin.
 - **`healthcheck.py` never populates the app registry.** It exists so
-  `python -m django_redis_aiogram.healthcheck` can answer without `django.setup()`,
+  `python -m django_aiogram.healthcheck` can answer without `django.setup()`,
   which in one measured consumer cost 17.9s of `AppConfig.ready()` against 0.01s of
   probing — more than any Docker `timeout` the wiki could publish. So: no models, no
-  aiogram, no `django_redis_aiogram.client`, and nothing that reaches them
+  aiogram, no `django_aiogram.client`, and nothing that reaches them
   transitively. `tests/test_lazy_init.py` proves it with a settings module whose app
   writes a file from `ready()`, and asserts the file is absent — plus a control that
   the file appears under `django.setup()`, so its absence means something.

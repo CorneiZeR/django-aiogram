@@ -1,5 +1,22 @@
 # Changelog
 
+## 4.0.0 - unreleased
+
+**The package is `django-aiogram` now**, and Redis is one transport among several rather
+than the only one. Import from `django_aiogram`, set environment variables with
+`DJANGO_AIOGRAM_`, and read logs from the `django_aiogram` logger. The event log lives in
+a new table, so the old one is left where it is — see **Upgrading** for moving the rows.
+
+Entries land here as the work does; nothing below is released.
+
+### Changed
+
+- **Renamed throughout.** The distribution is `django-aiogram`, the import path is
+  `django_aiogram`, the environment prefix is `DJANGO_AIOGRAM_`, the logger is
+  `django_aiogram`, check ids read `django_aiogram.EXXX`, and the event log's table is
+  `django_aiogram_event`. `TELEGRAM_BOT` stays as the settings key: it names what it
+  configures rather than the package that reads it.
+
 ## 3.1.0 - 2026-08-22
 
 **At-least-once delivery is true now, and was not before.** A message is

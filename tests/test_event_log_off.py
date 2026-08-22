@@ -15,9 +15,9 @@ import uuid
 import pytest
 from django.test import override_settings
 
-from django_redis_aiogram.dbrouter import TelegramEventLogRouter, event_log_database
-from django_redis_aiogram.enums import EventKind
-from django_redis_aiogram.events import (
+from django_aiogram.dbrouter import TelegramEventLogRouter, event_log_database
+from django_aiogram.enums import EventKind
+from django_aiogram.events import (
     MAX_KIND_LENGTH,
     failure_kinds,
     kind_choices,
@@ -25,8 +25,8 @@ from django_redis_aiogram.events import (
     new_correlation_id,
     register_kind,
 )
-from django_redis_aiogram.models import TelegramEvent
-from django_redis_aiogram.recorder import WRITER_THREAD, Event, EventRecorder
+from django_aiogram.models import TelegramEvent
+from django_aiogram.recorder import WRITER_THREAD, Event, EventRecorder
 
 
 def test_recording_is_free_while_the_flag_is_off():
@@ -58,7 +58,7 @@ def test_an_unreadable_flag_turns_recording_off_rather_than_raising(caplog):
     """A misconfigured flag is E031's finding at boot. At runtime it must not
     become the reason a message was not sent."""
     recorder = EventRecorder()
-    with caplog.at_level('ERROR', logger='django_redis_aiogram'):
+    with caplog.at_level('ERROR', logger='django_aiogram'):
         recorder.record(Event(kind=EventKind.OUTBOUND_SENT.value))
 
     assert recorder.enabled is False
@@ -90,13 +90,13 @@ def test_the_model_module_never_imports_aiogram():
 
         django.setup()
 
-        from django_redis_aiogram.recorder import Event, recorder
+        from django_aiogram.recorder import Event, recorder
 
         recorder.record(Event(kind='outbound.sent'))
 
-        assert 'django_redis_aiogram.models' in sys.modules, 'models did not load with the registry'
+        assert 'django_aiogram.models' in sys.modules, 'models did not load with the registry'
         assert 'aiogram' not in sys.modules, 'the model or the recorder pulled aiogram'
-        assert 'django_redis_aiogram.eventlog' not in sys.modules, 'a disabled recorder imported the ORM layer'
+        assert 'django_aiogram.eventlog' not in sys.modules, 'a disabled recorder imported the ORM layer'
         print('models stay cheap')
     """)
     result = subprocess.run(  # noqa: S603 - our own interpreter, and a script written right above
@@ -107,7 +107,7 @@ def test_the_model_module_never_imports_aiogram():
         env={
             **os.environ,
             'DJANGO_SETTINGS_MODULE': 'tests.settings',
-            'DJANGO_REDIS_AIOGRAM_ENABLED': '0',
+            'DJANGO_AIOGRAM_ENABLED': '0',
         },
     )
     assert result.returncode == 0, result.stderr
@@ -162,7 +162,7 @@ def test_the_router_stays_quiet_without_an_alias():
 
     assert event_log_database() is None
     assert router.db_for_write(TelegramEvent) is None
-    assert router.allow_migrate('default', 'django_redis_aiogram') is None
+    assert router.allow_migrate('default', 'django_aiogram') is None
 
 
 @override_settings(TELEGRAM_BOT={'EVENT_LOG_DATABASE': 'logs'})
@@ -178,8 +178,8 @@ def test_the_router_moves_only_this_app():
 
     assert router.db_for_read(TelegramEvent) == 'logs'
     assert router.db_for_write(TelegramEvent) == 'logs'
-    assert router.allow_migrate('logs', 'django_redis_aiogram') is True
-    assert router.allow_migrate('default', 'django_redis_aiogram') is False
+    assert router.allow_migrate('logs', 'django_aiogram') is True
+    assert router.allow_migrate('default', 'django_aiogram') is False
     # None, not False: where somebody else's table belongs is not ours to say
     assert router.allow_migrate('default', 'auth') is None
 
@@ -192,7 +192,7 @@ def test_every_setting_is_documented():
     """
     import pathlib
 
-    from django_redis_aiogram.defaults import DEFAULTS
+    from django_aiogram.defaults import DEFAULTS
 
     page = pathlib.Path(__file__).resolve().parent.parent / 'docs' / 'wiki' / 'Settings.md'
     text = page.read_text(encoding='utf-8')

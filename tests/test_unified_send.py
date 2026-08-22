@@ -7,9 +7,9 @@ from aiogram import exceptions
 from aiogram.methods import SendMessage
 from django.test import override_settings
 
-from django_redis_aiogram import TelegramBot
-from django_redis_aiogram.envelope import unpack
-from django_redis_aiogram.serializers import JsonSerializer
+from django_aiogram import TelegramBot
+from django_aiogram.envelope import unpack
+from django_aiogram.serializers import JsonSerializer
 
 SETTINGS = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'}
 
@@ -60,7 +60,7 @@ def test_disabled_send_is_a_noop(monkeypatch):
         msg = 'a disabled send reached for Redis'
         raise AssertionError(msg)
 
-    monkeypatch.setattr('django_redis_aiogram.client.get_redis', forbidden)
+    monkeypatch.setattr('django_aiogram.client.get_redis', forbidden)
 
     instance = TelegramBot()
     instance.send(chat_id=1, text='hi')
@@ -185,7 +185,7 @@ def a_failing_send(raise_exception, bot=Refusing):
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
 def test_raise_exception_reads_the_word_and_not_its_truthiness():
-    """`DJANGO_REDIS_AIOGRAM_RAISE_EXCEPTION=false` arrives as `'false'`, which is truthy.
+    """`DJANGO_AIOGRAM_RAISE_EXCEPTION=false` arrives as `'false'`, which is truthy.
 
     Read with a bare `if`, that re-raised into the caller the exception the project had
     just asked to have swallowed — and only after a send had exhausted `MAX_RETRIES`, so a

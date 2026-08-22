@@ -13,7 +13,7 @@ from enum import Enum
 import pytest
 from django.test import override_settings
 
-from django_redis_aiogram.payloads import (
+from django_aiogram.payloads import (
     MAX_DEPTH,
     MAX_ITEMS,
     MAX_KEYS,
@@ -236,7 +236,7 @@ def test_describe_never_raises(monkeypatch):
         msg = 'the summarizer itself broke'
         raise RuntimeError(msg)
 
-    monkeypatch.setattr('django_redis_aiogram.payloads.summarize', explode)
+    monkeypatch.setattr('django_aiogram.payloads.summarize', explode)
 
     assert describe({'value': 'anything'}) == {'__omitted__': 'undescribable'}
 
@@ -275,7 +275,7 @@ def test_the_colon_prefilter_never_lets_a_credential_through(text):
 @override_settings(TELEGRAM_BOT={'TOKEN': '424242:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'})
 def test_the_settings_are_read_once_for_a_whole_payload(monkeypatch):
     """They were read for every string, at every depth, of every event."""
-    from django_redis_aiogram import payloads
+    from django_aiogram import payloads
 
     reads = []
     original = payloads.conf.get
@@ -300,7 +300,7 @@ def test_a_string_without_a_colon_never_reaches_the_token_regex(monkeypatch):
     the regex run on everything and the output is identical. This is the one that
     fails when the optimisation is reverted.
     """
-    from django_redis_aiogram import payloads
+    from django_aiogram import payloads
 
     scanned = []
     real = payloads._TOKEN_RE

@@ -14,7 +14,7 @@ Scalars can come from the environment, so the choice can be made at startup
 without touching code:
 
 ```shell
-DJANGO_REDIS_AIOGRAM_MODE=webhook
+DJANGO_AIOGRAM_MODE=webhook
 ```
 
 `start_tgbot` prints which mode it is running in, honours `--mode` for a single
@@ -78,7 +78,7 @@ less thing scanning the internet will find.
 # urls.py
 from django.urls import path
 
-from django_redis_aiogram.webhook import telegram_webhook
+from django_aiogram.webhook import telegram_webhook
 
 urlpatterns = [
     path('tg/9c1f2b7a/', telegram_webhook),
@@ -117,7 +117,7 @@ what you want when trying the other mode without editing anything. It changes
 the two disagree and says what will happen: a webhook worker whose setting says
 polling gets no updates, because the view refuses them, and polling while a
 webhook is registered fails at `getUpdates`. For a real switch, change `MODE` (or
-`DJANGO_REDIS_AIOGRAM_MODE`) everywhere.
+`DJANGO_AIOGRAM_MODE`) everywhere.
 
 ## Going back to polling
 
@@ -170,7 +170,7 @@ the dispatcher. Redis carries outbound messages only, in both modes.
 ## Health
 
 The healthcheck reads the consumer's heartbeat — `python -m
-django_redis_aiogram.healthcheck` in a container, `manage.py tgbot_healthcheck`
+django_aiogram.healthcheck` in a container, `manage.py tgbot_healthcheck`
 by hand — so in webhook mode it answers for the `start_tgbot` worker rather than
 for the web process: the worker still runs the queue consumer, it just does not
 poll. Do not point it at the web service, which writes no heartbeat and would

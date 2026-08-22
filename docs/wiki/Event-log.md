@@ -91,7 +91,7 @@ duplicate.
 Register your own:
 
 ```python
-from django_redis_aiogram.events import register_kind
+from django_aiogram.events import register_kind
 
 ORDER_NOTIFIED = register_kind('shop.order.notified', 'Order notified')
 ```
@@ -147,9 +147,9 @@ bot does without keeping a row for any of it:
 # metrics.py, imported from your AppConfig.ready()
 from prometheus_client import Counter
 
-from django_redis_aiogram.signals import events_recorded
+from django_aiogram.signals import events_recorded
 
-SENDS = Counter('telegram_events', 'django-redis-aiogram events', ['kind', 'function'])
+SENDS = Counter('telegram_events', 'django-aiogram events', ['kind', 'function'])
 
 
 def count(sender, events, **kwargs):
@@ -297,7 +297,7 @@ support.permissions.add(Permission.objects.get(codename='view_telegramevent'))
 operators = Group.objects.create(name='Telegram operators')
 operators.permissions.set(
     Permission.objects.filter(
-        content_type__app_label='django_redis_aiogram',
+        content_type__app_label='django_aiogram',
         codename__in=['view_telegramevent', 'view_telegramevent_payload'],
     )
 )
@@ -360,7 +360,7 @@ path, and every prune then has to fetch primary keys first.
 
 ```python
 TELEGRAM_BOT = {'EVENT_LOG_DATABASE': 'logs'}
-DATABASE_ROUTERS = ['django_redis_aiogram.dbrouter.TelegramEventLogRouter', ...]
+DATABASE_ROUTERS = ['django_aiogram.dbrouter.TelegramEventLogRouter', ...]
 ```
 
 The writer and the admin name the alias explicitly, so the log lands in the
@@ -385,17 +385,17 @@ out of band. The sketch below is for an **empty** table — do it right after
 `migrate`, before the log is switched on:
 
 ```sql
-ALTER TABLE django_redis_aiogram_event RENAME TO django_redis_aiogram_event_old;
+ALTER TABLE django_aiogram_event RENAME TO django_aiogram_event_old;
 
-CREATE TABLE django_redis_aiogram_event (
-    LIKE django_redis_aiogram_event_old INCLUDING DEFAULTS INCLUDING IDENTITY
+CREATE TABLE django_aiogram_event (
+    LIKE django_aiogram_event_old INCLUDING DEFAULTS INCLUDING IDENTITY
 ) PARTITION BY RANGE (created_at);            -- no primary key on the parent
 
-CREATE TABLE django_redis_aiogram_event_2026_08
-    PARTITION OF django_redis_aiogram_event FOR VALUES FROM ('2026-08-01') TO ('2026-09-01');
-CREATE INDEX ON django_redis_aiogram_event_2026_08 (id);   -- per partition, per index
+CREATE TABLE django_aiogram_event_2026_08
+    PARTITION OF django_aiogram_event FOR VALUES FROM ('2026-08-01') TO ('2026-09-01');
+CREATE INDEX ON django_aiogram_event_2026_08 (id);   -- per partition, per index
 
-DROP TABLE django_redis_aiogram_event_old;
+DROP TABLE django_aiogram_event_old;
 ```
 
 `INCLUDING IDENTITY` is not decoration: Django creates the primary key as

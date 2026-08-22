@@ -16,9 +16,9 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 
-import django_redis_aiogram
-from django_redis_aiogram import TelegramBot, bot, conf, redis_conn
-from django_redis_aiogram.settings import Settings, parse_bool
+import django_aiogram
+from django_aiogram import TelegramBot, bot, conf, redis_conn
+from django_aiogram.settings import Settings, parse_bool
 
 #: seconds a nested interpreter gets before the test fails instead of hanging
 SUBPROCESS_TIMEOUT = 120
@@ -50,14 +50,14 @@ def test_package_exposes_public_api():
 def test_bot_name_is_not_shadowed_by_a_module():
     """The singleton is exported as `bot`, so the class must not live in bot.py.
 
-    Otherwise `django_redis_aiogram.bot` resolves to the module or the instance
+    Otherwise `django_aiogram.bot` resolves to the module or the instance
     depending on import order.
     """
-    import django_redis_aiogram
-    import django_redis_aiogram.client
+    import django_aiogram
+    import django_aiogram.client
 
-    assert isinstance(django_redis_aiogram.bot, TelegramBot)
-    assert django_redis_aiogram.client.TelegramBot is TelegramBot
+    assert isinstance(django_aiogram.bot, TelegramBot)
+    assert django_aiogram.client.TelegramBot is TelegramBot
 
 
 def test_building_a_bot_is_cheap():
@@ -99,21 +99,21 @@ def test_override_settings_is_picked_up():
 
 
 def test_settings_win_over_environment(monkeypatch):
-    monkeypatch.setenv('DJANGO_REDIS_AIOGRAM_MAX_RETRIES', '7')
+    monkeypatch.setenv('DJANGO_AIOGRAM_MAX_RETRIES', '7')
     with override_settings(TELEGRAM_BOT={'MAX_RETRIES': 3}):
         assert conf['MAX_RETRIES'] == 3
 
 
 def test_environment_fills_unset_keys(monkeypatch):
-    monkeypatch.setenv('DJANGO_REDIS_AIOGRAM_MAX_RETRIES', '7')
-    monkeypatch.setenv('DJANGO_REDIS_AIOGRAM_TOKEN', '42:from-env')
+    monkeypatch.setenv('DJANGO_AIOGRAM_MAX_RETRIES', '7')
+    monkeypatch.setenv('DJANGO_AIOGRAM_TOKEN', '42:from-env')
     with override_settings(TELEGRAM_BOT={}):
         assert conf['MAX_RETRIES'] == 7
         assert conf['TOKEN'] == '42:from-env'
 
 
 def test_environment_ignores_non_scalar_settings(monkeypatch):
-    monkeypatch.setenv('DJANGO_REDIS_AIOGRAM_DEFAULT_KWARGS', 'nonsense')
+    monkeypatch.setenv('DJANGO_AIOGRAM_DEFAULT_KWARGS', 'nonsense')
     with override_settings(TELEGRAM_BOT={}):
         assert callable(conf['DEFAULT_KWARGS'])
 
@@ -139,7 +139,7 @@ def test_parse_bool_rejects_ambiguous():
 
 
 def test_invalid_integer_in_environment_is_reported(monkeypatch):
-    monkeypatch.setenv('DJANGO_REDIS_AIOGRAM_MAX_RETRIES', 'ten')
+    monkeypatch.setenv('DJANGO_AIOGRAM_MAX_RETRIES', 'ten')
     with override_settings(TELEGRAM_BOT={}), pytest.raises(ImproperlyConfigured, match='integer'):
         _ = conf['MAX_RETRIES']
 
@@ -167,20 +167,20 @@ def test_importing_the_package_pulls_nothing_third_party():
         import sys
 
         before = set(sys.modules)
-        import django_redis_aiogram
+        import django_aiogram
         delta = set(sys.modules) - before
         pulled = {name.split('.')[0] for name in delta}
-        pulled -= sys.stdlib_module_names | {'django_redis_aiogram'}
+        pulled -= sys.stdlib_module_names | {'django_aiogram'}
 
         assert not pulled, f'importing the package pulled {sorted(pulled)}'
         # out of the raw delta, so the stdlib subtraction above cannot hide them
         assert 'typing' not in delta, 'the package imported typing again'
         assert 'threading' not in delta, 'the package imported threading again'
-        assert django_redis_aiogram.__version__
+        assert django_aiogram.__version__
 
-        _ = django_redis_aiogram.bot
+        _ = django_aiogram.bot
         assert 'aiogram' in sys.modules, 'using the bot did not resolve it'
-        assert django_redis_aiogram.bot is _, 'a second access built a second bot'
+        assert django_aiogram.bot is _, 'a second access built a second bot'
         print('lazy ok')
     """)
     result = subprocess.run(  # noqa: S603 - our own interpreter, and a script written right above
@@ -218,7 +218,7 @@ def test_a_disabled_django_boot_never_pays_for_aiogram():
         env={
             **os.environ,
             'DJANGO_SETTINGS_MODULE': 'tests.settings',
-            'DJANGO_REDIS_AIOGRAM_ENABLED': '0',
+            'DJANGO_AIOGRAM_ENABLED': '0',
         },
     )
     assert result.returncode == 0, result.stderr
@@ -254,7 +254,7 @@ def test_running_the_system_checks_does_not_import_aiogram():
             with override_settings(TELEGRAM_BOT={'TOKEN': 42}):
                 call_command('check')
         except SystemCheckError as refused:
-            assert 'django_redis_aiogram.E004' in str(refused), f'someone else refused it: {refused}'
+            assert 'django_aiogram.E004' in str(refused), f'someone else refused it: {refused}'
         else:
             raise AssertionError('manage.py check accepted a TOKEN of the wrong type')
 
@@ -276,9 +276,9 @@ def test_running_the_system_checks_does_not_import_aiogram():
 
 
 def test_dir_lists_the_lazy_exports():
-    import django_redis_aiogram
+    import django_aiogram
 
-    assert set(django_redis_aiogram.__all__) <= set(dir(django_redis_aiogram))
+    assert set(django_aiogram.__all__) <= set(dir(django_aiogram))
 
 
 def test_the_version_is_the_one_the_changelog_announces():
@@ -298,11 +298,14 @@ def test_the_version_is_the_one_the_changelog_announces():
     assert heading is not None, 'the changelog has no release headings'
     announced = heading.group(1).split(' - ')[0].strip()
     assert re.fullmatch(r'\d+\.\d+\.\d+', announced), f'the top changelog heading is not a version: {heading.group(1)}'
-    assert django_redis_aiogram.__version__ == announced
+    # the release the version is preparing, so `4.0.0.dev0` matches the `4.0.0` entry
+    # rather than demanding a `4.0.0.dev0` heading nobody would write
+    release = re.match(r'(\d+\.\d+\.\d+)', django_aiogram.__version__).group(1)
+    assert release == announced
 
 
 def test_connecting_a_metrics_receiver_pulls_neither_aiogram_nor_the_orm():
-    """`django_redis_aiogram.signals` must be importable from settings-time code.
+    """`django_aiogram.signals` must be importable from settings-time code.
 
     A metrics module is imported early, and importing this package's client half
     loads aiogram — the ~900ms this whole file exists about. So the seam is its own
@@ -322,9 +325,9 @@ def test_connecting_a_metrics_receiver_pulls_neither_aiogram_nor_the_orm():
         import sys
 
         before = set(sys.modules)
-        from django_redis_aiogram.signals import events_recorded
+        from django_aiogram.signals import events_recorded
         pulled = {name.split('.')[0] for name in set(sys.modules) - before}
-        pulled -= sys.stdlib_module_names | {'django_redis_aiogram', 'django', 'asgiref'}
+        pulled -= sys.stdlib_module_names | {'django_aiogram', 'django', 'asgiref'}
 
         assert not pulled, f'importing the signal pulled {sorted(pulled)}'
         assert 'aiogram' not in sys.modules, 'the metrics seam loaded aiogram'
@@ -358,14 +361,14 @@ def test_threads_racing_for_the_bot_all_get_the_same_one(monkeypatch):
     A `Barrier` rather than luck: every thread is held until all of them are ready, so
     they reach the import at the same moment rather than in sequence.
     """
-    import django_redis_aiogram
+    import django_aiogram
 
     # forget both the cached attribute and the module whose body builds it, so this
     # really is a first access rather than a read of what an earlier test left — and
     # through monkeypatch, so the next test does not inherit the instance built here
     # while every test before it holds the original
-    monkeypatch.delattr(django_redis_aiogram, 'bot', raising=False)
-    monkeypatch.delitem(sys.modules, 'django_redis_aiogram._singleton', raising=False)
+    monkeypatch.delattr(django_aiogram, 'bot', raising=False)
+    monkeypatch.delitem(sys.modules, 'django_aiogram._singleton', raising=False)
 
     gate = threading.Barrier(8)
     seen: list[object] = []
@@ -375,7 +378,7 @@ def test_threads_racing_for_the_bot_all_get_the_same_one(monkeypatch):
         """Wait at the barrier with the others, then take the shared bot."""
         try:
             gate.wait(timeout=10)
-            seen.append(django_redis_aiogram.bot)
+            seen.append(django_aiogram.bot)
         except BaseException as error:
             errors.append(error)
 
@@ -405,10 +408,10 @@ def test_the_healthcheck_probe_does_not_import_aiogram():
     script = textwrap.dedent("""
         import sys
 
-        from django_redis_aiogram.management.commands import tgbot_healthcheck
+        from django_aiogram.management.commands import tgbot_healthcheck
 
         assert 'aiogram' not in sys.modules, 'the healthcheck pulled aiogram'
-        assert 'django_redis_aiogram.client' not in sys.modules, 'it pulled the client half'
+        assert 'django_aiogram.client' not in sys.modules, 'it pulled the client half'
         assert hasattr(tgbot_healthcheck, 'Command')
         print('cheap probe ok')
     """)
@@ -418,7 +421,7 @@ def test_the_healthcheck_probe_does_not_import_aiogram():
         text=True,
         check=False,
         timeout=SUBPROCESS_TIMEOUT,
-        env={**os.environ, 'DJANGO_SETTINGS_MODULE': 'tests.settings', 'DJANGO_REDIS_AIOGRAM_AUTODISCOVER': '0'},
+        env={**os.environ, 'DJANGO_SETTINGS_MODULE': 'tests.settings', 'DJANGO_AIOGRAM_AUTODISCOVER': '0'},
     )
     assert result.returncode == 0, result.stderr
     assert 'cheap probe ok' in result.stdout
@@ -436,7 +439,7 @@ def test_the_probe_with_no_settings_module_refuses_in_one_line():
     """
     environment = {key: value for key, value in os.environ.items() if key != 'DJANGO_SETTINGS_MODULE'}
     probe = subprocess.run(
-        [sys.executable, '-m', 'django_redis_aiogram.healthcheck'],
+        [sys.executable, '-m', 'django_aiogram.healthcheck'],
         capture_output=True,
         text=True,
         check=False,
@@ -471,11 +474,11 @@ def test_the_healthcheck_probe_does_not_populate_the_app_registry(tmp_path):
     environment = {
         **os.environ,
         'DJANGO_SETTINGS_MODULE': 'tests.marker_settings',
-        'DJANGO_REDIS_AIOGRAM_TEST_MARKER': str(marker),
-        'DJANGO_REDIS_AIOGRAM_REDIS_URL': 'redis://127.0.0.1:1/0',
+        'DJANGO_AIOGRAM_TEST_MARKER': str(marker),
+        'DJANGO_AIOGRAM_REDIS_URL': 'redis://127.0.0.1:1/0',
     }
     probe = subprocess.run(
-        [sys.executable, '-m', 'django_redis_aiogram.healthcheck'],
+        [sys.executable, '-m', 'django_aiogram.healthcheck'],
         capture_output=True,
         text=True,
         check=False,

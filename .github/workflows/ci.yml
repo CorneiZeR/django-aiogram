@@ -138,7 +138,7 @@ jobs:
       - run: pip install -e . --group dev ${{ matrix.pins }}
       - run: python -m pytest -q -m integration tests/integration
         env:
-          DJANGO_REDIS_AIOGRAM_TEST_REDIS_URL: redis://localhost:6379/0
+          DJANGO_AIOGRAM_TEST_REDIS_URL: redis://localhost:6379/0
 
   smoke:
     # the unit suite imports from src/, so only an install can catch a packaging
@@ -155,7 +155,7 @@ jobs:
         options: >-
           --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 5
     env:
-      DJANGO_REDIS_AIOGRAM_TEST_REDIS_URL: redis://127.0.0.1:6399/0
+      DJANGO_AIOGRAM_TEST_REDIS_URL: redis://127.0.0.1:6399/0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -187,9 +187,9 @@ jobs:
           wheel = glob.glob('dist/*.whl')[0]
           names = zipfile.ZipFile(wheel).namelist()
           expected_names = (
-              'django_redis_aiogram/py.typed',
-              'django_redis_aiogram/api.py',
-              'django_redis_aiogram/migrations/0001_initial.py',
+              'django_aiogram/py.typed',
+              'django_aiogram/api.py',
+              'django_aiogram/migrations/0001_initial.py',
           )
           for expected in expected_names:
               assert expected in names, f'{expected} missing from {wheel}: {names}'

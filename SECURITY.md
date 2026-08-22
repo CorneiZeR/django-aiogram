@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Please report privately through
-[GitHub security advisories](https://github.com/CorneiZeR/django-redis-aiogram/security/advisories/new)
+[GitHub security advisories](https://github.com/CorneiZeR/django-aiogram/security/advisories/new)
 rather than opening a public issue.
 
 ## Supported versions
@@ -79,7 +79,7 @@ reason the Redis behind it must stay inside your own trust boundary.
 ## Tokens
 
 The bot token is read from `TELEGRAM_BOT['TOKEN']` or the
-`DJANGO_REDIS_AIOGRAM_TOKEN` environment variable. It is never logged.
+`DJANGO_AIOGRAM_TOKEN` environment variable. It is never logged.
 
 `ENABLED=0` means a process needs no token: it reaches neither Telegram nor
 Redis, and `manage.py check` stops asking for credentials. It does not take the

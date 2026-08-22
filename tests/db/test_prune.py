@@ -10,10 +10,10 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
-from django_redis_aiogram.enums import EventKind
-from django_redis_aiogram.events import new_correlation_id
-from django_redis_aiogram.management.commands import tgbot_prune_events as prune_command
-from django_redis_aiogram.models import TelegramEvent
+from django_aiogram.enums import EventKind
+from django_aiogram.events import new_correlation_id
+from django_aiogram.management.commands import tgbot_prune_events as prune_command
+from django_aiogram.models import TelegramEvent
 
 
 def an_event(days_old=0, **kwargs):
@@ -261,7 +261,7 @@ def test_a_dry_run_does_not_pace_itself(monkeypatch):
     there is nothing to pace, and a nightly `--dry-run` over a large table slept
     once per chunk for no reason."""
     slept = []
-    monkeypatch.setattr('django_redis_aiogram.management.commands.tgbot_prune_events.time.sleep', slept.append)
+    monkeypatch.setattr('django_aiogram.management.commands.tgbot_prune_events.time.sleep', slept.append)
     for _ in range(4):
         an_event(days_old=40)
 

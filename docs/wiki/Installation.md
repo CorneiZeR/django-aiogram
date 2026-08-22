@@ -1,7 +1,7 @@
 # Installation
 
 ```shell
-pip install django-redis-aiogram
+pip install django-aiogram
 ```
 
 Requires Python 3.10–3.14, Django 5.2+, aiogram 3.30+, redis 6.2+.
@@ -19,7 +19,7 @@ import os
 
 INSTALLED_APPS = [
     ...,
-    'django_redis_aiogram',
+    'django_aiogram',
 ]
 
 TELEGRAM_BOT = {
@@ -44,13 +44,13 @@ off by default, and nothing is written until you set it. See
 
 ## Configure from the environment
 
-Scalar settings can come from `DJANGO_REDIS_AIOGRAM_<NAME>`:
+Scalar settings can come from `DJANGO_AIOGRAM_<NAME>`:
 
 ```ini
 # .env
-DJANGO_REDIS_AIOGRAM_TOKEN=123:abc
-DJANGO_REDIS_AIOGRAM_REDIS_URL=redis://redis:6379/0
-DJANGO_REDIS_AIOGRAM_ENABLED=0
+DJANGO_AIOGRAM_TOKEN=123:abc
+DJANGO_AIOGRAM_REDIS_URL=redis://redis:6379/0
+DJANGO_AIOGRAM_ENABLED=0
 ```
 
 Django settings win over the environment. Callables and mappings —

@@ -11,11 +11,11 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 
-from django_redis_aiogram import TelegramBot
-from django_redis_aiogram.checks import check_settings
-from django_redis_aiogram.defaults import DEFAULTS
-from django_redis_aiogram.enums import RateLimitKey, choices
-from django_redis_aiogram.throttling import (
+from django_aiogram import TelegramBot
+from django_aiogram.checks import check_settings
+from django_aiogram.defaults import DEFAULTS
+from django_aiogram.enums import RateLimitKey, choices
+from django_aiogram.throttling import (
     KNOWN_RATE_LIMIT_KEYS,
     MAX_TRACKED_CHATS,
     RateLimiter,
@@ -294,7 +294,7 @@ def test_unknown_key_is_reported():
 
 @override_settings(TELEGRAM_BOT={'RATE_LIMIT': {'per_second': 5}, 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_check_catches_an_unknown_key():
-    assert 'django_redis_aiogram.E020' in {message.id for message in check_settings()}
+    assert 'django_aiogram.E020' in {message.id for message in check_settings()}
 
 
 @override_settings(
@@ -305,12 +305,12 @@ def test_check_catches_an_unknown_key():
     }
 )
 def test_check_catches_a_negative_rate():
-    assert 'django_redis_aiogram.E020' in {message.id for message in check_settings()}
+    assert 'django_aiogram.E020' in {message.id for message in check_settings()}
 
 
 @override_settings(TELEGRAM_BOT={'RATE_LIMIT': 'fast', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_check_catches_a_non_mapping():
-    assert 'django_redis_aiogram.E020' in {message.id for message in check_settings()}
+    assert 'django_aiogram.E020' in {message.id for message in check_settings()}
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x'})
@@ -348,7 +348,7 @@ def test_defaults_come_from_the_settings_defaults():
 )
 def test_writing_pickle_while_refusing_to_read_it_is_rejected():
     """Otherwise every queued message is written and then silently discarded."""
-    assert 'django_redis_aiogram.E022' in {message.id for message in check_settings()}
+    assert 'django_aiogram.E022' in {message.id for message in check_settings()}
 
 
 def test_the_known_keys_are_the_rate_limit_enum():
@@ -425,7 +425,7 @@ def test_a_living_bot_picks_up_changed_rate_limits():
 def test_a_textual_false_still_trips_the_pickle_check():
     """From the environment ALLOW_PICKLE is a string, and 'false' is truthy —
     the check has to coerce it exactly the way the reader does."""
-    assert 'django_redis_aiogram.E022' in {message.id for message in check_settings()}
+    assert 'django_aiogram.E022' in {message.id for message in check_settings()}
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'SERIALIZER': 'pickle', 'ALLOW_PICKLE': 'maybe'})
@@ -433,8 +433,8 @@ def test_unreadable_allow_pickle_is_reported_not_raised():
     """A check reports; E017 owns the type complaint, E022 stays silent."""
     reported = {message.id for message in check_settings()}
 
-    assert 'django_redis_aiogram.E017' in reported
-    assert 'django_redis_aiogram.E022' not in reported
+    assert 'django_aiogram.E017' in reported
+    assert 'django_aiogram.E022' not in reported
 
 
 def test_admission_is_strict_fifo():

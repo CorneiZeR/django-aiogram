@@ -13,12 +13,12 @@ from django.core.management import call_command
 from django.core.management.base import SystemCheckError
 from django.test import override_settings
 
-from django_redis_aiogram.checks import CHECKS, check_settings, worker_name_problems
-from django_redis_aiogram.dbrouter import TelegramEventLogRouter
-from django_redis_aiogram.defaults import DEFAULTS
-from django_redis_aiogram.events import worker_identity
-from django_redis_aiogram.redis import read_timeout
-from django_redis_aiogram.settings import blpop_ceiling
+from django_aiogram.checks import CHECKS, check_settings, worker_name_problems
+from django_aiogram.dbrouter import TelegramEventLogRouter
+from django_aiogram.defaults import DEFAULTS
+from django_aiogram.events import worker_identity
+from django_aiogram.redis import read_timeout
+from django_aiogram.settings import blpop_ceiling
 
 
 @pytest.fixture(autouse=True)
@@ -48,17 +48,17 @@ def test_valid_settings_produce_no_errors():
 
 @override_settings(TELEGRAM_BOT={'MAX_RETRIES': 'ten', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_wrong_integer_type_is_caught():
-    assert 'django_redis_aiogram.E012' in ids(errors(check_settings()))
+    assert 'django_aiogram.E012' in ids(errors(check_settings()))
 
 
 @override_settings(TELEGRAM_BOT={'MAX_RETRIES': True, 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_bool_is_not_accepted_as_integer():
-    assert 'django_redis_aiogram.E012' in ids(errors(check_settings()))
+    assert 'django_aiogram.E012' in ids(errors(check_settings()))
 
 
 @override_settings(TELEGRAM_BOT={'MAX_RETRIES': 0, 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_integer_below_minimum_is_caught():
-    assert 'django_redis_aiogram.E012' in ids(errors(check_settings()))
+    assert 'django_aiogram.E012' in ids(errors(check_settings()))
 
 
 @override_settings(
@@ -84,7 +84,7 @@ def test_a_configuration_that_boots_and_sends_does_not_fail_the_checks():
     the case they were written for.
     """
     reported = {str(message.id) for message in check_settings()}
-    boolean_ids = {f'django_redis_aiogram.{code}' for code in ('E001', 'E002', 'E017', 'E031', 'E042', 'E046')}
+    boolean_ids = {f'django_aiogram.{code}' for code in ('E001', 'E002', 'E017', 'E031', 'E042', 'E046')}
 
     assert reported & boolean_ids == set(), f'a working configuration was refused: {sorted(reported & boolean_ids)}'
 
@@ -99,7 +99,7 @@ def test_a_boolean_nothing_can_read_is_still_caught():
     """
     reported = errors(check_settings())
 
-    assert 'django_redis_aiogram.E001' in ids(reported)
+    assert 'django_aiogram.E001' in ids(reported)
     # the message is the one the runtime would have raised, not a paraphrase
     assert any("must be one of ['0', '1', 'false'" in str(message) for message in reported), reported
 
@@ -109,51 +109,51 @@ def test_raise_exception_accepts_what_the_environment_can_express():
     """It was the last setting demanding a real bool, and only because of a defect.
 
     `client.py` read it with a bare `if`, so `'false'` — truthy, and what
-    `DJANGO_REDIS_AIOGRAM_RAISE_EXCEPTION=false` arrives as — re-raised the exception the
+    `DJANGO_AIOGRAM_RAISE_EXCEPTION=false` arrives as — re-raised the exception the
     project had asked to have swallowed. The check was strict to say so at boot rather
     than at the first failed send. The read goes through `coerce_bool` now, so the
     documented spelling is a working value here too.
     """
-    assert 'django_redis_aiogram.E003' not in ids(errors(check_settings()))
+    assert 'django_aiogram.E003' not in ids(errors(check_settings()))
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': 42, 'REDIS_URL': 'r://x'})
 def test_wrong_string_type_is_caught():
-    assert 'django_redis_aiogram.E004' in ids(errors(check_settings()))
+    assert 'django_aiogram.E004' in ids(errors(check_settings()))
 
 
 @override_settings(TELEGRAM_BOT={'DELIVERY': 'carrier-pigeon', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_unknown_delivery_is_rejected():
-    assert 'django_redis_aiogram.E009' in ids(errors(check_settings()))
+    assert 'django_aiogram.E009' in ids(errors(check_settings()))
 
 
 @override_settings(TELEGRAM_BOT={'SERIALIZER': 'yaml', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_unknown_serializer_is_rejected():
-    assert 'django_redis_aiogram.E010' in ids(errors(check_settings()))
+    assert 'django_aiogram.E010' in ids(errors(check_settings()))
 
 
 @override_settings(TELEGRAM_BOT={'DEFAULT_KWARGS': {}, 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_non_callable_default_kwargs_is_caught():
-    assert 'django_redis_aiogram.E015' in ids(errors(check_settings()))
+    assert 'django_aiogram.E015' in ids(errors(check_settings()))
 
 
 @override_settings(TELEGRAM_BOT={'DEFAULT_BOT_PROPERTIES': 'HTML', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_non_mapping_bot_properties_is_caught():
-    assert 'django_redis_aiogram.E016' in ids(errors(check_settings()))
+    assert 'django_aiogram.E016' in ids(errors(check_settings()))
 
 
 @override_settings(TELEGRAM_BOT={'TOEKN': 'typo', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_typo_in_a_key_is_reported_as_warning():
     messages = check_settings()
     assert errors(messages) == []
-    assert 'django_redis_aiogram.W003' in ids(messages)
+    assert 'django_aiogram.W003' in ids(messages)
 
 
 @override_settings(TELEGRAM_BOT={})
 def test_missing_credentials_warn_but_do_not_fail():
     messages = check_settings()
     assert errors(messages) == []
-    assert {'django_redis_aiogram.W001', 'django_redis_aiogram.W002'} <= ids(messages)
+    assert {'django_aiogram.W001', 'django_aiogram.W002'} <= ids(messages)
 
 
 @override_settings(TELEGRAM_BOT={'ENABLED': False})
@@ -293,7 +293,7 @@ def emitted_ids():
     found = set()
     for settings in (WRONG_TYPES, WRONG_VALUES, LOG_WITHOUT_A_DATABASE, PICKLE_ON_A_DECODING_URL):
         with override_settings(TELEGRAM_BOT=settings):
-            found |= {str(message.id).removeprefix('django_redis_aiogram.') for message in check_settings()}
+            found |= {str(message.id).removeprefix('django_aiogram.') for message in check_settings()}
     return found
 
 
@@ -331,7 +331,7 @@ def test_the_documented_floor_is_the_floor_the_check_enforces():
 
     for value, refused in ((floor - 1, True), (floor, False)):
         with override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_TIMEOUT': value}):
-            reported = 'django_redis_aiogram.E030' in ids(errors(check_settings()))
+            reported = 'django_aiogram.E030' in ids(errors(check_settings()))
         assert reported is refused, f'REDIS_TIMEOUT={value} is {"accepted" if refused else "refused"}'
 
 
@@ -354,7 +354,7 @@ def test_no_test_asserts_on_a_check_id_the_registry_no_longer_has():
     live = {check.code for check in CHECKS} | RETIRED_IDS
     stale = {}
     for path in sorted(pathlib.Path(__file__).resolve().parent.rglob('*.py')):
-        named = set(re.findall(r'django_redis_aiogram\.([EWI]\d{3})', path.read_text(encoding='utf-8')))
+        named = set(re.findall(r'django_aiogram\.([EWI]\d{3})', path.read_text(encoding='utf-8')))
         if named - live:
             stale[path.name] = sorted(named - live)
 
@@ -371,9 +371,7 @@ def test_the_page_explains_every_severity_the_registry_uses():
     """
     page = SETTINGS_PAGE.read_text(encoding='utf-8')
     unexplained = sorted(
-        f'django_redis_aiogram.{check.code[0]}XXX'
-        for check in CHECKS
-        if f'django_redis_aiogram.{check.code[0]}XXX' not in page
+        f'django_aiogram.{check.code[0]}XXX' for check in CHECKS if f'django_aiogram.{check.code[0]}XXX' not in page
     )
 
     assert not unexplained, f'the Check ids legend does not explain: {unexplained}'
@@ -395,7 +393,7 @@ def test_every_registry_row_guards_a_real_setting():
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://x', 'WORKER_NAME': 7})
 def test_a_non_string_worker_name_is_reported():
     """It names the in-flight list, so a wrong type breaks reclaim at startup."""
-    assert 'django_redis_aiogram.E021' in ids(check_settings())
+    assert 'django_aiogram.E021' in ids(check_settings())
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://x', 42: 'numeric'})
@@ -403,7 +401,7 @@ def test_a_non_string_settings_key_is_reported_not_raised():
     """`", ".join` over mixed key types used to raise out of manage.py check."""
     reported = {message.id for message in check_settings()}
 
-    assert 'django_redis_aiogram.W003' in reported
+    assert 'django_aiogram.W003' in reported
 
 
 @override_settings(TELEGRAM_BOT={'ENABLED': 'false', 'TOKEN': '', 'REDIS_URL': ''})
@@ -412,8 +410,8 @@ def test_a_textually_disabled_bot_does_not_warn_about_credentials():
     credential warnings have to agree rather than nag a disabled process."""
     reported = {message.id for message in check_settings()}
 
-    assert 'django_redis_aiogram.W001' not in reported
-    assert 'django_redis_aiogram.W002' not in reported
+    assert 'django_aiogram.W001' not in reported
+    assert 'django_aiogram.W002' not in reported
 
 
 @override_settings(TELEGRAM_BOT={'ENABLED': 'maybe', 'TOKEN': '', 'REDIS_URL': ''})
@@ -421,8 +419,8 @@ def test_an_unreadable_enabled_still_warns_and_reports_its_own_problem():
     """E001 owns the type complaint; the warnings assume the bot is on."""
     reported = {message.id for message in check_settings()}
 
-    assert 'django_redis_aiogram.E001' in reported
-    assert 'django_redis_aiogram.W001' in reported
+    assert 'django_aiogram.E001' in reported
+    assert 'django_aiogram.W001' in reported
 
 
 @override_settings(
@@ -539,7 +537,7 @@ def test_a_log_database_nothing_routes_to_is_reported():
 
 @override_settings(
     TELEGRAM_BOT=ROUTED_LOG,
-    DATABASE_ROUTERS=['django_redis_aiogram.dbrouter.TelegramEventLogRouter'],
+    DATABASE_ROUTERS=['django_aiogram.dbrouter.TelegramEventLogRouter'],
 )
 def test_a_dotted_path_router_satisfies_it():
     """The spelling Django's own documentation uses."""
@@ -577,7 +575,7 @@ def test_the_synchronous_writer_warning_is_silent_while_the_log_is_off():
     """`record()` returns before it ever reads EVENT_LOG_SYNC, so warning here
     would describe a cost nobody is paying — and a warning that is wrong is one
     people learn to scroll past."""
-    emitted = {str(message.id).removeprefix('django_redis_aiogram.') for message in check_settings()}
+    emitted = {str(message.id).removeprefix('django_aiogram.') for message in check_settings()}
 
     assert 'W009' not in emitted, emitted
 
@@ -597,7 +595,7 @@ def test_a_decoding_url_with_pickle_is_refused():
     server has already moved the message to the in-flight list, and every later
     reclaim trips over the same message for ever.
     """
-    assert 'django_redis_aiogram.E043' in ids(check_settings())
+    assert 'django_aiogram.E043' in ids(check_settings())
 
 
 @override_settings(
@@ -609,12 +607,12 @@ def test_a_decoding_url_with_pickle_is_refused():
 )
 def test_a_decoding_url_without_pickle_is_fine():
     """Decoding is supported: one REDIS_URL is often shared with a cache backend."""
-    assert 'django_redis_aiogram.E043' not in ids(check_settings())
+    assert 'django_aiogram.E043' not in ids(check_settings())
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'ALLOW_PICKLE': True})
 def test_a_plain_url_with_pickle_is_fine():
-    assert 'django_redis_aiogram.E043' not in ids(check_settings())
+    assert 'django_aiogram.E043' not in ids(check_settings())
 
 
 @override_settings(
@@ -627,30 +625,30 @@ def test_a_plain_url_with_pickle_is_fine():
     }
 )
 def test_a_url_that_only_looks_like_it_disables_decoding_is_refused():
-    assert 'django_redis_aiogram.E043' in ids(check_settings())
+    assert 'django_aiogram.E043' in ids(check_settings())
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'DRAIN_TIMEOUT': 'soon'})
 def test_an_unreadable_drain_timeout_is_reported():
     """`close()` reads this while shutting down, which is the worst place to raise."""
-    assert 'django_redis_aiogram.E044' in ids(check_settings())
+    assert 'django_aiogram.E044' in ids(check_settings())
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'DRAIN_TIMEOUT': -1})
 def test_a_negative_drain_timeout_is_reported():
     """A negative budget makes the drain expire before it starts."""
-    assert 'django_redis_aiogram.E044' in ids(check_settings())
+    assert 'django_aiogram.E044' in ids(check_settings())
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'DRAIN_TIMEOUT': float('nan')})
 def test_a_drain_timeout_that_is_not_a_number_is_reported():
     """Every comparison against nan is false, so it slips past a plain bound."""
-    assert 'django_redis_aiogram.E044' in ids(check_settings())
+    assert 'django_aiogram.E044' in ids(check_settings())
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'DRAIN_TIMEOUT': 2.5})
 def test_a_fractional_drain_timeout_is_fine():
-    assert 'django_redis_aiogram.E044' not in ids(check_settings())
+    assert 'django_aiogram.E044' not in ids(check_settings())
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'})
@@ -663,7 +661,7 @@ def test_a_container_that_forgot_its_hostname_is_warned_about(monkeypatch):
     """
     monkeypatch.setenv('HOSTNAME', 'ba333cb79e00')
 
-    assert 'django_redis_aiogram.I001' in ids(check_settings())
+    assert 'django_aiogram.I001' in ids(check_settings())
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'})
@@ -672,7 +670,7 @@ def test_a_fixed_hostname_is_not_warned_about(monkeypatch):
     everywhere; warning about it as such would fire on every install."""
     monkeypatch.setenv('HOSTNAME', 'bot-worker-1')
 
-    assert 'django_redis_aiogram.I001' not in ids(check_settings())
+    assert 'django_aiogram.I001' not in ids(check_settings())
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'WORKER_NAME': '   '})
@@ -686,14 +684,14 @@ def test_a_padded_name_is_judged_the_way_the_worker_judges_it(monkeypatch):
     monkeypatch.setenv('HOSTNAME', 'ba333cb79e00')
 
     assert worker_identity() == '   ', 'the runtime stopped taking a padded name'
-    assert 'django_redis_aiogram.I001' not in ids(check_settings())
+    assert 'django_aiogram.I001' not in ids(check_settings())
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'WORKER_NAME': 'bot-1'})
 def test_a_named_worker_is_not_warned_about(monkeypatch):
     monkeypatch.setenv('HOSTNAME', 'ba333cb79e00')
 
-    assert 'django_redis_aiogram.I001' not in ids(check_settings())
+    assert 'django_aiogram.I001' not in ids(check_settings())
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})
@@ -718,7 +716,7 @@ def test_the_worker_name_rule_is_information_and_the_consumer_warns_for_itself(m
     Being the consumer is knowable in the command and not in a check, and this is the
     one place the same rule is asked twice — so it is asked of one function.
     """
-    monkeypatch.setattr('django_redis_aiogram.checks.socket.gethostname', lambda: 'ba333cb79e00')
+    monkeypatch.setattr('django_aiogram.checks.socket.gethostname', lambda: 'ba333cb79e00')
     monkeypatch.delenv('HOSTNAME', raising=False)
 
     reported = [message for message in check_settings() if str(message.id).endswith('I001')]
@@ -738,7 +736,7 @@ def test_a_read_deadline_of_one_second_is_refused():
     reconnect, against a healthy server, for ever — and `W004` invited exactly that by
     suggesting `BLPOP_TIMEOUT` be lowered to match.
     """
-    assert 'django_redis_aiogram.E030' in ids(errors(check_settings()))
+    assert 'django_aiogram.E030' in ids(errors(check_settings()))
 
 
 @pytest.mark.parametrize('timeout', [2, 3, 5, 10, 60])
@@ -766,7 +764,7 @@ def test_manage_py_check_surfaces_these_ids():
     with pytest.raises(SystemCheckError) as raised:
         call_command('check')
 
-    assert 'django_redis_aiogram.E004' in str(raised.value)
+    assert 'django_aiogram.E004' in str(raised.value)
 
 
 def test_the_checks_are_registered_with_django():

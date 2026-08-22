@@ -7,7 +7,7 @@ enabled and the module actually exists in that app.
 ```python
 # myapp/tg_router.py
 from aiogram import types, F
-from django_redis_aiogram import bot
+from django_aiogram import bot
 
 
 @bot.message(F.text.startswith('/start'))
@@ -104,7 +104,7 @@ Set `AUTODISCOVER` to `False` and import them yourself, for example from your
 
 ```python
 from aiogram import Bot, Dispatcher
-from django_redis_aiogram import bot as tg
+from django_aiogram import bot as tg
 
 
 def test_start_answers():

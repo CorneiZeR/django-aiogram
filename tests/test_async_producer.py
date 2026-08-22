@@ -19,13 +19,13 @@ from redis.exceptions import (
     ConnectionError,  # noqa: A004 - shadowing the builtin is the point: this is what redis-py raises
 )
 
-from django_redis_aiogram import TelegramBot
-from django_redis_aiogram import redis as redis_module
-from django_redis_aiogram.context import correlation_scope
-from django_redis_aiogram.envelope import unpack
-from django_redis_aiogram.exceptions import UnknownApiMethodError
-from django_redis_aiogram.redis import aget_redis, as_bytes
-from django_redis_aiogram.serializers import SerializationError, loads
+from django_aiogram import TelegramBot
+from django_aiogram import redis as redis_module
+from django_aiogram.context import correlation_scope
+from django_aiogram.envelope import unpack
+from django_aiogram.exceptions import UnknownApiMethodError
+from django_aiogram.redis import aget_redis, as_bytes
+from django_aiogram.serializers import SerializationError, loads
 
 QUEUE = 'TELEGRAM_BOT_MESSAGE'
 #: the one line that says there is an awaitable form; asserted, so a reword
@@ -155,7 +155,7 @@ def test_a_failed_chunk_records_its_own_messages_and_raises(redis_server, bulk, 
     which messages were lost. Earlier chunks are already queued, which is why
     this raises rather than returning a partial list."""
     recorded = []
-    monkeypatch.setattr('django_redis_aiogram.client.recorder.record', recorded.append)
+    monkeypatch.setattr('django_aiogram.client.recorder.record', recorded.append)
 
     calls = []
     bot = TelegramBot()
@@ -206,7 +206,7 @@ def test_the_producer_writes_the_key_the_depth_reads(redis_server, monkeypatch, 
     So the helper is made to answer something the setting does not, and both ends
     are asked whether they agree.
     """
-    monkeypatch.setattr('django_redis_aiogram.client.queue_key', lambda: f'{QUEUE}:elsewhere')
+    monkeypatch.setattr('django_aiogram.client.queue_key', lambda: f'{QUEUE}:elsewhere')
     bot = TelegramBot()
     call = getattr(bot, producer)
     result = call([1], text='hi') if producer.endswith('_many') else call(chat_id=1, text='hi')
@@ -247,14 +247,14 @@ def test_send_from_a_loop_mentions_asend_once(redis_server, caplog, monkeypatch)
     is how people learn to filter our logger out.
     """
     latch = threading.Event()
-    monkeypatch.setattr('django_redis_aiogram.client._asend_mentioned', latch)
+    monkeypatch.setattr('django_aiogram.client._asend_mentioned', latch)
     bot = TelegramBot()
 
     async def three_sends():
         for index in range(3):
             bot.send(chat_id=index, text='hi')
 
-    with caplog.at_level('WARNING', logger='django_redis_aiogram'):
+    with caplog.at_level('WARNING', logger='django_aiogram'):
         asyncio.run(three_sends())
 
     mentions = [record for record in caplog.records if MENTION in record.getMessage()]
@@ -271,9 +271,9 @@ def test_send_off_a_loop_says_nothing(redis_server, caplog, monkeypatch):
     """Most callers are synchronous — Celery, a management command, a view — and
     there is nothing for them to do about a message aimed at async code."""
     latch = threading.Event()
-    monkeypatch.setattr('django_redis_aiogram.client._asend_mentioned', latch)
+    monkeypatch.setattr('django_aiogram.client._asend_mentioned', latch)
 
-    with caplog.at_level('WARNING', logger='django_redis_aiogram'):
+    with caplog.at_level('WARNING', logger='django_aiogram'):
         TelegramBot().send(chat_id=1, text='hi')
 
     assert MENTION not in caplog.text
@@ -300,7 +300,7 @@ def test_a_refused_method_does_not_spend_the_mention(caplog, monkeypatch, produc
     send does.
     """
     latch = threading.Event()
-    monkeypatch.setattr('django_redis_aiogram.client._asend_mentioned', latch)
+    monkeypatch.setattr('django_aiogram.client._asend_mentioned', latch)
     instance = TelegramBot()
 
     def refused():
@@ -313,7 +313,7 @@ def test_a_refused_method_does_not_spend_the_mention(caplog, monkeypatch, produc
         with pytest.raises(UnknownApiMethodError):
             refused()
 
-    with caplog.at_level('WARNING', logger='django_redis_aiogram'):
+    with caplog.at_level('WARNING', logger='django_aiogram'):
         asyncio.run(only_the_refusal())
 
     assert MENTION not in caplog.text
@@ -332,20 +332,20 @@ def test_a_disabled_send_from_a_loop_says_nothing(caplog, monkeypatch):
     path spent the one line the first real caller should have got.
     """
     latch = threading.Event()
-    monkeypatch.setattr('django_redis_aiogram.client._asend_mentioned', latch)
+    monkeypatch.setattr('django_aiogram.client._asend_mentioned', latch)
 
     def refuse():
         raise AssertionError('a disabled send reached Redis')
 
     # the silence is only worth having if nothing was written: a regression that wrote and
     # suppressed the line would satisfy every other assertion here
-    monkeypatch.setattr('django_redis_aiogram.client.get_redis', refuse)
+    monkeypatch.setattr('django_aiogram.client.get_redis', refuse)
     instance = TelegramBot()
 
     async def one_send():
         assert instance.send(chat_id=1, text='hi') is not None, 'the id is still returned'
 
-    with caplog.at_level('WARNING', logger='django_redis_aiogram'):
+    with caplog.at_level('WARNING', logger='django_aiogram'):
         asyncio.run(one_send())
 
     assert MENTION not in caplog.text
@@ -370,7 +370,7 @@ def test_every_synchronous_route_that_writes_names_its_own_twin(
     release adds went unmentioned to exactly the callers who needed them.
     """
     latch = threading.Event()
-    monkeypatch.setattr('django_redis_aiogram.client._asend_mentioned', latch)
+    monkeypatch.setattr('django_aiogram.client._asend_mentioned', latch)
     bot = TelegramBot()
 
     async def once():
@@ -379,7 +379,7 @@ def test_every_synchronous_route_that_writes_names_its_own_twin(
         else:
             getattr(bot, producer)(chat_id=1, text='hi')
 
-    with caplog.at_level('WARNING', logger='django_redis_aiogram'):
+    with caplog.at_level('WARNING', logger='django_aiogram'):
         asyncio.run(once())
 
     mentions = [record for record in caplog.records if MENTION in record.getMessage()]
@@ -409,8 +409,8 @@ def test_the_bulk_pair_refuses_an_unknown_method_before_writing(redis_server, bu
     def refuse(*args, **kwargs):
         raise AssertionError('a refused method asked for a Redis client')
 
-    monkeypatch.setattr('django_redis_aiogram.client.get_redis', refuse)
-    monkeypatch.setattr('django_redis_aiogram.client.aget_redis', refuse)
+    monkeypatch.setattr('django_aiogram.client.get_redis', refuse)
+    monkeypatch.setattr('django_aiogram.client.aget_redis', refuse)
     bot = TelegramBot()
 
     def broadcast():
@@ -445,8 +445,8 @@ def test_a_disabled_process_queues_nothing_and_still_names_the_messages(redis_se
         message = 'a disabled process asked for a Redis client'
         raise AssertionError(message)
 
-    monkeypatch.setattr('django_redis_aiogram.client.get_redis', refuse)
-    monkeypatch.setattr('django_redis_aiogram.redis.build_async_client', refuse)
+    monkeypatch.setattr('django_aiogram.client.get_redis', refuse)
+    monkeypatch.setattr('django_aiogram.redis.build_async_client', refuse)
 
     bot = TelegramBot()
     result = getattr(bot, bulk)([1, 2, 3], text='hi')
@@ -468,7 +468,7 @@ def test_a_broadcast_records_one_row_per_message(redis_server, bulk, monkeypatch
     see the Event log page.
     """
     recorded = []
-    monkeypatch.setattr('django_redis_aiogram.client.recorder.record', recorded.append)
+    monkeypatch.setattr('django_aiogram.client.recorder.record', recorded.append)
 
     bot = TelegramBot()
     result = getattr(bot, bulk)(range(25), chunk_size=10, text='hi')
@@ -496,13 +496,13 @@ def test_a_payload_that_cannot_be_serialized_is_recorded_as_lost(redis_server, b
     from the one that is not.
     """
     recorded = []
-    monkeypatch.setattr('django_redis_aiogram.client.recorder.record', recorded.append)
+    monkeypatch.setattr('django_aiogram.client.recorder.record', recorded.append)
 
     def refuse(payload):
         msg = 'nothing here can be encoded'
         raise SerializationError(msg)
 
-    monkeypatch.setattr('django_redis_aiogram.client.get_serializer', lambda: SimpleNamespace(dumps=refuse))
+    monkeypatch.setattr('django_aiogram.client.get_serializer', lambda: SimpleNamespace(dumps=refuse))
     bot = TelegramBot()
 
     def broadcast():

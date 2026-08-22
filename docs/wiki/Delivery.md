@@ -124,7 +124,7 @@ blast radius of a mistaken name to `n` messages rather than a whole list.
 
 `manage.py tgbot_healthcheck` reports how many messages sit under other worker
 names, so a stranded pile stops being invisible. The container probe —
-`python -m django_redis_aiogram.healthcheck`, which **[[Deployment]]** puts in the
+`python -m django_aiogram.healthcheck`, which **[[Deployment]]** puts in the
 healthcheck — leaves that sweep off unless you pass `--stranded`, because it cannot
 change the verdict and it is the expensive half. That count is a floor, not a
 total: the sweep behind it is bounded, because `SCAN` walks the whole keyspace

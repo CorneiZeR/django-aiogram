@@ -1,7 +1,7 @@
 # Sending messages
 
 ```python
-from django_redis_aiogram import bot
+from django_aiogram import bot
 
 bot.send(chat_id=CHAT_ID, text='hello')
 ```

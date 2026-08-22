@@ -17,10 +17,10 @@ import pathlib
 import pytest
 from django.test import override_settings
 
-import django_redis_aiogram
-from django_redis_aiogram import TelegramBot, bot
-from django_redis_aiogram.checks import check_settings
-from django_redis_aiogram.enums import DeliveryKind, SerializerKind, StorageKind, UpdateMode
+import django_aiogram
+from django_aiogram import TelegramBot, bot
+from django_aiogram.checks import check_settings
+from django_aiogram.enums import DeliveryKind, SerializerKind, StorageKind, UpdateMode
 
 #: attributes that predate 2.0 and are reached for directly
 INHERITED_ATTRIBUTES = (
@@ -100,8 +100,8 @@ def test_the_method_is_still_callable(name):
 
 @pytest.mark.parametrize('name', MODULE_EXPORTS)
 def test_the_package_still_exports_it(name):
-    assert name in django_redis_aiogram.__all__, f'{name} left __all__'
-    assert getattr(django_redis_aiogram, name, None) is not None
+    assert name in django_aiogram.__all__, f'{name} left __all__'
+    assert getattr(django_aiogram, name, None) is not None
 
 
 @pytest.mark.parametrize('name', OBSERVER_DECORATORS)
@@ -173,21 +173,21 @@ ERROR_CLASSES = ('DjangoRedisAiogramError', 'SerializationError', 'UnknownApiMet
 @pytest.mark.parametrize('name', ENUM_CLASSES)
 def test_the_enums_page_documents_a_real_class(name):
     """The API page tells a project to import these; they have to exist."""
-    from django_redis_aiogram import enums
+    from django_aiogram import enums
 
     assert hasattr(enums, name), f'{name} is documented but missing'
 
 
 @pytest.mark.parametrize('name', ERROR_CLASSES)
 def test_the_errors_page_documents_a_real_class(name):
-    from django_redis_aiogram import exceptions
+    from django_aiogram import exceptions
 
     assert hasattr(exceptions, name)
 
 
 def test_one_family_catches_everything_the_package_raises():
     """The page promises DjangoRedisAiogramError catches all of them."""
-    from django_redis_aiogram.exceptions import (
+    from django_aiogram.exceptions import (
         DjangoRedisAiogramError,
         SerializationError,
         UnknownApiMethodError,
@@ -256,11 +256,11 @@ def test_the_declared_redis_floor_is_not_below_what_aiogram_asks_for():
 #: them. Restoring one would quietly undo a documented breaking change and give
 #: the package two spellings of every constant again
 REMOVED_ALIASES = {
-    'django_redis_aiogram.delivery': ('BLPOP_DELIVERY', 'KEYSPACE_DELIVERY'),
-    'django_redis_aiogram.client': ('MEMORY_STORAGE', 'REDIS_STORAGE'),
-    'django_redis_aiogram.throttling': ('OVERALL_PER_SECOND', 'PER_CHAT_PER_SECOND', 'GROUP_PER_MINUTE'),
-    'django_redis_aiogram.webhook': ('POLLING', 'WEBHOOK'),
-    'django_redis_aiogram.serializers': (
+    'django_aiogram.delivery': ('BLPOP_DELIVERY', 'KEYSPACE_DELIVERY'),
+    'django_aiogram.client': ('MEMORY_STORAGE', 'REDIS_STORAGE'),
+    'django_aiogram.throttling': ('OVERALL_PER_SECOND', 'PER_CHAT_PER_SECOND', 'GROUP_PER_MINUTE'),
+    'django_aiogram.webhook': ('POLLING', 'WEBHOOK'),
+    'django_aiogram.serializers': (
         'JSON_SERIALIZER',
         'PICKLE_SERIALIZER',
         'TAG_MODEL',
@@ -321,7 +321,7 @@ def test_the_two_send_paths_agree_on_their_signature():
 
 
 def test_the_metrics_signal_is_importable_where_a_project_expects_it():
-    """`django_redis_aiogram.signals.events_recorded`, and nothing heavier.
+    """`django_aiogram.signals.events_recorded`, and nothing heavier.
 
     The module path is the API: a project connects a receiver from its own metrics
     module or an `AppConfig.ready`, and moving this would break every one of them
@@ -329,7 +329,7 @@ def test_the_metrics_signal_is_importable_where_a_project_expects_it():
     """
     from django.dispatch import Signal
 
-    from django_redis_aiogram.signals import events_recorded
+    from django_aiogram.signals import events_recorded
 
     assert isinstance(events_recorded, Signal)
 
@@ -338,7 +338,7 @@ def test_the_event_fields_a_receiver_reads_are_all_there():
     """Receivers get `Event` objects, so its field names are public API now."""
     import dataclasses
 
-    from django_redis_aiogram.recorder import Event
+    from django_aiogram.recorder import Event
 
     present = tuple(field.name for field in dataclasses.fields(Event))
     assert present == EVENT_FIELDS, f'the Event shape changed: {present}'
@@ -352,8 +352,8 @@ def test_every_event_field_has_a_column_to_land_in():
     """
     import dataclasses
 
-    from django_redis_aiogram.models import TelegramEvent
-    from django_redis_aiogram.recorder import Event
+    from django_aiogram.models import TelegramEvent
+    from django_aiogram.recorder import Event
 
     columns = {field.name for field in TelegramEvent._meta.get_fields()}
     missing = [field.name for field in dataclasses.fields(Event) if field.name not in columns]
