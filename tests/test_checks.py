@@ -782,17 +782,11 @@ def test_the_checks_are_registered_with_django():
 
 @override_settings(
     TELEGRAM_BOT={
-        'TOKEN': '42:x',
-        'REDIS_URL': 'redis://localhost',
-        'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker',
-    }
-)
-@override_settings(
-    TELEGRAM_BOT={
         'ENABLED': True,
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost/0?decode_responses=1',
         'ALLOW_PICKLE': True,
+        'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker',
     }
 )
 def test_a_check_behind_e047_does_not_crash_looking_for_the_driver(monkeypatch):
@@ -828,7 +822,18 @@ def test_a_check_behind_e047_does_not_crash_looking_for_the_driver(monkeypatch):
     assert 'django_aiogram.E043' not in reported, 'a rule that cannot ask the driver still answered'
 
 
-@override_settings(TELEGRAM_BOT={'ENABLED': True})
+@override_settings(
+    TELEGRAM_BOT={
+        'ENABLED': True,
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        # named rather than defaulted, in all four of these: they are about one transport's
+        # behaviour, and a change of default would re-aim them at another one while they
+        # stayed green. This one lost its explicit name to a stacked `override_settings`,
+        # where the inner mapping wins, and went on passing through the default
+        'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker',
+    }
+)
 def test_a_named_broker_whose_driver_is_missing_is_reported_with_the_install_line(monkeypatch):
     """`redis` left the base dependencies, so this is now a reachable configuration.
 
@@ -849,7 +854,7 @@ def test_a_named_broker_whose_driver_is_missing_is_reported_with_the_install_lin
     assert 'pip install "django-aiogram[redis]"' in problems[0].hint, problems[0].hint
 
 
-@override_settings(TELEGRAM_BOT={'ENABLED': False})
+@override_settings(TELEGRAM_BOT={'ENABLED': False, 'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker'})
 def test_a_disabled_process_is_not_asked_to_install_a_driver_it_never_calls(monkeypatch):
     """The rule above, gated the way `W002` is gated, and for the same reason.
 
