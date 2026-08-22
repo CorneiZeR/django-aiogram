@@ -76,12 +76,11 @@ assert not shim, f'the removed telegram_bot package is back in the wheel: {shim}
 print('py.typed and the management command are present; the 1.x name is absent')
 PY
 
-echo "--- installing into a fresh environment"
+echo "--- installing the base wheel, with no extra"
 python -m venv "$work/venv"
 "$work/venv/bin/pip" install -q --upgrade pip
 "$work/venv/bin/pip" install -q "$wheel"
 
-echo "--- a project with neither TOKEN nor REDIS_URL"
 mkdir -p "$work/project"
 cat > "$work/project/settings.py" <<'PY'
 SECRET_KEY = 'smoke'
@@ -97,8 +96,67 @@ execute_from_command_line(sys.argv)
 PY
 
 cd "$work/project"
+
+# Since 4.0 no transport driver is a dependency, so this is the install a reader gets from
+# `pip install django-aiogram` — and the only place the promise around it can be checked:
+# that the package imports without a driver, and that what a project hears instead is the
+# name of the extra it needs. The unit suite cannot ask this. It runs with `redis` present,
+# because everything else in it needs a server.
+echo "--- the base install carries no driver"
+"$work/venv/bin/python" - <<'PY'
+import importlib.util
+
+assert importlib.util.find_spec('redis') is None, 'the base install pulled a transport driver'
+print('    redis is not installed')
+PY
+
+echo "--- and imports anyway, all the way to a send that names the extra"
+DJANGO_SETTINGS_MODULE=settings DJANGO_AIOGRAM_TOKEN=42:x "$work/venv/bin/python" - <<'PY'
+import sys
+
+import django
+
+django.setup()
+
+# the import a project writes, and the one that used to fail: a module-scope
+# `from redis import Redis` anywhere on this path turns the message below into
+# `ModuleNotFoundError: No module named 'redis'`
+from django_aiogram import bot
+
+assert 'redis' not in sys.modules, 'importing the package pulled the driver'
+
+try:
+    bot.send(chat_id=1, text='hi')
+except Exception as error:  # noqa: BLE001 - the class is the package's own, asserted by name below
+    assert type(error).__name__ == 'BrokerDependencyError', f'{type(error).__name__}: {error}'
+    assert 'pip install "django-aiogram[redis]"' in str(error), str(error)
+    print(f'    the send refused with the install line: {error}')
+else:
+    raise AssertionError('a send with no driver installed did not refuse')
+PY
+
+echo "--- the check names the missing extra, and fails the build"
+check_status=0
+"$work/venv/bin/python" manage.py check > "$work/base.out" 2>&1 || check_status=$?
+sed 's/^/    /' "$work/base.out"
+[ "$check_status" = 1 ] || { echo "    expected exit 1 with no driver, got $check_status"; exit 1; }
+grep -q 'django_aiogram.E047' "$work/base.out" || { echo '    E047 was not reported'; exit 1; }
+grep -q 'pip install "django-aiogram\[redis\]"' "$work/base.out" ||
+    { echo '    the hint did not carry the install line'; exit 1; }
+
+echo "--- installing the extra the hint asked for"
+"$work/venv/bin/pip" install -q "$wheel[redis]"
+"$work/venv/bin/python" -c "import redis; print('    redis', redis.__version__)"
+
+echo "--- a project with neither TOKEN nor REDIS_URL"
 echo "check:"
-"$work/venv/bin/python" manage.py check 2>&1 | sed 's/^/    /'
+check_status=0
+"$work/venv/bin/python" manage.py check > "$work/check.out" 2>&1 || check_status=$?
+sed 's/^/    /' "$work/check.out"
+[ "$check_status" = 0 ] || { echo "    the check still refuses once the extra is installed"; exit 1; }
+! grep -q 'django_aiogram.E047' "$work/check.out" ||
+    { echo '    E047 survived installing the extra'; exit 1; }
+echo "    E047 is gone, and the credential warnings are all that is left"
 
 echo "--- the shipped migration applies"
 "$work/venv/bin/python" manage.py migrate --noinput 2>&1 | sed 's/^/    /'
@@ -207,7 +265,10 @@ classifiers = fields.get_all('Classifier') or []
 for expected in ('Framework :: AsyncIO', 'Framework :: Django :: 6.1', 'Typing :: Typed'):
     assert expected in classifiers, f'{expected} is missing from the wheel metadata'
 extras = fields.get_all('Provides-Extra') or []
-assert 'hiredis' in extras, extras
+# `redis` is what the E047 hint tells a reader to install, so its absence here would make
+# that hint a dead end — the one metadata field this release's install story rests on
+for expected in ('redis', 'hiredis'):
+    assert expected in extras, f'{expected} is missing from Provides-Extra: {extras}'
 # dev is for this repository, not for anyone installing the package
 assert 'dev' not in extras, f'the dev extra shipped in the wheel: {extras}'
 print('    classifiers, extras and the absence of dev all check out')

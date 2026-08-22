@@ -13,8 +13,11 @@ git clone git@github.com:CorneiZeR/django-aiogram.git
 cd django-aiogram
 python -m venv .venv && source .venv/bin/activate
 python -m pip install --upgrade pip
-pip install -e . --group dev
+pip install -e '.[redis]' --group dev
 ```
+
+The `[redis]` extra is not optional for development: the transport driver is an
+extra since 4.0, and the suite exercises the Redis list.
 
 Python 3.10–3.14 is supported.
 

@@ -132,6 +132,34 @@ def test_configuration_does_not_import_what_it_configures():
     assert aiogram == 'False', 'importing the checks pulled aiogram'
 
 
+def test_neither_the_transport_nor_the_producer_imports_the_driver():
+    """`AGENTS.md`: a transport imports its driver lazily, never at module scope.
+
+    Since 4.0 `redis` is an extra, so this is what makes the rest of the design work
+    rather than a tidiness rule. A module-scope driver import puts an `ImportError` in
+    front of every message that would have named the extra: the `E047` check cannot run,
+    `from django_aiogram import bot` fails in a process that named another transport, and
+    the reader gets `No module named 'redis'` where `pip install "django-aiogram[redis]"`
+    belongs.
+
+    The producer is asserted beside the transport because it is the import a project
+    actually writes, and it was the one that failed: it pulled the driver twice over — a
+    `Redis` annotation, and aiogram's Redis FSM storage, which imports the driver itself.
+
+    A subprocess, and a fresh interpreter each time, because `sys.modules` in this one has
+    everything in it. Blocking the driver instead would prove less: the point is not that
+    an absent driver is survivable but that a present one is left alone until a connection
+    is built.
+    """
+    for module in ('django_aiogram.broker.redis_list', 'django_aiogram.producer.client'):
+        code = f'import sys, {module}; print("redis" in sys.modules)'
+        finished = subprocess.run(  # noqa: S603 - our own interpreter, and a script written right above
+            [sys.executable, '-c', code], capture_output=True, text=True, check=True
+        )
+
+        assert finished.stdout.strip() == 'False', f'importing {module} pulled the driver'
+
+
 @pytest.mark.parametrize('path', PUBLISHED)
 def test_a_published_path_is_where_it_says_it_is(path):
     """These are named in strings a project wrote, so a move is a break rather than a tidy.

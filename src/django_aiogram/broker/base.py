@@ -131,13 +131,16 @@ class Broker(ABC):
 
         A broker whose module imports its driver at module scope makes this unreachable:
         the ``ImportError`` arrives first and the reader never sees the extra they need.
-        ``AGENTS.md`` forbids it for that reason, and the Redis list does **not** satisfy it
-        yet — it reaches the connection through ``django_aiogram.redis``, which imports the
-        driver itself. Measured: importing that broker imports ``redis``. What covers the
-        shipped brokers meanwhile is :data:`~django_aiogram.broker.registry.SHIPPED`, which
-        the registry checks *before* importing anything, so the install line is still what a
-        misconfigured project gets. The rule becomes true for this one when the connection
-        module moves into the transport's own package, with the extras work.
+        ``AGENTS.md`` forbids it for that reason, and the shipped Redis list obeys it —
+        measured, importing ``django_aiogram.broker.redis_list`` leaves ``redis`` out of
+        ``sys.modules``, and ``tests/test_package_layout.py`` fails if that stops being
+        true. The connection module it reaches through imports the driver inside the two
+        functions that build a client, so the driver arrives with the connection and not
+        with the import.
+
+        Belt and braces: :data:`~django_aiogram.broker.registry.SHIPPED` is consulted
+        *before* anything is imported, so a shipped transport names its extra even if its
+        module were to break this rule tomorrow.
         """
         if cls.REQUIRES is None:
             return

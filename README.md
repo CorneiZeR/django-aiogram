@@ -20,8 +20,13 @@ waits on Telegram.
 ## Install
 
 ```shell
-pip install django-aiogram
+pip install 'django-aiogram[redis]'
 ```
+
+The transport driver is an extra, so a deployment downloads only the one it uses.
+`[redis]` is the default transport, the one this README shows. A base
+`pip install django-aiogram` installs and imports; it refuses at `manage.py check`
+with the `pip install` line for whichever `BROKER` you named.
 
 ```python
 # settings.py

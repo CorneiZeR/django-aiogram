@@ -1,10 +1,27 @@
 # Installation
 
 ```shell
-pip install django-aiogram
+pip install 'django-aiogram[redis]'
 ```
 
-Requires Python 3.10–3.14, Django 5.2+, aiogram 3.30+, redis 6.2+.
+Requires Python 3.10–3.14, Django 5.2+, aiogram 3.30+, and — for the Redis
+transport — redis 6.2+.
+
+**The transport driver is an extra**, so a deployment downloads the one it uses and
+not the other three. `BROKER` names the transport and nothing is inferred from what
+happens to be installed, so the two have to agree; when they do not, `manage.py check`
+says so with the install line for the one you named:
+
+```text
+?: (django_aiogram.E047) TELEGRAM_BOT['BROKER'] names
+   'django_aiogram.broker.redis_list.RedisListBroker', whose driver is not installed.
+	HINT: pip install "django-aiogram[redis]"
+```
+
+A base `pip install django-aiogram` is a valid install — it imports, and every
+`manage.py` command runs — it just cannot carry a message anywhere yet. A process
+with `ENABLED` off is not asked for a driver at all, so a web container that only
+records the event log needs no extra.
 
 The redis floor is 6.2 because aiogram's `RedisStorage` asks for it, and
 `FSM_STORAGE: 'redis'` is the default. On redis-py below 5.0.1 the storage
