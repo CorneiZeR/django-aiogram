@@ -11,6 +11,8 @@ Kafka wants a broker — so a fixture per transport supplies that, and a transpo
 fixture yet is skipped loudly rather than silently passing.
 """
 
+import asyncio
+
 import pytest
 from django.test import override_settings
 
@@ -71,6 +73,30 @@ def test_publishing_nothing_queues_nothing_and_raises_nothing(broker: Broker):
     broker.publish([])
 
     assert broker.depth() == before, 'publishing nothing changed the queue'
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_the_awaiting_half_publishes_and_counts_the_same(broker: Broker):
+    """Every `a*` method is a second implementation, and a second place to regress.
+
+    The synchronous cases above would all pass with `apublish`, `adepth` and
+    `ainflight_depth` broken — they are separate code reaching a separate client, one per
+    loop. Asserted together in one case because they are one round trip in practice: a
+    producer under ASGI publishes and then reads a depth on the same loop.
+    """
+
+    async def on_a_loop() -> tuple[int, int, int]:
+        """Publish nothing, then one, and read both depths without leaving the loop."""
+        await broker.apublish([])
+        after_nothing = await broker.adepth()
+        await broker.apublish([payload(11)])
+        return after_nothing, await broker.adepth(), await broker.ainflight_depth()
+
+    after_nothing, after_one, inflight = asyncio.run(on_a_loop())
+
+    assert after_nothing == 0, 'awaiting an empty publish queued something'
+    assert after_one == 1, 'the awaited publish did not arrive'
+    assert inflight == 0, 'nothing was taken, so nothing is in flight'
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
