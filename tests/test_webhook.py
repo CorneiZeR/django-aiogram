@@ -124,12 +124,14 @@ def test_a_polling_deployment_is_told_it_polls_and_not_about_its_secret(handled,
     the wrong diagnosis, for whoever finds the URL of a process that simply does not serve
     it. The secret is read only once the mode says to serve.
     """
+    seen, _ = handled
     with caplog.at_level('INFO', logger='django_aiogram'):
         response = post(an_update())
 
     assert response.status_code == 503
     assert 'while this deployment polls' in caplog.text
     assert 'not configured to serve updates' not in caplog.text
+    assert seen == [], 'the update was dispatched before the refusal'
 
 
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'WEBHOOK_SECRET': ''})
@@ -142,11 +144,15 @@ def test_serving_without_a_secret_answers_503_rather_than_raising(handled, caplo
     comment two branches down warns about. 503 is what every other configuration failure
     in this view answers, and Telegram retries it.
     """
+    seen, _ = handled
     with caplog.at_level('ERROR', logger='django_aiogram'):
         response = post(an_update())
 
     assert response.status_code == 503
     assert 'webhook is not configured to serve updates' in caplog.text
+    # and nothing ran: a 503 returned *after* dispatch would satisfy both assertions above
+    # while the update had already been handled, which is the half that matters
+    assert seen == [], 'the update was dispatched before the refusal'
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
@@ -374,11 +380,13 @@ def test_an_unknown_mode_answers_503_rather_than_raising(handled, caplog):
     `current_mode()` raises `ImproperlyConfigured` for a mode it does not know, and the
     view used to let that out — a 500 for something `E028` already reports at startup.
     """
+    seen, _ = handled
     with caplog.at_level('ERROR', logger='django_aiogram'):
         response = post(an_update())
 
     assert response.status_code == 503
     assert 'webhook is not configured to serve updates' in caplog.text
+    assert seen == [], 'the update was dispatched before the refusal'
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://x'})

@@ -135,7 +135,7 @@ Packaging-only work does not need the Redis suite, and vice versa.
   transitively. `tests/test_lazy_init.py` proves it with a settings module whose app
   writes a file from `ready()`, and asserts the file is absent — plus a control that
   the file appears under `django.setup()`, so its absence means something.
-- **`recorder.py` imports no `django.db`.** Only `eventlog.py` does, and the
+- **`recorder.py` imports no `django.db`.** Only `eventlog/writer.py` does, and the
   writer thread imports it on its first *write* — not its first flush, which since
   3.1.0 are different things. That is what makes a disabled log
   cost nothing and what makes `record()` legal from a coroutine — `put_nowait`
@@ -144,7 +144,7 @@ Packaging-only work does not need the Redis suite, and vice versa.
   also why it refuses to act inside a running loop, where the ORM is `@async_unsafe`. Since 3.1.0
   the writer also runs with the log *off*, for `events_recorded` receivers alone.
   Such a process writes no rows, so `EventRecorder._run` must not call
-  `_close_connections()` on its way out: that imports `eventlog.py`, which imports
+  `_close_connections()` on its way out: that imports `eventlog/writer.py`, which imports
   `django.db`, to close a connection nothing ever opened. It is gated on
   `_touched_database`, set only where a batch is actually handed to the ORM and
   **read and cleared when the writer stops** — the recorder is a process-wide
