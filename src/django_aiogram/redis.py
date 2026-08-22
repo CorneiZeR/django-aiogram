@@ -180,6 +180,10 @@ def url_decodes_responses(url: str) -> bool:
     ``REDIS_URL`` is often shared with a cache backend that wants decoding — but
     pickled payloads cannot survive it, so check E043 refuses that one pairing.
 
+    ``False`` when redis-py is not installed at all, which is not a guess about the URL but
+    a deferral: `E047` has already named the extra to install, and this rule has nothing to
+    add to a deployment that cannot connect to anything yet.
+
     Asked of redis-py rather than parsed here, because the answer is surprising
     and any reimplementation would drift from it. ``decode_responses`` has no
     entry in ``URL_QUERY_ARGUMENT_PARSERS``, so it never goes through a boolean
@@ -188,7 +192,16 @@ def url_decodes_responses(url: str) -> bool:
     **enable** decoding; only an empty value leaves it off, and only because the
     query parser drops blanks before redis-py sees them.
     """
-    from redis.connection import parse_url as _parse_url  # noqa: PLC0415 - as build_client
+    try:
+        from redis.connection import parse_url as _parse_url  # noqa: PLC0415 - as build_client
+    except ModuleNotFoundError:
+        # No driver, so there is nothing to ask. This is reached from `E043`, and `E043` is
+        # asked *after* `E047` has already reported the missing extra — checks report, they
+        # do not stop the ones behind them. Raising here would replace that install line with
+        # `ModuleNotFoundError: No module named 'redis'` from inside a system check, which is
+        # the exact failure the extras work exists to prevent. Measured: it did, on a base
+        # install with ALLOW_PICKLE on
+        return False
 
     #: redis-py ships py.typed but leaves parse_url unannotated, and strict mode refuses
     #: to call it. Naming the shape here keeps the call site honest without an ignore

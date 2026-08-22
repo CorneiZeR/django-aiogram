@@ -2,6 +2,7 @@
 was only ever set inside an `isinstance` branch that a wrong type never entered.
 """
 
+import builtins
 import pathlib
 import re
 
@@ -786,6 +787,47 @@ def test_the_checks_are_registered_with_django():
         'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker',
     }
 )
+@override_settings(
+    TELEGRAM_BOT={
+        'ENABLED': True,
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost/0?decode_responses=1',
+        'ALLOW_PICKLE': True,
+    }
+)
+def test_a_check_behind_e047_does_not_crash_looking_for_the_driver(monkeypatch):
+    """A rule reported after `E047` must not replace it with the traceback it prevents.
+
+    Checks report; they do not stop the ones behind them. `E043` asks redis-py whether a URL
+    enables `decode_responses`, and since the driver became an extra that question needs an
+    import — so on a base install with `ALLOW_PICKLE` on, `manage.py check` died with
+    `ModuleNotFoundError: No module named 'redis'` *from inside a check*, which is the exact
+    failure the extras work exists to replace. Measured on a real driverless install before
+    this was fixed.
+
+    `ALLOW_PICKLE` is what makes it reachable: without it `E043` returns before asking, which
+    is why the first driverless measurement of this branch came back clean.
+
+    The import is made to fail rather than the package uninstalled — the suite needs redis for
+    everything else — and `find_spec` is patched alongside it so `E047` reaches the same
+    conclusion and this reads as the one configuration it describes.
+    """
+    real_import = builtins.__import__
+
+    def refuse(name, *args, **kwargs):
+        if name == 'redis' or name.startswith('redis.'):
+            raise ModuleNotFoundError(f"No module named '{name}'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, '__import__', refuse)
+    monkeypatch.setattr('importlib.util.find_spec', lambda name, *args: None if name == 'redis' else True)
+
+    reported = ids(check_settings())
+
+    assert 'django_aiogram.E047' in reported, 'the missing driver was not reported'
+    assert 'django_aiogram.E043' not in reported, 'a rule that cannot ask the driver still answered'
+
+
 @override_settings(TELEGRAM_BOT={'ENABLED': True})
 def test_a_named_broker_whose_driver_is_missing_is_reported_with_the_install_line(monkeypatch):
     """`redis` left the base dependencies, so this is now a reachable configuration.

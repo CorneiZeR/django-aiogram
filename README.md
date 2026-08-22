@@ -24,9 +24,14 @@ pip install 'django-aiogram[redis]'
 ```
 
 The transport driver is an extra, so a deployment downloads only the one it uses.
-`[redis]` is the default transport, the one this README shows. A base
-`pip install django-aiogram` installs and imports; it refuses at `manage.py check`
-with the `pip install` line for whichever `BROKER` you named.
+`[redis]` is the default transport, the one this README shows.
+
+A base `pip install django-aiogram` is a valid install: it imports, and `manage.py`
+runs. What it cannot do is carry a message, and `manage.py check` says so — `E047`,
+with the `pip install` line for whichever `BROKER` you named. A process with
+`ENABLED` off is not asked for a driver at all, since it reaches no transport, so a
+web container that only records the event log needs no extra. A `BROKER` naming
+something that is not a transport is reported either way.
 
 ```python
 # settings.py

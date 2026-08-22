@@ -41,7 +41,7 @@ Entries land here as the work does; nothing below is released.
   Ignore all of that and the send still says it in words. Measured on a base install with
   no driver:
 
-  ```
+  ```text
   from django_aiogram import bot        → ok
   bot.send(chat_id=1, text='hi')        → RedisListBroker needs the 'redis' package, which
                                           is not installed. Install it with:
