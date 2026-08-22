@@ -8,6 +8,7 @@ from aiogram.methods import SendMessage
 from django.test import override_settings
 
 from django_aiogram import TelegramBot
+from django_aiogram.broker.redis_list import RedisListBroker
 from django_aiogram.consumer.delivery import BlpopDelivery, get_delivery
 from django_aiogram.eventlog.events import new_correlation_id
 from django_aiogram.producer.client import Outbound
@@ -362,7 +363,7 @@ def test_a_zero_blpop_timeout_is_clamped(redis_server, monkeypatch):
         def __getattr__(self, name):
             return getattr(redis_server, name)
 
-    monkeypatch.setattr('django_aiogram.consumer.delivery.get_redis', Spy)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', Spy)
     # one message, so the consumer actually reaches the blocking call
     redis_server.rpush('TELEGRAM_BOT_MESSAGE', JsonSerializer().dumps({'function': 'send_message', 'chat_id': 1}))
     drain(RecordingBlpop(), expected=1, timeout=2)
@@ -498,30 +499,27 @@ def test_the_consumer_pops_for_what_the_shared_ceiling_says(redis_server, monkey
 
 
 @override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop', 'BLPOP_TIMEOUT': 1, 'WORKER_NAME': 'mine'})
-def test_a_subclass_can_still_name_its_own_in_flight_list(redis_server, monkeypatch):
-    """The keys are module-level functions, and the properties over them stay overridable.
+def test_a_broker_subclass_can_name_its_own_in_flight_list(redis_server, monkeypatch):
+    """Two consumers on one queue under different names, which is what the capability is for.
 
-    Both halves matter and only one of them was pinned. `queue_key`, `processing_key`
-    and `heartbeat_key` live in `redis.py` so a producer, both depth reads and
-    `tgbot_reclaim` derive them from one place — but `Delivery` keeps properties over
-    those functions precisely so a subclass can answer differently, which
-    `tests/integration/test_delivery_against_redis.py` relies on to run two consumers
-    against one queue under different names. That reliance only ran with a real Redis.
+    In 3.x the extension point was a `Delivery` property over the module-level key
+    functions. 4.0 gives the keys to the transport, because a list key means nothing to a
+    stream or a topic — so the place to answer differently is the broker, and this is that
+    path pinned. `tests/integration/test_delivery_against_redis.py` relies on it to run two
+    consumers against one queue, and that reliance only ever ran with a real Redis.
 
-    Asserted on the key the consumer handed to Redis, not on the property. Reading the
-    property back proves only that the subclass defines it, and asserting the message
-    arrived proves only that *some* key worked: the first version of this test did both
-    and passed with `self.processing_key` replaced by the module function at all eight
-    call sites — which is exactly the regression it was written for.
+    Asserted on the key the consumer handed to Redis, not on the method. Reading the method
+    back proves only that the subclass defines it, and asserting the message arrived proves
+    only that *some* key worked — the 3.x version of this test did both and passed with the
+    override bypassed at all eight call sites, which is the regression it exists for.
     """
 
-    class Named(BlpopDelivery):
-        """A consumer that keeps its in-flight list under a name of its own."""
+    class Borrowing(RedisListBroker):
+        """A broker that keeps its in-flight list under a name of its own."""
 
-        @property
-        def processing_key(self) -> str:
+        def _inflight(self, worker: str | None = None) -> str:
             """Answer with a name this class chose rather than the worker identity."""
-            return f'{self.queue_key}:processing:borrowed'
+            return f'{self._queue()}:processing:borrowed'
 
     destinations: list[str] = []
     original = redis_server.lmove
@@ -533,7 +531,9 @@ def test_a_subclass_can_still_name_its_own_in_flight_list(redis_server, monkeypa
     monkeypatch.setattr(redis_server, 'lmove', recording_lmove)
 
     handled: list[int] = []
-    delivery = Named(handler=lambda **kwargs: handled.append(kwargs['chat_id']))
+    delivery = BlpopDelivery(handler=lambda **kwargs: handled.append(kwargs['chat_id']))
+    # the broker is what holds the keys now, so that is what a caller replaces
+    delivery.broker = Borrowing()
     redis_server.rpush(
         'TELEGRAM_BOT_MESSAGE',
         JsonSerializer().dumps({'function': 'send_message', 'chat_id': 7}),
@@ -544,6 +544,6 @@ def test_a_subclass_can_still_name_its_own_in_flight_list(redis_server, monkeypa
     assert handled == [7], f'the override stopped the consumer working: {handled}'
     assert destinations, 'nothing was moved, so nothing is being tested'
     assert destinations[0] == 'TELEGRAM_BOT_MESSAGE:processing:borrowed', destinations[0]
-    # and the module function is untouched by the override, which is what makes the
-    # producer and `tgbot_reclaim` agree with each other rather than with a subclass
+    # and the module function is untouched by the override, which is what keeps the producer
+    # and `tgbot_reclaim` agreeing with each other rather than with one broker instance
     assert processing_key() == 'TELEGRAM_BOT_MESSAGE:processing:mine'

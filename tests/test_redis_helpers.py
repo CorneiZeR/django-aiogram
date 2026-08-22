@@ -48,7 +48,7 @@ def decoded_server(monkeypatch):
     server = fakeredis.FakeRedis(decode_responses=True)
     for target in (
         'django_aiogram.redis.get_redis',
-        'django_aiogram.consumer.delivery.get_redis',
+        'django_aiogram.broker.redis_list.broker.get_redis',
         'django_aiogram.producer.client.get_redis',
     ):
         monkeypatch.setattr(target, lambda server=server: server)

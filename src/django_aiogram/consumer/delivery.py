@@ -33,19 +33,15 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
 
-from redis.exceptions import ResponseError
-
 from django_aiogram.api import check_function
+from django_aiogram.broker.registry import get_broker
 from django_aiogram.config.enums import DeliveryKind, EventKind
 from django_aiogram.config.settings import blpop_ceiling, conf
 from django_aiogram.eventlog.events import new_correlation_id, worker_identity
 from django_aiogram.eventlog.recorder import Event, as_identifier, recorder
 from django_aiogram.redis import (
-    as_bytes,
-    get_redis,
     heartbeat_interval,
     heartbeat_key,
-    heartbeat_ttl,
     processing_key,
     queue_key,
 )
@@ -98,14 +94,16 @@ class Delivery(ABC):
         """Take what each decoded message is handed to once it arrives."""
         self.handler = handler
         self._stop = threading.Event()
-        self._reliable = True
+        # the one transport this consumer talks to, resolved once: everything below asks it
+        # rather than a Redis client, which is what lets a second transport exist at all
+        self.broker = get_broker()
         self._beat_at = 0.0
         #: messages whose send is over, and whether each may leave the in-flight list.
         #: `(handle, True)` is a finished send and gets acknowledged; `(handle, False)` is
         #: one the producer refused outright, which releases the slot and leaves the
         #: message for a redelivery. Filled from the bot's event loop, drained on this
         #: thread, because every Redis call in this class belongs to the consumer
-        self._finished: queue.SimpleQueue[tuple[bytes | str, bool]] = queue.SimpleQueue()
+        self._finished: queue.SimpleQueue[tuple[object, bool]] = queue.SimpleQueue()
         self._in_flight = 0
         # asked once: a handler that cannot take the callback is acknowledged the
         # moment it returns, which is the behavior every existing caller has
@@ -121,11 +119,11 @@ class Delivery(ABC):
     def crash_safe(self) -> bool:
         """Whether a message survives this worker being killed mid-send.
 
-        False on a Redis without ``LMOVE``, where the pop and the send cannot be
-        made one step; ``REQUIRE_CRASH_SAFE`` is how a deployment refuses to run
-        that way.
+        Each transport answers for itself — a Redis list on a server without ``LMOVE``
+        cannot make the pop and the send one step, and says so. ``REQUIRE_CRASH_SAFE`` is
+        how a deployment refuses to run that way whatever the reason.
         """
-        return self._reliable
+        return self.broker.crash_safe
 
     @property
     def queue_key(self) -> str:
@@ -158,28 +156,13 @@ class Delivery(ABC):
     def reclaim(self) -> bool:
         """Requeue messages a crashed worker left in the processing list.
 
-        Also the probe for crash-safe mode: on a server without LMOVE the very
-        first call fails, and the consumer downgrades to plain pops.
-
-        Returns whether the list is settled; False means the caller should try
-        again, because a Redis that was unreachable at startup left messages
-        stranded there.
+        Returns whether the list is settled; False means the caller should try again,
+        because a transport that was unreachable at startup left messages stranded. The
+        broker says how many it moved, or ``None`` where the question does not apply —
+        a transport that returns an unsettled message to its group needs no reclaiming.
         """
-        connection = get_redis()
-        count = 0
         try:
-            # RIGHT->LEFT keeps the original order at the front of the queue
-            while connection.lmove(self.processing_key, self.queue_key, 'RIGHT', 'LEFT'):
-                count += 1
-        except ResponseError as error:
-            if not self._downgrade_without_lmove(error):
-                # WRONGTYPE, NOPERM and friends say nothing about LMOVE support
-                logger.exception(
-                    'could not reclaim previous messages, will retry',
-                    extra={'tg_key': self.processing_key},
-                )
-                return False
-            return True
+            count = self.broker.reclaim()
         except Exception:
             # run() is the thread target, so anything escaping here — a Redis
             # that is not up yet, for one — would end the consumer for good
@@ -192,23 +175,6 @@ class Delivery(ABC):
             logger.info(
                 'reclaimed messages from a previous run',
                 extra={'tg_key': self.queue_key, 'tg_count': count},
-            )
-        return True
-
-    def _downgrade_without_lmove(self, error: ResponseError) -> bool:
-        """Fall back to plain pops when the server has no LMOVE, and say whether it did.
-
-        Shared by the two places that reach for LMOVE first, so a caller draining by
-        hand gets the same downgrade the consumer loop gets rather than the raw error.
-        """
-        if 'unknown command' not in str(error).lower():
-            return False
-        if self._reliable:
-            self._reliable = False
-            logger.warning(
-                'crash-safe delivery unavailable: this Redis predates LMOVE (6.2); '
-                'a worker killed mid-send may lose that one message',
-                extra={'tg_key': self.queue_key},
             )
         return True
 
@@ -230,7 +196,9 @@ class Delivery(ABC):
             return
         self._beat_at = now
         try:
-            get_redis().set(self.heartbeat_key, str(int(time.time())), ex=heartbeat_ttl())
+            # the pace is policy and stays here; whether anything has to be written down,
+            # and where, is the transport's business — for two of the four it is nothing
+            self.broker.alive()
         except Exception:
             # the loop must keep consuming even when it cannot say so
             logger.exception('could not write the heartbeat', extra={'tg_key': self.heartbeat_key})
@@ -250,7 +218,7 @@ class Delivery(ABC):
             if delivered:
                 self.acknowledge(raw)
 
-    def _release_for(self, handle: bytes | str) -> Callable[[], None]:
+    def _release_for(self, handle: object) -> Callable[[], None]:
         """Give back the slot a refused send took, without acknowledging the message.
 
         The slot has to come back — `_hand_over` took one before the handler ran — but
@@ -271,7 +239,7 @@ class Delivery(ABC):
 
         return once
 
-    def _completion_for(self, handle: bytes | str) -> Callable[[], None]:
+    def _completion_for(self, handle: object) -> Callable[[], None]:
         """One report per message, however many times the send says it finished.
 
         A latch rather than a flag: two threads can both read an unset flag and
@@ -321,13 +289,14 @@ class Delivery(ABC):
             if delivered:
                 self.acknowledge(raw)
 
-    def acknowledge(self, raw: bytes | str) -> None:
-        """Drop a delivered message from the processing list."""
-        if not self._reliable:
-            return
+    def acknowledge(self, handle: object) -> None:
+        """Settle a delivered message, however this transport spells that.
+
+        The handle goes back unread: what it names is the broker's business — a payload for
+        a Redis list, an entry id for a stream, a delivery tag, an offset.
+        """
         try:
-            # redis-py's stubs say str, but bytes round-trip identically
-            get_redis().lrem(self.processing_key, 1, raw)  # type: ignore[arg-type]
+            self.broker.ack(handle)
         except Exception:
             # worst case the message is redelivered on the next start
             logger.exception(
@@ -375,7 +344,7 @@ class Delivery(ABC):
             logger.exception('dropping a queued message whose envelope cannot be read')
             return None, True
 
-    def dispatch(self, raw: bytes, handle: bytes | str | None = None) -> bool:
+    def dispatch(self, raw: bytes, handle: object | None = None) -> bool:
         """Decode one message and hand it to the handler.
 
         A bad payload is one message's problem, so everything short of a kill is
@@ -439,7 +408,7 @@ class Delivery(ABC):
         }
         return self._hand_over(envelope, call, handle)
 
-    def _hand_over(self, envelope: Envelope, call: dict[str, Any], handle: bytes | str) -> bool:
+    def _hand_over(self, envelope: Envelope, call: dict[str, Any], handle: object) -> bool:
         """Call the handler, and say whether the message may be acknowledged.
 
         Cancellation is the reason this is not one ``except``: it is a
@@ -524,32 +493,18 @@ class Delivery(ABC):
 
     def consume_pending(self) -> None:
         """Drain the queue without blocking, acknowledging each message."""
-        connection = get_redis()
-        raw: bytes | str | None
         while not self._stop.is_set():
             self.collect()
             if self.at_capacity():
                 # the blocking loop waits here; a drain has no thread to wait on,
                 # so it stops instead of scheduling past the bound
                 return
-            if self._reliable:
-                try:
-                    raw = connection.lmove(self.queue_key, self.processing_key, 'LEFT', 'RIGHT')
-                except ResponseError as error:
-                    # run() learns this from reclaim(); nothing probes for a caller
-                    # draining by hand, so without this the first pop against a
-                    # pre-6.2 server raises out of a documented helper
-                    if not self._downgrade_without_lmove(error):
-                        raise
-                    continue
-            else:
-                # lpop only widens to a list when given a count
-                raw = connection.lpop(self.queue_key)  # type: ignore[assignment]
-            if raw is None:
+            taken = self.broker.take_nowait()
+            if taken is None:
                 self.collect()
                 return
-            if self.dispatch(as_bytes(raw), raw):
-                self.acknowledge(raw)
+            if self.dispatch(taken.payload, taken.handle):
+                self.acknowledge(taken.handle)
             self.collect()
 
 
@@ -566,7 +521,6 @@ class BlpopDelivery(Delivery):
         # same helper — one place, so the check cannot describe a cap the consumer does
         # not use
         timeout = max(1, min(int(conf['BLPOP_TIMEOUT']), blpop_ceiling().seconds))
-        connection = get_redis()
         reclaimed = self.reclaim()
         logger.info(
             'delivery started',
@@ -574,10 +528,9 @@ class BlpopDelivery(Delivery):
                 'tg_delivery': DeliveryKind.BLPOP.value,
                 'tg_key': self.queue_key,
                 'tg_timeout': timeout,
-                'tg_crash_safe': self._reliable,
+                'tg_crash_safe': self.crash_safe,
             },
         )
-        raw: bytes | str | None
         while not self._stop.is_set():
             self.heartbeat()
             self.collect()
@@ -590,20 +543,16 @@ class BlpopDelivery(Delivery):
             if not reclaimed:
                 reclaimed = self.reclaim()
             try:
-                if self._reliable:
-                    raw = connection.blmove(self.queue_key, self.processing_key, timeout, 'LEFT', 'RIGHT')
-                else:
-                    item = connection.blpop([self.queue_key], timeout=timeout)
-                    raw = None if item is None else item[1]
+                taken = self.broker.take(timeout)
             except Exception:
                 # a dropped connection must not kill the worker thread
                 logger.exception('blocking pop failed, retrying', extra={'tg_key': self.queue_key})
                 self._stop.wait(timeout)
                 continue
-            if raw is None:
+            if taken is None:
                 continue
-            if self.dispatch(as_bytes(raw), raw):
-                self.acknowledge(raw)
+            if self.dispatch(taken.payload, taken.handle):
+                self.acknowledge(taken.handle)
         # sends that finished while the last read was blocking still have to
         # leave the in-flight list, or every stop redelivers them
         self.collect()

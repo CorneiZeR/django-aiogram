@@ -148,7 +148,7 @@ def old_redis_server(redis_server, monkeypatch):
     wrapped = OldRedis(redis_server)
     for target in (
         'django_aiogram.redis.get_redis',
-        'django_aiogram.consumer.delivery.get_redis',
+        'django_aiogram.broker.redis_list.broker.get_redis',
         'django_aiogram.producer.client.get_redis',
     ):
         monkeypatch.setattr(target, lambda wrapped=wrapped: wrapped)
@@ -163,7 +163,7 @@ def test_falls_back_to_plain_pops_on_an_old_server(old_redis_server):
     drain(delivery, expected_handled=1)
 
     assert [item['chat_id'] for item in delivery.handled] == [5]
-    assert delivery._reliable is False
+    assert delivery.crash_safe is False
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
@@ -243,12 +243,12 @@ def test_reclaim_survives_a_redis_that_is_not_up_yet(redis_server, monkeypatch):
         def __getattr__(self, name):
             return getattr(redis_server, name)
 
-    monkeypatch.setattr('django_aiogram.consumer.delivery.get_redis', Unreachable)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', Unreachable)
 
     delivery = Recording()
     delivery.reclaim()  # must not raise
 
-    assert delivery._reliable is True, 'a connection error is not a missing LMOVE'
+    assert delivery.crash_safe is True, 'a connection error is not a missing LMOVE'
 
 
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'worker-a'})
@@ -288,7 +288,7 @@ def test_reclaim_is_retried_when_redis_was_down_at_startup(redis_server):
     delivery = Recording()
 
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr('django_aiogram.consumer.delivery.get_redis', FlakyOnce)
+        patch.setattr('django_aiogram.broker.redis_list.broker.get_redis', FlakyOnce)
         drain(delivery, expected_handled=1)
 
     assert [item['chat_id'] for item in delivery.handled] == [1]
@@ -310,10 +310,10 @@ def test_a_response_error_that_is_not_a_missing_lmove_keeps_crash_safety(redis_s
 
     delivery = Recording()
     with pytest.MonkeyPatch.context() as patch, caplog.at_level('ERROR', logger=LOGGER):
-        patch.setattr('django_aiogram.consumer.delivery.get_redis', WrongType)
+        patch.setattr('django_aiogram.broker.redis_list.broker.get_redis', WrongType)
         assert delivery.reclaim() is False, 'the caller was not asked to retry'
 
-    assert delivery._reliable is True, 'crash-safe mode was given up on the wrong error'
+    assert delivery.crash_safe is True, 'crash-safe mode was given up on the wrong error'
     assert 'could not reclaim previous messages' in caplog.text
 
 
@@ -435,7 +435,7 @@ def test_draining_by_hand_downgrades_on_an_old_server(old_redis_server):
     delivery.consume_pending()
 
     assert [item['chat_id'] for item in handled] == [9]
-    assert delivery._reliable is False
+    assert delivery.crash_safe is False
 
 
 class Deferring(BlpopDelivery):
@@ -1049,7 +1049,7 @@ def test_an_unconfigured_project_gets_the_old_behavior():
     assert unbounded.at_capacity() is False, 'an unconfigured consumer grew a bound'
 
     without_lmove = Deferring()
-    without_lmove._reliable = False
+    without_lmove.broker._reliable = False
     assert without_lmove.crash_safe is False
     # unasked, the command starts anyway; the refusal is opt-in
     Command._require_crash_safety(without_lmove)

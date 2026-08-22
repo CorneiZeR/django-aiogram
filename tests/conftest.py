@@ -8,7 +8,10 @@ from django_aiogram import conf
 # `client`; patching the wrong one silently leaves the real connection in place.
 PATCH_TARGETS = (
     'django_aiogram.redis.get_redis',
-    'django_aiogram.consumer.delivery.get_redis',
+    # the consumer stopped holding a client in 4.0: it asks the broker, and the broker is
+    # what holds one. Patching where the connection is *used* is the whole point of this
+    # tuple, so the target moved with the use
+    'django_aiogram.broker.redis_list.broker.get_redis',
     'django_aiogram.producer.client.get_redis',
     'django_aiogram.get_redis',
     # the probe's decision moved out of the command in 3.1.0, so it can run without

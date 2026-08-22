@@ -499,7 +499,7 @@ def test_a_receiver_still_gets_the_detail_a_seam_measured_itself(redis_server, c
         message = 'redis is gone'
         raise ConnectionError(message)
 
-    monkeypatch.setattr('django_aiogram.producer.client.get_redis', refuse)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', refuse)
 
     with pytest.raises(ConnectionError):
         TelegramBot().send_redis(chat_id=7, text='hi')
