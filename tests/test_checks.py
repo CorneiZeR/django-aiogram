@@ -777,3 +777,51 @@ def test_the_checks_are_registered_with_django():
     registered = [check for check in registry.get_checks() if check is check_settings]
 
     assert registered, 'apps.ready() no longer registers check_settings with Django'
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker',
+    }
+)
+def test_a_named_broker_whose_driver_is_missing_is_reported_with_the_install_line(monkeypatch):
+    """`redis` left the base dependencies, so this is now a reachable configuration.
+
+    A project that names the Redis list without `django-aiogram[redis]` installed is one
+    `pip install` short of working — and the difference between hearing that from
+    `manage.py check` and hearing `ModuleNotFoundError: redis` from inside a producer is
+    the whole reason `BROKER` is judged rather than trusted.
+
+    The driver is made to look absent through `find_spec`, not uninstalled: the suite runs
+    with redis present because every other test needs it, and an import that really failed
+    would take this process down rather than produce a finding.
+    """
+    monkeypatch.setattr('importlib.util.find_spec', lambda name, *args: None if name == 'redis' else True)
+
+    problems = [problem for problem in check_settings() if str(problem.id) == 'django_aiogram.E047']
+
+    assert problems, 'a broker whose driver is absent produced no finding'
+    assert 'pip install "django-aiogram[redis]"' in problems[0].hint, problems[0].hint
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'BROKER': 'django_aiogram.producer.client.TelegramBot',
+    }
+)
+def test_a_broker_setting_naming_something_else_is_refused():
+    """Importable and callable is not the same as being a transport.
+
+    A dotted path that resolves is the easy half. This one resolves to a real class that is
+    not a `Broker`, which is what a copied line from the wrong page produces — and it would
+    otherwise fail on the first `publish` with an `AttributeError` naming a method rather
+    than the setting.
+    """
+    problems = [problem for problem in check_settings() if str(problem.id) == 'django_aiogram.E047']
+
+    assert problems, 'a BROKER naming a non-broker produced no finding'
+    assert 'not a Broker subclass' in problems[0].msg, problems[0].msg

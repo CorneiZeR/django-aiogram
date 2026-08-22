@@ -253,6 +253,51 @@ def _readable_serializer(key: str) -> list[Problem]:
     ]
 
 
+def _a_usable_broker(key: str) -> list[Problem]:
+    """Refuse a transport that cannot be reached before anything tries to send through it.
+
+    `BROKER` is a dotted path and nothing is inferred from what happens to be installed, which
+    is only safe if the name is judged here: `redis` left the base dependencies in 4.0, so a
+    project that names the Redis list without `django-aiogram[redis]` installed is a working
+    configuration one `pip install` short — and the difference between hearing that at startup
+    and hearing `ModuleNotFoundError: redis` from inside a producer is the whole point of this
+    rule.
+
+    Three findings, and each says what to do rather than what happened: the setting is empty;
+    it names something that is not a broker; or the driver behind it is absent, in which case
+    the hint carries the install line for that extra.
+
+    Nothing here imports the driver — the registry checks its own table of shipped brokers
+    before importing anything, so an absent one is named rather than discovered by traceback.
+    """
+    from django_aiogram.broker.exceptions import (  # noqa: PLC0415 - only when the checks run
+        BrokerDependencyError,
+        BrokerNotConfiguredError,
+    )
+    from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
+
+    try:
+        resolved = broker_class()
+    except BrokerDependencyError as missing:
+        return [
+            Problem(
+                f'names {conf.get(key)!r}, whose driver is not installed.',
+                hint=f'pip install "django-aiogram[{missing.extra}]"',
+            )
+        ]
+    except BrokerNotConfiguredError as wrong:
+        return [Problem(f'is unusable: {wrong}', hint='Name a Broker subclass by dotted path.')]
+    required = [option for option in resolved.required() if not str(conf.get(option) or '').strip()]
+    if required:
+        return [
+            Problem(
+                f'is {resolved.__name__}, which needs {", ".join(required)} set.',
+                hint='Each transport declares the settings it cannot work without — see Settings.',
+            )
+        ]
+    return []
+
+
 def _a_url_pickle_can_survive(key: str) -> list[Problem]:
     """Refuse a decoding URL where pickle may be read: the pair cannot work at all.
 
@@ -719,6 +764,7 @@ CHECKS: tuple[Check, ...] = (
     # the alias is correctly configured and would still be reported. Information the
     # reader can act on, not a condition worth failing `check --fail-level WARNING`
     Check('I002', 'EVENT_LOG_DATABASE', _a_routed_log_database),
+    Check('E047', 'BROKER', _a_usable_broker),
     Check('E042', 'EVENT_LOG_SYNC', _a_readable_boolean),
     Check('E043', 'REDIS_URL', _a_url_pickle_can_survive),
     Check('E044', 'DRAIN_TIMEOUT', partial(_a_number, minimum=0)),
