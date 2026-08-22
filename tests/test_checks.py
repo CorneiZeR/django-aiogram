@@ -665,6 +665,30 @@ def test_a_container_that_forgot_its_hostname_is_warned_about(monkeypatch):
     assert 'django_aiogram.I001' in ids(check_settings())
 
 
+@override_settings(
+    TELEGRAM_BOT={
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'BROKER': 'django_aiogram.broker.redis_streams.RedisStreamsBroker',
+        'REDIS_STREAM_KEY': 'TELEGRAM_BOT_STREAM',
+    }
+)
+def test_a_transport_that_needs_no_worker_name_is_not_asked_for_one(monkeypatch):
+    """The same container, on a transport where the advice would be empty.
+
+    A Streams group's pending list belongs to the group, so any consumer can recover a dead
+    one's work whatever it is called — `needs_identity` says so, and this is the check reading
+    it. Without the gate, a Streams deployment with a Docker-generated hostname is told to pin
+    it in order to protect an in-flight list that does not exist.
+
+    The hostname is the same one the case above is warned about, which is what makes this
+    about the transport rather than about the environment.
+    """
+    monkeypatch.setenv('HOSTNAME', 'ba333cb79e00')
+
+    assert 'django_aiogram.I001' not in ids(check_settings())
+
+
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'})
 def test_a_fixed_hostname_is_not_warned_about(monkeypatch):
     """An unset WORKER_NAME is the documented default and correct almost

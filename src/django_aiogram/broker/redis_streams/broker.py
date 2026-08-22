@@ -37,6 +37,10 @@ logger = logging.getLogger('django_aiogram')
 #: exactly one thing to put in it: the same envelope bytes the list stored on its own
 _FIELD = b'payload'
 
+#: how many of its own pending entries a recovering consumer looks at per call. One at a
+#: time would let a single undecodable entry hide every valid one behind it
+_RECOVERY_PAGE = 10
+
 #: the field `depth()` is answered from. Absent below Redis 7.0, and nil once entries have
 #: been deleted — two different conditions, which is why the probe distinguishes them
 _LAG = 'lag'
@@ -63,10 +67,17 @@ class RedisStreamsBroker(Broker):
         """Nothing reaches the server yet; the group is created on first use."""
         #: whether the server has been checked and the group created, once per process
         self._ready = False
-        #: whether this consumer may be holding entries a `reclaim` handed it. `take` reads
-        #: its own pending list while this is set, because `XREADGROUP … >` never returns an
-        #: entry that was already delivered — a claimed entry would otherwise sit for ever
-        self._recovering = True
+        #: how far through its own pending list this consumer has read, or ``None`` for "it
+        #: holds nothing". `take` reads that list while this is set, because ``XREADGROUP … >``
+        #: never returns an entry that was already delivered, so a claimed entry would
+        #: otherwise sit for ever.
+        #:
+        #: A cursor rather than a flag, and that is a fix rather than a flourish: with a flag
+        #: every recovering read started at ``0``, so one entry this package cannot decode sat
+        #: at the front of the list and every valid entry behind it was skipped for good.
+        #: Measured — reading the pending list from an explicit id returns the entries *after*
+        #: it, which is what lets an undecodable one be stepped over and left pending.
+        self._recovered_upto: str | bytes | None = '0'
 
     def _key(self) -> str:
         """Name the stream, from this broker's own required setting.
@@ -131,6 +142,28 @@ class RedisStreamsBroker(Broker):
             raise StreamServerTooOldError
         self._ready = True
 
+    async def _aensure(self) -> None:
+        """Do the same on the loop the caller is on, and not with a blocking socket.
+
+        Every ``a*`` method needs the group to exist, and reaching for the synchronous client
+        to make it would put two blocking round trips on the event loop the async half exists
+        to keep free — the first send from an ASGI request paying a connect timeout inside the
+        handler serving it. Measured: ``redis.asyncio.Redis`` answers ``xgroup_create`` and
+        ``xinfo_groups`` under ``await``.
+        """
+        if self._ready:
+            return
+        client = await aget_redis()
+        try:
+            await client.xgroup_create(self._key(), self._group(), id='0', mkstream=True)
+        except Exception as error:
+            # as above: narrowed by message, because the driver is imported lazily
+            if 'BUSYGROUP' not in str(error):
+                raise
+        if not self._reports_lag(await client.xinfo_groups(self._key())):
+            raise StreamServerTooOldError
+        self._ready = True
+
     def _reports_lag(self, groups: object) -> bool:
         """Whether this server has the field at all, which is the 7.0 question.
 
@@ -166,7 +199,7 @@ class RedisStreamsBroker(Broker):
         """Queue the same writes on the client belonging to the loop the caller is on."""
         if not payloads:
             return
-        self._ensure()
+        await self._aensure()
         key = self._key()
         client = await aget_redis()
         pipe = client.pipeline(transaction=False)
@@ -191,13 +224,9 @@ class RedisStreamsBroker(Broker):
         """
         self._ensure()
         connection = get_redis()
-        if self._recovering:
-            taken = self._first(connection.xreadgroup(self._group(), self._consumer(), {self._key(): '0'}, count=1))
-            if taken is not None:
-                return taken
-            # nothing of ours is outstanding, so stop paying for the extra read until the
-            # next reclaim puts something there
-            self._recovering = False
+        recovered = self._recovered(connection)
+        if recovered is not None:
+            return recovered
         block = max(1, int(timeout * 1000))
         return self._first(
             connection.xreadgroup(self._group(), self._consumer(), {self._key(): '>'}, count=1, block=block)
@@ -207,40 +236,85 @@ class RedisStreamsBroker(Broker):
         """Read the same two phases without waiting, for a drain with no thread to block."""
         self._ensure()
         connection = get_redis()
-        if self._recovering:
-            taken = self._first(connection.xreadgroup(self._group(), self._consumer(), {self._key(): '0'}, count=1))
-            if taken is not None:
-                return taken
-            self._recovering = False
+        recovered = self._recovered(connection)
+        if recovered is not None:
+            return recovered
         return self._first(connection.xreadgroup(self._group(), self._consumer(), {self._key(): '>'}, count=1))
 
+    def _recovered(self, connection: object) -> Taken | None:
+        """Hand back one entry this consumer already holds, stepping over what it cannot read.
+
+        A page rather than one entry at a time, because the reason this exists is a pending
+        list with something undecodable in it: reading one at a time from ``0`` for ever means
+        the first such entry hides everything behind it. The cursor advances past every entry
+        examined, so each call makes progress whatever the page contained, and an entry this
+        package did not write is left pending rather than acknowledged — settling someone
+        else's data would be a guess.
+
+        ``None`` means "nothing of ours is outstanding", and the caller goes on to ask for
+        something new. The cursor is cleared then, so the extra read costs nothing until the
+        next :meth:`reclaim` or :meth:`release` puts it back.
+        """
+        if self._recovered_upto is None:
+            return None
+        page = connection.xreadgroup(  # type: ignore[attr-defined]
+            self._group(), self._consumer(), {self._key(): self._recovered_upto}, count=_RECOVERY_PAGE
+        )
+        entries = self._entries(page)
+        if not entries:
+            self._recovered_upto = None
+            return None
+        found = None
+        for identifier, fields in entries:
+            self._recovered_upto = identifier
+            if found is None:
+                found = self._decode(identifier, fields)
+        return found
+
     @staticmethod
-    def _first(response: object) -> Taken | None:
-        """Unwrap one entry from what ``XREADGROUP`` answers, or ``None`` for nothing.
+    def _entries(response: object) -> list[Any]:
+        """Pull the entry list out of what ``XREADGROUP`` answers, empty for nothing.
 
         The shape is ``[[stream, [(id, {field: value}), …]], …]`` and an expired block is an
-        empty list rather than nil, so both are handled here instead of at three call sites.
-        The handle is the entry id: opaque above this module, and the only name a stream has
-        for an entry.
+        empty list rather than nil, so both are handled here instead of at four call sites.
+        Unpacked rather than indexed, so a driver answering some other shape lands here as an
+        empty read instead of an `IndexError` from inside a take.
         """
         if not isinstance(response, list) or not response:
-            return None
-        entries = response[0][1] if isinstance(response[0], (list, tuple)) and len(response[0]) > 1 else []
-        if not entries:
-            return None
-        identifier, fields = entries[0]
+            return []
+        try:
+            _stream, entries = response[0]
+        except (TypeError, ValueError):
+            return []
+        return list(entries or [])
+
+    @staticmethod
+    def _decode(identifier: object, fields: object) -> Taken | None:
+        """Wrap one entry as a :class:`Taken`, or report one this package did not write."""
         payload = fields.get(_FIELD) if isinstance(fields, dict) else None
         if payload is None:
-            # an entry written by something else, with fields this package did not put there.
-            # Acknowledging it would be a guess about someone else's data, so it is left
-            # pending and reported: a stream shared with another producer is a configuration
-            # mistake `_key`'s docstring exists to prevent
+            # an entry with fields this package did not put there. Acknowledging it would be a
+            # guess about someone else's data, so it is left pending and reported: a stream
+            # shared with another producer is the mistake `_key`'s docstring exists to prevent
             logger.warning(
                 'a stream entry carries no payload field and was left pending',
                 extra={'tg_entry': identifier},
             )
             return None
         return Taken(payload, identifier)
+
+    @classmethod
+    def _first(cls, response: object) -> Taken | None:
+        """Unwrap one entry from what ``XREADGROUP`` answers, or ``None`` for nothing.
+
+        The handle is the entry id: opaque above this module, and the only name a stream has
+        for an entry.
+        """
+        entries = cls._entries(response)
+        if not entries:
+            return None
+        identifier, fields = entries[0]
+        return cls._decode(identifier, fields)
 
     def ack(self, handle: object) -> None:
         """``XACK`` the entry this handle names, which drops it from the pending list."""
@@ -273,7 +347,7 @@ class RedisStreamsBroker(Broker):
             message_ids=[handle],  # type: ignore[list-item]
             idle=heartbeat_ttl() * 1000,
         )
-        self._recovering = True
+        self._recovered_upto = '0'
 
     # ---------------------------------------------------------------- operations
 
@@ -319,7 +393,7 @@ class RedisStreamsBroker(Broker):
                 extra={'tg_lost': lost, 'tg_key': key},
             )
         if claimed:
-            self._recovering = True
+            self._recovered_upto = '0'
         return claimed
 
     def trim(self) -> int:
@@ -360,13 +434,13 @@ class RedisStreamsBroker(Broker):
 
     async def adepth(self) -> int:
         """Read the same count on the client belonging to the loop the caller is on."""
-        self._ensure()
+        await self._aensure()
         client = await aget_redis()
         return self._lag(await client.xinfo_groups(self._key()))
 
     async def ainflight_depth(self) -> int:
         """Count the group's pending entries without blocking the loop."""
-        self._ensure()
+        await self._aensure()
         client = await aget_redis()
         return self._count(await client.xpending(self._key(), self._group()))
 

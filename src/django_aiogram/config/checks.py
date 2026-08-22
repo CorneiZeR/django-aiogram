@@ -360,7 +360,15 @@ def _a_worker_that_keeps_its_name(key: str) -> list[Problem]:
     correct almost everywhere, so warning about it as such would fire on every
     untouched installation and teach people to stop reading warnings. This fires
     only on the shape that is actually broken.
+
+    And only on the transports it is broken *for*. A broker answering
+    ``needs_identity`` false does not key anything on the worker's name — a Redis
+    Streams group's pending list belongs to the group, so any consumer can recover a
+    dead one's work whatever it is called. Telling such a deployment to pin its
+    hostname would be advice with nothing behind it.
     """
+    if not _identity_matters():
+        return []
     # the same test `worker_identity()` makes. Stripping here would warn about a
     # hostname the worker does not use: a padded name is a poor one, but it is
     # stable, and stability is the only thing this check is about
@@ -447,8 +455,14 @@ def _known_keys(_key: str) -> list[Problem]:
     it requires would be reported as a typo.
 
     Only the configured one, not every shipped one: a key belonging to a transport this
-    project is not using is read by nothing, which is exactly what this warns about. A
-    project mid-migration sees it and can delete the line it no longer needs.
+    project is not using is read by nothing, which is exactly what this warns about.
+
+    That works for a key only a transport declares, and **not** for the four the Redis list
+    shares with the package-wide table. `REDIS_MESSAGES_KEY` is in `DEFAULTS`, so it stays
+    known whichever transport is configured, and a project that moved to Streams keeps a line
+    nothing reads without being told. Saying so here rather than implying otherwise: the fix
+    is to split that table into what the package owns and what a transport does, which is #23
+    and belongs with the removal of the Redis-named public API rather than in a transport.
     """
     known = set(DEFAULTS) | _broker_options()
     # a non-string key would raise out of join and sorting mixed types raises
@@ -462,6 +476,22 @@ def _known_keys(_key: str) -> list[Problem]:
             hint=f'Known keys are: {", ".join(sorted(known))}.',
         )
     ]
+
+
+def _identity_matters() -> bool:
+    """Whether the configured transport keys anything on the worker's name.
+
+    True when it cannot be answered, which is the safe direction: an unresolvable ``BROKER``
+    is `E047`'s finding, and suppressing an unrelated rule on the back of it would hide advice
+    that is right for the default transport.
+    """
+    from django_aiogram.broker.exceptions import BrokerError  # noqa: PLC0415 - only when the checks run
+    from django_aiogram.broker.registry import get_broker  # noqa: PLC0415 - as above
+
+    try:
+        return bool(get_broker().needs_identity)
+    except (BrokerError, ImproperlyConfigured):
+        return True
 
 
 def _broker_options() -> set[str]:
