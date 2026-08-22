@@ -23,6 +23,20 @@ Entries land here as the work does; nothing below is released.
 
 ### Changed
 
+- **No transport driver is a dependency of this package any more.** `pip install
+  django-aiogram` brings Django and aiogram; the driver comes with the transport you name.
+  For the default that is **`pip install "django-aiogram[redis]"`** — an existing project
+  upgrading from 3.x has to add the extra, or `redis` disappears with the rename.
+
+  It is worth the one-time edit because the alternative is every deployment carrying every
+  driver: a project on Kafka has no use for `redis`, and this is what lets the later
+  transports ship without adding to what a base install downloads.
+
+  Nothing guesses. `BROKER` names the transport, and a name whose driver is absent is
+  `E047` at startup carrying that `pip install` line — with one exception that matters to a
+  web container: a process with `ENABLED` off reaches no transport, so it is not asked to
+  install one, the same way `W002` does not ask a disabled process for a `REDIS_URL`. A
+  `BROKER` naming something that is not a transport is still reported there.
 - **The consumer and both producers talk to a transport, not to Redis.** What names an
   in-flight message is the transport's business — a payload for a Redis list, an entry id
   for a stream, a delivery tag, an offset — so a take hands back an opaque handle and it

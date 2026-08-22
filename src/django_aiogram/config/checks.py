@@ -267,6 +267,12 @@ def _a_usable_broker(key: str) -> list[Problem]:
     it names something that is not a broker; or the driver behind it is absent, in which case
     the hint carries the install line for that extra.
 
+    Two of those are gated on the bot being enabled, for the same reason `W002` is: a process
+    with `ENABLED` off reaches no transport, so asking it to install a driver it will never
+    call is an error nobody can act on except by installing it anyway. The name itself is
+    judged either way — nothing legitimately names a non-broker, and a typo in the web tier is
+    the same typo in the worker, where it would fail.
+
     Nothing here imports the driver — the registry checks its own table of shipped brokers
     before importing anything, so an absent one is named rather than discovered by traceback.
     """
@@ -276,9 +282,12 @@ def _a_usable_broker(key: str) -> list[Problem]:
     )
     from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
 
+    enabled = _bot_is_enabled()
     try:
         resolved = broker_class()
     except BrokerDependencyError as missing:
+        if not enabled:
+            return []
         return [
             Problem(
                 f'names {conf.get(key)!r}, whose driver is not installed.',
@@ -288,7 +297,7 @@ def _a_usable_broker(key: str) -> list[Problem]:
     except BrokerNotConfiguredError as wrong:
         return [Problem(f'is unusable: {wrong}', hint='Name a Broker subclass by dotted path.')]
     required = [option for option in resolved.required() if not str(conf.get(option) or '').strip()]
-    if required:
+    if required and enabled:
         return [
             Problem(
                 f'is {resolved.__name__}, which needs {", ".join(required)} set.',

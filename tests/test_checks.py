@@ -786,6 +786,7 @@ def test_the_checks_are_registered_with_django():
         'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker',
     }
 )
+@override_settings(TELEGRAM_BOT={'ENABLED': True})
 def test_a_named_broker_whose_driver_is_missing_is_reported_with_the_install_line(monkeypatch):
     """`redis` left the base dependencies, so this is now a reachable configuration.
 
@@ -806,10 +807,28 @@ def test_a_named_broker_whose_driver_is_missing_is_reported_with_the_install_lin
     assert 'pip install "django-aiogram[redis]"' in problems[0].hint, problems[0].hint
 
 
+@override_settings(TELEGRAM_BOT={'ENABLED': False})
+def test_a_disabled_process_is_not_asked_to_install_a_driver_it_never_calls(monkeypatch):
+    """The rule above, gated the way `W002` is gated, and for the same reason.
+
+    A web container with `ENABLED` off registers every check — that is what makes this
+    worth pinning — and it reaches no transport, so the driver it does not have is not a
+    problem it has. Without the gate this is an `Error`, which fails `manage.py check`
+    outright and can only be answered by installing a driver nothing in that process calls.
+
+    The name is still judged: the sibling case below names a non-broker with the bot
+    disabled and is reported, because a typo is a typo in every process.
+    """
+    monkeypatch.setattr('importlib.util.find_spec', lambda name, *args: None if name == 'redis' else True)
+
+    problems = [problem for problem in check_settings() if str(problem.id) == 'django_aiogram.E047']
+
+    assert not problems, f'a disabled process was asked for a driver: {problems}'
+
+
 @override_settings(
     TELEGRAM_BOT={
-        'TOKEN': '42:x',
-        'REDIS_URL': 'redis://localhost',
+        'ENABLED': False,
         'BROKER': 'django_aiogram.producer.client.TelegramBot',
     }
 )
@@ -820,6 +839,10 @@ def test_a_broker_setting_naming_something_else_is_refused():
     not a `Broker`, which is what a copied line from the wrong page produces — and it would
     otherwise fail on the first `publish` with an `AttributeError` naming a method rather
     than the setting.
+
+    Asserted with the bot **disabled**, which is the half of this rule that is not gated:
+    the process above is excused its missing driver, and this one is not excused its typo,
+    because a name that is wrong here is wrong in the worker that does send.
     """
     problems = [problem for problem in check_settings() if str(problem.id) == 'django_aiogram.E047']
 
