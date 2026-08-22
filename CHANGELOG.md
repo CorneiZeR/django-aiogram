@@ -9,8 +9,29 @@ a new table, so the old one is left where it is — see **Upgrading** for moving
 
 Entries land here as the work does; nothing below is released.
 
+### Added
+
+- **`BROKER`** — which transport carries messages, by dotted path, defaulting to the Redis
+  list so a project changes its imports and nothing else. Nothing is inferred from what
+  happens to be installed: a name whose driver is missing is a system check with the
+  `pip install` line, not an `ImportError` on the first send.
+
+  Each broker declares its **own** settings rather than adding to the package-wide table,
+  because `REDIS_MESSAGES_KEY` means nothing to Kafka and a topic means nothing to a list.
+  A transport with no sensible default for where a message goes marks that setting required
+  and refuses at startup without it.
+
 ### Changed
 
+- **The consumer and both producers talk to a transport, not to Redis.** What names an
+  in-flight message is the transport's business — a payload for a Redis list, an entry id
+  for a stream, a delivery tag, an offset — so a take hands back an opaque handle and it
+  goes back unread. Nothing a project calls changed shape; `bot.send()`, `send_many`, the
+  `await` twins and the depth reads all behave as they did.
+
+  **If you patch the connection in tests, the name moved**: it is
+  `django_aiogram.broker.redis_list.broker.get_redis`, because that is where the connection
+  lives now. Patching the producer no longer reaches the write. See **Testing**.
 - **Renamed throughout.** The distribution is `django-aiogram`, the import path is
   `django_aiogram`, the environment prefix is `DJANGO_AIOGRAM_`, the logger is
   `django_aiogram`, check ids read `django_aiogram.EXXX`, and the event log's table is
