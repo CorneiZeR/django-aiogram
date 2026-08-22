@@ -159,9 +159,10 @@ outside ASCII is compared like any other and a matching one passes; **400** the 
 not an update Telegram could have sent. Anything that is not a POST gets **405**.
 
 All five reasons for a 503, in the order the view checks them: `ENABLED` is off in this
-process; `MODE` or `WEBHOOK_SECRET` cannot be read, because an unknown mode and an empty
-secret each raise `ImproperlyConfigured`; `MODE` is not `webhook`, so a worker is polling
-and two sources of updates would be one too many; building the bot raised
+process; `MODE` cannot be read, because an unknown one raises `ImproperlyConfigured`;
+`MODE` is not `webhook`, so a worker is polling and two sources of updates would be one too
+many; `WEBHOOK_SECRET` cannot be read, which is the same refusal and is checked here rather
+than earlier because a polling deployment has no reason to set one; building the bot raised
 `ImproperlyConfigured`, most often a `TOKEN` that is missing or malformed; and nothing ran
 the update — the process is shutting down, its loop is closed,
 or the loop's own thread had not started yet.

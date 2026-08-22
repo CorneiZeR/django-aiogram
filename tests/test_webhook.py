@@ -115,6 +115,23 @@ def test_a_secret_that_is_a_prefix_is_refused(handled):
     assert response.status_code == 403
 
 
+@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://x', 'MODE': 'polling'})
+def test_a_polling_deployment_is_told_it_polls_and_not_about_its_secret(handled, caplog):
+    """The commonest configuration there is, and the one a guard put in the wrong bucket.
+
+    A polling deployment has no reason to set `WEBHOOK_SECRET`, so reading the secret before
+    judging the mode reported every one of them as unreadable configuration — the same 503,
+    the wrong diagnosis, for whoever finds the URL of a process that simply does not serve
+    it. The secret is read only once the mode says to serve.
+    """
+    with caplog.at_level('INFO', logger='django_aiogram'):
+        response = post(an_update())
+
+    assert response.status_code == 503
+    assert 'while this deployment polls' in caplog.text
+    assert 'not configured to serve updates' not in caplog.text
+
+
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'WEBHOOK_SECRET': ''})
 def test_serving_without_a_secret_answers_503_rather_than_raising(handled, caplog):
     """No update is accepted either way, so the only question is what the caller gets.

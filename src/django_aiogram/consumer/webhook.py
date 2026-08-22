@@ -73,17 +73,23 @@ def telegram_webhook(request: HttpRequest) -> HttpResponse:  # noqa: PLR0911 - a
         return HttpResponse(status=503)
 
     try:
-        # both here, and once: an unknown `MODE` and an empty `WEBHOOK_SECRET` each raise
-        # `ImproperlyConfigured`, and unguarded that left an unauthenticated 500 with a
+        # guarded, because an unknown `MODE` and an empty `WEBHOOK_SECRET` each raise
+        # `ImproperlyConfigured` — and unguarded that left an unauthenticated 500 with a
         # traceback from a view whose every other refusal is a status code. The bot build
-        # below already treats a configuration failure as ours to answer for
+        # below already treats a configuration failure as ours to answer for.
+        #
+        # The secret only when the mode says to serve: a polling deployment has no reason
+        # to set one, and reading it first told every such deployment its configuration was
+        # unreadable instead of that it polls. Each setting is judged where it matters, and
+        # the order the documentation promises is the order here
         mode = current_mode()
-        secret = webhook_secret()
+        polling = mode != UpdateMode.WEBHOOK
+        secret = '' if polling else webhook_secret()
     except ImproperlyConfigured:
         logger.exception('webhook is not configured to serve updates')
         return HttpResponse(status=503)
 
-    if mode != UpdateMode.WEBHOOK:
+    if polling:
         # serving updates here while a worker polls for them would mean two
         # sources of updates and no way to tell which handled what
         logger.warning(
