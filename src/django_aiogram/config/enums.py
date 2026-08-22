@@ -105,4 +105,4 @@ def choices(kind: type[Enum]) -> frozenset[str]:
 #: to judge the setting, and reaching into `producer` for them would make configuration
 #: depend on the thing it configures — and would pay for whatever the limiter imports on
 #: every boot that registers a check
-KNOWN_RATE_LIMIT_KEYS = choices(RateLimitKey)
+KNOWN_RATE_LIMIT_KEYS: frozenset[str] = choices(RateLimitKey)

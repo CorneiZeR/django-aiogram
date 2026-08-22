@@ -109,10 +109,15 @@ def test_configuration_does_not_import_what_it_configures():
 
     A subprocess, because `sys.modules` in this one is already full of everything.
     """
+    # all three the docstring names, not just the one that was being violated: a test that
+    # covers a third of a rule reports a clean bill for the other two thirds
+    forbidden = ('producer', 'consumer', 'broker')
     code = (
         'import sys\n'
         'import django_aiogram.config.checks\n'
-        "print(sorted(m for m in sys.modules if m.split('.')[:2] == ['django_aiogram', 'producer']))\n"
+        f'forbidden = {forbidden!r}\n'
+        "print(sorted(m for m in sys.modules if m.split('.')[:2][1:] and m.split('.')[1] in forbidden"
+        " and m.startswith('django_aiogram.')))\n"
         "print('aiogram' in sys.modules)\n"
     )
     finished = subprocess.run(  # noqa: S603 - our own interpreter, and a script written right above
