@@ -21,11 +21,11 @@ from django.db import (
 )
 from django.utils import timezone
 
-from django_aiogram.dbrouter import event_log_database
+from django_aiogram.eventlog.dbrouter import event_log_database
+from django_aiogram.eventlog.recorder import Event
 from django_aiogram.exceptions import DjangoRedisAiogramError
 from django_aiogram.models import TelegramEvent
-from django_aiogram.payloads import redact_keys, redact_text, redact_values, secrets
-from django_aiogram.recorder import Event
+from django_aiogram.wire.payloads import redact_keys, redact_text, redact_values, secrets
 
 logger = logging.getLogger('django_aiogram')
 

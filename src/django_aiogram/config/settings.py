@@ -2,7 +2,7 @@
 
 A project configures the package through one ``TELEGRAM_BOT`` dict in its Django
 settings. Anything it leaves out is looked for in the environment, and anything
-the environment leaves out comes from :mod:`django_aiogram.defaults`.
+the environment leaves out comes from :mod:`django_aiogram.config.defaults`.
 
 Nothing here reads Django settings at import time: before 2.0 it did, which took
 the whole project down — its test suite included — whenever the token or Redis
@@ -20,7 +20,7 @@ from django.conf import settings as django_settings
 from django.core.exceptions import ImproperlyConfigured
 from django.core.signals import setting_changed
 
-from django_aiogram.defaults import DEFAULTS
+from django_aiogram.config.defaults import DEFAULTS
 
 logger = logging.getLogger('django_aiogram')
 
@@ -228,7 +228,7 @@ def blpop_ceiling() -> PopCeiling:
     equals the read deadline, and every idle pop raises instead of returning empty.
 
     Lives here rather than beside the consumer because ``checks.py`` needs it too, and
-    importing :mod:`django_aiogram.delivery` would pull in aiogram through
+    importing :mod:`django_aiogram.consumer.delivery` would pull in aiogram through
     :mod:`django_aiogram.api` — which is the whole reason ``manage.py check``
     costs nothing.
 
@@ -263,4 +263,4 @@ def _reset_on_setting_change(
 
 
 # dispatch_uid keeps autoreload from stacking duplicate receivers
-setting_changed.connect(_reset_on_setting_change, dispatch_uid='django_aiogram.settings')
+setting_changed.connect(_reset_on_setting_change, dispatch_uid='django_aiogram.config.settings')

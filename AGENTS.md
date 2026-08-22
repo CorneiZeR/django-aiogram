@@ -109,7 +109,7 @@ Packaging-only work does not need the Redis suite, and vice versa.
   every `django.setup()`, before `ready()` and regardless of `ENABLED`, and
   `admin.autodiscover` imports the other on every boot of a project with the
   admin installed — so a migration container pays for whatever either pulls.
-  `django.db.models` and `django_aiogram.enums`/`events` only — never
+  `django.db.models` and `django_aiogram.config.enums`/`events` only — never
   `client`, `serializers` or `api`. A subprocess test pins each:
   `tests/test_event_log_off.py` for the model, `tests/db/test_admin.py` for the
   admin.
@@ -117,7 +117,7 @@ Packaging-only work does not need the Redis suite, and vice versa.
   `python -m django_aiogram.healthcheck` can answer without `django.setup()`,
   which in one measured consumer cost 17.9s of `AppConfig.ready()` against 0.01s of
   probing — more than any Docker `timeout` the wiki could publish. So: no models, no
-  aiogram, no `django_aiogram.client`, and nothing that reaches them
+  aiogram, no `django_aiogram.producer.client`, and nothing that reaches them
   transitively. `tests/test_lazy_init.py` proves it with a settings module whose app
   writes a file from `ready()`, and asserts the file is absent — plus a control that
   the file appears under `django.setup()`, so its absence means something.
@@ -166,6 +166,43 @@ Packaging-only work does not need the Redis suite, and vice versa.
   `pyproject.toml` records as `"D", # test names are the documentation`.
 - Public API is annotated; the package ships `py.typed` and mypy runs on it.
 - No new runtime dependencies without a reason that survives being questioned.
+
+## Package layout
+
+`src/django_aiogram/` groups by what a thing *is for*, not by what it is made of.
+
+| package | what belongs in it |
+| --- | --- |
+| `config/` | what a project configures, and what refuses a bad value |
+| `broker/` | one transport per package; the contract they answer |
+| `producer/` | the send side: the bot, the producer, the pacing |
+| `consumer/` | the receive side: the queue consumer, the webhook view, router discovery |
+| `wire/` | how a message becomes bytes and comes back |
+| `eventlog/` | the optional table, the writer thread, the metrics seam |
+
+**The root is the published surface.** A module stays at `src/django_aiogram/` when the
+outside world names it by path, and there are three ways that happens:
+
+- Django looks for it there — `apps.py`, `models.py`, `admin.py`, `migrations/`. Moving
+  them costs an `app_label` on every model and a `MIGRATION_MODULES` in every project.
+- A consumer writes the path in a **string**: `DELIVERY`, `SERIALIZER` and
+  `DATABASE_ROUTERS` name classes by dotted path, and `urls.py` names the webhook view.
+- A container runs it: `python -m django_aiogram.healthcheck` is in a compose file.
+
+So a module's location is an API decision, not a filing decision. Moving one is a
+breaking change, and the check that recognises the old path and names the new one is what
+turns that break into a migration somebody can follow.
+
+Two rules that are not style:
+
+- **`__init__.py` exports deliberately.** Every package declares `__all__`. The cluster
+  packages declare it *empty*: callers import from the modules, because a re-export makes
+  a second path to every name and the one nobody chose is the one that cannot be moved.
+  `tests/test_package_layout.py` fails when a package has no `__all__`.
+- **A transport imports its driver lazily, never at module scope.** The base install pulls
+  no driver, so `import django_aiogram.broker.kafka` must not fail on a machine without
+  Kafka — otherwise the check that names the missing extra can never run, and the reader
+  gets an `ImportError` instead of `pip install "django-aiogram[kafka]"`.
 
 ## Documentation
 

@@ -19,7 +19,7 @@ So this module is the check, and both entry points are thin:
   Deployment page says why you would not put it in a healthcheck.
 
 **This module must not import anything that needs the app registry.** No models, no
-aiogram, no :mod:`django_aiogram.client`. Reading
+aiogram, no :mod:`django_aiogram.producer.client`. Reading
 ``django.conf.settings.TELEGRAM_BOT`` imports the settings module and nothing more,
 which is the whole saving. ``tests/test_lazy_init.py`` asserts the registry is still
 unpopulated after ``main()`` returns.
@@ -36,6 +36,7 @@ from django.core.exceptions import ImproperlyConfigured
 from redis import Redis
 from redis.exceptions import RedisError, ResponseError
 
+from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 from django_aiogram.redis import (
     get_redis,
     heartbeat_key,
@@ -44,7 +45,6 @@ from django_aiogram.redis import (
     processing_pattern,
     queue_key,
 )
-from django_aiogram.settings import SETTINGS_NAME, coerce_bool, conf
 
 logger = logging.getLogger('django_aiogram')
 

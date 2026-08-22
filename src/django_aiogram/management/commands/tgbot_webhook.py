@@ -11,8 +11,8 @@ from typing import Any
 from django.core.management import BaseCommand, CommandError
 
 from django_aiogram import bot
-from django_aiogram.enums import UpdateMode
-from django_aiogram.webhook import current_mode, webhook_settings
+from django_aiogram.config.enums import UpdateMode
+from django_aiogram.consumer.webhook import current_mode, webhook_settings
 
 
 class Command(BaseCommand):

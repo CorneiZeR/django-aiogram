@@ -22,9 +22,9 @@ from django.views.decorators.csrf import csrf_exempt
 from pydantic import ValidationError
 
 from django_aiogram import bot
-from django_aiogram.enums import UpdateMode, choices
+from django_aiogram.config.enums import UpdateMode, choices
+from django_aiogram.config.settings import SETTINGS_NAME, conf
 from django_aiogram.exceptions import LoopUnavailableError
-from django_aiogram.settings import SETTINGS_NAME, conf
 
 logger = logging.getLogger('django_aiogram')
 

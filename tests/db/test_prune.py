@@ -10,8 +10,8 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
-from django_aiogram.enums import EventKind
-from django_aiogram.events import new_correlation_id
+from django_aiogram.config.enums import EventKind
+from django_aiogram.eventlog.events import new_correlation_id
 from django_aiogram.management.commands import tgbot_prune_events as prune_command
 from django_aiogram.models import TelegramEvent
 

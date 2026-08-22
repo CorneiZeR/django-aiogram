@@ -27,16 +27,16 @@ from redis.exceptions import (
 )
 
 from django_aiogram import TelegramBot
-from django_aiogram import recorder as recorder_module
-from django_aiogram.instrumentation import install_instrumentation, instrumented
-from django_aiogram.recorder import (
+from django_aiogram.eventlog import recorder as recorder_module
+from django_aiogram.eventlog.instrumentation import install_instrumentation, instrumented
+from django_aiogram.eventlog.recorder import (
     DROP_REPORT_INTERVAL,
     WRITER_THREAD,
     Event,
     EventRecorder,
     recorder,
 )
-from django_aiogram.signals import events_recorded
+from django_aiogram.eventlog.signals import events_recorded
 
 
 def a_bot():
@@ -174,7 +174,7 @@ def test_the_payload_is_not_summarized_for_a_receiver(redis_server, collected, m
     about — the cost, not the value.
     """
     called = []
-    monkeypatch.setattr('django_aiogram.client.describe', lambda kwargs: called.append(kwargs) or {})
+    monkeypatch.setattr('django_aiogram.producer.client.describe', lambda kwargs: called.append(kwargs) or {})
 
     TelegramBot().send_redis(chat_id=7, text='hi')
     recorder.flush(timeout=5)
@@ -370,7 +370,7 @@ def test_a_metrics_only_writer_does_not_close_a_connection_it_never_opened(redis
 
     Which is the one import `recorder.py`'s own docstring exists to keep out of a
     process that does not need it — and a process with receivers and no table does
-    not. Measured before the fix: `django_aiogram.eventlog` appeared in
+    not. Measured before the fix: `django_aiogram.eventlog.writer` appeared in
     `sys.modules` the moment the writer stopped, having written nothing.
 
     Asserted on the call rather than on `sys.modules`, because by the time this test
@@ -499,7 +499,7 @@ def test_a_receiver_still_gets_the_detail_a_seam_measured_itself(redis_server, c
         message = 'redis is gone'
         raise ConnectionError(message)
 
-    monkeypatch.setattr('django_aiogram.client.get_redis', refuse)
+    monkeypatch.setattr('django_aiogram.producer.client.get_redis', refuse)
 
     with pytest.raises(ConnectionError):
         TelegramBot().send_redis(chat_id=7, text='hi')

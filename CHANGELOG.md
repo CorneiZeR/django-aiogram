@@ -16,6 +16,24 @@ Entries land here as the work does; nothing below is released.
   `django_aiogram`, check ids read `django_aiogram.EXXX`, and the event log's table is
   `django_aiogram_event`. `TELEGRAM_BOT` stays as the settings key: it names what it
   configures rather than the package that reads it.
+- **`src/` groups by what a thing is for**, so several import paths moved. The root keeps
+  what the outside world names — Django's `apps`, `models`, `admin` and `migrations`, the
+  webhook view, `python -m django_aiogram.healthcheck`, and the classes `DELIVERY`,
+  `SERIALIZER` and `DATABASE_ROUTERS` name as strings. Everything else lives in
+  `config/`, `producer/`, `consumer/`, `wire/`, `eventlog/` or `broker/`.
+
+  | was | is |
+  | --- | --- |
+  | `django_aiogram.settings`, `defaults`, `enums`, `checks` | `django_aiogram.config.*` |
+  | `django_aiogram.client`, `throttling` | `django_aiogram.producer.*` |
+  | `django_aiogram.delivery`, `webhook`, `routers` | `django_aiogram.consumer.*` |
+  | `django_aiogram.serializers`, `envelope`, `payloads` | `django_aiogram.wire.*` |
+  | `django_aiogram.recorder`, `events`, `instrumentation`, `signals`, `dbrouter` | `django_aiogram.eventlog.*` |
+  | `django_aiogram.eventlog` | `django_aiogram.eventlog.writer` |
+
+  The settings package is `config` and not `conf` for one reason worth writing down:
+  `django_aiogram.conf` is the settings *object*, public since 2.x, and a subpackage at
+  that path would shadow it.
 
 ## 3.1.0 - 2026-08-22
 

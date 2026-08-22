@@ -25,11 +25,11 @@ from aiogram.fsm.storage.base import BaseStorage, StateType, StorageKey
 from aiogram.types import TelegramObject, Update
 from aiogram.types.update import UpdateTypeLookupError
 
+from django_aiogram.config.enums import EventKind
 from django_aiogram.context import correlation_scope, current_correlation_id
-from django_aiogram.enums import EventKind
-from django_aiogram.events import new_correlation_id
-from django_aiogram.payloads import describe
-from django_aiogram.recorder import Event, recorder
+from django_aiogram.eventlog.events import new_correlation_id
+from django_aiogram.eventlog.recorder import Event, recorder
+from django_aiogram.wire.payloads import describe
 
 logger = logging.getLogger('django_aiogram')
 

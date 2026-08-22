@@ -14,7 +14,7 @@ insert-only, which is also what keeps pruning cheap and the table shardable.
 from django.db import models
 from django.utils import timezone
 
-from django_aiogram.events import MAX_KIND_LENGTH
+from django_aiogram.eventlog.events import MAX_KIND_LENGTH
 
 
 class TelegramEvent(models.Model):

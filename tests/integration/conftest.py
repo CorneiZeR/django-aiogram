@@ -11,8 +11,8 @@ import os
 import pytest
 from redis import Redis
 
+from django_aiogram.producer.throttling import reset_rate_limiters
 from django_aiogram.redis import reset_redis
-from django_aiogram.throttling import reset_rate_limiters
 
 # the marker is registered in pyproject.toml, and each module carries it itself
 REDIS_URL = os.environ.get('DJANGO_AIOGRAM_TEST_REDIS_URL', '')

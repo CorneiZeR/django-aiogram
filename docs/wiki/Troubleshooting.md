@@ -211,8 +211,8 @@ Telegram will start refusing.
 
 The 1.x package name was a deprecated shim in 2.x and is gone in 3.0. The
 package is `django_aiogram`: use it in `INSTALLED_APPS`, import from it,
-and note that `TelegramBot` lives in `django_aiogram.client` while the
-settings module is `django_aiogram.settings`. See **[[Upgrading]]**.
+and note that `TelegramBot` lives in `django_aiogram.producer.client` while the
+settings module is `django_aiogram.config.settings`. See **[[Upgrading]]**.
 
 ## The event log writes nothing
 

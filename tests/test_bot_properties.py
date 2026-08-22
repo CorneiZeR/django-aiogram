@@ -14,8 +14,8 @@ from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 
 from django_aiogram import TelegramBot
-from django_aiogram.checks import check_settings
-from django_aiogram.client import build_default_properties, build_storage
+from django_aiogram.config.checks import check_settings
+from django_aiogram.producer.client import build_default_properties, build_storage
 
 
 @override_settings(TELEGRAM_BOT={'DEFAULT_BOT_PROPERTIES': {'parse_mode': 'HTML'}})
@@ -64,7 +64,7 @@ def test_dotted_path_storage():
     assert isinstance(build_storage(), MemoryStorage)
 
 
-@override_settings(TELEGRAM_BOT={'FSM_STORAGE': 'django_aiogram.client.TelegramBot'})
+@override_settings(TELEGRAM_BOT={'FSM_STORAGE': 'django_aiogram.producer.client.TelegramBot'})
 def test_dotted_path_must_be_a_storage():
     with pytest.raises(ImproperlyConfigured, match='BaseStorage'):
         build_storage()
@@ -112,7 +112,7 @@ def test_check_catches_a_dotted_path_that_does_not_import():
 
 @override_settings(
     TELEGRAM_BOT={
-        'FSM_STORAGE': 'django_aiogram.client.TelegramBot',
+        'FSM_STORAGE': 'django_aiogram.producer.client.TelegramBot',
         'TOKEN': '42:x',
         'REDIS_URL': 'r://x',
     }

@@ -9,10 +9,10 @@ from django.core.signals import setting_changed
 from django.test import override_settings
 
 from django_aiogram import conf as conf_object
-from django_aiogram import settings as settings_module
-from django_aiogram.checks import _a_pop_inside_the_deadline, check_settings
-from django_aiogram.defaults import no_default_kwargs
-from django_aiogram.settings import Settings, conf
+from django_aiogram.config import settings as settings_module
+from django_aiogram.config.checks import _a_pop_inside_the_deadline, check_settings
+from django_aiogram.config.defaults import no_default_kwargs
+from django_aiogram.config.settings import Settings, conf
 
 
 @override_settings(TELEGRAM_BOT=['not', 'a', 'mapping'])
@@ -56,9 +56,9 @@ def test_an_absent_setting_is_still_absent_rather_than_wrong(value):
 @pytest.mark.parametrize(
     ('module', 'uid'),
     [
-        ('django_aiogram.settings', 'django_aiogram.settings'),
+        ('django_aiogram.config.settings', 'django_aiogram.config.settings'),
         ('django_aiogram.redis', 'django_aiogram.redis'),
-        ('django_aiogram.throttling', 'django_aiogram.throttling'),
+        ('django_aiogram.producer.throttling', 'django_aiogram.producer.throttling'),
     ],
 )
 def test_reset_receiver_is_deduplicated(module, uid):
@@ -141,7 +141,7 @@ def test_the_flush_interval_is_read_the_way_its_check_demands():
     helper below it — the first version of this test asked `_number` directly and passed
     with the float read still in place.
     """
-    from django_aiogram.recorder import EventRecorder
+    from django_aiogram.eventlog.recorder import EventRecorder
 
     with override_settings(TELEGRAM_BOT={'EVENT_LOG_FLUSH_INTERVAL': 0.5}):
         assert 'django_aiogram.E038' in {str(m.id) for m in check_settings()}
@@ -161,8 +161,8 @@ def test_a_writer_dial_that_cannot_be_read_falls_back_instead_of_ending_the_thre
     dict can, and `E038` — the check that owns this setting — only reports it where
     `manage.py check` runs.
     """
-    from django_aiogram.defaults import DEFAULTS
-    from django_aiogram.recorder import EventRecorder
+    from django_aiogram.config.defaults import DEFAULTS
+    from django_aiogram.eventlog.recorder import EventRecorder
 
     with override_settings(TELEGRAM_BOT={'EVENT_LOG_FLUSH_INTERVAL': value}):
         assert EventRecorder.flush_interval() == DEFAULTS['EVENT_LOG_FLUSH_INTERVAL']
@@ -178,7 +178,7 @@ def test_the_writer_waits_the_interval_its_reader_returns():
     """
     import queue
 
-    from django_aiogram.recorder import EventRecorder
+    from django_aiogram.eventlog.recorder import EventRecorder
 
     class RecordingBuffer:
         """Answers `_collect` the way an empty queue does, and remembers the deadline."""

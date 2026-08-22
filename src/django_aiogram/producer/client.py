@@ -31,15 +31,15 @@ from django.utils.module_loading import import_string
 from redis import Redis
 
 from django_aiogram.api import check_function
+from django_aiogram.config.defaults import DEFAULTS
+from django_aiogram.config.enums import EventKind, StorageKind
+from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 from django_aiogram.context import current_correlation_id
-from django_aiogram.defaults import DEFAULTS
-from django_aiogram.enums import EventKind, StorageKind
-from django_aiogram.envelope import pack
-from django_aiogram.events import new_correlation_id
+from django_aiogram.eventlog.events import new_correlation_id
+from django_aiogram.eventlog.instrumentation import install_instrumentation, instrumented
+from django_aiogram.eventlog.recorder import Event, as_identifier, recorder
 from django_aiogram.exceptions import LoopThreadNotStartedError, ShuttingDownError
-from django_aiogram.instrumentation import install_instrumentation, instrumented
-from django_aiogram.payloads import describe
-from django_aiogram.recorder import Event, as_identifier, recorder
+from django_aiogram.producer.throttling import RateLimiter, get_rate_limiter
 from django_aiogram.redis import (
     aclose_redis,
     aget_redis,
@@ -48,9 +48,9 @@ from django_aiogram.redis import (
     processing_key,
     queue_key,
 )
-from django_aiogram.serializers import get_serializer
-from django_aiogram.settings import SETTINGS_NAME, coerce_bool, conf
-from django_aiogram.throttling import RateLimiter, get_rate_limiter
+from django_aiogram.wire.envelope import pack
+from django_aiogram.wire.payloads import describe
+from django_aiogram.wire.serializers import get_serializer
 
 logger = logging.getLogger('django_aiogram')
 

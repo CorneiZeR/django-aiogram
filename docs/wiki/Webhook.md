@@ -78,7 +78,7 @@ less thing scanning the internet will find.
 # urls.py
 from django.urls import path
 
-from django_aiogram.webhook import telegram_webhook
+from django_aiogram.consumer.webhook import telegram_webhook
 
 urlpatterns = [
     path('tg/9c1f2b7a/', telegram_webhook),

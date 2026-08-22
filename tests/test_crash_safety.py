@@ -22,9 +22,9 @@ from redis.exceptions import ConnectionError, ResponseError  # noqa: A004
 
 from django_aiogram import TelegramBot
 from django_aiogram.api import API_METHODS, check_function
-from django_aiogram.delivery import BlpopDelivery, defers_completion
+from django_aiogram.consumer.delivery import BlpopDelivery, defers_completion
 from django_aiogram.management.commands.start_tgbot import Command
-from django_aiogram.serializers import JsonSerializer, PickleSerializer
+from django_aiogram.wire.serializers import JsonSerializer, PickleSerializer
 
 LOGGER = 'django_aiogram'
 QUEUE = 'TELEGRAM_BOT_MESSAGE'
@@ -148,8 +148,8 @@ def old_redis_server(redis_server, monkeypatch):
     wrapped = OldRedis(redis_server)
     for target in (
         'django_aiogram.redis.get_redis',
-        'django_aiogram.delivery.get_redis',
-        'django_aiogram.client.get_redis',
+        'django_aiogram.consumer.delivery.get_redis',
+        'django_aiogram.producer.client.get_redis',
     ):
         monkeypatch.setattr(target, lambda wrapped=wrapped: wrapped)
     return redis_server
@@ -243,7 +243,7 @@ def test_reclaim_survives_a_redis_that_is_not_up_yet(redis_server, monkeypatch):
         def __getattr__(self, name):
             return getattr(redis_server, name)
 
-    monkeypatch.setattr('django_aiogram.delivery.get_redis', Unreachable)
+    monkeypatch.setattr('django_aiogram.consumer.delivery.get_redis', Unreachable)
 
     delivery = Recording()
     delivery.reclaim()  # must not raise
@@ -288,7 +288,7 @@ def test_reclaim_is_retried_when_redis_was_down_at_startup(redis_server):
     delivery = Recording()
 
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr('django_aiogram.delivery.get_redis', FlakyOnce)
+        patch.setattr('django_aiogram.consumer.delivery.get_redis', FlakyOnce)
         drain(delivery, expected_handled=1)
 
     assert [item['chat_id'] for item in delivery.handled] == [1]
@@ -310,7 +310,7 @@ def test_a_response_error_that_is_not_a_missing_lmove_keeps_crash_safety(redis_s
 
     delivery = Recording()
     with pytest.MonkeyPatch.context() as patch, caplog.at_level('ERROR', logger=LOGGER):
-        patch.setattr('django_aiogram.delivery.get_redis', WrongType)
+        patch.setattr('django_aiogram.consumer.delivery.get_redis', WrongType)
         assert delivery.reclaim() is False, 'the caller was not asked to retry'
 
     assert delivery._reliable is True, 'crash-safe mode was given up on the wrong error'

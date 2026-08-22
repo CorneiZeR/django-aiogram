@@ -32,7 +32,7 @@ def test_send_redis_is_a_noop_when_disabled(monkeypatch):
 
     # asserted rather than inferred: an ImproperlyConfigured would also pass by
     # accident if the early return were removed and REDIS_URL happened to be set
-    monkeypatch.setattr('django_aiogram.client.get_redis', refuse)
+    monkeypatch.setattr('django_aiogram.producer.client.get_redis', refuse)
 
     TelegramBot().send_redis(chat_id=1, text='hi')
 
@@ -70,7 +70,7 @@ def test_command_refuses_to_start_when_disabled():
 def test_ready_skips_autodiscover_when_disabled(monkeypatch):
     called = []
     monkeypatch.setattr(
-        'django_aiogram.routers.autodiscover_tg_routers',
+        'django_aiogram.consumer.routers.autodiscover_tg_routers',
         lambda: called.append(True),
     )
     config = TelegramBotAppConfig('django_aiogram', __import__('django_aiogram'))
@@ -82,7 +82,7 @@ def test_ready_skips_autodiscover_when_disabled(monkeypatch):
 def test_autodiscover_can_be_disabled_on_its_own(monkeypatch):
     called = []
     monkeypatch.setattr(
-        'django_aiogram.routers.autodiscover_tg_routers',
+        'django_aiogram.consumer.routers.autodiscover_tg_routers',
         lambda: called.append(True),
     )
     config = TelegramBotAppConfig('django_aiogram', __import__('django_aiogram'))
@@ -95,7 +95,7 @@ def test_ready_runs_autodiscover_when_enabled(monkeypatch):
     """Guards the two tests above against being vacuously green."""
     called = []
     monkeypatch.setattr(
-        'django_aiogram.routers.autodiscover_tg_routers',
+        'django_aiogram.consumer.routers.autodiscover_tg_routers',
         lambda: called.append(True),
     )
     config = TelegramBotAppConfig('django_aiogram', __import__('django_aiogram'))
@@ -150,7 +150,7 @@ def test_ready_agrees_with_the_bot_about_the_string_false(monkeypatch):
     """ready() used to read the raw value, so 'false' started the app anyway."""
     called = []
     monkeypatch.setattr(
-        'django_aiogram.routers.autodiscover_tg_routers',
+        'django_aiogram.consumer.routers.autodiscover_tg_routers',
         lambda: called.append(True),
     )
     config = TelegramBotAppConfig('django_aiogram', __import__('django_aiogram'))
@@ -164,7 +164,7 @@ def test_ready_agrees_with_the_bot_about_the_string_false(monkeypatch):
 def test_autodiscover_accepts_the_same_spellings(monkeypatch):
     called = []
     monkeypatch.setattr(
-        'django_aiogram.routers.autodiscover_tg_routers',
+        'django_aiogram.consumer.routers.autodiscover_tg_routers',
         lambda: called.append(True),
     )
     config = TelegramBotAppConfig('django_aiogram', __import__('django_aiogram'))

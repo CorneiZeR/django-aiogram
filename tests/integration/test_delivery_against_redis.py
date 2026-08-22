@@ -16,8 +16,8 @@ from redis import Redis
 from redis.exceptions import ResponseError
 
 from django_aiogram import TelegramBot
-from django_aiogram.delivery import BlpopDelivery
-from django_aiogram.serializers import JsonSerializer, PickleSerializer
+from django_aiogram.consumer.delivery import BlpopDelivery
+from django_aiogram.wire.serializers import JsonSerializer, PickleSerializer
 
 pytestmark = pytest.mark.integration
 

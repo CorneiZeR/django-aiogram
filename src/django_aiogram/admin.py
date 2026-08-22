@@ -20,10 +20,10 @@ from django.http import HttpRequest
 from django.utils.functional import cached_property
 from django.utils.html import format_html, format_html_join
 
-from django_aiogram.eventlog import log_alias
-from django_aiogram.events import failure_kinds, kind_choices
+from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
+from django_aiogram.eventlog.events import failure_kinds, kind_choices
+from django_aiogram.eventlog.writer import log_alias
 from django_aiogram.models import TelegramEvent
-from django_aiogram.settings import SETTINGS_NAME, coerce_bool, conf
 
 #: fetched only on the page that renders them; see TelegramEventAdmin.get_queryset
 PAYLOAD_COLUMNS = ('error', 'detail')

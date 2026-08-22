@@ -24,9 +24,9 @@ from typing import Any
 from django.core.exceptions import ImproperlyConfigured
 from django.core.signals import setting_changed
 
-from django_aiogram.defaults import DEFAULTS
-from django_aiogram.enums import RateLimitKey, choices
-from django_aiogram.settings import SETTINGS_NAME, conf
+from django_aiogram.config.defaults import DEFAULTS
+from django_aiogram.config.enums import RateLimitKey, choices
+from django_aiogram.config.settings import SETTINGS_NAME, conf
 
 Clock = Callable[[], float]
 Sleeper = Callable[[float], Awaitable[None]]
@@ -334,4 +334,4 @@ def _reset_on_setting_change(
         reset_rate_limiters()
 
 
-setting_changed.connect(_reset_on_setting_change, dispatch_uid='django_aiogram.throttling')
+setting_changed.connect(_reset_on_setting_change, dispatch_uid='django_aiogram.producer.throttling')

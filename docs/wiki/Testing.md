@@ -34,14 +34,14 @@ import fakeredis
 from django.test import override_settings
 
 from django_aiogram import bot
-from django_aiogram.envelope import unpack
-from django_aiogram.serializers import loads
+from django_aiogram.wire.envelope import unpack
+from django_aiogram.wire.serializers import loads
 
 
 @override_settings(TELEGRAM_BOT={'REDIS_URL': 'redis://localhost:6379/0'})
 def test_approval_notifies_the_reviewer(monkeypatch):
     server = fakeredis.FakeRedis()
-    monkeypatch.setattr('django_aiogram.client.get_redis', lambda: server)
+    monkeypatch.setattr('django_aiogram.producer.client.get_redis', lambda: server)
 
     approve(order)  # your code, which calls bot.send(...)
 
@@ -56,7 +56,7 @@ id — see **[[Event-log|Event log]]**. Reading through `unpack` is what keeps a
 test from having to know that: `call.correlation_id` is there if you want it,
 and `bot.send()` returns the same value.
 
-Patch `django_aiogram.client.get_redis` — the name the sending code looks
+Patch `django_aiogram.producer.client.get_redis` — the name the sending code looks
 up. Patching `django_aiogram.redis.get_redis` alone leaves the real
 connection in place.
 
@@ -77,7 +77,7 @@ def fake_redis(monkeypatch):
     """One in-memory server behind both halves, sync and async."""
     server = fakeredis.FakeServer()
     client = fakeredis.FakeRedis(server=server)
-    monkeypatch.setattr('django_aiogram.client.get_redis', lambda: client)
+    monkeypatch.setattr('django_aiogram.producer.client.get_redis', lambda: client)
     monkeypatch.setattr(
         'django_aiogram.redis.build_async_client',
         lambda: fakeredis.aioredis.FakeRedis(server=server),
@@ -234,7 +234,7 @@ You should not have to. If you want an end-to-end check, queue a message with
 
 ```python
 from django_aiogram import bot
-from django_aiogram.delivery import BlpopDelivery
+from django_aiogram.consumer.delivery import BlpopDelivery
 
 # with get_redis patched to fakeredis as above
 bot.send_redis(chat_id=42, text='hi')

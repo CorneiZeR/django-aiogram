@@ -18,7 +18,7 @@ from django.test import override_settings
 
 import django_aiogram
 from django_aiogram import TelegramBot, bot, conf, redis_conn
-from django_aiogram.settings import Settings, parse_bool
+from django_aiogram.config.settings import Settings, parse_bool
 
 #: seconds a nested interpreter gets before the test fails instead of hanging
 SUBPROCESS_TIMEOUT = 120
@@ -54,10 +54,10 @@ def test_bot_name_is_not_shadowed_by_a_module():
     depending on import order.
     """
     import django_aiogram
-    import django_aiogram.client
+    import django_aiogram.producer.client
 
     assert isinstance(django_aiogram.bot, TelegramBot)
-    assert django_aiogram.client.TelegramBot is TelegramBot
+    assert django_aiogram.producer.client.TelegramBot is TelegramBot
 
 
 def test_building_a_bot_is_cheap():
@@ -305,7 +305,7 @@ def test_the_version_is_the_one_the_changelog_announces():
 
 
 def test_connecting_a_metrics_receiver_pulls_neither_aiogram_nor_the_orm():
-    """`django_aiogram.signals` must be importable from settings-time code.
+    """`django_aiogram.eventlog.signals` must be importable from settings-time code.
 
     A metrics module is imported early, and importing this package's client half
     loads aiogram — the ~900ms this whole file exists about. So the seam is its own
@@ -325,7 +325,7 @@ def test_connecting_a_metrics_receiver_pulls_neither_aiogram_nor_the_orm():
         import sys
 
         before = set(sys.modules)
-        from django_aiogram.signals import events_recorded
+        from django_aiogram.eventlog.signals import events_recorded
         pulled = {name.split('.')[0] for name in set(sys.modules) - before}
         pulled -= sys.stdlib_module_names | {'django_aiogram', 'django', 'asgiref'}
 
@@ -411,7 +411,7 @@ def test_the_healthcheck_probe_does_not_import_aiogram():
         from django_aiogram.management.commands import tgbot_healthcheck
 
         assert 'aiogram' not in sys.modules, 'the healthcheck pulled aiogram'
-        assert 'django_aiogram.client' not in sys.modules, 'it pulled the client half'
+        assert 'django_aiogram.producer.client' not in sys.modules, 'it pulled the client half'
         assert hasattr(tgbot_healthcheck, 'Command')
         print('cheap probe ok')
     """)

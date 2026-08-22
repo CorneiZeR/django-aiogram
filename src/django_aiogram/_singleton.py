@@ -1,4 +1,4 @@
-"""The one shared :class:`~django_aiogram.client.TelegramBot` for this process.
+"""The one shared :class:`~django_aiogram.producer.client.TelegramBot` for this process.
 
 A module body, not a lock. Python guarantees a module executes once per process and
 makes concurrent importers wait on that module's own import lock, so two threads
@@ -17,6 +17,6 @@ scope: :func:`django_aiogram.__getattr__` reaches it on the first access to
 ``bot`` and never again.
 """
 
-from django_aiogram.client import TelegramBot
+from django_aiogram.producer.client import TelegramBot
 
 bot = TelegramBot()

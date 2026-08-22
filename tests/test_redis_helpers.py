@@ -14,8 +14,8 @@ from redis import Redis
 
 from django_aiogram import TelegramBot
 from django_aiogram import redis as redis_module
-from django_aiogram.delivery import BlpopDelivery
-from django_aiogram.envelope import unpack
+from django_aiogram.config.settings import conf
+from django_aiogram.consumer.delivery import BlpopDelivery
 from django_aiogram.redis import (
     aclose_redis,
     aget_redis,
@@ -26,8 +26,8 @@ from django_aiogram.redis import (
     reset_redis,
     url_decodes_responses,
 )
-from django_aiogram.serializers import JsonSerializer, loads
-from django_aiogram.settings import conf
+from django_aiogram.wire.envelope import unpack
+from django_aiogram.wire.serializers import JsonSerializer, loads
 
 
 @pytest.mark.parametrize(
@@ -48,8 +48,8 @@ def decoded_server(monkeypatch):
     server = fakeredis.FakeRedis(decode_responses=True)
     for target in (
         'django_aiogram.redis.get_redis',
-        'django_aiogram.delivery.get_redis',
-        'django_aiogram.client.get_redis',
+        'django_aiogram.consumer.delivery.get_redis',
+        'django_aiogram.producer.client.get_redis',
     ):
         monkeypatch.setattr(target, lambda server=server: server)
     return server

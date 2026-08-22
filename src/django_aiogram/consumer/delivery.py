@@ -36,10 +36,10 @@ from typing import Any
 from redis.exceptions import ResponseError
 
 from django_aiogram.api import check_function
-from django_aiogram.enums import DeliveryKind, EventKind
-from django_aiogram.envelope import Envelope, UnknownEnvelopeVersionError, unpack
-from django_aiogram.events import new_correlation_id, worker_identity
-from django_aiogram.recorder import Event, as_identifier, recorder
+from django_aiogram.config.enums import DeliveryKind, EventKind
+from django_aiogram.config.settings import blpop_ceiling, conf
+from django_aiogram.eventlog.events import new_correlation_id, worker_identity
+from django_aiogram.eventlog.recorder import Event, as_identifier, recorder
 from django_aiogram.redis import (
     as_bytes,
     get_redis,
@@ -49,8 +49,8 @@ from django_aiogram.redis import (
     processing_key,
     queue_key,
 )
-from django_aiogram.serializers import PickleReadRefusedError, SerializationError, loads
-from django_aiogram.settings import blpop_ceiling, conf
+from django_aiogram.wire.envelope import Envelope, UnknownEnvelopeVersionError, unpack
+from django_aiogram.wire.serializers import PickleReadRefusedError, SerializationError, loads
 
 logger = logging.getLogger('django_aiogram')
 

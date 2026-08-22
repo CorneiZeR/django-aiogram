@@ -20,9 +20,9 @@ from aiogram.client.session.base import BaseSession
 from django.test import override_settings
 
 from django_aiogram import bot
-from django_aiogram.delivery import BlpopDelivery
-from django_aiogram.envelope import unpack
-from django_aiogram.serializers import loads
+from django_aiogram.consumer.delivery import BlpopDelivery
+from django_aiogram.wire.envelope import unpack
+from django_aiogram.wire.serializers import loads
 
 QUEUE = 'TELEGRAM_BOT_MESSAGE'
 
@@ -40,7 +40,7 @@ def a_message(text):
 def test_the_fakeredis_queue_assertion(monkeypatch):
     """Patching client.get_redis is what the page tells the reader to patch."""
     server = fakeredis.FakeRedis()
-    monkeypatch.setattr('django_aiogram.client.get_redis', lambda: server)
+    monkeypatch.setattr('django_aiogram.producer.client.get_redis', lambda: server)
 
     approve({'reviewer': 42})
 
@@ -226,7 +226,7 @@ def test_the_page_documents_every_recipe_here():
     text = PAGE.read_text(encoding='utf-8')
     for needle in (
         'fakeredis',
-        'django_aiogram.client.get_redis',
+        'django_aiogram.producer.client.get_redis',
         "monkeypatch.setattr(bot, 'send'",
         'object.__setattr__',
         'feed_update',
@@ -429,7 +429,7 @@ WEBHOOK_REFUSALS = (
 def webhook_source():
     """The view, as text."""
     root = pathlib.Path(__file__).resolve().parent.parent
-    return (root / 'src' / 'django_aiogram' / 'webhook.py').read_text(encoding='utf-8')
+    return (root / 'src' / 'django_aiogram' / 'consumer' / 'webhook.py').read_text(encoding='utf-8')
 
 
 def catalogued_refusals():

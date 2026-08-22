@@ -8,7 +8,7 @@ from django.contrib.auth.models import Permission
 from django.core.management import call_command
 from django.db import connection
 
-from django_aiogram.events import new_correlation_id
+from django_aiogram.eventlog.events import new_correlation_id
 from django_aiogram.models import TelegramEvent
 
 

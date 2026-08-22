@@ -91,7 +91,7 @@ duplicate.
 Register your own:
 
 ```python
-from django_aiogram.events import register_kind
+from django_aiogram.eventlog.events import register_kind
 
 ORDER_NOTIFIED = register_kind('shop.order.notified', 'Order notified')
 ```
@@ -147,7 +147,7 @@ bot does without keeping a row for any of it:
 # metrics.py, imported from your AppConfig.ready()
 from prometheus_client import Counter
 
-from django_aiogram.signals import events_recorded
+from django_aiogram.eventlog.signals import events_recorded
 
 SENDS = Counter('telegram_events', 'django-aiogram events', ['kind', 'function'])
 
@@ -360,7 +360,7 @@ path, and every prune then has to fetch primary keys first.
 
 ```python
 TELEGRAM_BOT = {'EVENT_LOG_DATABASE': 'logs'}
-DATABASE_ROUTERS = ['django_aiogram.dbrouter.TelegramEventLogRouter', ...]
+DATABASE_ROUTERS = ['django_aiogram.eventlog.dbrouter.TelegramEventLogRouter', ...]
 ```
 
 The writer and the admin name the alias explicitly, so the log lands in the
