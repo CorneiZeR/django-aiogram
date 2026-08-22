@@ -31,6 +31,7 @@ from django.utils.module_loading import import_string
 from redis import Redis
 
 from django_aiogram.api import check_function
+from django_aiogram.broker.registry import get_broker
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import EventKind, StorageKind
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
@@ -46,7 +47,6 @@ from django_aiogram.redis import (
     connection_kwargs,
     get_redis,
     processing_key,
-    queue_key,
 )
 from django_aiogram.wire.envelope import pack
 from django_aiogram.wire.payloads import describe
@@ -164,7 +164,6 @@ class Queueing:
     actually lost: a variadic ``RPUSH`` fails for its whole chunk, not one entry.
     """
 
-    key: str
     payloads: list[bytes]
     messages: list[tuple[uuid.UUID, dict[str, Any]]]
     queued_at: float
@@ -197,10 +196,6 @@ def queueing(function: str, messages: list[tuple[uuid.UUID, dict[str, Any]]]) ->
     """
     queued_at = time.time()
     serializer = get_serializer()
-    # through the helper, not the setting: the consumer, both depth reads and
-    # `tgbot_reclaim` all derive their keys from it, and a producer reading the
-    # setting itself is the one writer that would not follow it anywhere it goes
-    key = queue_key()
 
     def dropped(stage: str, error: Exception) -> None:
         """Record every message this failure lost, and where it lost them."""
@@ -223,7 +218,6 @@ def queueing(function: str, messages: list[tuple[uuid.UUID, dict[str, Any]]]) ->
         # ids go with the exception — so these rows are the only record of which
         # messages were lost
         write = Queueing(
-            key=key,
             payloads=[
                 serializer.dumps(pack(function, kwargs, identifier, queued_at)) for identifier, kwargs in messages
             ],
@@ -1280,7 +1274,7 @@ class TelegramBot:
 
         _mention_asend('asend_redis')
         with queueing(function, [(identifier, kwargs)]) as write:
-            get_redis().rpush(write.key, *write.payloads)
+            get_broker().publish(write.payloads)
         return identifier
 
     async def asend_redis(
@@ -1301,9 +1295,9 @@ class TelegramBot:
         if not accepted:
             return identifier
 
-        client = await aget_redis()
+        broker = get_broker()
         with queueing(function, [(identifier, kwargs)]) as write:
-            await client.rpush(write.key, *write.payloads)
+            await broker.apublish(write.payloads)
         return identifier
 
     def _accept_bulk(self, function: str) -> bool:
@@ -1356,7 +1350,7 @@ class TelegramBot:
         for chunk in self._chunks(chat_ids, chunk_size, kwargs):
             if writing:
                 with queueing(function, chunk) as write:
-                    get_redis().rpush(write.key, *write.payloads)
+                    get_broker().publish(write.payloads)
             identifiers.extend(identifier for identifier, _ in chunk)
         return identifiers
 
@@ -1376,14 +1370,14 @@ class TelegramBot:
         often than a single send does.
         """
         writing = self._accept_bulk(function)
-        # after the decision, not before: a disabled process may have no REDIS_URL
-        # at all, and building a client would raise where the point is to do nothing
-        client = await aget_redis() if writing else None
+        # after the decision, not before: a disabled process may have no transport
+        # configured at all, and resolving one would raise where the point is to do nothing
+        broker = get_broker() if writing else None
         identifiers: list[uuid.UUID] = []
         for chunk in self._chunks(chat_ids, chunk_size, kwargs):
-            if client is not None:
+            if broker is not None:
                 with queueing(function, chunk) as write:
-                    await client.rpush(write.key, *write.payloads)
+                    await broker.apublish(write.payloads)
             identifiers.extend(identifier for identifier, _ in chunk)
         return identifiers
 
@@ -1438,12 +1432,11 @@ class TelegramBot:
         Growing is not by itself a fault — producers can outpace delivery, and
         ``MAX_IN_FLIGHT`` holds intake back on purpose. See **Troubleshooting**.
         """
-        return int(get_redis().llen(queue_key()) or 0)
+        return get_broker().depth()
 
     async def aqueue_depth(self) -> int:
         """:meth:`queue_depth` without blocking the loop this coroutine runs on."""
-        client = await aget_redis()
-        return int(await client.llen(queue_key()) or 0)
+        return await get_broker().adepth()
 
     def inflight_depth(self, worker: str | None = None) -> int:
         """How many messages one worker is part-way through sending.
@@ -1453,10 +1446,17 @@ class TelegramBot:
         those keys follow is this package's business, not an exporter's to
         reproduce.
         """
+        if worker is None:
+            return get_broker().inflight_depth()
+        # as above: naming another worker's list is a Redis-list question
         return int(get_redis().llen(processing_key(worker)) or 0)
 
     async def ainflight_depth(self, worker: str | None = None) -> int:
         """:meth:`inflight_depth` without blocking the loop this coroutine runs on."""
+        if worker is None:
+            return await get_broker().ainflight_depth()
+        # a *named* worker is a per-worker list, which is one transport's arrangement rather
+        # than every transport's — the identity work takes this over
         client = await aget_redis()
         return int(await client.llen(processing_key(worker)) or 0)
 

@@ -40,7 +40,7 @@ def a_message(text):
 def test_the_fakeredis_queue_assertion(monkeypatch):
     """Patching client.get_redis is what the page tells the reader to patch."""
     server = fakeredis.FakeRedis()
-    monkeypatch.setattr('django_aiogram.producer.client.get_redis', lambda: server)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', lambda: server)
 
     approve({'reviewer': 42})
 
@@ -226,7 +226,7 @@ def test_the_page_documents_every_recipe_here():
     text = PAGE.read_text(encoding='utf-8')
     for needle in (
         'fakeredis',
-        'django_aiogram.producer.client.get_redis',
+        'django_aiogram.broker.redis_list.broker.get_redis',
         "monkeypatch.setattr(bot, 'send'",
         'object.__setattr__',
         'feed_update',

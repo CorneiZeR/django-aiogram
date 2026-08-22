@@ -41,7 +41,7 @@ from django_aiogram.wire.serializers import loads
 @override_settings(TELEGRAM_BOT={'REDIS_URL': 'redis://localhost:6379/0'})
 def test_approval_notifies_the_reviewer(monkeypatch):
     server = fakeredis.FakeRedis()
-    monkeypatch.setattr('django_aiogram.producer.client.get_redis', lambda: server)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', lambda: server)
 
     approve(order)  # your code, which calls bot.send(...)
 
@@ -56,9 +56,10 @@ id — see **[[Event-log|Event log]]**. Reading through `unpack` is what keeps a
 test from having to know that: `call.correlation_id` is there if you want it,
 and `bot.send()` returns the same value.
 
-Patch `django_aiogram.producer.client.get_redis` — the name the sending code looks
-up. Patching `django_aiogram.redis.get_redis` alone leaves the real
-connection in place.
+Patch `django_aiogram.broker.redis_list.broker.get_redis` — the name the transport looks
+up. In 4.0 the producer hands a payload to a broker and the broker owns the connection, so
+that is where a fake belongs; patching `django_aiogram.redis.get_redis` alone leaves the real
+connection in place, and patching the producer no longer reaches the write at all.
 
 **That covers the synchronous sends only.** `asend`, `asend_redis`, `asend_many`,
 `aqueue_depth` and `ainflight_depth` go through `aget_redis`, which keeps one
@@ -77,7 +78,7 @@ def fake_redis(monkeypatch):
     """One in-memory server behind both halves, sync and async."""
     server = fakeredis.FakeServer()
     client = fakeredis.FakeRedis(server=server)
-    monkeypatch.setattr('django_aiogram.producer.client.get_redis', lambda: client)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', lambda: client)
     monkeypatch.setattr(
         'django_aiogram.redis.build_async_client',
         lambda: fakeredis.aioredis.FakeRedis(server=server),

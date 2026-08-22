@@ -206,7 +206,9 @@ def test_the_producer_writes_the_key_the_depth_reads(redis_server, monkeypatch, 
     So the helper is made to answer something the setting does not, and both ends
     are asked whether they agree.
     """
-    monkeypatch.setattr('django_aiogram.producer.client.queue_key', lambda: f'{QUEUE}:elsewhere')
+    monkeypatch.setattr(
+        'django_aiogram.broker.redis_list.broker.RedisListBroker._queue', lambda self: f'{QUEUE}:elsewhere'
+    )
     bot = TelegramBot()
     call = getattr(bot, producer)
     result = call([1], text='hi') if producer.endswith('_many') else call(chat_id=1, text='hi')

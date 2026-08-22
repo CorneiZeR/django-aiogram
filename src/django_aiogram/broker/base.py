@@ -173,6 +173,19 @@ class Broker(ABC):
     def inflight_depth(self) -> int:
         """How many this worker has taken and not yet settled."""
 
+    @abstractmethod
+    async def adepth(self) -> int:
+        """How many are waiting, read without blocking the loop the caller is on.
+
+        The async half exists for the same reason `apublish` does: a producer under ASGI
+        asks this from a request, and a synchronous read there is a socket write on the
+        thread serving it.
+        """
+
+    @abstractmethod
+    async def ainflight_depth(self) -> int:
+        """How many this worker holds, read without blocking the loop."""
+
     def alive(self) -> None:
         """Say the consumer is still turning, if this transport needs telling.
 
