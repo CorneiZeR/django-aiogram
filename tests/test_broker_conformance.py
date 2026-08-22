@@ -54,6 +54,26 @@ def test_a_published_message_can_be_taken(broker: Broker):
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
+def test_publishing_nothing_queues_nothing_and_raises_nothing(broker: Broker):
+    """The transports disagree by nature, so the contract has to decide.
+
+    A batching producer accepts an empty batch quietly; `RPUSH key` with no values is a
+    syntax error to Redis — measured, `wrong number of arguments for 'rpush' command`. A
+    caller holding a list that turned out empty should not have to know which transport it
+    is talking to, so the answer is: nothing happens.
+
+    Not reachable through this package's own producers — `_chunks` yields no chunk for an
+    empty iterable, so the loop body never runs — which is exactly why it belongs here
+    rather than in a producer test. The contract accepts a `Sequence[bytes]` from anyone.
+    """
+    before = broker.depth()
+
+    broker.publish([])
+
+    assert broker.depth() == before, 'publishing nothing changed the queue'
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
 def test_an_empty_queue_answers_none_rather_than_blocking(broker: Broker):
     """`take_nowait` on nothing is `None`, not an exception and not a wait."""
     assert broker.take_nowait() is None
