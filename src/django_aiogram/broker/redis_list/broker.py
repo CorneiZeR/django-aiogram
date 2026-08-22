@@ -14,7 +14,8 @@ from typing import Any, ClassVar
 
 from redis.exceptions import ResponseError
 
-from django_aiogram.broker import Broker, Liveness, Taken
+from django_aiogram.broker.base import Broker
+from django_aiogram.broker.models import Liveness, Taken
 from django_aiogram.redis import (
     aget_redis,
     as_bytes,

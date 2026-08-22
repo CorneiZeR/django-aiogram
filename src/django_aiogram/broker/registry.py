@@ -14,7 +14,7 @@ from django.utils.module_loading import import_string
 
 from django_aiogram.broker.base import Broker
 from django_aiogram.broker.exceptions import BrokerDependencyError, BrokerNotConfiguredError
-from django_aiogram.settings import SETTINGS_NAME, conf
+from django_aiogram.config.settings import SETTINGS_NAME, conf
 
 if TYPE_CHECKING:
     from typing import Any
