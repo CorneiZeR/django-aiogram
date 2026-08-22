@@ -66,7 +66,10 @@ def _assigns_all(node: ast.stmt) -> bool:
     `AttributeError` from inside the test.
     """
     if isinstance(node, ast.AnnAssign):
-        return getattr(node.target, 'id', None) == '__all__'
+        # a value, not just an annotation: `__all__: tuple[str, ...]` with nothing after it
+        # is a promise to a type checker and binds no name at runtime, so a package
+        # carrying only that exports whatever it happened to import
+        return node.value is not None and getattr(node.target, 'id', None) == '__all__'
     if isinstance(node, ast.Assign):
         return any(getattr(target, 'id', None) == '__all__' for target in node.targets)
     return False

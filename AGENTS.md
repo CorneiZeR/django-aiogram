@@ -20,7 +20,8 @@ src/django_aiogram/
     api.py          the allowlist of Telegram API method names a payload may use
     exceptions.py   one error family for the whole package
     context.py      the correlation id a handler's replies inherit
-    redis.py        lazy connection — moves under broker/ with the transport seam
+    _singleton.py   once-per-process construction, under the import lock
+    redis.py        lazy connection
     config/
         settings.py     lazy settings with an environment fallback
         defaults.py     the only place a default lives
@@ -119,8 +120,10 @@ Packaging-only work does not need the Redis suite, and vice versa.
   every `django.setup()`, before `ready()` and regardless of `ENABLED`, and
   `admin.autodiscover` imports the other on every boot of a project with the
   admin installed — so a migration container pays for whatever either pulls.
-  `django.db.models`, `django_aiogram.config.enums` and `django_aiogram.eventlog.events`
-  only — never
+  `models.py` takes `django.db.models` and `django_aiogram.eventlog.events`, and nothing
+  else. `admin.py` needs more — `config.settings`, `eventlog.events` and
+  `eventlog.writer` — because a changelist reads settings and knows which alias the rows
+  are on. Neither takes
   `client`, `serializers` or `api`. A subprocess test pins each:
   `tests/test_event_log_off.py` for the model, `tests/db/test_admin.py` for the
   admin.
@@ -191,13 +194,17 @@ Packaging-only work does not need the Redis suite, and vice versa.
 | `wire/` | how a message becomes bytes and comes back |
 | `eventlog/` | the optional table, the writer thread, the metrics seam |
 
-**The root keeps what cannot move**, which is a shorter list than it first appears:
+**The root keeps two kinds of thing**, and nothing else:
 
-- **Django looks for it there** — `apps.py`, `models.py`, `admin.py`, `migrations/`.
-  Moving them costs an `app_label` on every model and a `MIGRATION_MODULES` in every
-  consuming project.
-- **A container runs it** — `python -m django_aiogram.healthcheck` sits in a compose
-  file, where nothing can rewrite it and no check can see it.
+- **What cannot move.** Django looks for `apps.py`, `models.py`, `admin.py` and
+  `migrations/` there — moving them costs an `app_label` on every model and a
+  `MIGRATION_MODULES` in every consuming project. And `python -m
+  django_aiogram.healthcheck` sits in a compose file, where nothing can rewrite it and no
+  check can see it.
+- **What every cluster needs and none of them owns**: `api.py`, `exceptions.py`,
+  `context.py`, `_singleton.py` and `redis.py`. A package for five small modules would
+  add a directory and answer no question — and putting a shared one *inside* a cluster
+  would make every other cluster import that cluster to reach it.
 
 Everything else moves, including paths a project wrote down. Two of those exist and are
 worth knowing by name, because neither is found by an import a test would notice:
