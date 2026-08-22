@@ -149,11 +149,20 @@ class Broker(ABC):
 
     @abstractmethod
     def publish(self, payloads: Seq[bytes]) -> None:
-        """Queue every payload, in order, from synchronous code."""
+        """Queue every payload, in order, from synchronous code.
+
+        An empty sequence queues nothing and raises nothing. Worth stating because the
+        transports disagree by nature: a producer that batches accepts an empty batch
+        quietly, while ``RPUSH key`` with no values is a syntax error to Redis. A caller
+        holding a list that turned out empty should not have to know which it is talking to.
+        """
 
     @abstractmethod
     async def apublish(self, payloads: Seq[bytes]) -> None:
-        """Queue every payload without blocking the loop the caller is on."""
+        """Queue every payload without blocking the loop the caller is on.
+
+        Empty means nothing, as for :meth:`publish`.
+        """
 
     # ------------------------------------------------------------------ consumer
 

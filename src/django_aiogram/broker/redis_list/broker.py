@@ -72,11 +72,20 @@ class RedisListBroker(Broker):
     # ------------------------------------------------------------------ producer
 
     def publish(self, payloads: Sequence[bytes]) -> None:
-        """One variadic ``RPUSH``, so a chunk is one round trip."""
+        """One variadic ``RPUSH``, so a chunk is one round trip.
+
+        Nothing to publish is a return, not a round trip: ``RPUSH key`` with no values is
+        `wrong number of arguments for 'rpush' command` — measured — where a batching
+        transport would have accepted it quietly.
+        """
+        if not payloads:
+            return
         get_redis().rpush(self._queue(), *payloads)
 
     async def apublish(self, payloads: Sequence[bytes]) -> None:
         """Queue the same write, on the loop the caller is already on."""
+        if not payloads:
+            return
         client = await aget_redis()
         await client.rpush(self._queue(), *payloads)
 
