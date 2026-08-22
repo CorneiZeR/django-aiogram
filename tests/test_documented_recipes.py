@@ -420,6 +420,7 @@ PROBE_REFUSALS = (
 #: operator can grep the line they have. Same bidirectional pin as the probe's refusals
 WEBHOOK_REFUSALS = (
     'webhook received an update while the bot is disabled',
+    'webhook is not configured to serve updates',
     'webhook received an update while this deployment polls',
     'webhook cannot build the bot',
     'webhook refused an update',
@@ -462,13 +463,14 @@ NUMBER_WORDS = {'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7
 #: bad `TOKEN` is only its most common cause
 WEBHOOK_CAUSES = (
     '`ENABLED` is off',
+    'cannot be read',
     '`MODE` is not `webhook`',
     'raised `ImproperlyConfigured`',
     'nothing ran the update',
 )
 
 
-def test_the_other_page_names_the_same_four_causes():
+def test_the_other_page_names_the_same_causes():
     """The helpers above read Troubleshooting, and Webhook.md carries the causes too.
 
     Dropping one from that page left every assertion here true — the same gap this file was
@@ -486,7 +488,10 @@ def test_the_other_page_names_the_same_four_causes():
         f'the page says {stated.group(1)} reasons, the view refuses for {len(WEBHOOK_REFUSALS)}'
     )
 
-    paragraph = page[stated.end() :].split('\n\n')[0]
+    # whitespace collapsed: the causes are prose, so a fragment straddles whatever line
+    # break the author's wrapping happened to land on — and where a paragraph wraps is not
+    # something this test has any business pinning
+    paragraph = ' '.join(page[stated.end() :].split('\n\n')[0].split())
     positions = [paragraph.find(cause) for cause in WEBHOOK_CAUSES]
     absent = [cause for cause, position in zip(WEBHOOK_CAUSES, positions, strict=True) if position < 0]
 

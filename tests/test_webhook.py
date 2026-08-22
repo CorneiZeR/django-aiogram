@@ -116,9 +116,20 @@ def test_a_secret_that_is_a_prefix_is_refused(handled):
 
 
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'WEBHOOK_SECRET': ''})
-def test_serving_without_a_secret_refuses_to_run(handled):
-    with pytest.raises(ImproperlyConfigured, match='WEBHOOK_SECRET'):
-        post(an_update())
+def test_serving_without_a_secret_answers_503_rather_than_raising(handled, caplog):
+    """No update is accepted either way, so the only question is what the caller gets.
+
+    `webhook_secret()` raises before the comparison, so an empty secret has never let an
+    update through — and `E027` reports it at startup with the reason. Raising here made
+    that a 500 with a traceback on an unauthenticated path, which is the exact shape the
+    comment two branches down warns about. 503 is what every other configuration failure
+    in this view answers, and Telegram retries it.
+    """
+    with caplog.at_level('ERROR', logger='django_aiogram'):
+        response = post(an_update())
+
+    assert response.status_code == 503
+    assert 'webhook is not configured to serve updates' in caplog.text
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
@@ -340,9 +351,17 @@ def test_the_view_refuses_while_the_deployment_polls(handled):
 
 
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'MODE': 'nonsense'})
-def test_an_unknown_mode_is_refused(handled):
-    with pytest.raises(ImproperlyConfigured, match="\\['MODE'\\]"):
-        post(an_update())
+def test_an_unknown_mode_answers_503_rather_than_raising(handled, caplog):
+    """The same rule as the empty secret: a misconfiguration is ours to answer for.
+
+    `current_mode()` raises `ImproperlyConfigured` for a mode it does not know, and the
+    view used to let that out — a 500 for something `E028` already reports at startup.
+    """
+    with caplog.at_level('ERROR', logger='django_aiogram'):
+        response = post(an_update())
+
+    assert response.status_code == 503
+    assert 'webhook is not configured to serve updates' in caplog.text
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://x'})

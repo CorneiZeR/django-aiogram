@@ -14,28 +14,38 @@ onto a Redis list, and the bot container consumes it.
 src/django_aiogram/
     __init__.py     lazy exports: bot, conf, redis_conn, get_redis, __version__
     apps.py         AppConfig.ready(): checks and autodiscover, both behind ENABLED
-    client.py       TelegramBot: bot/dispatcher/loop, send, send_raw, send_redis
-    api.py          the allowlist of Telegram API method names a payload may use
-    delivery.py     BlpopDelivery, the one consumer
-    serializers.py  tagged JSON, and pickle behind ALLOW_PICKLE
-    throttling.py   token buckets, one budget per token
-    checks.py       system checks E001-E046, W001-W009, I001-I002
-    settings.py     lazy settings with an environment fallback
-    redis.py        lazy connection
-    healthcheck.py  the container probe; must import nothing needing the app registry
-    routers.py      autodiscover
     models.py       TelegramEvent, the append-only feed; migrations/ beside it
-    events.py       the event-kind registry and the correlation id
-    recorder.py     the bounded queue and the writer thread; no django.db here
-    signals.py      events_recorded, the metrics seam; imports only django.dispatch
-    eventlog.py     the only module that touches the ORM
-    dbrouter.py     optional routing of the log to its own database
     admin.py        the read-only changelist; registered from ready(), not on import
-    instrumentation.py  the update middleware and the storage wrapper
-    envelope.py     what a queued payload looks like, both shapes
+    healthcheck.py  the container probe; must import nothing needing the app registry
+    api.py          the allowlist of Telegram API method names a payload may use
+    exceptions.py   one error family for the whole package
     context.py      the correlation id a handler's replies inherit
-    payloads.py     summarize, redact, cap — in that order, and never lossless
-docs/wiki/          the wiki, published from master
+    redis.py        lazy connection — moves under broker/ with the transport seam
+    config/
+        settings.py     lazy settings with an environment fallback
+        defaults.py     the only place a default lives
+        enums.py        the values a setting accepts
+        checks.py       system checks E001-E046, W001-W009, I001-I002
+    broker/         one transport per package, and the contract they answer
+    producer/
+        client.py       TelegramBot: bot/dispatcher/loop, send, send_raw
+        throttling.py   GCRA reservations, one budget per name
+    consumer/
+        delivery.py     BlpopDelivery, the one consumer
+        webhook.py      the view an update arrives at
+        routers.py      autodiscover
+    wire/
+        serializers.py  tagged JSON, and pickle behind ALLOW_PICKLE
+        envelope.py     what a queued payload looks like, both shapes
+        payloads.py     summarize, redact, cap — in that order, and never lossless
+    eventlog/
+        recorder.py     the bounded queue and the writer thread; no django.db here
+        writer.py       the only module that touches the ORM
+        events.py       the event-kind registry and the correlation id
+        instrumentation.py  the update middleware and the storage wrapper
+        signals.py      events_recorded, the metrics seam; imports only django.dispatch
+        dbrouter.py     optional routing of the log to its own database
+docs/wiki/          the wiki, published from main
 tests/              pytest, fakeredis, no network
 ```
 
@@ -109,7 +119,8 @@ Packaging-only work does not need the Redis suite, and vice versa.
   every `django.setup()`, before `ready()` and regardless of `ENABLED`, and
   `admin.autodiscover` imports the other on every boot of a project with the
   admin installed — so a migration container pays for whatever either pulls.
-  `django.db.models` and `django_aiogram.config.enums`/`events` only — never
+  `django.db.models`, `django_aiogram.config.enums` and `django_aiogram.eventlog.events`
+  only — never
   `client`, `serializers` or `api`. A subprocess test pins each:
   `tests/test_event_log_off.py` for the model, `tests/db/test_admin.py` for the
   admin.
@@ -180,18 +191,26 @@ Packaging-only work does not need the Redis suite, and vice versa.
 | `wire/` | how a message becomes bytes and comes back |
 | `eventlog/` | the optional table, the writer thread, the metrics seam |
 
-**The root is the published surface.** A module stays at `src/django_aiogram/` when the
-outside world names it by path, and there are three ways that happens:
+**The root keeps what cannot move**, which is a shorter list than it first appears:
 
-- Django looks for it there — `apps.py`, `models.py`, `admin.py`, `migrations/`. Moving
-  them costs an `app_label` on every model and a `MIGRATION_MODULES` in every project.
-- A consumer writes the path in a **string**: `DELIVERY`, `SERIALIZER` and
-  `DATABASE_ROUTERS` name classes by dotted path, and `urls.py` names the webhook view.
-- A container runs it: `python -m django_aiogram.healthcheck` is in a compose file.
+- **Django looks for it there** — `apps.py`, `models.py`, `admin.py`, `migrations/`.
+  Moving them costs an `app_label` on every model and a `MIGRATION_MODULES` in every
+  consuming project.
+- **A container runs it** — `python -m django_aiogram.healthcheck` sits in a compose
+  file, where nothing can rewrite it and no check can see it.
 
-So a module's location is an API decision, not a filing decision. Moving one is a
-breaking change, and the check that recognises the old path and names the new one is what
-turns that break into a migration somebody can follow.
+Everything else moves, including paths a project wrote down. Two of those exist and are
+worth knowing by name, because neither is found by an import a test would notice:
+`DATABASE_ROUTERS` holds `django_aiogram.eventlog.dbrouter.TelegramEventLogRouter`, and a
+project's own `urls.py` names the webhook view. `FSM_STORAGE` takes a dotted path too, but
+to a class of the project's choosing rather than one of ours.
+
+`DELIVERY` and `SERIALIZER` are *not* in that list, however much they look like it: they
+hold short names — `blpop`, `json`, `pickle` — validated against an enum, so moving the
+classes behind them breaks nothing a project wrote.
+
+So a module's location is still an API decision rather than a filing decision, and a move
+belongs in the changelog table and in `Upgrading.md` with the old path against the new.
 
 Two rules that are not style:
 

@@ -25,6 +25,7 @@ from django.utils.module_loading import import_string
 
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import (
+    KNOWN_RATE_LIMIT_KEYS,
     DeliveryKind,
     PayloadDetail,
     SerializerKind,
@@ -34,7 +35,6 @@ from django_aiogram.config.enums import (
 )
 from django_aiogram.config.settings import SETTINGS_NAME, blpop_ceiling, coerce_bool, conf
 from django_aiogram.eventlog.events import known_kinds
-from django_aiogram.producer.throttling import KNOWN_RATE_LIMIT_KEYS
 
 DELIVERY_CHOICES = choices(DeliveryKind)
 MODE_CHOICES = choices(UpdateMode)

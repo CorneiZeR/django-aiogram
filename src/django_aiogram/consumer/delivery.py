@@ -422,12 +422,20 @@ class Delivery(ABC):
             return True
         self._record(EventKind.OUTBOUND_CONSUMED, envelope)
         # by keyword, the way 2.x splatted it: a handler taking **kwargs
-        # only — which every documented recipe does — refuses a positional
+        # only — which every documented recipe does — refuses a positional.
+        #
+        # The envelope's own fields go in *after* the payload, for the reason
+        # `_hand_over` gives about `on_complete`: the queue is a trust boundary, and
+        # spreading last let a payload carrying `function` replace the name
+        # `check_function` had just validated. `send_raw` validates again and so refuses
+        # an unknown one, but a handler taking only `**kwargs` does not — and
+        # `correlation_id` and `queued_at` were replaceable either way, which is the
+        # event log's correlation and its queue latency
         call: dict[str, Any] = {
+            **envelope.kwargs,
             'function': envelope.function,
             'correlation_id': envelope.correlation_id,
             'queued_at': envelope.queued_at,
-            **envelope.kwargs,
         }
         return self._hand_over(envelope, call, handle)
 

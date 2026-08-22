@@ -796,7 +796,12 @@ class EventRecorder:
         close_connections()
 
     def drain_once(self, timeout: float = 0.0) -> int:
-        """Write whatever is buffered, on the calling thread. Returns rows written.
+        """Write whatever is buffered, on the calling thread. Returns events processed.
+
+        Events taken off the queue, not rows that landed: `_flush` swallows a failed write
+        and the refused count `_deliver` returns is dropped here, so a batch the database
+        rejected still counts. A caller reading this as a durability signal is reading the
+        wrong number — the gap rows and `log.dropped` are what say what was lost.
 
         Goes through the same flush the writer uses, gap recording included, so
         a test driving this exercises the path production takes.

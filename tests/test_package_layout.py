@@ -6,6 +6,8 @@ cannot forget: a package with no declared exports, and a published path that qui
 
 import ast
 import pathlib
+import subprocess
+import sys
 
 import pytest
 
@@ -68,6 +70,58 @@ def _assigns_all(node: ast.stmt) -> bool:
     if isinstance(node, ast.Assign):
         return any(getattr(target, 'id', None) == '__all__' for target in node.targets)
     return False
+
+
+def test_the_root_package_declares_its_exports_too():
+    """Excluded from the sweep above, and the one package where it matters most.
+
+    `django_aiogram/__init__.py` is what `from django_aiogram import ...` reads, so a name
+    that appears there by accident is public immediately. The sweep skips the root because
+    its `__init__` is a lazy surface rather than a cluster facade, which is exactly why it
+    is asserted here instead of quietly not at all.
+    """
+    source = (SRC / '__init__.py').read_text(encoding='utf-8')
+
+    assert any(_assigns_all(node) for node in ast.parse(source).body), 'the root declares no __all__'
+
+
+@pytest.mark.parametrize('package', sorted(DJANGO_OWNED))
+def test_the_django_owned_packages_stay_empty_of_exports(package):
+    """The exemption is asserted, so it cannot quietly become a hiding place.
+
+    These exist because Django looks for them by path. Nothing imports a name *from* them,
+    so an `__all__` would be a claim about an empty room — but a package that grew real
+    contents should stop being exempt, and this is what notices.
+    """
+    body = ast.parse((SRC / package / '__init__.py').read_text(encoding='utf-8')).body
+    meaningful = [node for node in body if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant))]
+
+    assert not meaningful, f'{package}/__init__.py has contents now, so it needs __all__ like the rest'
+
+
+def test_configuration_does_not_import_what_it_configures():
+    """`config/__init__.py` says it may not reach into `producer`, `consumer` or `broker`.
+
+    It said so while `checks.py` imported `KNOWN_RATE_LIMIT_KEYS` from
+    `producer.throttling` at module scope — and `checks` is imported from `apps.ready()`,
+    so every boot that registers checks paid for whatever the limiter pulls. The names now
+    live in `config.enums`, beside the enum they come from.
+
+    A subprocess, because `sys.modules` in this one is already full of everything.
+    """
+    code = (
+        'import sys\n'
+        'import django_aiogram.config.checks\n'
+        "print(sorted(m for m in sys.modules if m.split('.')[:2] == ['django_aiogram', 'producer']))\n"
+        "print('aiogram' in sys.modules)\n"
+    )
+    finished = subprocess.run(  # noqa: S603 - our own interpreter, and a script written right above
+        [sys.executable, '-c', code], capture_output=True, text=True, check=True
+    )
+    pulled, aiogram = finished.stdout.strip().splitlines()
+
+    assert pulled == '[]', f'importing the checks pulled {pulled}'
+    assert aiogram == 'False', 'importing the checks pulled aiogram'
 
 
 @pytest.mark.parametrize('path', PUBLISHED)

@@ -99,3 +99,10 @@ class PayloadDetail(str, Enum):
 def choices(kind: type[Enum]) -> frozenset[str]:
     """Return the values of ``kind`` as a frozenset, for membership checks."""
     return frozenset(member.value for member in kind)
+
+
+#: here rather than beside the limiter that enforces them: `config.checks` needs the names
+#: to judge the setting, and reaching into `producer` for them would make configuration
+#: depend on the thing it configures — and would pay for whatever the limiter imports on
+#: every boot that registers a check
+KNOWN_RATE_LIMIT_KEYS = choices(RateLimitKey)

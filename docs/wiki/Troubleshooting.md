@@ -132,6 +132,9 @@ that part rather than fail the container over it:
 redeliver — which is what you want. Four reasons, each with its own log line:
 
 - `webhook received an update while the bot is disabled` — `ENABLED` is off here
+- `webhook is not configured to serve updates` — `MODE` or `WEBHOOK_SECRET` cannot be
+  read: an unknown mode and an empty secret each raise `ImproperlyConfigured`, and this is
+  the view answering for it rather than raising through
 - `webhook received an update while this deployment polls` — `MODE` is not `webhook`, so
   a worker is polling and this process must not also feed the dispatcher
 - `webhook cannot build the bot` — building it raised `ImproperlyConfigured`; a

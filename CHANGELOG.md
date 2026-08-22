@@ -17,10 +17,14 @@ Entries land here as the work does; nothing below is released.
   `django_aiogram_event`. `TELEGRAM_BOT` stays as the settings key: it names what it
   configures rather than the package that reads it.
 - **`src/` groups by what a thing is for**, so several import paths moved. The root keeps
-  what the outside world names — Django's `apps`, `models`, `admin` and `migrations`, the
-  webhook view, `python -m django_aiogram.healthcheck`, and the classes `DELIVERY`,
-  `SERIALIZER` and `DATABASE_ROUTERS` name as strings. Everything else lives in
-  `config/`, `producer/`, `consumer/`, `wire/`, `eventlog/` or `broker/`.
+  only what cannot move: Django's `apps`, `models`, `admin` and `migrations`, and
+  `python -m django_aiogram.healthcheck`, which a compose file runs. Everything else lives
+  in `config/`, `producer/`, `consumer/`, `wire/`, `eventlog/` or `broker/`.
+
+  Two moved paths are ones a project wrote down itself. `DATABASE_ROUTERS` becomes
+  `django_aiogram.eventlog.dbrouter.TelegramEventLogRouter`, and the webhook view in your
+  `urls.py` becomes `django_aiogram.consumer.webhook.telegram_webhook`. `DELIVERY` and
+  `SERIALIZER` are unaffected — they hold short names, not paths.
 
   | was | is |
   | --- | --- |

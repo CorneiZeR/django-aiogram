@@ -158,10 +158,12 @@ redeliver; **403** the secret does not match — the comparison is on bytes, so 
 outside ASCII is compared like any other and a matching one passes; **400** the body is
 not an update Telegram could have sent. Anything that is not a POST gets **405**.
 
-All four reasons for a 503, in the order the view checks them: `ENABLED` is off in this
-process; `MODE` is not `webhook`, so a worker is polling and two sources of updates would
-be one too many; building the bot raised `ImproperlyConfigured`, most often a `TOKEN` that
-is missing or malformed; and nothing ran the update — the process is shutting down, its loop is closed,
+All five reasons for a 503, in the order the view checks them: `ENABLED` is off in this
+process; `MODE` or `WEBHOOK_SECRET` cannot be read, because an unknown mode and an empty
+secret each raise `ImproperlyConfigured`; `MODE` is not `webhook`, so a worker is polling
+and two sources of updates would be one too many; building the bot raised
+`ImproperlyConfigured`, most often a `TOKEN` that is missing or malformed; and nothing ran
+the update — the process is shutting down, its loop is closed,
 or the loop's own thread had not started yet.
 
 **Updates are not queued through Redis.** They go straight from the request to
