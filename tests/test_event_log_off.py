@@ -189,15 +189,36 @@ def test_every_setting_is_documented():
 
     The check-id table has its own test; this is the other half, and it fails
     when a setting lands without a row on the page.
+
+    Since 4.0 the package-wide table is not the whole list: a transport declares settings
+    of its own, and the first of them — the Streams broker's stream key — exists nowhere
+    else. So every shipped broker's `OPTIONS` is asked for too. A transport whose driver is
+    not installed is reported by name rather than skipped over: a quiet skip here would
+    read as coverage of settings nothing checked.
     """
     import pathlib
 
+    from django.utils.module_loading import import_string
+
+    from django_aiogram.broker.registry import SHIPPED
     from django_aiogram.config.defaults import DEFAULTS
 
     page = pathlib.Path(__file__).resolve().parent.parent / 'docs' / 'wiki' / 'Settings.md'
     text = page.read_text(encoding='utf-8')
-    missing = sorted(name for name in DEFAULTS if f'`{name}`' not in text)
 
+    def options(path):
+        """This transport's declared settings, or None when its driver is absent."""
+        try:
+            return set(import_string(path).OPTIONS)
+        except ImportError:  # pragma: no cover - every shipped transport uses redis today
+            return None
+
+    declared = {path: options(path) for path in SHIPPED}
+    unreadable = sorted(path for path, found in declared.items() if found is None)
+    names = set(DEFAULTS).union(*(found for found in declared.values() if found))
+    missing = sorted(name for name in names if f'| `{name}` |' not in text)
+
+    assert unreadable == [], f'could not read the options of: {unreadable}'
     assert missing == [], f'settings missing from Settings.md: {missing}'
 
 

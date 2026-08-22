@@ -25,6 +25,9 @@ __all__ = ('SHIPPED', 'broker_class', 'close_broker', 'get_broker')
 #: module, so a check can name the missing extra even where the import would fail
 SHIPPED: dict[str, tuple[str, str]] = {
     'django_aiogram.broker.redis_list.RedisListBroker': ('redis', 'redis'),
+    # the same driver and the same extra: Streams is a different data structure on the
+    # server, not a different dependency
+    'django_aiogram.broker.redis_streams.RedisStreamsBroker': ('redis', 'redis'),
 }
 
 _lock = threading.Lock()

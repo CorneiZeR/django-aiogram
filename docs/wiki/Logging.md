@@ -34,10 +34,10 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_retries` | attempts made so far |
 | `tg_max_retries` | the limit that was reached |
 | `tg_delivery` | the consumer that started, always `blpop` |
-| `tg_key` | Redis list being consumed |
+| `tg_key` | the queue being consumed: a Redis list, or a stream |
 | `tg_timeout` | blocking-pop timeout, or how long a shutdown waited |
 | `tg_error` | the class name of a non-fatal error, not its text — a webhook secret or a chat id can end up in the message, and this field is what a log aggregator groups on |
-| `tg_crash_safe` | whether the consumer holds messages in flight; false on a Redis without `LMOVE` |
+| `tg_crash_safe` | whether the consumer holds messages in flight. The transport answers for itself: false on a Redis without `LMOVE`, and always true on a stream, where the pending list is how delivery works |
 | `tg_mode` | `polling` or `webhook` |
 | `tg_update` | the update id being handled |
 | `tg_correlation_id` | the id every event about one message carries |
@@ -49,6 +49,8 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_count` | events in the batch being written |
 | `tg_batch` | how many rows the batch held, when part of it was refused |
 | `tg_worker` | the worker name an in-flight list is keyed on |
+| `tg_entry` | the id of a stream entry this package did not write, left pending rather than acknowledged |
+| `tg_lost` | stream entries that were pending and no longer exist, so that work is gone — the fingerprint of a `MAXLEN` trim or an `XDEL` reaching unacknowledged work |
 | `tg_setting` | the setting a message is about |
 | `tg_variable` | the environment variable a message is about |
 | `tg_dropped` | events lost because the buffer was full, or sends dropped at shutdown |
