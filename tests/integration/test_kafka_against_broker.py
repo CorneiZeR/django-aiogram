@@ -235,11 +235,16 @@ def test_the_awaited_halves_work_off_the_loop(broker, kafka_bootstrap, kafka_top
 def test_a_handle_from_another_broker_is_refused(broker, kafka_bootstrap, kafka_topic):
     """A position is a pair, so anything else came from a different transport."""
     with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
-        with pytest.raises(TypeError, match='partition, offset'):
+        with pytest.raises(TypeError, match='partition, offset, epoch'):
             broker.ack(b'a redis payload')
 
-        with pytest.raises(TypeError, match='partition, offset'):
+        with pytest.raises(TypeError, match='partition, offset, epoch'):
             broker.release(7)
+
+        # a pair is the shape this broker used to hand out, and it is no longer enough: the
+        # rewind count is what makes a position mean something
+        with pytest.raises(TypeError, match='partition, offset, epoch'):
+            broker.ack((0, 0))
 
 
 def test_messages_stranded_in_the_producer_are_reported(kafka_bootstrap, caplog):
@@ -267,3 +272,33 @@ def test_messages_stranded_in_the_producer_are_reported(kafka_bootstrap, caplog)
     assert any(record.tg_count == 3 for record in caplog.records if hasattr(record, 'tg_count')), (
         f'the count was not reported: {[getattr(r, "tg_count", None) for r in caplog.records]}'
     )
+
+
+def test_a_stale_ack_after_a_rewind_cannot_commit_past_it(broker, kafka_bootstrap, kafka_topic, caplog):
+    """A `release` rewinds a whole partition, so every earlier handle names a delivery that is gone.
+
+    The losing sequence: offsets 0 and 1 in flight, `release` on 0 rewinds the partition, and
+    then the send that was already running for 1 finishes and calls `ack`. With nothing
+    outstanding, accepting it commits offset 2 — and a restart then skips **both** messages.
+
+    So the handle carries the partition's rewind count and a stale one settles nothing. What
+    proves it is what comes back afterwards: both messages, in order.
+    """
+    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+        broker.publish([payload(1), payload(2)])
+        first, second = (broker.take_nowait() for _ in range(2))
+        assert first is not None, 'the first message was not delivered'
+        assert second is not None, 'the second message was not delivered'
+
+        broker.release(first.handle)
+        with caplog.at_level('WARNING', logger='django_aiogram'):
+            broker.ack(second.handle)  # the send that was already running finishes now
+
+        close_clients()
+        replacement = KafkaBroker()
+        seen = [taken.payload for taken in (replacement.take_nowait() for _ in range(2)) if taken]
+
+        # the loss first, because it is the consequence: asserting the warning before it means a
+        # falsification stops at the log line and never shows the messages going missing
+        assert seen == [payload(1), payload(2)], f'a stale ack committed past the rewind: {seen}'
+        assert 'its partition was rewound' in caplog.text, caplog.text

@@ -64,16 +64,20 @@ the same worker name** — the list is keyed on that name, so a replacement cont
 with a fresh hostname strands it instead. That is what `I001` reports and what
 `manage.py tgbot_reclaim --worker <name>` is the way back from.
 
-**Kafka.** A committed offset is the record, and it says something about *every* message
-below it rather than about one. So a consumer that holds several sends at once — which
-`MAX_IN_FLIGHT` allows — commits only the highest **contiguous** prefix: settle the second
-while the first is still in flight and nothing is committed until the first finishes, because
-committing the second would claim the first as done. A worker killed at that moment loses
-nothing and redelivers both.
+**Kafka.** A committed offset is the record, and it says something about *every* message below
+it in that partition rather than about one. So a consumer that holds several sends at once —
+which `MAX_IN_FLIGHT` allows — commits only the highest **contiguous** prefix per partition:
+settle the second while the first is still in flight and nothing is committed for that
+partition until the first finishes, because committing the second would claim the first as
+done. A worker killed at that moment loses nothing and redelivers both. Partitions are
+independent: a gap in one does not hold up commits in another.
 
 The same shape has a sharper edge on a refusal. There is no per-message nack, so giving one up
-rewinds to its offset, and the messages after it are delivered again too. **Build idempotency
-on your own business key** — the advice below is not decoration on this transport.
+rewinds that partition to the offset, and **every record after it in that partition** is
+delivered again — the other partitions carry on untouched. Handles taken before the rewind stop
+being settleable, because the deliveries they name no longer exist; a send that finishes after
+one is reported and settles nothing, and its message comes back with the rest. **Build
+idempotency on your own business key** — the advice below is not decoration on this transport.
 
 **RabbitMQ.** The least of any of them: an unacknowledged message returns to the
 queue when the channel that held it drops, and a worker being killed drops its

@@ -44,6 +44,10 @@ _NO_OFFSET = -1001
 #: librdkafka to do something with it, short enough to notice the join the moment it lands
 _JOIN_SLICE = 0.2
 
+#: and how long a publish waits per turn for its own delivery callbacks. Shorter, because the
+#: acknowledgement is the thing being waited for rather than a handshake
+_CALLBACK_SLICE = 0.05
+
 #: what "is one there?" costs on this transport. Asking Kafka is a fetch round trip, not a
 #: lookup: measured, a message re-delivered after a seek arrived 0.504s later, so a poll of a
 #: millisecond answers "nothing" about a topic that has something in it. `take_nowait` is
@@ -73,6 +77,10 @@ class KafkaBroker(Broker):
         #: ceiling, and anything settled above it waits for it
         self._unsettled: dict[int, set[int]] = {}
         self._settled: dict[int, set[int]] = {}
+        #: how many times each partition has been rewound. A `release` puts the whole partition
+        #: back to an offset, so every handle from before it means something else now — see
+        #: `_settleable`. Carried in the handle, the way the RabbitMQ broker carries its channel
+        self._epoch: dict[int, int] = {}
         self._lock = threading.Lock()
 
     def _topic(self) -> str:
@@ -94,12 +102,18 @@ class KafkaBroker(Broker):
     # ------------------------------------------------------------------ producer
 
     def publish(self, payloads: Seq[bytes]) -> None:
-        """Produce each payload and wait for the broker to acknowledge it.
+        """Produce each payload and wait for the broker to acknowledge **these**.
 
         ``produce`` answers locally — measured at 0.2 microseconds, because librdkafka's own
         thread does the I/O — and returning there would be a weaker promise than the rest of
         this package makes. So the delivery callbacks are waited for, at about 479 microseconds
         for one message, which makes this the most expensive publish of the four transports.
+
+        Waited for by counting *this call's* callbacks rather than by flushing. The producer is
+        one per process, and `flush` waits for everything in it: a caller would then wait on
+        another thread's records, and — worse — could be told its own batch failed because a
+        record produced by somebody else during the wait was still outstanding. Retrying that
+        would send this batch twice.
 
         Waited for once at the end rather than per message: the acknowledgements come back
         concurrently, so a batch of ten costs about what one does rather than ten times it.
@@ -108,17 +122,23 @@ class KafkaBroker(Broker):
             return
         producer, topic = shared_producer(self._bootstrap()), self._topic()
         failures: list[str] = []
+        outstanding = [len(payloads)]
 
         def delivered(error: object, _message: object) -> None:
-            """Note a refusal; success needs nothing recorded."""
+            """Count this record as answered, and note a refusal."""
+            outstanding[0] -= 1
             if error is not None:
                 failures.append(str(error))
 
         for payload in payloads:
             producer.produce(topic, payload, on_delivery=delivered)
-        remaining = producer.flush(self._timeout())
-        if remaining:
-            raise ProduceRefusedError(topic, f'{remaining} message(s) were still unsent after flushing')
+        deadline = time.monotonic() + self._timeout()
+        while outstanding[0] and time.monotonic() < deadline:
+            # `poll` is what serves callbacks, including other threads' — which is how
+            # librdkafka works and is safe: whoever polls serves whatever is ready
+            producer.poll(_CALLBACK_SLICE)
+        if outstanding[0]:
+            raise ProduceRefusedError(topic, f'{outstanding[0]} message(s) of this batch went unanswered')
         if failures:
             raise ProduceRefusedError(topic, failures[0])
 
@@ -205,7 +225,8 @@ class KafkaBroker(Broker):
         partition, offset = message.partition(), message.offset()  # type: ignore[attr-defined]
         with self._lock:
             self._unsettled.setdefault(partition, set()).add(offset)
-        return Taken(payload, (partition, offset))
+            epoch = self._epoch.get(partition, 0)
+        return Taken(payload, (partition, offset, epoch))
 
     def ack(self, handle: object) -> None:
         """Settle this message, and commit as far as the settled offsets reach.
@@ -218,7 +239,9 @@ class KafkaBroker(Broker):
         Nothing is committed when the lowest unsettled offset is the one just settled's
         neighbour; the next `ack` that closes the gap commits both.
         """
-        partition, offset = _position(handle)
+        partition, offset = self._settleable(handle)
+        if partition is None or offset is None:
+            return
         commit_to = None
         with self._lock:
             self._unsettled.get(partition, set()).discard(offset)
@@ -257,13 +280,44 @@ class KafkaBroker(Broker):
         """
         from confluent_kafka import TopicPartition  # noqa: PLC0415 - the driver is an extra
 
-        partition, offset = _position(handle)
+        partition, offset = self._settleable(handle)
+        if partition is None or offset is None:
+            return
         with self._lock:
             for tracked in (self._unsettled, self._settled):
                 held = tracked.get(partition)
                 if held is not None:
                     tracked[partition] = {value for value in held if value < offset}
+            # every handle from before this rewind now names a position that will be delivered
+            # again, so none of them may settle anything
+            self._epoch[partition] = self._epoch.get(partition, 0) + 1
         self._consumer().seek(TopicPartition(self._topic(), partition, offset))
+
+    def _settleable(self, handle: object) -> tuple[int | None, int | None]:
+        """Find the position to settle, or ``(None, None)`` when its partition has been rewound.
+
+        A `release` puts a whole partition back to an offset — Kafka has no per-message nack —
+        so every message taken before it will be delivered again, and a handle from before it
+        names a delivery that no longer exists. Settling with one is not merely stale, it is
+        wrong in the losing direction: with nothing outstanding, an `ack` for the *higher*
+        offset of a released pair would commit past both, and a restart would skip them.
+
+        So a handle carries the partition's rewind count and this refuses the ones that do not
+        match. Nothing is committed, and the message comes back because that is what the rewind
+        already arranged.
+
+        Reported, because it means a send finished after its position was given up.
+        """
+        partition, offset, epoch = _position(handle)
+        with self._lock:
+            current = self._epoch.get(partition, 0)
+        if epoch != current:
+            logger.warning(
+                'a message finished after its partition was rewound, so it will be redelivered',
+                extra={'tg_key': self._topic()},
+            )
+            return None, None
+        return partition, offset
 
     # ---------------------------------------------------------------- operations
 
@@ -353,19 +407,20 @@ class KafkaBroker(Broker):
         close_clients()
 
 
-def _position(handle: object) -> tuple[int, int]:
-    """Read a partition and offset out of an opaque handle, or say where it came from.
+def _position(handle: object) -> tuple[int, int, int]:
+    """Read a partition, offset and rewind count out of an opaque handle.
 
-    Kafka names a message by where it sits, so a handle of any other shape belongs to another
-    broker — the same refusal the Redis list and RabbitMQ make, for the same reason.
+    Kafka names a message by where it sits, and the rewind count says whether that position
+    still means what it did — so a handle of any other shape belongs to another broker, and the
+    same refusal the Redis list and RabbitMQ make applies here.
     """
-    pair = 2  # a partition and an offset, which is all Kafka knows about where a message is
-    wrong = not isinstance(handle, tuple) or len(handle) != pair or not all(isinstance(part, int) for part in handle)
+    triple = 3  # where the message sits, and which rewind of that partition it belongs to
+    wrong = not isinstance(handle, tuple) or len(handle) != triple or not all(isinstance(p, int) for p in handle)
     if wrong:
         msg = (
-            'this broker settles by position, so a handle must be a (partition, offset) pair, '
-            f'not {type(handle).__name__}'
+            'this broker settles by position, so a handle must be the (partition, offset, epoch) '
+            f'triple it handed out, not {type(handle).__name__}'
         )
         raise TypeError(msg)
-    partition, offset = cast('tuple[int, int]', handle)
-    return partition, offset
+    partition, offset, epoch = cast('tuple[int, int, int]', handle)
+    return partition, offset, epoch

@@ -47,12 +47,17 @@ Entries land here as the work does; nothing below is released.
   librdkafka's own thread does the I/O, and returning there would be weaker than the promise
   `RPUSH` already makes.
 
-  **Offsets are committed only where they are contiguous.** A consumer holding several sends
-  cannot settle them in whatever order they finish: committing the second while the first is in
-  flight would claim the first as done. So the broker commits the highest contiguous prefix and
-  holds anything settled above a gap until the gap closes. `release` rewinds to the offset,
-  which redelivers everything after it — Kafka has no per-message nack, and that is the honest
-  consequence rather than a pretence.
+  **Offsets are committed only where they are contiguous, per partition.** A consumer holding
+  several sends cannot settle them in whatever order they finish: committing the second while
+  the first is in flight would claim the first as done. So the broker commits the highest
+  contiguous prefix for each partition and holds anything settled above a gap until the gap
+  closes; partitions do not wait for each other.
+
+  `release` rewinds that partition to the offset, so every record after it in that partition is
+  delivered again — Kafka has no per-message nack, and that is the honest consequence rather
+  than a pretence. Handles from before a rewind stop being settleable: a send that finishes
+  afterwards is reported and commits nothing, because accepting it could commit past messages
+  the rewind put back.
 
   `KAFKA_BOOTSTRAP` and `KAFKA_TOPIC` are required. Nothing here needs `WORKER_NAME`: a
   consumer that dies stops heartbeating, the group rebalances, and its partitions go to another
