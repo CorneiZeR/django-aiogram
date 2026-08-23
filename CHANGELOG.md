@@ -46,8 +46,8 @@ Entries land here as the work does; nothing below is released.
   `aiokafka` ships no `py3-none-any` wheel either, so both drivers are compiled and there is no
   portability difference.
 
-  **A publish waits for the broker**, which makes Kafka the most expensive publish of the four —
-  roughly 10× a Redis list. `produce()` answers in 0.2µs because librdkafka's own thread does
+  **A publish waits for the broker** — roughly 10× a Redis list, and second only to RabbitMQ,
+  whose confirmed, persistent publish costs about twice as much again. `produce()` answers in 0.2µs because librdkafka's own thread does
   the I/O, and returning there would be weaker than the promise `RPUSH` already makes.
 
   Which is why the producer sets **`linger.ms` to 0**. The driver holds a batch open for 5ms by

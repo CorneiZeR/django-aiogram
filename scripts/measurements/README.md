@@ -103,4 +103,6 @@ The plan's other argument turned out to be false and is recorded so it is not re
 
 **And the guarantee is not optional.** `RPUSH` answers with the new list length, so a Redis
 publish is acknowledged before `send()` returns. The confirmed columns are what matching that
-costs: RabbitMQ ~9× a Redis list, Kafka ~10×.
+costs: Kafka ~10× a Redis list, RabbitMQ ~18× — and the difference between those two is mostly
+the disk, since RabbitMQ is asked for persistence and a Kafka broker's flushing is its own
+setting rather than the publisher's.

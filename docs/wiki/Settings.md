@@ -183,8 +183,8 @@ giving a message up means rewinding to its offset — and everything after it is
 too. **Build idempotency on your own business key**, which the delivery page recommends
 generally and which matters most here.
 
-**A publish waits for the broker** — 166 to 232µs across repeated runs — which makes Kafka the
-most expensive publish of the four, roughly 10× a Redis list. `produce()` itself answers in
+**A publish waits for the broker** — 166 to 232µs across repeated runs, roughly 10× a Redis
+list and second only to RabbitMQ, whose confirmed, persistent publish is about twice that. `produce()` itself answers in
 0.2µs because librdkafka's own thread does the I/O, and returning there would be a weaker
 promise than `RPUSH` already makes. Automatic topic creation is the broker's setting, not this
 package's: with it off, a missing topic is a refusal at publish time.
