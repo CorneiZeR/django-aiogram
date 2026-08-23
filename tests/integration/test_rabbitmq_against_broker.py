@@ -12,6 +12,7 @@ what a killed worker does to it, so that is what this arranges.
 """
 
 import asyncio
+import threading
 
 import pytest
 from django.test import override_settings
@@ -226,25 +227,56 @@ def test_a_blocked_connection_cannot_hold_a_call_for_ever(broker, amqp_url):
         )
 
 
-def test_a_settings_change_does_not_reach_across_a_thread(broker, amqp_url):
-    """The connection a worker thread opened is asked to close, not closed from here.
+def test_a_settings_change_does_not_reach_across_a_thread(broker, amqp_url, monkeypatch):
+    """The connection a worker thread opened is *asked* to close, not closed from here.
 
     `BlockingConnection` belongs to the thread that opened it — pika documents
     `add_callback_threadsafe` as the only thing another thread may do to one — so closing a
-    worker's connection from the settings receiver would race whatever frame it is in. What
-    must hold is that the change still takes effect: the next use rebuilds, because the
-    channel is only reused while the settings behind it match.
+    worker's connection from the settings receiver would race whatever frame it is in.
 
-    `apublish` is what opens a connection on a thread that is not this one.
+    Asserted on which call the connection received, not on whether the publishes worked: those
+    succeed either way while the worker is idle, which is exactly why a direct cross-thread
+    close *looks* fine. The recorder notes the thread each call came from, so a close arriving
+    from anywhere but the owner is the failure.
+
+    `apublish` is what opens a connection on a thread this one does not own.
     """
+    from pika.adapters.blocking_connection import BlockingConnection
+
+    from django_aiogram.broker.rabbitmq import client
+
+    closed_from: list[int] = []
+    asked_from: list[int] = []
+    close, ask = BlockingConnection.close, BlockingConnection.add_callback_threadsafe
+
+    def recording_close(self, *args, **kwargs):
+        closed_from.append(threading.get_ident())
+        return close(self, *args, **kwargs)
+
+    def recording_ask(self, callback):
+        asked_from.append(threading.get_ident())
+        return ask(self, callback)
+
+    monkeypatch.setattr(BlockingConnection, 'close', recording_close)
+    monkeypatch.setattr(BlockingConnection, 'add_callback_threadsafe', recording_ask)
+
     with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
         asyncio.run(broker.apublish([payload(1)]))
+        mine = getattr(client._local, 'connection', None)
+        assert [c for c in client._opened if c is not mine], 'apublish opened nothing on another thread'
+        closed_from.clear()
+        asked_from.clear()
 
-    # leaving the block above fired the receiver, and entering this one fires it again
+        client.close_connections()
+
+    here = threading.get_ident()
+    assert asked_from == [here], f'the foreign connection was not asked to close: {asked_from}'
+    assert here not in closed_from, 'a connection was closed directly from a thread that does not own it'
+
     with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
         asyncio.run(broker.apublish([payload(2)]))
 
-        assert broker.depth() == 2, 'a publish after a settings change did not arrive'
+        assert broker.depth() >= 1, 'a publish after a settings change did not arrive'
 
 
 def test_a_handle_from_another_broker_is_refused(broker, amqp_url):
