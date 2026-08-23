@@ -7,6 +7,7 @@ sitting in front of a valid one, and the async half reaching for the synchronous
 
 import asyncio
 
+import fakeredis
 import pytest
 from django.test import override_settings
 
@@ -58,6 +59,61 @@ def test_recovery_steps_over_an_entry_this_package_cannot_read(broker, redis_ser
 
     assert again is not None, 'recovery stopped at the entry it could not read'
     assert again.payload == payload(1)
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_every_reclaimed_entry_comes_back_not_just_the_first(broker, redis_server):
+    """A page of pending entries must be delivered entry by entry.
+
+    The recovering read takes a page so that one entry it cannot decode does not hide the rest.
+    Advancing the cursor to the end of that page and returning its first entry — which is what
+    the first version of this did — loses everything behind it: those entries stay pending,
+    now behind the cursor, and `XREADGROUP … >` never returns an entry that was already
+    delivered. Three reclaimed messages came back as one.
+
+    `release` on each is how the cursor is armed without reaching into the broker: it is the
+    documented way an unsent message becomes reclaimable.
+    """
+    sent = [payload(n) for n in (1, 2, 3)]
+    broker.publish(sent)
+    held = [broker.take_nowait() for _ in sent]
+    assert all(item is not None for item in held), 'the fixture did not deliver three messages'
+    for item in held:
+        broker.release(item.handle)
+
+    seen = []
+    while (again := broker.take_nowait()) is not None:
+        seen.append(again.payload)
+
+    assert sorted(seen) == sorted(sent), f'{len(seen)} of {len(sent)} released messages came back'
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_url_that_asks_for_decoding_still_delivers(monkeypatch):
+    """`decode_responses` is tolerated, so it must not silently deliver nothing.
+
+    One `REDIS_URL` is often shared with a cache backend that wants decoding, which is why
+    `as_bytes` exists and why `E043` refuses the setting only alongside pickle. Measured on
+    such a client: the entry id, the field name *and* the payload all come back as `str`. A
+    reader that only knows `b'payload'` treats every entry as one written by something else —
+    a warning per message, and a queue that never drains.
+
+    The client is built here rather than through the `redis_server` fixture, and that is the
+    point of the case: that fixture hands out a fake with decoding **off**, so setting
+    `decode_responses` in the URL changes nothing about it and a test written that way passes
+    without ever meeting a `str` key. Measured — the plain fake answers `b'payload'`, the
+    decoding one answers `'payload'`.
+    """
+    decoding = fakeredis.FakeRedis(server=fakeredis.FakeServer(), decode_responses=True)
+    monkeypatch.setattr('django_aiogram.broker.redis_streams.broker.get_redis', lambda: decoding)
+    broker = RedisStreamsBroker()
+
+    broker.publish([payload(5)])
+    taken = broker.take_nowait()
+
+    assert taken is not None, 'a decoding client delivered nothing'
+    assert isinstance(taken.payload, bytes), f'the payload arrived as {type(taken.payload).__name__}'
+    assert taken.payload == payload(5), 'the payload did not survive the round trip'
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)

@@ -27,7 +27,7 @@ from django_aiogram.broker.redis_streams.exceptions import (
     StreamLagUnknownError,
     StreamServerTooOldError,
 )
-from django_aiogram.redis import aget_redis, get_redis, heartbeat_ttl
+from django_aiogram.redis import aget_redis, as_bytes, get_redis, heartbeat_ttl
 
 __all__ = ('RedisStreamsBroker',)
 
@@ -264,12 +264,19 @@ class RedisStreamsBroker(Broker):
         if not entries:
             self._recovered_upto = None
             return None
-        found = None
         for identifier, fields in entries:
+            # the cursor moves entry by entry, and stops at the one handed back. Advancing to
+            # the end of the page and returning its first entry — which is what this did —
+            # loses the rest: they stay pending, now behind the cursor, and `XREADGROUP … >`
+            # never returns an entry that was already delivered. Ten reclaimed entries came
+            # back as one
             self._recovered_upto = identifier
-            if found is None:
-                found = self._decode(identifier, fields)
-        return found
+            taken = self._decode(identifier, fields)
+            if taken is not None:
+                return taken
+        # every entry in the page was one this package cannot read. The cursor is past them,
+        # so the next call continues rather than meeting the same ones again
+        return None
 
     @staticmethod
     def _entries(response: object) -> list[Any]:
@@ -290,8 +297,24 @@ class RedisStreamsBroker(Broker):
 
     @staticmethod
     def _decode(identifier: object, fields: object) -> Taken | None:
-        """Wrap one entry as a :class:`Taken`, or report one this package did not write."""
-        payload = fields.get(_FIELD) if isinstance(fields, dict) else None
+        """Wrap one entry as a :class:`Taken`, or report one this package did not write.
+
+        Both spellings of the field name, because ``REDIS_URL`` may enable
+        ``decode_responses`` — tolerated deliberately, since one URL is often shared with a
+        cache backend that wants it, and only refused alongside pickle by `E043`. Measured on
+        such a client: the entry id, the field name *and* the payload all come back as
+        ``str``. Reading only ``b'payload'`` made every entry look like one written by
+        something else, so this transport logged a warning per message and delivered nothing.
+
+        The payload goes through :func:`as_bytes` for the same reason the list's does: what is
+        above this module unpacks bytes, and which of the two a driver hands over is a
+        connection setting rather than a fact about the message.
+        """
+        payload = None
+        if isinstance(fields, dict):
+            payload = fields.get(_FIELD)
+            if payload is None:
+                payload = fields.get(_FIELD.decode())
         if payload is None:
             # an entry with fields this package did not put there. Acknowledging it would be a
             # guess about someone else's data, so it is left pending and reported: a stream
@@ -301,7 +324,7 @@ class RedisStreamsBroker(Broker):
                 extra={'tg_entry': identifier},
             )
             return None
-        return Taken(payload, identifier)
+        return Taken(as_bytes(payload), identifier)
 
     @classmethod
     def _first(cls, response: object) -> Taken | None:
