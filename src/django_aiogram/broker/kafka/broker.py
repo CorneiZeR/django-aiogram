@@ -239,11 +239,10 @@ class KafkaBroker(Broker):
         Nothing is committed when the lowest unsettled offset is the one just settled's
         neighbour; the next `ack` that closes the gap commits both.
         """
-        partition, offset = self._settleable(handle)
-        if partition is None or offset is None:
-            return
-        commit_to = None
+        partition, offset, epoch = _position(handle)
         with self._lock:
+            if not self._still_current(partition, epoch):
+                return
             self._unsettled.get(partition, set()).discard(offset)
             self._settled.setdefault(partition, set()).add(offset)
             # the ceiling is the lowest offset still outstanding, and *nothing* outstanding
@@ -255,17 +254,21 @@ class KafkaBroker(Broker):
             settled = self._settled[partition]
             candidates = settled if not outstanding else {value for value in settled if value < min(outstanding)}
             highest = max(candidates, default=None)
-            if highest is not None:
-                commit_to = highest
-                self._settled[partition] = {value for value in settled if value > highest}
-        if commit_to is not None:
+            if highest is None:
+                return
+            self._settled[partition] = {value for value in settled if value > highest}
+
             from confluent_kafka import TopicPartition  # noqa: PLC0415 - the driver is an extra
 
-            # `commit_to + 1`: a committed offset is the *next* one to read, measured —
+            # committed inside the lock, deliberately. The epoch was checked above and a
+            # `release` on this partition takes the same lock, so nothing can rewind between
+            # the check and the commit — which is exactly the window that loses both messages.
+            # It holds the lock across a round trip, and that is affordable: every settle
+            # happens on the consumer thread today, so there is nobody to block
+            #
+            # `highest + 1`: a committed offset is the *next* one to read, measured —
             # committing message 0 makes `committed()` answer 1
-            self._consumer().commit(
-                offsets=[TopicPartition(self._topic(), partition, commit_to + 1)], asynchronous=False
-            )
+            self._consumer().commit(offsets=[TopicPartition(self._topic(), partition, highest + 1)], asynchronous=False)
 
     def release(self, handle: object) -> None:
         """Rewind to this message, so it and everything after it are delivered again.
@@ -280,10 +283,18 @@ class KafkaBroker(Broker):
         """
         from confluent_kafka import TopicPartition  # noqa: PLC0415 - the driver is an extra
 
-        partition, offset = self._settleable(handle)
-        if partition is None or offset is None:
-            return
+        partition, offset, epoch = _position(handle)
         with self._lock:
+            if not self._still_current(partition, epoch):
+                return
+            # the seek first, and the bookkeeping only if it worked. Rewinding is the part
+            # that can fail — a consumer without this partition assigned answers
+            # `_UNKNOWN_PARTITION`, measured — and doing it second left the offsets dropped
+            # from tracking and the epoch bumped for a rewind that never happened, which
+            # makes the message unsettleable by the thread that actually holds it.
+            #
+            # Inside the lock as well, so an `ack` cannot commit between the two
+            self._consumer().seek(TopicPartition(self._topic(), partition, offset))
             for tracked in (self._unsettled, self._settled):
                 held = tracked.get(partition)
                 if held is not None:
@@ -291,10 +302,9 @@ class KafkaBroker(Broker):
             # every handle from before this rewind now names a position that will be delivered
             # again, so none of them may settle anything
             self._epoch[partition] = self._epoch.get(partition, 0) + 1
-        self._consumer().seek(TopicPartition(self._topic(), partition, offset))
 
-    def _settleable(self, handle: object) -> tuple[int | None, int | None]:
-        """Find the position to settle, or ``(None, None)`` when its partition has been rewound.
+    def _still_current(self, partition: int, epoch: int) -> bool:
+        """Say whether a handle from this epoch may still settle; call with the lock held.
 
         A `release` puts a whole partition back to an offset — Kafka has no per-message nack —
         so every message taken before it will be delivered again, and a handle from before it
@@ -302,22 +312,21 @@ class KafkaBroker(Broker):
         wrong in the losing direction: with nothing outstanding, an `ack` for the *higher*
         offset of a released pair would commit past both, and a restart would skip them.
 
-        So a handle carries the partition's rewind count and this refuses the ones that do not
-        match. Nothing is committed, and the message comes back because that is what the rewind
-        already arranged.
+        Checked inside the caller's critical section rather than before it, because a check that
+        releases the lock and then commits leaves the same window it exists to close. Every
+        settle happens on the consumer thread today, so the window cannot open — but that is a
+        property of the call graph rather than of this code, and the lock makes it one of this
+        code.
 
         Reported, because it means a send finished after its position was given up.
         """
-        partition, offset, epoch = _position(handle)
-        with self._lock:
-            current = self._epoch.get(partition, 0)
-        if epoch != current:
-            logger.warning(
-                'a message finished after its partition was rewound, so it will be redelivered',
-                extra={'tg_key': self._topic()},
-            )
-            return None, None
-        return partition, offset
+        if epoch == self._epoch.get(partition, 0):
+            return True
+        logger.warning(
+            'a message finished after its partition was rewound, so it will be redelivered',
+            extra={'tg_key': self._topic()},
+        )
+        return False
 
     # ---------------------------------------------------------------- operations
 

@@ -9,6 +9,7 @@ committed, so the group hands the partition to somebody else at the last committ
 """
 
 import asyncio
+import threading
 
 import pytest
 from django.test import override_settings
@@ -302,3 +303,47 @@ def test_a_stale_ack_after_a_rewind_cannot_commit_past_it(broker, kafka_bootstra
         # falsification stops at the log line and never shows the messages going missing
         assert seen == [payload(1), payload(2)], f'a stale ack committed past the rewind: {seen}'
         assert 'its partition was rewound' in caplog.text, caplog.text
+
+
+def test_a_settle_from_another_thread_fails_rather_than_corrupting_the_offsets(broker, kafka_bootstrap, kafka_topic):
+    """Only the thread holding the assignment can settle, and Kafka is what enforces it.
+
+    This case exists because of what it *disproved*. A review asked whether an `ack` and a
+    `release` for one partition could race — the epoch is checked and the offset committed, and
+    a rewind in between would commit past both messages. The answer is that they cannot, and not
+    because of how this package happens to call them: the consumer is per thread, so a settle
+    from any other thread reaches a consumer with no assignment and Kafka refuses it outright.
+
+    Measured, that refusal is `_UNKNOWN_PARTITION: Failed to seek to offset 0`. Asserted here so
+    the reasoning is checked rather than remembered — if a future consumer became shareable, the
+    window would open and this case is what would say so.
+    """
+    from confluent_kafka import KafkaException
+
+    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+        broker.publish([payload(1)])
+        taken = broker.take_nowait()
+        assert taken is not None, 'the message was not delivered'
+
+        failures: list[BaseException] = []
+
+        def settle_from_elsewhere():
+            try:
+                broker.release(taken.handle)
+            except BaseException as error:  # recorded and asserted on below
+                failures.append(error)
+
+        worker = threading.Thread(target=settle_from_elsewhere)
+        worker.start()
+        worker.join(timeout=30)
+
+        assert failures, 'a settle from another thread was accepted'
+        assert isinstance(failures[0], KafkaException), repr(failures[0])
+        assert 'Unknown partition' in str(failures[0]), str(failures[0])
+
+        # and the offsets are untouched, which is the half that matters: the message is still
+        # this thread's to settle
+        assert broker.inflight_depth() == 1, 'the failed settle changed what this worker holds'
+        broker.ack(taken.handle)
+        close_clients()
+        assert KafkaBroker().take_nowait() is None, 'the message was not settled after all'
