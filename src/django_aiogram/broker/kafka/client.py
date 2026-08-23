@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 else:  # the annotations below are evaluated at runtime in a `|` union
     Consumer = Producer = Any
 
-__all__ = ('close_clients', 'consumer_for_thread', 'shared_producer')
+__all__ = ('close_clients', 'consumer_for_thread', 'metadata_client', 'shared_producer')
 
 #: librdkafka's producer is thread-safe and keeps its own I/O thread, so one per process is
 #: right — and a second would mean a second connection pool for no reason
@@ -36,6 +36,9 @@ _producer: tuple[str, 'Producer'] | None = None
 #: another thread would be a second member, taking a share of the partitions
 _local = threading.local()
 _consumers: list[Any] = []
+#: and the ones that only read. Kept apart because they differ in the thing that matters: a
+#: subscribed consumer is a group member and an unsubscribed one is not
+_readers: list[Any] = []
 _consumer_lock = threading.Lock()
 
 
@@ -95,6 +98,57 @@ def consumer_for_thread(bootstrap: str, topic: str, group: str, timeout: float) 
     return consumer
 
 
+def metadata_client(bootstrap: str, group: str, timeout: float) -> 'Consumer':
+    """Reach a consumer that reads metadata and committed offsets and joins no group.
+
+    ``subscribe`` is what makes a consumer a *member*, and a process that only publishes must
+    not become one: the coordinator would give it partitions it never polls, and on a
+    single-partition topic the real worker then receives nothing until that member's session
+    times out. A healthcheck asking how deep the queue is could starve the consumer it was
+    checking on.
+
+    Measured: ``list_topics``, ``committed`` and ``get_watermark_offsets`` all answer on a
+    consumer that has never subscribed. ``group.id`` is still needed — a committed offset
+    belongs to a group — which is why this takes one and joins nothing.
+    """
+    from confluent_kafka import Consumer as KafkaConsumer  # noqa: PLC0415 - the driver is an extra
+
+    identity = (bootstrap, group, timeout)
+    existing: Consumer | None = getattr(_local, 'reader', None)
+    if existing is not None and getattr(_local, 'reader_identity', None) == identity:
+        return existing
+    if not bootstrap:
+        msg = f"{SETTINGS_NAME}['KAFKA_BOOTSTRAP'] is required to talk to Kafka."
+        raise ImproperlyConfigured(msg)
+    _drop_this_threads_reader()
+    reader = KafkaConsumer(
+        {
+            'bootstrap.servers': bootstrap,
+            'group.id': group,
+            'enable.auto.commit': False,
+            'socket.timeout.ms': int(timeout * 1000),
+        }
+    )
+    _local.reader_identity, _local.reader = identity, reader
+    with _consumer_lock:
+        _readers.append(reader)
+    return reader
+
+
+def _drop_this_threads_reader() -> None:
+    """Close and forget the calling thread's metadata client, if it has one."""
+    reader = getattr(_local, 'reader', None)
+    if reader is None:
+        return
+    with _consumer_lock:
+        _readers[:] = [held for held in _readers if held is not reader]
+    with suppress(Exception):
+        reader.close()
+    for attribute in ('reader_identity', 'reader'):
+        if hasattr(_local, attribute):
+            delattr(_local, attribute)
+
+
 def _drop_this_threads_consumer() -> None:
     """Close and forget the calling thread's consumer, if it has one.
 
@@ -129,6 +183,7 @@ def close_clients(**_kwargs: object) -> None:
             _producer[1].flush(5)
             _producer = None
     _drop_this_threads_consumer()
+    _drop_this_threads_reader()
 
 
 def _forget(**kwargs: object) -> None:

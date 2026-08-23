@@ -21,7 +21,12 @@ from collections.abc import Sequence as Seq
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django_aiogram.broker.base import REQUIRED, Broker
-from django_aiogram.broker.kafka.client import close_clients, consumer_for_thread, shared_producer
+from django_aiogram.broker.kafka.client import (
+    close_clients,
+    consumer_for_thread,
+    metadata_client,
+    shared_producer,
+)
 from django_aiogram.broker.kafka.exceptions import ProduceRefusedError
 from django_aiogram.broker.models import Taken
 
@@ -285,10 +290,20 @@ class KafkaBroker(Broker):
         nothing, and answering from the assignment would report an empty queue to every one of
         them. Measured, both `get_watermark_offsets` and `committed` answer for a partition
         this consumer was never given.
+
+        And through a client that never subscribes, which is the part that matters more: a
+        subscription is group membership, so asking the depth from a web process used to make
+        it a member and hand it partitions nobody would poll.
         """
         from confluent_kafka import TopicPartition  # noqa: PLC0415 - the driver is an extra
 
-        consumer, topic = self._consumer(), self._topic()
+        # the *reader*, not this thread's consumer: subscribing is what makes a consumer a
+        # group member, and a process that only publishes must not become one — it would be
+        # given partitions it never polls, and on a single-partition topic the real worker
+        # then gets nothing until that member's session times out. A healthcheck could starve
+        # the consumer it was checking on
+        consumer = metadata_client(self._bootstrap(), str(self.option('KAFKA_GROUP')), self._timeout())
+        topic = self._topic()
         described = consumer.list_topics(topic, timeout=self._timeout()).topics.get(topic)
         if described is None or described.error is not None:
             # the topic does not exist yet, so nothing is waiting in it. A publish would

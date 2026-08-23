@@ -169,12 +169,45 @@ def test_producing_to_a_topic_that_cannot_be_created_is_refused(kafka_bootstrap)
 
     An invalid topic name is the reliable way to be refused without depending on the broker's
     `auto.create.topics.enable`: Kafka rejects the name itself.
+
+    Asserted on the *reason*, not on the message containing the topic. The first version of
+    this looked for "not a valid topic name" in the text — which is the topic name this case
+    configured, so it matched the error's own subject and would have passed with the reason
+    empty. Measured, librdkafka reports `TOPIC_EXCEPTION … Broker: Invalid topic`.
     """
-    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, 'this is not a valid topic name')):
+    bad = 'this is not a valid topic name'
+    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, bad)):
         with pytest.raises(ProduceRefusedError) as refused:
             KafkaBroker().publish([payload(1)])
 
-        assert 'not a valid topic name' in str(refused.value), str(refused.value)
+        assert refused.value.topic == bad, refused.value.topic
+        assert 'Invalid topic' in str(refused.value), str(refused.value)
+
+
+def test_asking_the_depth_does_not_join_the_group(broker, kafka_bootstrap, kafka_topic):
+    """A subscription is group membership, and a process that only publishes must not be one.
+
+    Reading the depth from a web process used to subscribe: the coordinator then hands that
+    process partitions it never polls, and on a single-partition topic the real worker receives
+    nothing until the member's session times out. A healthcheck could starve the consumer it
+    was checking on.
+
+    Asserted on the group's members as the broker sees them, which is the only place the
+    difference shows — the depth is the same number either way.
+    """
+    from confluent_kafka.admin import AdminClient
+
+    admin = AdminClient({'bootstrap.servers': kafka_bootstrap})
+
+    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+        publisher = KafkaBroker()
+        publisher.publish([payload(1)])
+
+        assert publisher.depth() == 1, 'the depth read did not work at all'
+
+    described = admin.describe_consumer_groups([kafka_topic])[kafka_topic].result(timeout=30)
+
+    assert described.members == [], f'reading the depth joined the group: {described.members}'
 
 
 def test_the_awaited_halves_work_off_the_loop(broker, kafka_bootstrap, kafka_topic):
