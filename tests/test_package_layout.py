@@ -35,6 +35,7 @@ PACKAGES = sorted(
 PUBLISHED_BROKERS = (
     'django_aiogram.broker.redis_list.RedisListBroker',
     'django_aiogram.broker.redis_streams.RedisStreamsBroker',
+    'django_aiogram.broker.rabbitmq.RabbitMQBroker',
 )
 
 PUBLISHED = (

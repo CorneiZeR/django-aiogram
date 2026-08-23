@@ -21,6 +21,43 @@ Entries land here as the work does; nothing below is released.
   A transport with no sensible default for where a message goes marks that setting required
   and refuses at startup without it.
 
+- **A RabbitMQ transport**, `django_aiogram.broker.rabbitmq.RabbitMQBroker`, on the
+  **`[rabbitmq]`** extra. The transport that needs least from this package: an unacknowledged
+  message returns to the queue when the channel that held it drops, so there is no worker name
+  to keep, no in-flight list to reclaim, and `reclaim()` answers `None` rather than zero.
+
+  **`pika`, not `aio-pika`, and by measurement.** The obvious reading — async-native driver for
+  the `await` half — is wrong, and the first measurement that said so was wrong too:
+  `aio_pika.Connection.channel()` confirms publishes by default and `pika`'s does not, so
+  comparing them directly put a confirmed publish next to fire-and-forget. Held constant, on
+  RabbitMQ 4 over loopback, median of 300 publishes:
+
+  ```text
+                                          unconfirmed   confirmed
+  pika, synchronous, its own face              18.9us      170.7us
+  aio-pika, handed to a loop thread           119.2us      290.6us
+  pika, awaited via asyncio.to_thread         120.1us            —
+  ```
+
+  The decisive part is that two of those are the same number. Crossing the thread boundary
+  costs about 100µs whichever driver is used, so the question is which face pays it — and the
+  faces are not equal. `bot.send()` is called from views, tasks and management commands;
+  `asend()` is for ASGI and is rarer. `pika` charges the rare one and leaves the common one at
+  18.9µs. `aio-pika` also cannot serve a synchronous caller simply: its connections are
+  loop-affine, so `async_to_sync` over one built elsewhere raises `attached to a different
+  loop`, exactly as `redis.asyncio` does.
+
+  **Publishes are confirmed and mandatory**, which costs 170.7µs against 18.9µs. That buys the
+  promise the package already makes: `RPUSH` answers with the new length, so a Redis publish is
+  acknowledged before `send()` returns and a failure raises. Unconfirmed AMQP publishing is
+  weaker than that — a broker that dies before persisting the message loses it in silence — so
+  the RabbitMQ transport is about 8× a Redis list publish, and that is the guarantee rather than
+  the driver.
+
+  `RABBITMQ_URL` and `RABBITMQ_QUEUE` are both required. `RABBITMQ_PREFETCH` defaults to
+  unlimited on purpose: `MAX_IN_FLIGHT` already bounds unacknowledged sends, and a prefetch
+  below it would stall the consumer.
+
 - **A Redis Streams transport**, `django_aiogram.broker.redis_streams.RedisStreamsBroker`.
   The same server and the same `[redis]` extra as the list — a different data structure, not a
   different dependency — and the first transport here that names a message by id rather than

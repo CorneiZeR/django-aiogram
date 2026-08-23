@@ -64,6 +64,13 @@ the same worker name** — the list is keyed on that name, so a replacement cont
 with a fresh hostname strands it instead. That is what `I001` reports and what
 `manage.py tgbot_reclaim --worker <name>` is the way back from.
 
+**RabbitMQ.** The least of any of them: an unacknowledged message returns to the
+queue when the channel that held it drops, and a worker being killed drops its
+channel by dying. So there is no in-flight list, `reclaim()` has nothing to do and
+says so by answering nothing at all, `tgbot_reclaim` refuses, and `I001` stays
+quiet. A publish is confirmed and mandatory, so a message the broker will not take
+raises rather than disappearing into an exchange.
+
 **Redis Streams.** The consumer group records every delivery before the consumer
 sees it, and unsettled entries sit in the group's pending list rather than under a
 name. So a worker's name buys nothing here: any consumer reclaims what a dead one

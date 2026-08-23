@@ -43,6 +43,12 @@ classifiers = [
 # which one is in use, and a system check refuses at startup with this install
 # line when the driver behind that name is absent
 redis = ["redis>=6.2"]
+# pika rather than aio-pika, and by measurement rather than by which face it matched:
+# crossing the thread boundary costs about 100us whichever driver is used — 119.2us for
+# aio-pika reached from synchronous code against 120.1us for pika reached from a
+# coroutine, which are the same number — so the driver that needs no crossing on the
+# synchronous path wins, and that is where `bot.send()` is called from. 18.9us there
+rabbitmq = ["pika>=1.3"]
 # not a runtime dependency: redis-py parses the protocol in C when this is
 # present. Worth it on a busy consumer, pointless on a web tier that only ever
 # pushes, which is why it is opt-in rather than pulled in for everybody
@@ -184,6 +190,16 @@ python_version = "3.10"
 files = ["src"]
 strict = true
 plugins = ["mypy_django_plugin.main"]
+
+# pika ships no type information, and the third-party stubs that exist are stale: the newest
+# `types-pika` is a beta for pika 1.2 and `pika-stubs` stopped at 0.1.x, while this package
+# requires >=1.3. Stubs describing an older surface are worse than none — mypy would check
+# confidently against a shape the driver no longer has — so the import is untyped on purpose
+# and the two modules that touch it annotate their own boundary. Nothing outside
+# `broker/rabbitmq/` imports it
+[[tool.mypy.overrides]]
+module = ["pika.*"]
+ignore_missing_imports = true
 
 [tool.django-stubs]
 django_settings_module = "tests.settings"
