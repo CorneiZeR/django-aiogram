@@ -50,9 +50,12 @@ def test_recovery_steps_over_an_entry_this_package_cannot_read(broker, redis_ser
     redis_server.xadd(STREAM, {b'written-by': b'something-else'})
     broker.publish([payload(1)])
 
-    assert broker.take_nowait() is None, 'an entry with no payload field was handed to a caller'
-    good = broker.take_nowait()
-    assert good is not None, 'the valid entry behind it was never delivered'
+    # asked more than once on purpose, and without requiring how many: whether the foreign
+    # entry costs a call or is stepped over inside one is the implementation's business, and a
+    # version that skipped it in the same call would be better rather than broken
+    good = next((taken for taken in (broker.take_nowait() for _ in range(3)) if taken), None)
+    assert good is not None, 'the valid entry behind the unreadable one was never delivered'
+    assert good.payload == payload(1), 'something other than the published message came back'
 
     broker.release(good.handle)
     again = broker.take_nowait()
