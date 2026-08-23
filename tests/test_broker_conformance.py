@@ -20,7 +20,28 @@ from django_aiogram.broker.base import Broker
 from django_aiogram.broker.registry import SHIPPED
 from django_aiogram.wire.serializers import JsonSerializer
 
-SETTINGS = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'RATE_LIMIT': None}
+# `REDIS_STREAM_KEY` has no default — the Streams broker requires it, so a settings dict
+# without it makes every case for that transport an `ImproperlyConfigured` about the fixture
+# rather than an answer about the contract
+SETTINGS = {
+    'TOKEN': '42:x',
+    'REDIS_URL': 'redis://localhost:6379/0',
+    'RATE_LIMIT': None,
+    'REDIS_STREAM_KEY': 'TELEGRAM_BOT_STREAM',
+}
+
+
+#: transports whose waiting-count cannot be asserted against the in-memory server, and why.
+#: Not a transport's answer being excused — a fake's arithmetic being wrong: measured, two
+#: entries published into a fresh group make real Redis answer `lag` 1 then 2 and fakeredis
+#: answer 0 then 1. The real coverage is `tests/integration/test_streams_against_redis.py`,
+#: which the entry names so this cannot quietly become no coverage at all
+UNTRUSTWORTHY_DEPTH = {
+    'django_aiogram.broker.redis_streams.RedisStreamsBroker': (
+        'fakeredis computes XINFO GROUPS lag one short; depth() is asserted against a real '
+        'server in tests/integration/test_streams_against_redis.py'
+    ),
+}
 
 
 def payload(chat_id: int) -> bytes:
@@ -41,7 +62,22 @@ def broker(request, redis_server):
     if 'redis' not in path:
         pytest.skip(f'no fixture yet for {path}: add one rather than skipping the contract')
     with override_settings(TELEGRAM_BOT=SETTINGS):
-        yield import_string(path)()
+        broker = import_string(path)()
+        broker.conformance_path = path
+        yield broker
+
+
+@pytest.fixture
+def countable(broker):
+    """The same broker, for a case that asks it how many messages are waiting.
+
+    Separate from `broker` so that skipping is impossible to do by accident: a case wanting a
+    trustworthy count says so by asking for this one, and every other case keeps running.
+    """
+    reason = UNTRUSTWORTHY_DEPTH.get(getattr(broker, 'conformance_path', ''))
+    if reason:
+        pytest.skip(reason)
+    return broker
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
@@ -76,7 +112,7 @@ def test_publishing_nothing_queues_nothing_and_raises_nothing(broker: Broker):
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
-def test_the_awaiting_half_publishes_and_counts_the_same(broker: Broker):
+def test_the_awaiting_half_publishes_and_counts_the_same(countable: Broker):
     """Every `a*` method is a second implementation, and a second place to regress.
 
     The synchronous cases above would all pass with `apublish`, `adepth` and
@@ -87,10 +123,10 @@ def test_the_awaiting_half_publishes_and_counts_the_same(broker: Broker):
 
     async def on_a_loop() -> tuple[int, int, int]:
         """Publish nothing, then one, and read both depths without leaving the loop."""
-        await broker.apublish([])
-        after_nothing = await broker.adepth()
-        await broker.apublish([payload(11)])
-        return after_nothing, await broker.adepth(), await broker.ainflight_depth()
+        await countable.apublish([])
+        after_nothing = await countable.adepth()
+        await countable.apublish([payload(11)])
+        return after_nothing, await countable.adepth(), await countable.ainflight_depth()
 
     after_nothing, after_one, inflight = asyncio.run(on_a_loop())
 
@@ -139,14 +175,14 @@ def test_a_released_message_comes_back(broker: Broker):
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
-def test_depth_counts_what_is_waiting(broker: Broker):
+def test_depth_counts_what_is_waiting(countable: Broker):
     """Two published, two waiting; one taken, one waiting."""
-    broker.publish([payload(3), payload(4)])
-    assert broker.depth() == 2
+    countable.publish([payload(3), payload(4)])
+    assert countable.depth() == 2
 
-    broker.take_nowait()
+    countable.take_nowait()
 
-    assert broker.depth() == 1
+    assert countable.depth() == 1
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)

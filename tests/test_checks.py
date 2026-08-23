@@ -665,6 +665,30 @@ def test_a_container_that_forgot_its_hostname_is_warned_about(monkeypatch):
     assert 'django_aiogram.I001' in ids(check_settings())
 
 
+@override_settings(
+    TELEGRAM_BOT={
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'BROKER': 'django_aiogram.broker.redis_streams.RedisStreamsBroker',
+        'REDIS_STREAM_KEY': 'TELEGRAM_BOT_STREAM',
+    }
+)
+def test_a_transport_that_needs_no_worker_name_is_not_asked_for_one(monkeypatch):
+    """The same container, on a transport where the advice would be empty.
+
+    A Streams group's pending list belongs to the group, so any consumer can recover a dead
+    one's work whatever it is called — `needs_identity` says so, and this is the check reading
+    it. Without the gate, a Streams deployment with a Docker-generated hostname is told to pin
+    it in order to protect an in-flight list that does not exist.
+
+    The hostname is the same one the case above is warned about, which is what makes this
+    about the transport rather than about the environment.
+    """
+    monkeypatch.setenv('HOSTNAME', 'ba333cb79e00')
+
+    assert 'django_aiogram.I001' not in ids(check_settings())
+
+
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'})
 def test_a_fixed_hostname_is_not_warned_about(monkeypatch):
     """An unset WORKER_NAME is the documented default and correct almost
@@ -852,6 +876,31 @@ def test_a_named_broker_whose_driver_is_missing_is_reported_with_the_install_lin
 
     assert problems, 'a broker whose driver is absent produced no finding'
     assert 'pip install "django-aiogram[redis]"' in problems[0].hint, problems[0].hint
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        'ENABLED': True,
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker',
+    }
+)
+def test_running_the_checks_leaves_no_broker_behind():
+    """A rule may ask the transport a question without building the one this process uses.
+
+    `I001` reads `needs_identity`, which needs an instance — and reaching for the process-wide
+    accessor to get one would leave a live broker cached in `migrate`, `shell`, `collectstatic`
+    and every other command that runs checks. A throwaway costs nothing and connects to
+    nothing; the cache is for the process that actually sends.
+    """
+    from django_aiogram.broker import registry
+
+    registry.close_broker()
+
+    check_settings()
+
+    assert registry._broker is None, 'running the checks cached a broker for the whole process'
 
 
 @override_settings(TELEGRAM_BOT={'ENABLED': False, 'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker'})

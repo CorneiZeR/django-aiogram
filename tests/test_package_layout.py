@@ -11,6 +11,8 @@ import sys
 
 import pytest
 
+from django_aiogram.broker.registry import SHIPPED
+
 SRC = pathlib.Path(__file__).resolve().parent.parent / 'src' / 'django_aiogram'
 
 #: Django finds these by path and imports nothing *from* them, so there is nothing to
@@ -27,6 +29,14 @@ PACKAGES = sorted(
 
 #: paths the outside world names: a settings string, a urls entry, a compose command. Moving
 #: one of these is a breaking change for every project that wrote it down
+#: what `BROKER` may hold, spelled out. A project typed one of these into its settings, so
+#: these strings are as public as any function this package exports — and the point of writing
+#: them here is that renaming the class and its registry entry together cannot pass unnoticed
+PUBLISHED_BROKERS = (
+    'django_aiogram.broker.redis_list.RedisListBroker',
+    'django_aiogram.broker.redis_streams.RedisStreamsBroker',
+)
+
 PUBLISHED = (
     'django_aiogram/apps.py',
     'django_aiogram/models.py',
@@ -142,22 +152,66 @@ def test_neither_the_transport_nor_the_producer_imports_the_driver():
     the reader gets `No module named 'redis'` where `pip install "django-aiogram[redis]"`
     belongs.
 
-    The producer is asserted beside the transport because it is the import a project
+    The producer is asserted beside the transports because it is the import a project
     actually writes, and it was the one that failed: it pulled the driver twice over — a
     `Redis` annotation, and aiogram's Redis FSM storage, which imports the driver itself.
+
+    Every shipped transport, taken from the registry rather than named here, so the rule
+    covers one added later instead of covering whichever ones somebody remembered.
 
     A subprocess, and a fresh interpreter each time, because `sys.modules` in this one has
     everything in it. Blocking the driver instead would prove less: the point is not that
     an absent driver is survivable but that a present one is left alone until a connection
     is built.
     """
-    for module in ('django_aiogram.broker.redis_list', 'django_aiogram.producer.client'):
+    transports = [path.rsplit('.', 1)[0] for path in sorted(SHIPPED)]
+    for module in [*transports, 'django_aiogram.producer.client']:
         code = f'import sys, {module}; print("redis" in sys.modules)'
         finished = subprocess.run(  # noqa: S603 - our own interpreter, and a script written right above
             [sys.executable, '-c', code], capture_output=True, text=True, check=True
         )
 
         assert finished.stdout.strip() == 'False', f'importing {module} pulled the driver'
+
+
+@pytest.mark.parametrize('path', PUBLISHED_BROKERS, ids=lambda path: path.rsplit('.', 1)[-1])
+def test_the_dotted_path_a_project_writes_for_a_transport_still_resolves(path):
+    """`BROKER` holds one of these, written by hand into a project's settings.
+
+    The strongest case in this file for a name that cannot move quietly: `DELIVERY` and
+    `SERIALIZER` hold short names the package maps itself, while this one is a dotted path
+    straight into these modules. A rename here is a break in every project that named it, and
+    the failure lands at startup with `E047` saying the path cannot be imported — accurate,
+    and no help to somebody who did nothing wrong.
+
+    A class path rather than a file path, because that is what a project writes. Written out
+    above rather than read from the registry, which is the difference between a test and a
+    tautology: renaming the class *and* its registry entry together leaves a registry-driven
+    version green while every project that named the old path is broken. Spelled here, the
+    rename fails and somebody decides on purpose.
+    """
+    from django.utils.module_loading import import_string
+
+    from django_aiogram.broker.base import Broker
+
+    resolved = import_string(path)
+
+    assert isinstance(resolved, type), f'{path} does not name a class'
+    assert issubclass(resolved, Broker), f'{path} names something that is not a Broker'
+
+
+def test_the_registry_ships_exactly_the_transports_written_down_here():
+    """The other half: a name added or dropped has to be a decision, not a side effect.
+
+    Without this the list above could fall behind the registry — a transport shipped and
+    published with nothing pinning its path — and the case above would keep passing for the
+    two it happens to name.
+    """
+    assert set(SHIPPED) == set(PUBLISHED_BROKERS), (
+        'the registry and the published paths disagree: '
+        f'registry only {sorted(set(SHIPPED) - set(PUBLISHED_BROKERS))}, '
+        f'list only {sorted(set(PUBLISHED_BROKERS) - set(SHIPPED))}'
+    )
 
 
 @pytest.mark.parametrize('path', PUBLISHED)

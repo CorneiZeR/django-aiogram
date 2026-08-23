@@ -34,10 +34,10 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_retries` | attempts made so far |
 | `tg_max_retries` | the limit that was reached |
 | `tg_delivery` | the consumer that started, always `blpop` |
-| `tg_key` | Redis list being consumed |
+| `tg_key` | the queue being consumed: a Redis list, or a stream |
 | `tg_timeout` | blocking-pop timeout, or how long a shutdown waited |
 | `tg_error` | the class name of a non-fatal error, not its text — a webhook secret or a chat id can end up in the message, and this field is what a log aggregator groups on |
-| `tg_crash_safe` | whether the consumer holds messages in flight; false on a Redis without `LMOVE` |
+| `tg_crash_safe` | whether the consumer holds messages in flight. The transport answers for itself: false on a Redis without `LMOVE`, and always true on a stream, where the pending list is how delivery works |
 | `tg_mode` | `polling` or `webhook` |
 | `tg_update` | the update id being handled |
 | `tg_correlation_id` | the id every event about one message carries |
@@ -49,6 +49,8 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_count` | events in the batch being written |
 | `tg_batch` | how many rows the batch held, when part of it was refused |
 | `tg_worker` | the worker name an in-flight list is keyed on |
+| `tg_entry` | the id of a stream entry this package did not write, left pending rather than acknowledged |
+| `tg_lost` | stream entries that were pending and no longer exist, so that work is gone — the fingerprint of a `MAXLEN` trim or an `XDEL` reaching unacknowledged work |
 | `tg_setting` | the setting a message is about |
 | `tg_variable` | the environment variable a message is about |
 | `tg_dropped` | events lost because the buffer was full, or sends dropped at shutdown |
@@ -62,6 +64,8 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `handler failed for queued message` | ERROR | the send itself raised |
 | `dropping undecodable queued message` | ERROR | a payload could not be deserialized |
 | `blocking pop failed, retrying` | ERROR | lost the Redis connection; it retries |
+| `entries were pending but no longer exist in the stream, so that work is lost` | WARNING | Redis Streams: work that was taken and never settled has been deleted from the stream, so those messages are gone. Nothing in this package can cause it — a `MAXLEN` trim or an `XDEL` reached unacknowledged entries. `tg_lost` carries how many |
+| `a stream entry carries no payload field and was left pending` | WARNING | Redis Streams: something else is writing to this stream. The entry is left pending rather than acknowledged, because settling it would be a guess about another producer's data. `tg_entry` names it |
 | `the delivery consumer did not stop in time` | WARNING | the consumer outlived its join at shutdown; a message it holds may be redelivered |
 | `cancelling updates still in flight` | WARNING | a webhook update outlasted the drain at shutdown; its request is answered 503, so Telegram redelivers it rather than a worker hanging on a stopped loop |
 | `webhook is not configured to serve updates` | ERROR | `MODE` or `WEBHOOK_SECRET` could not be read, so the view answered 503 rather than raising an unauthenticated 500 |

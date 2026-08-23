@@ -21,6 +21,42 @@ Entries land here as the work does; nothing below is released.
   A transport with no sensible default for where a message goes marks that setting required
   and refuses at startup without it.
 
+- **A Redis Streams transport**, `django_aiogram.broker.redis_streams.RedisStreamsBroker`.
+  The same server and the same `[redis]` extra as the list — a different data structure, not a
+  different dependency — and the first transport here that names a message by id rather than
+  by value, which is the model RabbitMQ and Kafka use.
+
+  It needs **Redis 7.0**, for this transport alone; the package floor stays 6.2 for the list.
+  `XINFO GROUPS` grew the `lag` field in 7.0 and it is the only exact answer to how many
+  messages are waiting, so the broker probes for the field on first use and refuses by name
+  without it rather than reporting a number that would drive `HEALTHCHECK_MAX_QUEUE` wrongly.
+  Probed rather than read off a version string, for the same reason the list probes `LMOVE`.
+
+  `REDIS_STREAM_KEY` is **required** and has no default on purpose: a default would sit a
+  suffix away from `REDIS_MESSAGES_KEY`, and `XADD` against a key holding a list answers
+  `WRONGTYPE` on the first send instead of at startup. `REDIS_STREAM_GROUP` defaults.
+
+  Two things it does that the list does not need to:
+
+  - **`WORKER_NAME` buys nothing here.** The pending list belongs to the group, so any
+    consumer can recover a dead one's work — measured, `XAUTOCLAIM` under a name that never
+    existed before claims every entry the dead consumer held. A container returning with a
+    fresh Docker hostname strands nothing, which is the one thing `I001` warns about for the
+    list. `needs_identity` is `False` and the checks read it.
+  - **`release()` is not a no-op.** Leaving an entry pending is not enough: `reclaim` only
+    takes entries idle past the liveness TTL, so a message refused a second after it was
+    taken would sit unsent for that long. `XCLAIM … IDLE` sets the counter to exactly that
+    threshold, and the boundary is inclusive — measured on a real server and on fakeredis.
+
+  **Never trim this stream by length.** `MAXLEN` and `XDEL` remove exactly the entries an
+  unfinished send leaves unacknowledged: trim past a pending entry and `XPENDING` still
+  reports it while `XAUTOCLAIM` hands the id back in its *deleted* list, so the message is
+  gone and nothing can replay it. `XDEL` additionally costs Redis the ability to answer `lag`
+  at all, and a depth read then refuses instead of guessing — temporarily: measured, the count
+  returns once the group has read to the end of the stream, so it is missing exactly while
+  there is a backlog. The
+  broker's own `trim()` stops at the oldest unacknowledged entry.
+
 ### Changed
 
 - **No transport driver is a dependency of this package any more.** `pip install

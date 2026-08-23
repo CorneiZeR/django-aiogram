@@ -94,8 +94,8 @@ which carries outbound messages in both modes — see **[[Webhook]]**.
 | Setting | Default | Description |
 | ------- | ------- | ----------- |
 | `DELIVERY` | `'blpop'` | The only consumer; `'keyspace'` was removed in 3.0 — see **[[Delivery]]** |
-| `BROKER` | `'django_aiogram.broker.redis_list.RedisListBroker'` | Which transport carries messages, by dotted path. Nothing is inferred from what happens to be installed: a name whose driver is missing is a system check with the `pip install` line, not an `ImportError` on the first send. Each broker declares its **own** settings: the Redis list declares `REDIS_URL`, `REDIS_MESSAGES_KEY`, `REDIS_TIMEOUT` and `BLPOP_TIMEOUT` — the other queue rows in this table belong to the package, not to a transport. A broker with no sensible default for where a message goes marks that setting required and refuses at startup without it |
-| `REDIS_MESSAGES_KEY` | `'TELEGRAM_BOT_MESSAGE'` | List holding queued calls |
+| `BROKER` | `'django_aiogram.broker.redis_list.RedisListBroker'` | Which transport carries messages, by dotted path. Nothing is inferred from what happens to be installed: a name whose driver is missing is a system check with the `pip install` line, not an `ImportError` on the first send. Each broker declares its **own** settings — see the table below — and the other queue rows here belong to the package rather than to a transport. A broker with no sensible default for where a message goes marks that setting required and refuses at startup without it |
+| `REDIS_MESSAGES_KEY` | `'TELEGRAM_BOT_MESSAGE'` | List holding queued calls — the Redis list transport's own |
 | `WORKER_NAME` | hostname | Names this worker's in-flight list — see **[[Delivery]]** |
 | `BLPOP_TIMEOUT` | `5` | How often the consumer checks for shutdown; capped at `min(HEARTBEAT_INTERVAL, REDIS_TIMEOUT - 1)` |
 | `DRAIN_TIMEOUT` | `5` | Seconds `close()` gives in-flight sends to finish before canceling them |
@@ -106,6 +106,35 @@ which carries outbound messages in both modes — see **[[Webhook]]**.
 | `HEALTHCHECK_MAX_QUEUE` | `0` | Longest queue still considered healthy; the check fails only above it, and `0` disables it |
 | `SERIALIZER` | `'json'` | `'json'` or `'pickle'` — see **[[Serialization]]** |
 | `ALLOW_PICKLE` | `False` | Let the reader accept pickled payloads. Needed to *read* them at all, and needed alongside `SERIALIZER: 'pickle'` to write them. Unpickling queue data is code execution, so only on a queue nothing untrusted can write to |
+
+### What each transport declares
+
+`BROKER` names one of these, and only that one's settings are read. A setting belonging to a
+transport you are not using is reported by `W003` as a key nothing reads, which is what it is.
+
+| Transport | Settings | Required |
+| --- | --- | --- |
+| `django_aiogram.broker.redis_list.RedisListBroker` | `REDIS_URL`, `REDIS_MESSAGES_KEY`, `REDIS_TIMEOUT`, `BLPOP_TIMEOUT` | none — the list has a default name |
+| `django_aiogram.broker.redis_streams.RedisStreamsBroker` | `REDIS_URL`, `REDIS_STREAM_KEY`, `REDIS_STREAM_GROUP`, `REDIS_TIMEOUT`, `BLPOP_TIMEOUT` | **`REDIS_STREAM_KEY`** |
+
+| Setting | Default | Description |
+| ------- | ------- | ----------- |
+| `REDIS_STREAM_KEY` | **required** | The stream `XADD` writes to. No default on purpose: one would sit a suffix away from `REDIS_MESSAGES_KEY`, and `XADD` against a key holding a list answers `WRONGTYPE` on the first send rather than at startup. `E047` asks for it before anything runs |
+| `REDIS_STREAM_GROUP` | `'django-aiogram'` | The consumer group every worker joins, so they share the stream instead of each reading all of it. Defaulted, because unlike the key there is nothing another transport could collide with |
+
+**Redis 7.0 or newer**, for this transport only — the package floor stays 6.2 for the list.
+`XINFO GROUPS` grew the `lag` field in 7.0 and it is the only exact answer to how many
+messages are waiting; measured, 6.2 has no such field, and Redis has no command that counts a
+range. The broker probes for the field on first use and refuses by name without it rather than
+reporting a number that would drive `HEALTHCHECK_MAX_QUEUE` wrongly.
+
+**Never trim this stream by length.** `XADD MAXLEN` and `XDEL` remove exactly the entries an
+unfinished send leaves unacknowledged. Measured: trim past a pending entry and `XPENDING`
+still reports it while `XAUTOCLAIM` hands the id back in its *deleted* list — the message is
+gone and no consumer can replay it. `XDEL` additionally costs Redis the ability to answer
+`lag` at all — a depth read then refuses instead of guessing. That one is temporary:
+measured, the count returns once the group has read through to the end of the stream, so it
+is unavailable exactly while there is a backlog, and `XSETID` restores it at once. The broker's own `trim()` stops at the oldest unacknowledged entry.
 
 ## Rate limits
 

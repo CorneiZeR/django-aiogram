@@ -12,6 +12,10 @@ PATCH_TARGETS = (
     # what holds one. Patching where the connection is *used* is the whole point of this
     # tuple, so the target moved with the use
     'django_aiogram.broker.redis_list.broker.get_redis',
+    # every transport module gets its own entry, and a missing one fails in a way worth
+    # knowing: a broker module imported lazily *during* a test binds that test's fake and
+    # keeps it for the whole session, so later tests read entries the first one left behind
+    'django_aiogram.broker.redis_streams.broker.get_redis',
     'django_aiogram.producer.client.get_redis',
     'django_aiogram.get_redis',
     # the probe's decision moved out of the command in 3.1.0, so it can run without
