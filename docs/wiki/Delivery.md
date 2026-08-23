@@ -1,7 +1,13 @@
 # Delivery
 
-`send_redis` pushes a serialized call onto a Redis list. The bot container
-consumes that list and makes the call.
+`bot.send()` puts a serialized call on the queue. The bot container takes it off
+and makes the call.
+
+Which queue is `BROKER`'s answer — see **[[Settings]]** — and this page is about
+what the consumer does with it, which is the same either way: take one message,
+send it, settle it, and leave it unsettled if the send did not happen. Where a
+transport's own machinery shows through, the section says which transport it is
+talking about.
 
 This page is about outbound messages: how a queued `bot.send()` reaches
 Telegram. Which way *updates* arrive — polling or webhook — is a separate
@@ -38,19 +44,33 @@ the value to use.
 
 ## Running more than one worker
 
-The consumer takes each message once — `BLMOVE` and `BLPOP` are atomic. Running
-several bot containers is safe, though a single one handles a lot: the limits
-in **[[Rate-limits|Rate limits]]** bind long before the consumer does.
+The consumer takes each message once, and every transport is responsible for that
+being true: the Redis list relies on `BLMOVE` and `BLPOP` being atomic, and Redis
+Streams on a consumer group handing an entry to one member. Running several bot
+containers is safe, though a single one handles a lot: the limits in
+**[[Rate-limits|Rate limits]]** bind long before the consumer does.
 
 ## Crash safety
 
-On Redis 6.2+ a message is moved to `<queue>:processing` while it is being
-sent and removed once the send has actually finished. A worker killed mid-send
-leaves it there, and the next start reclaims it **if it resolves the same worker
-name** — the list is keyed on that name, so a replacement container with a fresh
-hostname strands it instead, which is what `I001` reports and what
-`manage.py tgbot_reclaim` is the way back from. With a stable name, delivery is
-**at-least-once**, so a crash can cause a duplicate send.
+A message taken and not yet sent has to survive the worker being killed, and each
+transport records that its own way. The guarantee is the same — **at-least-once**,
+so a crash can cause a duplicate send — and what an operator has to do about it is
+not.
+
+**Redis list.** On Redis 6.2+ the message is moved to `<queue>:processing:<worker>`
+while it is being sent and removed once the send has actually finished. A worker
+killed mid-send leaves it there, and the next start reclaims it **if it resolves
+the same worker name** — the list is keyed on that name, so a replacement container
+with a fresh hostname strands it instead. That is what `I001` reports and what
+`manage.py tgbot_reclaim --worker <name>` is the way back from.
+
+**Redis Streams.** The consumer group records every delivery before the consumer
+sees it, and unsettled entries sit in the group's pending list rather than under a
+name. So a worker's name buys nothing here: any consumer reclaims what a dead one
+held, a replacement container with a fresh hostname strands nothing, `I001` stays
+quiet, and `tgbot_reclaim` refuses because there is nothing for `--worker` to
+select. A worker that comes back — or one already running — picks the work up once
+the old one has been quiet longer than the liveness TTL.
 
 Before 3.1.0 it was removed when the *handler returned*, and `send_raw` returns
 as soon as the coroutine is scheduled. In polling mode that meant the message

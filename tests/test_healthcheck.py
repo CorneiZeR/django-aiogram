@@ -211,12 +211,15 @@ def test_a_heartbeat_read_that_fails_after_ping_is_reported(redis_server, monkey
         def __getattr__(self, name):
             return getattr(redis_server, name)
 
-    monkeypatch.setattr(
-        'django_aiogram.healthcheck.get_redis',
-        FailsTheRead,
-    )
+    # both names: the probe's own `ping` goes through `healthcheck.get_redis`, and the
+    # liveness read goes through the broker, because a heartbeat key is one transport's
+    # answer. Patching only the first left the broker reading the real fake, which has no
+    # heartbeat in it — so the test passed on "none has been written" while the failing
+    # read it set up was never called
+    monkeypatch.setattr('django_aiogram.healthcheck.get_redis', FailsTheRead)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', FailsTheRead)
 
-    with pytest.raises(CommandError, match='could not read the heartbeat'):
+    with pytest.raises(CommandError, match='could not read the consumer liveness'):
         healthcheck()
 
 
@@ -235,10 +238,10 @@ def test_a_queue_read_that_fails_is_reported(redis_server, monkeypatch):
         def __getattr__(self, name):
             return getattr(redis_server, name)
 
-    monkeypatch.setattr(
-        'django_aiogram.healthcheck.get_redis',
-        FailsTheCount,
-    )
+    # as above: the count is the broker's answer now, so the failure has to be arranged
+    # where the broker looks
+    monkeypatch.setattr('django_aiogram.healthcheck.get_redis', FailsTheCount)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', FailsTheCount)
 
     with pytest.raises(CommandError, match='could not read the queue length'):
         healthcheck()
@@ -430,9 +433,56 @@ def test_a_heartbeat_that_cannot_be_decoded_is_reported(redis_server, monkeypatc
             return getattr(redis_server, name)
 
     monkeypatch.setattr('django_aiogram.healthcheck.get_redis', CannotDecode)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', CannotDecode)
 
-    with pytest.raises(CommandError, match='could not read the heartbeat'):
+    with pytest.raises(CommandError, match='could not read the consumer liveness'):
         healthcheck()
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_transport_that_cannot_answer_liveness_is_not_called_dead(redis_server, monkeypatch):
+    """`reported=False` is "nobody outside can see this", and that is not a failure.
+
+    The contract allows a transport whose group membership *is* the liveness signal and which
+    therefore writes nothing an outside probe can read. Judging that as a stale heartbeat would
+    report every such deployment as unhealthy for ever; treating it as an age of zero would be
+    worse, because the line would claim a consumer had just checked in.
+
+    So the probe says so and the depth carries the verdict, which is the only thing left to
+    look at.
+    """
+    from django_aiogram.broker.models import Liveness
+    from django_aiogram.broker.redis_list import RedisListBroker
+
+    monkeypatch.setattr(
+        RedisListBroker,
+        'liveness',
+        lambda self: Liveness(reported=False, age=None, detail='this transport tracks its own consumers'),
+    )
+
+    report = check()
+
+    assert report.ok, report.message
+    assert 'not observable from outside' in report.message, report.message
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_liveness_that_is_too_old_still_refuses(redis_server, monkeypatch):
+    """The other half of the same branch: an age *is* judged, whoever measured it.
+
+    Without this the case above could pass on a probe that had stopped judging liveness
+    altogether — the same green for "nothing to look at" and for "nobody has reported in an
+    hour".
+    """
+    from django_aiogram.broker.models import Liveness
+    from django_aiogram.broker.redis_list import RedisListBroker
+
+    monkeypatch.setattr(RedisListBroker, 'liveness', lambda self: Liveness(reported=True, age=3600.0))
+
+    report = check()
+
+    assert not report.ok
+    assert 'over the' in report.message, report.message
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
@@ -471,7 +521,7 @@ def test_the_container_form_neither_scans_nor_writes(redis_server, monkeypatch):
     # crosses a second boundary between the write above and the read reports `1s` and the
     # equality failed on CI for a probe that was working perfectly. The digits are not
     # what this test is about — the shape of the line is
-    assert re.fullmatch(r'healthy: heartbeat \d+s old, 0 queued', report.message), report.message
+    assert re.fullmatch(r'healthy: consumer \d+s old, 0 queued', report.message), report.message
     assert report.warnings == (), report.warnings
 
 
@@ -566,7 +616,7 @@ def test_a_healthy_process_is_reported_in_success_green(redis_server):
 
     call_command('tgbot_healthcheck', stdout=out, force_color=True)
 
-    assert 'healthy: heartbeat' in out.getvalue(), out.getvalue()
+    assert 'healthy: consumer' in out.getvalue(), out.getvalue()
     assert '\x1b[' in out.getvalue(), 'the healthy line lost its success colour'
 
 

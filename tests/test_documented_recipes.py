@@ -404,9 +404,11 @@ PROBE_REFUSALS = (
     'redis is unreachable',
     'is not a number',
     'cannot read the settings',
-    'the consumer has not written one within',
-    'is not a timestamp',
-    'could not read the heartbeat',
+    'or the consumer never started',
+    'no heartbeat has been written',
+    'the heartbeat is not a timestamp',
+    'no consumer has joined the group',
+    'could not read the consumer liveness',
     'could not read the queue length',
     'messages are queued, over the limit of',
     'message(s) are in flight under',
@@ -521,7 +523,12 @@ def test_every_line_the_probe_prints_is_catalogued(fragment):
     catalogue quietly describing a line the probe no longer prints.
     """
     root = pathlib.Path(__file__).resolve().parent.parent
-    source = (root / 'src' / 'django_aiogram' / 'healthcheck.py').read_text(encoding='utf-8')
+    package = root / 'src' / 'django_aiogram'
+    # the probe's vocabulary is no longer its own file's: since liveness became a question for
+    # the transport, part of what it prints is a broker's `Liveness.detail`, composed into the
+    # refusal. Scanning only `healthcheck.py` would call those lines gone the moment they moved
+    sources = [package / 'healthcheck.py', *sorted((package / 'broker').rglob('broker.py'))]
+    source = '\n'.join(path.read_text(encoding='utf-8') for path in sources)
     page = (root / 'docs' / 'wiki' / 'Troubleshooting.md').read_text(encoding='utf-8')
 
     assert fragment in source, 'the probe no longer says this; the page and this list still do'

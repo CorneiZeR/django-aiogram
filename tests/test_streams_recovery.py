@@ -20,6 +20,10 @@ SETTINGS = {
     'REDIS_URL': 'redis://localhost:6379/0',
     'REDIS_STREAM_KEY': STREAM,
     'RATE_LIMIT': None,
+    # named, not defaulted: the fixture below builds the broker directly, but anything asking
+    # `get_broker()` — a management command, a check — would otherwise get the default list
+    # and the case would pass while testing the wrong transport
+    'BROKER': 'django_aiogram.broker.redis_streams.RedisStreamsBroker',
 }
 
 
@@ -89,6 +93,37 @@ def test_every_reclaimed_entry_comes_back_not_just_the_first(broker, redis_serve
         seen.append(again.payload)
 
     assert sorted(seen) == sorted(sent), f'{len(seen)} of {len(sent)} released messages came back'
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_liveness_comes_from_the_group_with_no_key_to_write(broker, redis_server):
+    """The transport answers for itself, and writes nothing to do it.
+
+    `XINFO CONSUMERS` records milliseconds since each member last spoke, and a blocking read
+    that finds nothing counts as speaking — measured on a real server, 1006ms of idling
+    becoming 386ms after one empty read. So a consumer that is turning keeps its idle inside
+    its own block timeout, and the list's `SET heartbeat … EX` on every pass has nothing to do
+    here: `alive()` stays the base class's no-op.
+
+    A group nobody has joined reports no age rather than an age of zero, which would read as a
+    consumer that just checked in.
+    """
+    before = broker.liveness()
+
+    assert before.reported is True, 'the transport claims it cannot answer'
+    assert before.age is None, 'a group nobody has joined reported an age'
+    assert 'no consumer' in before.detail, before.detail
+
+    broker.publish([payload(1)])
+    broker.take_nowait()
+    after = broker.liveness()
+
+    assert after.reported is True
+    assert after.age is not None, 'a consumer that has read is not reported as alive'
+    assert after.age >= 0
+    assert redis_server.get('TELEGRAM_BOT_MESSAGE:heartbeat:integration') is None, (
+        'this transport wrote a heartbeat key it has no use for'
+    )
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
@@ -177,3 +212,18 @@ def test_the_async_half_does_not_reach_for_the_synchronous_client(broker, redis_
     # test must not depend on. What it is about is that the publish landed
     assert redis_server.xlen(STREAM) == 1, 'the awaited publish did not queue anything'
     assert inflight == 0, 'nothing was taken, so nothing is in flight'
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_reclaiming_by_worker_name_is_refused_here(redis_server):
+    """`tgbot_reclaim` names a worker, and on this transport a name selects nothing.
+
+    The command exists because a *person* decided one worker is dead. That judgement does not
+    translate into "take every unacknowledged message from whoever is holding it", which is
+    all a name could mean where the pending list belongs to the group — so it refuses and says
+    what recovers the work instead.
+    """
+    from django.core.management import CommandError, call_command
+
+    with pytest.raises(CommandError, match='nothing for --worker to select'):
+        call_command('tgbot_reclaim', worker='gone')

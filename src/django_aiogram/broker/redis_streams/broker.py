@@ -22,7 +22,7 @@ from collections.abc import Sequence as Seq
 from typing import Any, ClassVar
 
 from django_aiogram.broker.base import REQUIRED, Broker
-from django_aiogram.broker.models import Taken
+from django_aiogram.broker.models import Liveness, Taken
 from django_aiogram.broker.redis_streams.exceptions import (
     StreamLagUnknownError,
     StreamServerTooOldError,
@@ -515,11 +515,59 @@ class RedisStreamsBroker(Broker):
         return 0
 
     @staticmethod
+    def _idles(rows: object) -> list[int]:
+        """Every consumer's idle time in milliseconds, from ``XINFO CONSUMERS``.
+
+        Takes ``object`` for the same reason :meth:`_lag` does: the field names come back as
+        ``str`` on a real server and on fakeredis alike, and the bytes spelling is kept as a
+        guard against a driver that decides otherwise — which a typed row would refuse to let
+        this ask about.
+        """
+        found = []
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            idle = row.get('idle', row.get(b'idle'))
+            if idle is not None:
+                found.append(int(idle))
+        return found
+
+    @staticmethod
     def _count(pending: object) -> int:
         """Pull the ``pending`` total out of an ``XPENDING`` summary."""
         if isinstance(pending, dict):
             return int(pending.get('pending', pending.get(b'pending', 0)) or 0)
         return 0
+
+    def liveness(self) -> Liveness:
+        """Report how long since any consumer in this group last talked to the server.
+
+        No heartbeat key, and none needed: ``XINFO CONSUMERS`` already answers the question
+        the key exists to answer. ``idle`` is milliseconds since that consumer's last
+        interaction, and the deciding question was whether a *blocking read that finds
+        nothing* counts — because that is what a consumer does all day on a quiet queue.
+        Measured, it does:
+
+        ===================================  =========
+        after 1s of doing nothing            1006 ms
+        after a blocking read that timed out  386 ms
+        and 0.7s later                       1091 ms
+        ===================================  =========
+
+        So a consumer that is turning keeps ``idle`` inside its own block timeout, and one
+        that has died stops refreshing it. The list writes ``SET heartbeat … EX`` on every
+        pass precisely because it has nothing like this; here :meth:`alive` stays the base
+        class's no-op and the consumer loop is one round trip lighter.
+
+        The smallest ``idle`` across the group, because the question is whether *a* consumer
+        is alive rather than which one. A group nobody has joined yet reports no age, the
+        honest analogue of the list's "no heartbeat has been written".
+        """
+        self._ensure()
+        idles = self._idles(get_redis().xinfo_consumers(self._key(), self._group()))
+        if not idles:
+            return Liveness(reported=True, age=None, detail='no consumer has joined the group')
+        return Liveness(reported=True, age=max(0.0, min(idles) / 1000))
 
     @property
     def crash_safe(self) -> bool:
