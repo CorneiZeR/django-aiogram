@@ -227,3 +227,25 @@ def test_reclaiming_by_worker_name_is_refused_here(redis_server):
 
     with pytest.raises(CommandError, match='nothing for --worker to select'):
         call_command('tgbot_reclaim', worker='gone')
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_the_awaiting_reads_answer_nothing_rather_than_raising(broker, redis_server):
+    """Nothing published yet is nothing waiting, on the awaited halves too.
+
+    They are a second implementation reaching a second client, so the synchronous cases above
+    say nothing about them — and this is the path a producer under ASGI takes: `aqueue_depth()`
+    from a request, on a deployment where the bot has not started and the stream therefore does
+    not exist. It has to answer zero, not raise `no such key` at the caller.
+
+    Asserted before anything is published, which is the whole condition.
+    """
+
+    async def on_a_loop():
+        return await broker.adepth(), await broker.ainflight_depth()
+
+    depth, inflight = asyncio.run(on_a_loop())
+
+    assert depth == 0, 'a stream that does not exist reported messages waiting'
+    assert inflight == 0, 'a group that does not exist reported work in flight'
+    assert not redis_server.exists(STREAM), 'reading created the stream'
