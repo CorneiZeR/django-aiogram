@@ -33,13 +33,17 @@ _producer_lock = threading.Lock()
 _producer: tuple[str, 'Producer'] | None = None
 
 #: the consumer is *not* thread-safe, and it also carries the group membership: a second one on
-#: another thread would be a second member, taking a share of the partitions
+#: another thread would be a second member, taking a share of the partitions. The metadata
+#: reader beside it is the same object with no subscription, which is the whole difference
+#: between a member and an observer.
+#:
+#: Held in thread-local storage and nowhere else, deliberately. A registry of every client this
+#: process opened would have to be pruned by the thread that owns each one — nothing else may
+#: touch a librdkafka client — so a thread that exits without closing would leave its entry
+#: behind for ever, keeping a socket and librdkafka's own threads alive with it. A server that
+#: recycles worker threads and asks for a queue depth on them would grow that list without
+#: bound. Thread-local storage is discarded with its thread, which is the behaviour wanted
 _local = threading.local()
-_consumers: list[Any] = []
-#: and the ones that only read. Kept apart because they differ in the thing that matters: a
-#: subscribed consumer is a group member and an unsubscribed one is not
-_readers: list[Any] = []
-_consumer_lock = threading.Lock()
 
 
 def shared_producer(bootstrap: str) -> 'Producer':
@@ -93,8 +97,6 @@ def consumer_for_thread(bootstrap: str, topic: str, group: str, timeout: float) 
     )
     consumer.subscribe([topic])
     _local.identity, _local.consumer = identity, consumer
-    with _consumer_lock:
-        _consumers.append(consumer)
     return consumer
 
 
@@ -130,8 +132,6 @@ def metadata_client(bootstrap: str, group: str, timeout: float) -> 'Consumer':
         }
     )
     _local.reader_identity, _local.reader = identity, reader
-    with _consumer_lock:
-        _readers.append(reader)
     return reader
 
 
@@ -140,8 +140,6 @@ def _drop_this_threads_reader() -> None:
     reader = getattr(_local, 'reader', None)
     if reader is None:
         return
-    with _consumer_lock:
-        _readers[:] = [held for held in _readers if held is not reader]
     with suppress(Exception):
         reader.close()
     for attribute in ('reader_identity', 'reader'):
@@ -159,8 +157,6 @@ def _drop_this_threads_consumer() -> None:
     consumer = getattr(_local, 'consumer', None)
     if consumer is None:
         return
-    with _consumer_lock:
-        _consumers[:] = [held for held in _consumers if held is not consumer]
     # a consumer that is already gone is the outcome being asked for
     with suppress(Exception):
         consumer.close()
@@ -172,10 +168,12 @@ def _drop_this_threads_consumer() -> None:
 def close_clients(**_kwargs: object) -> None:
     """Flush the producer and close this thread's consumer.
 
-    The other threads' consumers are left alone. librdkafka's are not thread-safe either, and
-    unlike pika there is no documented way to ask one to close itself — so the honest thing is
-    to leave it to the thread that owns it, which reaches this on its own next use because
-    :func:`consumer_for_thread` rebuilds when the settings behind it have moved.
+    The other threads' clients are left alone, and are not even recorded: librdkafka's are not
+    thread-safe either, and unlike pika there is no documented way to ask one to close itself.
+    So the honest thing is to leave each to the thread that owns it, which reaches this on its
+    own next use because :func:`consumer_for_thread` rebuilds when the settings behind it have
+    moved — and to keep no list of them, since a list nothing may act on is a list that only
+    keeps sockets alive.
     """
     global _producer  # noqa: PLW0603 - as above
     with _producer_lock:
