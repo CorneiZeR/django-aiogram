@@ -69,8 +69,10 @@ it in that partition rather than about one. So a consumer that holds several sen
 which `MAX_IN_FLIGHT` allows — commits only the highest **contiguous** prefix per partition:
 settle the second while the first is still in flight and nothing is committed for that
 partition until the first finishes, because committing the second would claim the first as
-done. A worker killed at that moment loses nothing and redelivers both. Partitions are
-independent: a gap in one does not hold up commits in another.
+done. A worker killed at that moment loses nothing: what comes back is every record after the
+last committed offset in that partition, which with `MAX_IN_FLIGHT` above two is more than the
+pair that caused the gap. Partitions are independent: a gap in one does not hold up commits in
+another.
 
 The same shape has a sharper edge on a refusal. There is no per-message nack, so giving one up
 rewinds that partition to the offset, and **every record after it in that partition** is

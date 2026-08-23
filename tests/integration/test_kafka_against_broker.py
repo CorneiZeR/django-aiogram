@@ -193,9 +193,13 @@ def test_asking_the_depth_does_not_join_the_group(broker, kafka_bootstrap, kafka
     nothing until the member's session times out. A healthcheck could starve the consumer it
     was checking on.
 
-    Asserted on the group's members as the broker sees them, which is the only place the
-    difference shows — the depth is the same number either way.
+    Asserted on the group's *state*, not on its member list, and the difference matters.
+    Measured, a group that never existed describes as `DEAD` with no members, one with a
+    consumer attached as `STABLE`, and one whose consumer has left as `EMPTY` with no members —
+    so an empty member list would pass for a process that joined and then went away. `DEAD` is
+    the only answer that means nobody ever joined.
     """
+    from confluent_kafka import ConsumerGroupState
     from confluent_kafka.admin import AdminClient
 
     admin = AdminClient({'bootstrap.servers': kafka_bootstrap})
@@ -206,9 +210,11 @@ def test_asking_the_depth_does_not_join_the_group(broker, kafka_bootstrap, kafka
 
         assert publisher.depth() == 1, 'the depth read did not work at all'
 
-    described = admin.describe_consumer_groups([kafka_topic])[kafka_topic].result(timeout=30)
+        described = admin.describe_consumer_groups([kafka_topic])[kafka_topic].result(timeout=30)
 
-    assert described.members == [], f'reading the depth joined the group: {described.members}'
+    assert described.state == ConsumerGroupState.DEAD, (
+        f'reading the depth joined the group: state={described.state} members={described.members}'
+    )
 
 
 def test_the_awaited_halves_work_off_the_loop(broker, kafka_bootstrap, kafka_topic):

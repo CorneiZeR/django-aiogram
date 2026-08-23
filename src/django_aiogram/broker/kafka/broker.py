@@ -123,24 +123,36 @@ class KafkaBroker(Broker):
         producer, topic = shared_producer(self._bootstrap()), self._topic()
         failures: list[str] = []
         outstanding = [len(payloads)]
+        # a lock of its own, not `self._lock`: the callbacks run on whichever thread is
+        # polling, and `poll` on a process-wide producer serves other threads' callbacks too.
+        # `outstanding[0] -= 1` is a read, a subtract and a store, so two callbacks can lose a
+        # decrement between them — and a lost decrement means this call reports a batch the
+        # broker accepted as unanswered, which a retry then sends twice
+        counted = threading.Lock()
 
         def delivered(error: object, _message: object) -> None:
             """Count this record as answered, and note a refusal."""
-            outstanding[0] -= 1
-            if error is not None:
-                failures.append(str(error))
+            with counted:
+                if error is not None:
+                    failures.append(str(error))
+                outstanding[0] -= 1
 
         for payload in payloads:
             producer.produce(topic, payload, on_delivery=delivered)
         deadline = time.monotonic() + self._timeout()
-        while outstanding[0] and time.monotonic() < deadline:
+        while time.monotonic() < deadline:
+            with counted:
+                if not outstanding[0]:
+                    break
             # `poll` is what serves callbacks, including other threads' — which is how
             # librdkafka works and is safe: whoever polls serves whatever is ready
             producer.poll(_CALLBACK_SLICE)
-        if outstanding[0]:
-            raise ProduceRefusedError(topic, f'{outstanding[0]} message(s) of this batch went unanswered')
-        if failures:
-            raise ProduceRefusedError(topic, failures[0])
+        with counted:
+            left, refused = outstanding[0], list(failures)
+        if left:
+            raise ProduceRefusedError(topic, f'{left} message(s) of this batch went unanswered')
+        if refused:
+            raise ProduceRefusedError(topic, refused[0])
 
     async def apublish(self, payloads: Seq[bytes]) -> None:
         """Make the same publishes, off the loop's thread.
