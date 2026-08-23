@@ -1,10 +1,11 @@
-"""The measurements two driver decisions rest on, kept so they can be re-taken.
+"""The measurements two driver decisions and every quoted ratio rest on, kept to be re-taken.
 
 Not tests: each needs a broker, and what they produce is a number to read rather than a pass or
 a fail. `README.md` beside them says how to run each one and what it answered.
 
 A package rather than loose files because they share `_timing`, and because a number is only
-comparable to another number taken the same way.
+comparable to another number taken the same way — which is the whole reason `redis_baseline` is
+here next to the two driver comparisons rather than being remembered from an earlier release.
 """
 
 __all__ = ()

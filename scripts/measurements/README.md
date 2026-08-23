@@ -52,6 +52,14 @@ docker run -d --rm --name amqp -p 5673:5672 rabbitmq:4
 `.[rabbitmq,kafka]` brings the two drivers that were chosen; `--group measure` brings the two
 that were not. Needs pip 25.1+ or uv, the same floor `--group dev` has.
 
+The baseline needs neither group — `redis` is a shipped extra, so an ordinary development
+checkout can take it:
+
+```shell
+docker run -d --rm --name redis -p 6399:6379 redis:8
+python -m scripts.measurements.redis_baseline
+```
+
 ```shell
 # the advertised listener matters: with the image's default the broker answers `localhost:9092`
 # from inside the container, and a client on the host retries into a refusal loop rather than
@@ -87,6 +95,13 @@ aio-pika 10.0.1, confluent-kafka on librdkafka 2.15.0 and aiokafka 0.14.0. Versi
 | `pika`, awaited via `to_thread` | 119 – 122 µs | 412 – 423 µs |
 | `confluent-kafka`, synchronous | 0.2 µs | 166 – 232 µs |
 | `aiokafka`, via a loop thread | 66 – 72 µs | 354 – 359 µs |
+| `RPUSH`, the list transport's publish | — | 120 – 143 µs |
+| `XADD`, the Streams transport's publish | — | 116 – 121 µs |
+
+The last two rows are the baseline, and they are in this table rather than in a sentence
+somewhere because five claims elsewhere are quoted as a multiple of them. Redis is asked for no
+disk here and neither transport waits for one, which is why they have no unconfirmed column: a
+list publish *is* the acknowledged one.
 
 **RabbitMQ: `pika`.** The two bridged rows are the same number, so crossing the thread boundary
 is the price rather than the library — about 100 µs either way, 0.98 to 1.00 times each other. That makes the question which
@@ -105,6 +120,14 @@ The plan's other argument turned out to be false and is recorded so it is not re
 
 **And the guarantee is not optional.** `RPUSH` answers with the new list length, so a Redis
 publish is acknowledged before `send()` returns. The confirmed columns are what matching that
-costs: Kafka ~10× a Redis list, RabbitMQ ~18× — and the difference between those two is mostly
-the disk, since RabbitMQ is asked for persistence and a Kafka broker's flushing is its own
-setting rather than the publisher's.
+costs: on this footing a Redis list publish is 120–143 µs, Kafka 1.2–1.9× that and RabbitMQ
+2.3–3.3×, and the difference between the two brokers is mostly the disk, since RabbitMQ is asked
+for persistence and a Kafka broker's flushing is its own setting rather than the publisher's.
+
+**Quote the divisor or do not quote the multiple.** These ratios were carried for a while as
+"~10×" and "~18×" against a Redis publish nobody had measured here — a figure of 14–19 µs taken
+in 3.1.0 on a *native* server, while every broker number above comes from a container. On one
+footing the AMQP publish is two and a half times a list publish and on the other it is twenty,
+and both readings are honest about their own machine. `redis_baseline.py` exists so the divisor
+is a row in this table rather than folklore; what survives a change of footing is only the
+ordering, Streams ≤ list < Kafka < RabbitMQ.

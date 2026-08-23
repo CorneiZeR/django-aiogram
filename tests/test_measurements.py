@@ -83,6 +83,26 @@ def test_every_amqp_publish_is_mandatory_and_persistent(source):
         )
 
 
+@pytest.mark.parametrize(
+    ('command', 'transport'),
+    [
+        ('rpush', 'src/django_aiogram/broker/redis_list/broker.py'),
+        ('xadd', 'src/django_aiogram/broker/redis_streams/broker.py'),
+    ],
+)
+def test_the_baseline_times_the_command_its_transport_publishes_with(command, transport):
+    """The divisor has to be the same publish as the thing being divided.
+
+    Five ratios elsewhere are quoted against these two rows, so a baseline that timed a
+    cheaper command would understate every one of them — and quietly, because a ratio reads as
+    a measurement whichever command produced it.
+    """
+    baseline = calls_to(parsed('scripts/measurements/redis_baseline.py'), command)
+    assert baseline, f'the baseline no longer times {command}, which its own row names'
+    published = calls_to(parsed(transport), command)
+    assert published, f'{transport} no longer publishes with {command}, so the baseline is measuring the wrong call'
+
+
 def test_the_kafka_measurement_lingers_as_little_as_the_transport():
     """One send is a batch of one on both sides, or the script reports a latency nobody gets.
 
