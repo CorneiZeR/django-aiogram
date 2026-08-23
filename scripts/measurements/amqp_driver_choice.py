@@ -38,19 +38,36 @@ BODY = b'{"function": "send_message", "chat_id": 1}'
 def main() -> None:
     """Measure both drivers on both faces and report what the numbers decide."""
     configure_reporting()
-    logger.info('pika, on its own synchronous face:')
     plain, confirming = _pika_channels()
-    measure('unconfirmed', lambda: plain.basic_publish('', QUEUE, BODY))
-    pika_confirmed = measure('confirmed', lambda: confirming.basic_publish('', QUEUE, BODY))
+    loop, connection, unconfirmed_channel, confirmed_channel = _aio_pika_channels()
+    try:
+        _report(plain, confirming, loop, unconfirmed_channel, confirmed_channel)
+    finally:
+        _tear_down(plain, confirming, loop, connection)
+
+
+def _report(
+    plain: BlockingChannel,
+    confirming: BlockingChannel,
+    loop: asyncio.AbstractEventLoop,
+    unconfirmed_channel: AbstractChannel,
+    confirmed_channel: AbstractChannel,
+) -> None:
+    """Time every row and say what the numbers decide."""
+    logger.info('pika, on its own synchronous face:')
+    measure('unconfirmed', _purged(lambda: plain.basic_publish('', QUEUE, BODY), plain))
+    pika_confirmed = measure('confirmed', _purged(lambda: confirming.basic_publish('', QUEUE, BODY), plain))
 
     logger.info('aio-pika, handed to a loop thread (what a sync producer needs):')
-    loop, unconfirmed_channel, confirmed_channel = _aio_pika_channels()
-    aio_queued = measure('unconfirmed', _publisher(loop, unconfirmed_channel))
-    aio_confirmed = measure('confirmed', _publisher(loop, confirmed_channel))
+    aio_queued = measure('unconfirmed', _purged(_publisher(loop, unconfirmed_channel), plain))
+    aio_confirmed = measure('confirmed', _purged(_publisher(loop, confirmed_channel), plain))
 
     logger.info('pika, awaited from a loop via to_thread:')
-    pika_queued_bridged = measure('unconfirmed', _threaded(loop, lambda: plain.basic_publish('', QUEUE, BODY)))
-    measure('confirmed', _threaded(loop, lambda: confirming.basic_publish('', QUEUE, BODY)))
+    # each of these publishes through a connection its *own* thread opened, which is what the
+    # transport does and what pika allows: a `BlockingConnection` belongs to one thread, so
+    # sharing the main thread's from an executor would be measuring an unsupported path
+    pika_queued_bridged = measure('unconfirmed', _purged(_threaded(loop, confirmed=False), plain))
+    measure('confirmed', _purged(_threaded(loop, confirmed=True), plain))
 
     logger.info('')
     logger.info(
@@ -69,7 +86,6 @@ def main() -> None:
         pika_queued_bridged / aio_queued,
     )
     logger.info('a ratio near 1 is the finding: the hand-off is the price, not the library')
-    loop.call_soon_threadsafe(loop.stop)
 
 
 def _pika_channels() -> tuple[BlockingChannel, BlockingChannel]:
@@ -81,7 +97,9 @@ def _pika_channels() -> tuple[BlockingChannel, BlockingChannel]:
     return plain, confirming
 
 
-def _aio_pika_channels() -> tuple[asyncio.AbstractEventLoop, AbstractChannel, AbstractChannel]:
+def _aio_pika_channels() -> tuple[
+    asyncio.AbstractEventLoop, aio_pika.abc.AbstractRobustConnection, AbstractChannel, AbstractChannel
+]:
     """Start a loop on a thread of its own and open two channels on it.
 
     A thread, because that is what a synchronous caller would need: aio-pika's connections are
@@ -91,15 +109,15 @@ def _aio_pika_channels() -> tuple[asyncio.AbstractEventLoop, AbstractChannel, Ab
     loop = asyncio.new_event_loop()
     threading.Thread(target=loop.run_forever, daemon=True).start()
 
-    async def open_them() -> tuple[AbstractChannel, AbstractChannel]:
+    async def open_them() -> tuple[aio_pika.abc.AbstractRobustConnection, AbstractChannel, AbstractChannel]:
         connection = await aio_pika.connect_robust(URL)
         confirmed = await connection.channel(publisher_confirms=True)
         unconfirmed = await connection.channel(publisher_confirms=False)
         await confirmed.declare_queue(QUEUE, durable=True)
-        return unconfirmed, confirmed
+        return connection, unconfirmed, confirmed
 
-    unconfirmed, confirmed = asyncio.run_coroutine_threadsafe(open_them(), loop).result(30)
-    return loop, unconfirmed, confirmed
+    connection, unconfirmed, confirmed = asyncio.run_coroutine_threadsafe(open_them(), loop).result(30)
+    return loop, connection, unconfirmed, confirmed
 
 
 def _publisher(loop: asyncio.AbstractEventLoop, channel: AbstractChannel) -> Callable[[], None]:
@@ -111,13 +129,70 @@ def _publisher(loop: asyncio.AbstractEventLoop, channel: AbstractChannel) -> Cal
     return lambda: asyncio.run_coroutine_threadsafe(publish(), loop).result(30)
 
 
-def _threaded(loop: asyncio.AbstractEventLoop, call: Callable[[], None]) -> Callable[[], None]:
-    """Build a call that runs a synchronous publish in a thread, awaited from ``loop``."""
+def _threaded(loop: asyncio.AbstractEventLoop, *, confirmed: bool) -> Callable[[], None]:
+    """Build a call that publishes through pika from a thread, awaited from ``loop``.
+
+    The channel is opened by whichever thread the publish lands on, and kept there. That is not
+    ceremony: pika documents ``add_callback_threadsafe`` as the only operation another thread may
+    perform on a ``BlockingConnection``, so a shared connection would make this row a
+    measurement of something the driver does not support. The transport keeps one connection per
+    thread for the same reason.
+    """
+    local = threading.local()
+
+    def publish() -> None:
+        channel = getattr(local, 'channel', None)
+        if channel is None:
+            connection = pika.BlockingConnection(pika.URLParameters(URL))
+            channel = connection.channel()
+            if confirmed:
+                channel.confirm_delivery()
+            local.channel = channel
+        channel.basic_publish('', QUEUE, BODY)
 
     async def awaited() -> None:
-        await asyncio.to_thread(call)
+        await asyncio.to_thread(publish)
 
     return lambda: asyncio.run_coroutine_threadsafe(awaited(), loop).result(30)
+
+
+def _purged(call: Callable[[], None], keeper: BlockingChannel) -> Callable[[], None]:
+    """Wrap ``call`` so the queue is emptied before the row it is timed in.
+
+    Nothing consumes what these publish, so without this each row is measured against the
+    backlog the rows before it left — and a deep enough queue puts the broker into flow control,
+    which is a different thing to be timing. Purged once per row rather than per publish: the
+    purge itself is a round trip and would swamp an 18-microsecond measurement.
+    """
+    purged = [False]
+
+    def once() -> None:
+        if not purged[0]:
+            keeper.queue_purge(QUEUE)
+            purged[0] = True
+        call()
+
+    return once
+
+
+def _tear_down(
+    plain: BlockingChannel,
+    confirming: BlockingChannel,
+    loop: asyncio.AbstractEventLoop,
+    connection: aio_pika.abc.AbstractRobustConnection,
+) -> None:
+    """Close what was opened and leave the broker as it was found.
+
+    The aio-pika connection is closed on the loop that owns it and *before* the loop stops:
+    stopping first leaves its reader, writer and heartbeat tasks pending, which is what made a
+    successful run end in a page of ``Task was destroyed but it is pending``. The queue goes last
+    because it is the only durable trace a run leaves behind.
+    """
+    asyncio.run_coroutine_threadsafe(connection.close(), loop).result(30)
+    loop.call_soon_threadsafe(loop.stop)
+    plain.queue_delete(QUEUE)
+    plain.connection.close()
+    confirming.connection.close()
 
 
 if __name__ == '__main__':

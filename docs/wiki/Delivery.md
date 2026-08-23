@@ -65,8 +65,9 @@ with a fresh hostname strands it instead. That is what `I001` reports and what
 `manage.py tgbot_reclaim --worker <name>` is the way back from.
 
 **Kafka.** A committed offset is the *next* record to read, so it says that every offset below
-it in that partition is settled rather than saying anything about one message. So a consumer that holds several sends at once —
-which `MAX_IN_FLIGHT` allows — commits only the highest **contiguous** prefix per partition:
+it in that partition is settled rather than saying anything about one message. A consumer that
+holds several sends at once — which `MAX_IN_FLIGHT` allows — therefore commits only the highest
+**contiguous** prefix per partition:
 settle the second while the first is still in flight and nothing is committed for that
 partition until the first finishes, because committing the second would claim the first as
 done. A worker killed at that moment loses nothing: what comes back is every record after the

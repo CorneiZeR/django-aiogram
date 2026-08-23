@@ -138,8 +138,8 @@ transport you are not using is reported by `W003` as a key nothing reads, which 
 A publish here is **confirmed and mandatory**: the broker answers before `send()` returns, and
 a message that cannot be routed raises instead of vanishing into an exchange. That matches what
 the Redis transports already do — `RPUSH` answers with the new length — and it costs what the
-guarantee costs: measured, 170.7µs against 18.9µs for a publish nobody confirms, so roughly 8×
-a Redis list publish.
+guarantee costs: measured, 135–173µs against 14–21µs for a publish nobody confirms, so roughly
+8× a Redis list publish.
 
 Nothing here needs `WORKER_NAME`. An unacknowledged message returns to the queue when the
 channel that held it drops, which is what a worker being killed does to it — so there is no

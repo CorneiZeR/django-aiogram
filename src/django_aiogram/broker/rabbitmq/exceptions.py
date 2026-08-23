@@ -10,7 +10,7 @@ class QueueRefusedError(BrokerError):
 
     This transport publishes with ``mandatory`` and publisher confirms on, so a message that
     cannot be routed comes back as an error rather than disappearing. That is a deliberate
-    cost: measured, confirms take a publish from 18.9 to 170.7 microseconds.
+    cost: measured, confirms take a publish from 14-21 to 135-173 microseconds.
 
     It is what keeps the promise the package already makes everywhere else. ``RPUSH`` answers
     with the new list length, so a Redis publish is acknowledged by the server before

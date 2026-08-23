@@ -75,24 +75,24 @@ Entries land here as the work does; nothing below is released.
   the `await` half — is wrong, and the first measurement that said so was wrong too:
   `aio_pika.Connection.channel()` confirms publishes by default and `pika`'s does not, so
   comparing them directly put a confirmed publish next to fire-and-forget. Held constant, on
-  RabbitMQ 4 over loopback, median of 300 publishes:
+  RabbitMQ 4 over loopback, medians of 300 publishes, four runs against an emptied queue:
 
   ```text
-                                          unconfirmed   confirmed
-  pika, synchronous, its own face              18.9us      170.7us
-  aio-pika, handed to a loop thread           119.2us      290.6us
-  pika, awaited via asyncio.to_thread         120.1us            —
+                                          unconfirmed     confirmed
+  pika, synchronous, its own face           14 - 21us   135 - 173us
+  aio-pika, handed to a loop thread        113 - 118us   265 - 300us
+  pika, awaited via asyncio.to_thread      120 - 122us   231 - 263us
   ```
 
   The decisive part is that two of those are the same number. Crossing the thread boundary
   costs about 100µs whichever driver is used, so the question is which face pays it — and the
   faces are not equal. `bot.send()` is called from views, tasks and management commands;
   `asend()` is for ASGI and is rarer. `pika` charges the rare one and leaves the common one at
-  18.9µs. `aio-pika` also cannot serve a synchronous caller simply: its connections are
+  14–21µs. `aio-pika` also cannot serve a synchronous caller simply: its connections are
   loop-affine, so `async_to_sync` over one built elsewhere raises `attached to a different
   loop`, exactly as `redis.asyncio` does.
 
-  **Publishes are confirmed and mandatory**, which costs 170.7µs against 18.9µs. That buys the
+  **Publishes are confirmed and mandatory**, which costs 135–173µs against 14–21µs. That buys the
   promise the package already makes: `RPUSH` answers with the new length, so a Redis publish is
   acknowledged before `send()` returns and a failure raises. Unconfirmed AMQP publishing is
   weaker than that — a broker that dies before persisting the message loses it in silence — so

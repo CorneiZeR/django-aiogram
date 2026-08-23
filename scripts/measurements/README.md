@@ -16,6 +16,20 @@ unconfirmed publish against `aio-pika`'s confirmed one — `aio_pika`'s channel 
 and pika's does not — and read as a 15× difference in the *driver* when most of it was the
 promise. Both scripts measure both drivers with the wait off and on.
 
+**Leave the broker as you found it, between rows and not only at the end.** Nothing consumes
+what these publish, so the second attempt at the AMQP one timed every row against the backlog
+the rows before it had left — and a deep enough queue puts RabbitMQ into publisher flow control,
+which is a different thing to be timing. Each row now empties the queue before it starts, and
+the run deletes it on the way out.
+
+**Call a driver the way its own rules allow.** The same attempt reached pika from an executor
+thread over a connection the main thread had opened, which pika documents as unsupported: a
+`BlockingConnection` belongs to one thread and `add_callback_threadsafe` is the only thing
+another may do to it. That row was measuring a path no correct implementation would take. Those
+two mistakes together moved the confirmed pika figure from a single 170.7µs to a 135–173µs
+spread over four runs — they did not change which driver wins, and that is luck rather than a
+reason to skip either rule.
+
 ## Running them
 
 The drivers they need but the package does not ship live in their own dependency group, so
@@ -59,9 +73,9 @@ One machine, loopback, RabbitMQ 4 and Apache Kafka 4, CPython 3.13:
 
 | | unconfirmed | confirmed |
 | --- | --- | --- |
-| `pika`, synchronous | 18.9 µs | 170.7 µs |
-| `aio-pika`, via a loop thread | 119.2 µs | 290.6 µs |
-| `pika`, awaited via `to_thread` | 120.1 µs | — |
+| `pika`, synchronous | 14 – 21 µs | 135 – 173 µs |
+| `aio-pika`, via a loop thread | 113 – 118 µs | 265 – 300 µs |
+| `pika`, awaited via `to_thread` | 120 – 122 µs | 231 – 263 µs |
 | `confluent-kafka`, synchronous | 0.2 µs | 166 – 232 µs |
 | `aiokafka`, via a loop thread | 66 – 72 µs | 354 – 359 µs |
 
