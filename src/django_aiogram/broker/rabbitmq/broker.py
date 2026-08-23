@@ -61,10 +61,14 @@ class RabbitMQBroker(Broker):
 
     def __init__(self) -> None:
         """Hold nothing open; the first publish or take opens this thread's channel."""
-        #: the open consumer and the timeout it was opened with. `consume` fixes its
-        #: inactivity timeout when the generator is made, so a different one needs a new one
+        #: the open consumer, the timeout it was opened with, and the channel it belongs to.
+        #: `consume` fixes its inactivity timeout when the generator is made, so a different
+        #: one needs a new generator — and so does a different *channel*: a connection replaced
+        #: under this broker leaves a generator whose channel is dead, and advancing that is a
+        #: failure where opening a new consumer was the whole intent
         self._consumer: Any = None
         self._consumer_timeout: float | None = None
+        self._consumer_channel: Any = None
         #: delivery tags handed out and not yet settled. AMQP does not report an unacked count
         #: — `message_count` counts only what is ready, measured — and the contract asks what
         #: *this worker* holds, which is exactly what this knows
@@ -132,10 +136,12 @@ class RabbitMQBroker(Broker):
         it is shutting down.
         """
         channel = self._channel()
+        self._forget_a_stale_consumer(channel)
         if self._consumer is None or self._consumer_timeout != timeout:
             self._cancel(channel)
             self._consumer = channel.consume(self._queue(), inactivity_timeout=max(0.001, timeout))
             self._consumer_timeout = timeout
+            self._consumer_channel = channel
         method, _properties, body = next(self._consumer)
         if method is None or body is None:
             return None
@@ -151,6 +157,7 @@ class RabbitMQBroker(Broker):
         round trip on a path that runs at shutdown, not in the loop.
         """
         channel = self._channel()
+        self._forget_a_stale_consumer(channel)
         self._cancel(channel)
         method, _properties, body = channel.basic_get(self._queue(), auto_ack=False)
         if method is None or body is None:
@@ -158,12 +165,26 @@ class RabbitMQBroker(Broker):
         self._unsettled.add(method.delivery_tag)
         return Taken(body, method.delivery_tag)
 
+    def _forget_a_stale_consumer(self, channel: 'BlockingChannel') -> None:
+        """Drop a consumer that belongs to a channel this broker no longer uses.
+
+        Dropped rather than cancelled: the channel it was opened on is gone, so there is
+        nothing to cancel and asking would be the failure this avoids. A connection is
+        replaced whenever the settings behind it move or it was closed, which is a live path
+        rather than a theoretical one.
+        """
+        if self._consumer is not None and self._consumer_channel is not channel:
+            self._consumer = None
+            self._consumer_timeout = None
+            self._consumer_channel = None
+
     def _cancel(self, channel: 'BlockingChannel') -> None:
         """Close the open consumer, if there is one, and forget it."""
         if self._consumer is None:
             return
         self._consumer = None
         self._consumer_timeout = None
+        self._consumer_channel = None
         channel.cancel()
 
     def ack(self, handle: object) -> None:

@@ -291,3 +291,56 @@ def test_a_handle_from_another_broker_is_refused(broker, amqp_url):
 
         with pytest.raises(TypeError, match='delivery tag'):
             broker.release('not a tag')
+
+
+def test_taking_again_after_the_connection_was_replaced(broker, amqp_url):
+    """A consumer generator belongs to the channel it was opened on.
+
+    `take` caches the generator, because `consume` fixes its inactivity timeout when the
+    generator is made. Cache it across a *connection* being replaced and the next take with the
+    same timeout advances a generator whose channel is dead — a failure where opening a new
+    consumer was the whole intent. Settings moving under a running consumer is a live path, not
+    a theoretical one.
+    """
+    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+        broker.publish([payload(1)])
+        first = broker.take(2)
+        assert first is not None, 'the first take found nothing'
+        # settled before the drop, or the transport correctly returns it to the queue and the
+        # take below gets *that* message — which would say nothing about the generator
+        broker.ack(first.handle)
+
+        close_connections()
+
+        broker.publish([payload(2)])
+        again = broker.take(2)
+
+        assert again is not None, 'the take after a replaced connection found nothing'
+        assert again.payload == payload(2)
+
+
+def test_replacing_a_connection_does_not_leave_the_old_one_open(broker, amqp_url):
+    """Closing a channel does not close its connection, so whoever replaces it has to.
+
+    Arranged by closing the *channel* and leaving the connection up, which is what a broker
+    does when it takes exception to something on that channel — a `queue_declare` against a
+    queue declared with different arguments, most often. `channel_for_thread` then sees a
+    channel that is not open and builds a replacement.
+
+    A settings change does not exercise this: `override_settings` fires the receiver on the way
+    in and on the way out, so the connection is already closed by the time a replacement is
+    asked for. That is why the first version of this case passed with the fix removed.
+    """
+    from django_aiogram.broker.rabbitmq import client
+
+    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+        broker.publish([payload(1)])
+        stranded = client._local.connection
+        client._local.channel.close()
+        assert stranded.is_open, 'closing the channel closed the connection, so there is nothing to leak'
+
+        broker.publish([payload(2)])
+
+        assert not stranded.is_open, 'the replaced connection was left open'
+        assert client._local.connection is not stranded, 'the connection was not replaced at all'
+        assert len(client._opened) == 1, f'{len(client._opened)} connections are still held'

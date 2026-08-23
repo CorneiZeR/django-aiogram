@@ -58,6 +58,11 @@ def channel_for_thread(url: str, queue: str, prefetch: int, blocked_timeout: flo
     if not url:
         msg = f"{SETTINGS_NAME}['RABBITMQ_URL'] is required to talk to RabbitMQ."
         raise ImproperlyConfigured(msg)
+    # the one being replaced is closed here, which is the only place that can: closing a
+    # channel does not close its connection, so a thread whose settings moved a few times
+    # would otherwise hold a socket per move — and this is that thread, so no cross-thread
+    # close is involved
+    _drop_this_threads_connection()
     parameters = URLParameters(url)
     if parameters.blocked_connection_timeout is None:
         # pika leaves this unset, measured, and a broker that blocks the connection under
@@ -78,6 +83,20 @@ def channel_for_thread(url: str, queue: str, prefetch: int, blocked_timeout: flo
     with _lock:
         _opened.append(connection)
     return channel
+
+
+def _drop_this_threads_connection() -> None:
+    """Close and forget the calling thread's connection, if it has one."""
+    connection = getattr(_local, 'connection', None)
+    if connection is None:
+        return
+    with _lock:
+        _opened[:] = [held for held in _opened if held is not connection]
+    with suppress(Exception):
+        connection.close()
+    for attribute in ('identity', 'connection', 'channel'):
+        if hasattr(_local, attribute):
+            delattr(_local, attribute)
 
 
 def close_connections(**_kwargs: object) -> None:
@@ -104,14 +123,7 @@ def close_connections(**_kwargs: object) -> None:
     for connection in others:
         with suppress(Exception):
             connection.add_callback_threadsafe(connection.close)
-    if mine is not None:
-        with suppress(Exception):
-            mine.close()
-        with _lock:
-            _opened[:] = [connection for connection in _opened if connection is not mine]
-    for attribute in ('identity', 'connection', 'channel'):
-        if hasattr(_local, attribute):
-            delattr(_local, attribute)
+    _drop_this_threads_connection()
 
 
 def _forget(**kwargs: object) -> None:
