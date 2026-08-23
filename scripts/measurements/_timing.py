@@ -11,6 +11,9 @@ from collections.abc import Callable
 
 __all__ = ('configure_reporting', 'measure')
 
+#: a child of the package's logger, so it propagates to whatever a reader has configured for
+#: `django_aiogram` without mixing benchmark output into it under the same name. Never the root,
+#: which is the rule `AGENTS.md` states
 logger = logging.getLogger('django_aiogram.measurements')
 
 #: what a run reports on. The median rather than the mean, because a single scheduling hiccup

@@ -255,7 +255,7 @@ class KafkaBroker(Broker):
         """
         partition, offset, epoch = _position(handle)
         with self._lock:
-            if not self._still_current(partition, epoch):
+            if not self._settleable(partition, offset, epoch):
                 return
             self._unsettled.get(partition, set()).discard(offset)
             self._settled.setdefault(partition, set()).add(offset)
@@ -299,7 +299,7 @@ class KafkaBroker(Broker):
 
         partition, offset, epoch = _position(handle)
         with self._lock:
-            if not self._still_current(partition, epoch):
+            if not self._settleable(partition, offset, epoch):
                 return
             # the seek first, and the bookkeeping only if it worked. Rewinding is the part
             # that can fail — a consumer without this partition assigned answers
@@ -317,8 +317,19 @@ class KafkaBroker(Broker):
             # again, so none of them may settle anything
             self._epoch[partition] = self._epoch.get(partition, 0) + 1
 
-    def _still_current(self, partition: int, epoch: int) -> bool:
-        """Say whether a handle from this epoch may still settle; call with the lock held.
+    def _settleable(self, partition: int, offset: int, epoch: int) -> bool:
+        """Say whether this handle may settle anything at all; call with the lock held.
+
+        Two questions, and a handle has to pass both. The first is whether this partition is
+        still on the rewind the handle came from. The second is whether this broker is actually
+        holding that offset — `_position` checks the *shape* of a handle and nothing else, so a
+        duplicate or a hand-made tuple with the right epoch would otherwise reach `commit` or
+        `seek`: a second `ack` would put an already-committed offset back into the settled set,
+        and a `release` for an offset nobody took would move the live consumer to it.
+
+        A handle this broker did not hand out, or handed out and has already been given back,
+        settles nothing and is not an error — a retry that acknowledges twice is a caller doing
+        its job twice, not a caller doing something wrong.
 
         A `release` puts a whole partition back to an offset — Kafka has no per-message nack —
         so every message taken before it will be delivered again, and a handle from before it
@@ -332,15 +343,18 @@ class KafkaBroker(Broker):
         property of the call graph rather than of this code, and the lock makes it one of this
         code.
 
-        Reported, because it means a send finished after its position was given up.
+        The rewind case is reported, because it means a send finished after its position was
+        given up. An unknown offset is not: it is either a duplicate settle, which is harmless,
+        or a handle from somewhere else, which `_position` already refuses when it is not even
+        the right shape.
         """
-        if epoch == self._epoch.get(partition, 0):
-            return True
-        logger.warning(
-            'a message finished after its partition was rewound, so it will be redelivered',
-            extra={'tg_key': self._topic()},
-        )
-        return False
+        if epoch != self._epoch.get(partition, 0):
+            logger.warning(
+                'a message finished after its partition was rewound, so it will be redelivered',
+                extra={'tg_key': self._topic()},
+            )
+            return False
+        return offset in self._unsettled.get(partition, set())
 
     # ---------------------------------------------------------------- operations
 

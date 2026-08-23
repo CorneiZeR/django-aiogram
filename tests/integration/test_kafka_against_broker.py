@@ -353,3 +353,31 @@ def test_a_settle_from_another_thread_fails_rather_than_corrupting_the_offsets(b
         broker.ack(taken.handle)
         close_clients()
         assert KafkaBroker().take_nowait() is None, 'the message was not settled after all'
+
+
+def test_a_handle_this_broker_is_not_holding_settles_nothing(broker, kafka_bootstrap, kafka_topic):
+    """The shape of a handle is not enough: it has to be one that was handed out and not returned.
+
+    `_position` checks that a handle is a `(partition, offset, epoch)` triple and nothing more,
+    so a duplicate — or a tuple somebody built — with the right epoch would otherwise reach
+    `commit` or `seek`. A second `ack` would put an already-committed offset back among the
+    settled ones, and a `release` for an offset nobody took would move the live consumer to it.
+
+    Both halves asserted: acknowledging twice changes nothing, and releasing a position this
+    broker never took does not rewind the partition — the next message is the one after, not the
+    one the forged handle named.
+    """
+    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+        broker.publish([payload(1), payload(2)])
+        first = broker.take_nowait()
+        assert first is not None, 'the first message was not delivered'
+        partition, offset, epoch = first.handle
+        broker.ack(first.handle)
+
+        broker.ack(first.handle)  # the same send reported twice
+        broker.release((partition, offset, epoch))  # and a release for what is already settled
+
+        assert broker.inflight_depth() == 0, 'a settled offset came back into the in-flight count'
+        second = broker.take_nowait()
+        assert second is not None, 'the queue stopped delivering'
+        assert second.payload == payload(2), 'a forged handle rewound the partition'
