@@ -64,6 +64,17 @@ the same worker name** — the list is keyed on that name, so a replacement cont
 with a fresh hostname strands it instead. That is what `I001` reports and what
 `manage.py tgbot_reclaim --worker <name>` is the way back from.
 
+**Kafka.** A committed offset is the record, and it says something about *every* message
+below it rather than about one. So a consumer that holds several sends at once — which
+`MAX_IN_FLIGHT` allows — commits only the highest **contiguous** prefix: settle the second
+while the first is still in flight and nothing is committed until the first finishes, because
+committing the second would claim the first as done. A worker killed at that moment loses
+nothing and redelivers both.
+
+The same shape has a sharper edge on a refusal. There is no per-message nack, so giving one up
+rewinds to its offset, and the messages after it are delivered again too. **Build idempotency
+on your own business key** — the advice below is not decoration on this transport.
+
 **RabbitMQ.** The least of any of them: an unacknowledged message returns to the
 queue when the channel that held it drops, and a worker being killed drops its
 channel by dying. So there is no in-flight list, `reclaim()` has nothing to do and

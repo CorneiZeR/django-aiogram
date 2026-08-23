@@ -49,6 +49,12 @@ redis = ["redis>=6.2"]
 # coroutine, which are the same number — so the driver that needs no crossing on the
 # synchronous path wins, and that is where `bot.send()` is called from. 18.9us there
 rabbitmq = ["pika>=1.3"]
+# confluent-kafka rather than aiokafka, and here the latency did *not* decide it: held to
+# the same guarantee the two are 479us and 502us, which is the round trip to the broker with
+# the driver invisible behind it. What decided it is that the consumer is a thread, where a
+# synchronous driver belongs. The plan's other argument was false and is recorded so it is
+# not reopened: aiokafka ships no py3-none-any wheel either, so both are compiled
+kafka = ["confluent-kafka>=2.3"]
 # not a runtime dependency: redis-py parses the protocol in C when this is
 # present. Worth it on a busy consumer, pointless on a web tier that only ever
 # pushes, which is why it is opt-in rather than pulled in for everybody

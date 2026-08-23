@@ -21,6 +21,43 @@ Entries land here as the work does; nothing below is released.
   A transport with no sensible default for where a message goes marks that setting required
   and refuses at startup without it.
 
+- **A Kafka transport**, `django_aiogram.broker.kafka.KafkaBroker`, on the **`[kafka]`** extra.
+  The fourth, and the one whose model differs most: the other three settle a *message*, and
+  Kafka settles a *position*.
+
+  **`confluent-kafka`, not `aiokafka`** — and here, unlike RabbitMQ, the latency did not choose
+  it. Held to the same guarantee, on Apache Kafka 4 over loopback, median of 200 produces:
+
+  ```text
+                                              queued locally   waited for the ack
+  confluent-kafka, synchronous                        0.2us               479.2us
+  aiokafka, handed to a loop thread                  66.0us               502.1us
+  confluent-kafka, awaited via to_thread                  —               388.2us
+  ```
+
+  479 against 502 is nothing: the round trip to the broker dominates and the driver disappears
+  behind it. So the decision is about the *consumer*, which is a thread — a synchronous driver
+  belongs in one, and `aiokafka` would need an event loop inside it, which is the machinery
+  that lost `aio-pika` the RabbitMQ decision. The plan's other argument turned out to be false
+  and is recorded so it is not reopened: `aiokafka` ships no `py3-none-any` wheel either, so
+  both drivers are compiled and there is no portability difference.
+
+  **A publish waits for the broker**, at about 480µs, which makes Kafka the most expensive
+  publish of the four — roughly 25× a Redis list. `produce()` answers in 0.2µs because
+  librdkafka's own thread does the I/O, and returning there would be weaker than the promise
+  `RPUSH` already makes.
+
+  **Offsets are committed only where they are contiguous.** A consumer holding several sends
+  cannot settle them in whatever order they finish: committing the second while the first is in
+  flight would claim the first as done. So the broker commits the highest contiguous prefix and
+  holds anything settled above a gap until the gap closes. `release` rewinds to the offset,
+  which redelivers everything after it — Kafka has no per-message nack, and that is the honest
+  consequence rather than a pretence.
+
+  `KAFKA_BOOTSTRAP` and `KAFKA_TOPIC` are required. Nothing here needs `WORKER_NAME`: a
+  consumer that dies stops heartbeating, the group rebalances, and its partitions go to another
+  member from the last committed offset.
+
 - **A RabbitMQ transport**, `django_aiogram.broker.rabbitmq.RabbitMQBroker`, on the
   **`[rabbitmq]`** extra. The transport that needs least from this package: an unacknowledged
   message returns to the queue when the channel that held it drops, so there is no worker name
