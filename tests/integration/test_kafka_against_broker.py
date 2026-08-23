@@ -10,6 +10,7 @@ committed, so the group hands the partition to somebody else at the last committ
 
 import asyncio
 import threading
+import time
 
 import pytest
 from django.test import override_settings
@@ -252,6 +253,28 @@ def test_a_handle_from_another_broker_is_refused(broker, kafka_bootstrap, kafka_
         # rewind count is what makes a position mean something
         with pytest.raises(TypeError, match='partition, offset, epoch'):
             broker.ack((0, 0))
+
+
+def test_a_single_publish_does_not_wait_for_a_batch(broker):
+    """One send is a batch of one, and it must not be held open for records that are not coming.
+
+    `publish` waits for the broker to answer, so librdkafka's default `linger.ms` of 5
+    milliseconds lands on every `bot.send()`: measured, one confirmed publish costs 6.4ms on the
+    defaults against 241us with it at 0, which is 26x for batching a batch of one.
+
+    The ceiling is 3ms — twelve times the measured cost and below the delay the default adds, so
+    it fails on the default and has room on a loaded runner. Median of nine rather than one
+    publish, because a single outlier here would be a flake rather than a finding.
+    """
+    broker.publish([payload(0)])  # warm the metadata, the connection and the topic
+    timings = []
+    for chat_id in range(9):
+        start = time.perf_counter()
+        broker.publish([payload(chat_id)])
+        timings.append(time.perf_counter() - start)
+
+    median = sorted(timings)[len(timings) // 2]
+    assert median < 0.003, f'one publish took {median * 1000:.1f}ms, so it waited for a batch'
 
 
 def test_messages_stranded_in_the_producer_are_reported(kafka_bootstrap, caplog):

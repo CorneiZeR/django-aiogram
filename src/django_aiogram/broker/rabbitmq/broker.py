@@ -103,8 +103,9 @@ class RabbitMQBroker(Broker):
 
         ``mandatory`` so a queue that is not there is an error rather than a message dropped
         by the exchange, and confirms so the broker has answered before this returns. Measured
-        at 135 to 173 microseconds against 14 to 21 unconfirmed — the difference is the promise the
-        rest of this package already makes, where ``RPUSH`` answers with a length.
+        at 323 to 393 microseconds against 18 to 20 for a publish that promises none of it —
+        the difference is the promise the rest of this package already makes, where ``RPUSH``
+        answers with a length. Most of it is the disk: without persistence, 135 to 173.
         """
         if not payloads:
             return

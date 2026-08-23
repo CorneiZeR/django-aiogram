@@ -5,7 +5,7 @@ order. The consumer here is a thread, and a synchronous driver belongs in one: `
 need an event loop inside it, which is the machinery that lost `aio-pika` the RabbitMQ decision.
 
 And it is faster on the face that matters. Held to the same guarantee — both waiting for the
-broker — three runs put ``confluent-kafka`` at 166 to 222 microseconds against ``aiokafka``'s
+broker — three runs put ``confluent-kafka`` at 166 to 232 microseconds against ``aiokafka``'s
 354 to 359, so 1.6 to 2.1 times. An earlier single run showed 479 against 502 and the parity was
 written down as the finding; it was a cold broker, and the number that survived repetition is
 this one. Re-take them with ``scripts/measurements`` rather than trusting either.
@@ -59,7 +59,11 @@ _local = threading.local()
 
 
 def shared_producer(bootstrap: str) -> 'Producer':
-    """Reach the process's producer, built on first use and rebuilt when its servers change."""
+    """Reach the process's producer, built on first use and rebuilt when its servers change.
+
+    Configured for one message at a time, because that is what a send is: see the comment on
+    ``linger.ms`` below for the 6.4 milliseconds the driver's default charges for it.
+    """
     from confluent_kafka import Producer as KafkaProducer  # noqa: PLC0415 - the driver is an extra
 
     global _producer  # noqa: PLW0603 - one per process, like the connection it holds
@@ -71,7 +75,12 @@ def shared_producer(bootstrap: str) -> 'Producer':
             raise ImproperlyConfigured(msg)
         if _producer is not None:
             _drain(_producer[1])
-        _producer = (bootstrap, KafkaProducer({'bootstrap.servers': bootstrap}))
+        # `linger.ms` at 0 because `publish` waits for the broker to answer, so librdkafka's
+        # default of 5 milliseconds is paid on every send while it holds a batch open for
+        # records that are not coming: measured, one confirmed publish costs 6.4ms on the
+        # default against 241us at 0. Batching still happens -- what is switched off is the
+        # waiting for it, which is the only part a one-message send can pay for
+        _producer = (bootstrap, KafkaProducer({'bootstrap.servers': bootstrap, 'linger.ms': 0}))
         return _producer[1]
 
 

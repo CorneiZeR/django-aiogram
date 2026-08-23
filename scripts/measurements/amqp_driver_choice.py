@@ -33,6 +33,12 @@ URL = os.environ.get('DJANGO_AIOGRAM_TEST_AMQP_URL', 'amqp://guest:guest@127.0.0
 QUEUE = 'measurement'
 #: the shape of a queued call this package actually sends
 BODY = b'{"function": "send_message", "chat_id": 1}'
+#: everything the transport asks for on every publish except the confirm, which is the variable
+#: here. Persistence makes the broker write to disk before it answers and ``mandatory`` makes an
+#: unroutable message an error, so a row without them times a cheaper promise than the one this
+#: package makes -- the same mistake as putting a confirmed publish next to a fire-and-forget
+#: one, one level down. Held constant across every row so that only the confirm varies.
+PERSISTENT = pika.DeliveryMode.Persistent
 
 
 def main() -> None:
@@ -55,8 +61,8 @@ def _report(
 ) -> None:
     """Time every row and say what the numbers decide."""
     logger.info('pika, on its own synchronous face:')
-    measure('unconfirmed', _purged(lambda: plain.basic_publish('', QUEUE, BODY), plain))
-    pika_confirmed = measure('confirmed', _purged(lambda: confirming.basic_publish('', QUEUE, BODY), plain))
+    measure('unconfirmed', _purged(_pika_publish(plain), plain))
+    pika_confirmed = measure('confirmed', _purged(_pika_publish(confirming), plain))
 
     logger.info('aio-pika, handed to a loop thread (what a sync producer needs):')
     aio_queued = measure('unconfirmed', _purged(_publisher(loop, unconfirmed_channel), plain))
@@ -124,7 +130,11 @@ def _publisher(loop: asyncio.AbstractEventLoop, channel: AbstractChannel) -> Cal
     """Build a synchronous call that hands one publish to ``loop`` and waits for it."""
 
     async def publish() -> None:
-        await channel.default_exchange.publish(aio_pika.Message(BODY), routing_key=QUEUE)
+        await channel.default_exchange.publish(
+            aio_pika.Message(BODY, delivery_mode=aio_pika.DeliveryMode.PERSISTENT),
+            routing_key=QUEUE,
+            mandatory=True,
+        )
 
     return lambda: asyncio.run_coroutine_threadsafe(publish(), loop).result(30)
 
@@ -148,12 +158,18 @@ def _threaded(loop: asyncio.AbstractEventLoop, *, confirmed: bool) -> Callable[[
             if confirmed:
                 channel.confirm_delivery()
             local.channel = channel
-        channel.basic_publish('', QUEUE, BODY)
+        _pika_publish(channel)()
 
     async def awaited() -> None:
         await asyncio.to_thread(publish)
 
     return lambda: asyncio.run_coroutine_threadsafe(awaited(), loop).result(30)
+
+
+def _pika_publish(channel: BlockingChannel) -> Callable[[], None]:
+    """Build the publish this package makes: persistent, mandatory, on the given channel."""
+    properties = pika.BasicProperties(delivery_mode=PERSISTENT)
+    return lambda: channel.basic_publish('', QUEUE, BODY, properties=properties, mandatory=True)
 
 
 def _purged(call: Callable[[], None], keeper: BlockingChannel) -> Callable[[], None]:
