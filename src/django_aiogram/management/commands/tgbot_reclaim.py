@@ -1,5 +1,9 @@
 """Put a dead worker's in-flight messages back on the queue.
 
+Only where a worker *has* messages of its own. A transport answering
+``needs_identity`` false keeps unsettled work in the group rather than under a name, so
+this command refuses there instead of inventing a meaning for ``--worker``.
+
 A message being sent lives in ``<queue>:processing:<worker>`` until the send
 finishes, and the worker that put it there reclaims it on its next start. That
 only works while the name is stable — a container with no ``hostname:`` and no
@@ -20,10 +24,31 @@ from django.core.management import BaseCommand, CommandError
 from redis import Redis
 from redis.exceptions import ResponseError
 
+from django_aiogram.broker.registry import get_broker
 from django_aiogram.eventlog.events import worker_identity
 from django_aiogram.redis import get_redis, processing_key, queue_key
 
 logger = logging.getLogger('django_aiogram')
+
+
+def _refuse_where_a_name_selects_nothing() -> None:
+    """Stop before doing anything on a transport where ``--worker`` means nothing.
+
+    Naming a worker is this command's whole interface, and where the consumer group owns
+    unsettled work there is nothing for a name to select. Refusing rather than reclaiming
+    everything: this exists because a *person* decided one worker is dead, and that judgement
+    does not translate into "take every unacknowledged message from whoever is holding it".
+    """
+    broker = get_broker()
+    if broker.needs_identity:
+        return
+    msg = (
+        f'{type(broker).__name__} does not key in-flight messages on a worker name, so there is '
+        'nothing for --worker to select. Unsettled work belongs to the consumer group and any '
+        'consumer recovers it: start a worker, or one already running will claim it once the old '
+        'one has been quiet long enough.'
+    )
+    raise CommandError(msg)
 
 
 class Command(BaseCommand):
@@ -74,6 +99,7 @@ class Command(BaseCommand):
 
     def handle(self, *args: Any, **options: Any) -> None:
         """Walk the named worker's in-flight list back onto the queue."""
+        _refuse_where_a_name_selects_nothing()
         worker = str(options['worker']).strip()
         if not worker:
             msg = '--worker cannot be empty.'

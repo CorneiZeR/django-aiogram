@@ -74,7 +74,12 @@ exhausted `MAX_RETRIES` is logged and acknowledged, not redelivered.
 
 The probe was killed by Docker's `timeout`, so its exit code never arrived — `docker
 inspect` shows `ExitCode: -1` and a growing `FailingStreak` beside a last line that
-reads `healthy: heartbeat 6s old, 0 queued`.
+reads `healthy: consumer 6s old, 0 queued`. The age is what the *transport* says: a
+Redis list has a heartbeat key the consumer writes, and a stream reads it off its
+consumer group, which is why the line says `consumer` rather than naming one of them.
+A transport that cannot answer at all says `consumer not observable from outside`, and
+that is a pass rather than a failure — there is nothing to look at, so the depth is the
+whole verdict.
 
 It happens when the healthcheck runs `manage.py tgbot_healthcheck`, because a
 management command runs `django.setup()` first: the whole of your `INSTALLED_APPS`,
@@ -106,10 +111,11 @@ Grepping one out of `docker inspect` should land here.
 | `redis is unreachable: …` | The client could not be built or could not `PING`. Covers a missing or malformed `REDIS_URL` and an unreadable `REDIS_TIMEOUT` as well as a Redis that is genuinely down — the probe cannot tell a server it cannot reach from one it cannot address |
 | `TELEGRAM_BOT['…'] is not a number: …` | `HEARTBEAT_INTERVAL` or `HEALTHCHECK_MAX_QUEUE` holds something `int()` refuses. `manage.py check` reports these as `E023`/`E024`, but the container form never runs it — that is the point of it — so it says so itself |
 | `cannot read the settings: …` | `DJANGO_SETTINGS_MODULE` is missing from the container's environment, or names a module that does not import. See the section above |
-| `no heartbeat at …: the consumer has not written one within Ns, or it never started` | The key is absent: the consumer never ran, died before its first beat, or has been silent longer than the key's TTL. If the line adds that a limit over the TTL cannot be observed, `--max-age` is set above `3 × HEARTBEAT_INTERVAL` and is doing nothing |
-| `the consumer last reported Ns ago, over the Ns limit` | The key is there and stale. The consumer thread is stuck or gone while the process lives — the failure this probe exists for |
-| `the heartbeat at … is not a timestamp` | Something else writes to that key. Give the worker its own `REDIS_MESSAGES_KEY`, or its own database |
-| `could not read the heartbeat: …` | `PING` answered and the next command did not: a failover in between, a replica that cannot serve the key, or `decode_responses` in a URL shared with a cache backend meeting bytes it cannot decode |
+| `no heartbeat has been written: nothing within Ns, or the consumer never started` | Redis list: the key is absent — the consumer never ran, died before its first beat, or has been silent longer than the key's TTL. If the line adds that a limit over the TTL cannot be observed, `--max-age` is set above `3 × HEARTBEAT_INTERVAL` and is doing nothing |
+| `no consumer has joined the group: nothing within Ns, or the consumer never started` | Redis Streams: the group exists and nothing has ever read from it. Nothing is written for this transport — the group's own record of when each member last spoke is the signal — so this means no worker has started, not that a key is missing |
+| `the consumer last reported Ns ago, over the Ns limit` | The transport can see the consumer and it has been quiet too long. What was measured depends on which one: the Redis list reads the heartbeat key its consumer writes on every pass, and Redis Streams reads how long ago any member of the consumer group last spoke — which a blocking read that finds nothing refreshes, so an idle queue is not a stale consumer. Either way the worker is wedged, gone, or slower than `HEARTBEAT_INTERVAL × 3` |
+| `the heartbeat is not a timestamp` | Redis list: something else writes to that key. Give the worker its own `REDIS_MESSAGES_KEY`, or its own database |
+| `could not read the consumer liveness: …` | `PING` answered and the next command did not: a failover in between, a replica that cannot serve the key, or `decode_responses` in a URL shared with a cache backend meeting bytes it cannot decode |
 | `could not read the queue length: …` | The same, one command later |
 | `N messages are queued, over the limit of N` | Work is backing up. `HEALTHCHECK_MAX_QUEUE` or `--max-queue` is what set that number; see **Messages pile up in Redis** above |
 

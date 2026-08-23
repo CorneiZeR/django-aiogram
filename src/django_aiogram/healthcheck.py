@@ -29,17 +29,18 @@ import argparse
 import logging
 import os
 import sys
-import time
 from dataclasses import dataclass
 
 from django.core.exceptions import ImproperlyConfigured
 from redis import Redis
 from redis.exceptions import RedisError, ResponseError
 
+from django_aiogram.broker.base import Broker
+from django_aiogram.broker.exceptions import BrokerError
+from django_aiogram.broker.registry import get_broker
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 from django_aiogram.redis import (
     get_redis,
-    heartbeat_key,
     heartbeat_ttl,
     processing_key,
     processing_pattern,
@@ -123,51 +124,76 @@ def _connected() -> Redis:
     return connection
 
 
-def _heartbeat_age(connection: Redis, *, limit: int, ttl: int) -> int:
-    """How long ago the consumer last said it was turning.
+def _liveness_age(broker: Broker, *, limit: int, ttl: int) -> int | None:
+    """How long ago the consumer last said it was turning, as the transport measures it.
 
-    Both numbers are needed: ``limit`` is what the verdict is judged by, and ``ttl`` is
-    what the key can actually show. A limit above the TTL is unreachable — the key is
-    gone by then — so the refusal names that rather than leaving an operator to wonder
-    why ``--max-age 600`` still refused at a minute.
+    Asked of the broker rather than read out of a key, because the key is one transport's
+    answer. A Redis list has nothing that knows a consumer exists, so it writes a
+    timestamp with a TTL; a stream's consumer group already records when each member last
+    spoke, so there is nothing to write and nothing to expire — and a probe that read the
+    key anyway would report a bot that is running perfectly as dead.
+
+    ``None`` means the transport says liveness is not observable from outside. That is not
+    a failure and not a pass: the caller says so and moves on to the depth, which is the
+    honest position for a probe that has been told there is nothing to look at.
+
+    Both numbers are needed for the refusal, not for the verdict: ``limit`` is what it is
+    judged by, and ``ttl`` is what a written marker can actually show. A limit above it is
+    unreachable, so the message names that instead of leaving an operator wondering why
+    ``--max-age 600`` still refused at a minute.
     """
     try:
-        raw = connection.get(heartbeat_key())
-    except (RedisError, UnicodeDecodeError) as error:
+        report = broker.liveness()
+    except (RedisError, BrokerError, UnicodeDecodeError) as error:
         # ping answering says nothing about the next command: a failover in between, or a
         # key this replica cannot serve. The decode error is not hypothetical either —
         # `decode_responses` in a URL shared with a cache backend makes redis-py decode
         # this key, and the bytes there are not ours to promise anything about
-        msg = f'could not read the heartbeat: {error}'
+        msg = f'could not read the consumer liveness: {error}'
         raise _UnhealthyError(msg) from error
-    if raw is None:
+    if not report.reported:
+        return None
+    if report.age is None:
         # the applied limit, not the TTL: with `--max-age 600` the old wording said
         # "within 30s", which contradicts the number the probe is judging by
-        msg = (
-            f'no heartbeat at {heartbeat_key()}: the consumer has not written one within {limit}s, or it never started'
-        )
-        if limit > ttl:
+        detail = report.detail or 'the consumer has not reported'
+        msg = f'{detail}: nothing within {limit}s, or the consumer never started'
+        if limit > ttl and _writes_a_marker(broker):
+            # only where something expires. On a transport that reports from the group's
+            # own bookkeeping there is no key to outlive, so this advice would be noise
             msg = (
-                f'{msg}. A limit over {ttl}s cannot be observed anyway, because the key expires then: '
+                f'{msg}. A limit over {ttl}s cannot be observed anyway, because the marker expires then: '
                 f"raise {SETTINGS_NAME}['HEARTBEAT_INTERVAL'] instead"
             )
         raise _UnhealthyError(msg)
-    try:
-        age = int(time.time()) - int(raw)
-    except (TypeError, ValueError) as error:
-        msg = f'the heartbeat at {heartbeat_key()} is not a timestamp'
-        raise _UnhealthyError(msg) from error
-    if age > limit:
-        msg = f'the consumer last reported {age}s ago, over the {limit}s limit'
+    # compared before truncating: `int(5.9)` is 5, so `--max-age 5` used to accept a consumer
+    # already past the limit. The message keeps whole seconds, which is what an operator set
+    if report.age > limit:
+        msg = f'the consumer last reported {int(report.age)}s ago, over the {limit}s limit'
         raise _UnhealthyError(msg)
-    return age
+    return int(report.age)
 
 
-def _queue_depth(connection: Redis, *, limit: int) -> int:
-    """How many messages are waiting, refusing when that is over the limit."""
+def _writes_a_marker(broker: Broker) -> bool:
+    """Whether this transport writes something that can expire.
+
+    Read off whether the broker overrides :meth:`Broker.alive`, which is exactly the
+    question: the base class does nothing, and a transport that has to say "still here"
+    is the one with a marker that outlives nothing.
+    """
+    return type(broker).alive is not Broker.alive
+
+
+def _depth(broker: Broker, *, limit: int) -> int:
+    """How many messages are waiting, refusing when that is over the limit.
+
+    Through the broker, so this counts the transport that is configured. Reading a list
+    length here would report an empty queue on a deployment carrying its messages
+    somewhere else — a healthcheck that says "healthy, 0 queued" about a backlog.
+    """
     try:
-        queued = int(connection.llen(queue_key()) or 0)
-    except RedisError as error:
+        queued = broker.depth()
+    except (RedisError, BrokerError) as error:
         msg = f'could not read the queue length: {error}'
         raise _UnhealthyError(msg) from error
     if limit and queued > limit:
@@ -183,11 +209,16 @@ def check(
     stranded: bool = False,
     guarantee: bool = False,
 ) -> Report:
-    """Read Redis, the consumer's heartbeat and the queue length, in that order.
+    """Read Redis, then ask the broker for consumer liveness and queue depth, in that order.
 
-    ``max_age`` defaults to the heartbeat key's own TTL — three ``HEARTBEAT_INTERVAL``s,
-    so one missed refresh is not a failure — which is also the most any reader can
-    observe; ``max_queue`` to ``HEALTHCHECK_MAX_QUEUE``, where 0 disables the limit.
+    ``max_age`` defaults to three ``HEARTBEAT_INTERVAL``s, so one missed refresh is not a
+    failure — which is also the most a written marker can show; ``max_queue`` to
+    ``HEALTHCHECK_MAX_QUEUE``, where 0 disables the limit.
+
+    Liveness and depth are asked of the configured broker, not read out of a key and a
+    list. Both are one transport's answer: a stream's consumer group records when each
+    member last spoke, so nothing is written and nothing expires, and its waiting count is
+    a group's lag rather than a list's length.
 
     ``stranded`` and ``guarantee`` are off by default and the management command turns
     them on, which is the one place the two entry points differ. Both cost more than
@@ -209,16 +240,23 @@ def check(
         age_limit = ttl if max_age is None else max_age
         queue_limit = _setting_int('HEALTHCHECK_MAX_QUEUE') if max_queue is None else max_queue
         connection = _connected()
-        age = _heartbeat_age(connection, limit=age_limit, ttl=ttl)
-        queued = _queue_depth(connection, limit=queue_limit)
+        broker = get_broker()
+        age = _liveness_age(broker, limit=age_limit, ttl=ttl)
+        queued = _depth(broker, limit=queue_limit)
     except _UnhealthyError as refusal:
         return Report(ok=False, message=str(refusal))
 
-    healthy = f'healthy: heartbeat {age}s old, {queued} queued'
+    # `None` is the transport saying nobody outside can see whether a consumer is turning.
+    # Reported as such rather than as an age of zero, which would read as a fresh heartbeat
+    reported = f'{age}s old' if age is not None else 'not observable from outside'
+    healthy = f'healthy: consumer {reported}, {queued} queued'
     if guarantee:
         healthy = f'{healthy}, {_guarantee(connection)}'
     warnings: list[str] = []
-    if stranded:
+    # the per-worker in-flight list is one transport's bookkeeping, and a transport that
+    # answers `needs_identity` false has none — scanning for keys that cannot exist would
+    # report a reassuring zero about a question this deployment does not have
+    if stranded and broker.needs_identity:
         found, swept = _stranded(connection)
         if found:
             # not a failure: another worker may be sending them right now. But an

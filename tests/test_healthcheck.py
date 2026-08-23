@@ -211,12 +211,15 @@ def test_a_heartbeat_read_that_fails_after_ping_is_reported(redis_server, monkey
         def __getattr__(self, name):
             return getattr(redis_server, name)
 
-    monkeypatch.setattr(
-        'django_aiogram.healthcheck.get_redis',
-        FailsTheRead,
-    )
+    # both names: the probe's own `ping` goes through `healthcheck.get_redis`, and the
+    # liveness read goes through the broker, because a heartbeat key is one transport's
+    # answer. Patching only the first left the broker reading the real fake, which has no
+    # heartbeat in it — so the test passed on "none has been written" while the failing
+    # read it set up was never called
+    monkeypatch.setattr('django_aiogram.healthcheck.get_redis', FailsTheRead)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', FailsTheRead)
 
-    with pytest.raises(CommandError, match='could not read the heartbeat'):
+    with pytest.raises(CommandError, match='could not read the consumer liveness'):
         healthcheck()
 
 
@@ -235,10 +238,10 @@ def test_a_queue_read_that_fails_is_reported(redis_server, monkeypatch):
         def __getattr__(self, name):
             return getattr(redis_server, name)
 
-    monkeypatch.setattr(
-        'django_aiogram.healthcheck.get_redis',
-        FailsTheCount,
-    )
+    # as above: the count is the broker's answer now, so the failure has to be arranged
+    # where the broker looks
+    monkeypatch.setattr('django_aiogram.healthcheck.get_redis', FailsTheCount)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', FailsTheCount)
 
     with pytest.raises(CommandError, match='could not read the queue length'):
         healthcheck()
@@ -430,9 +433,147 @@ def test_a_heartbeat_that_cannot_be_decoded_is_reported(redis_server, monkeypatc
             return getattr(redis_server, name)
 
     monkeypatch.setattr('django_aiogram.healthcheck.get_redis', CannotDecode)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', CannotDecode)
 
-    with pytest.raises(CommandError, match='could not read the heartbeat'):
+    with pytest.raises(CommandError, match='could not read the consumer liveness'):
         healthcheck()
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        **SETTINGS,
+        'BROKER': 'django_aiogram.broker.redis_streams.RedisStreamsBroker',
+        'REDIS_STREAM_KEY': 'TELEGRAM_BOT_STREAM',
+    }
+)
+def test_probing_a_stream_creates_nothing(redis_server, monkeypatch):
+    """Observation is read-only, and on this transport that had to be made true.
+
+    Publishing and consuming create the consumer group; reading how much is waiting must not.
+    A container healthcheck runs twice a minute in a fresh process, so a group-creating probe
+    is a write per probe — refused outright on a read-only replica, and by an ACL user allowed
+    to run `XINFO` and nothing else.
+
+    Asserted on the command and on the answer. The answer here is a *refusal*, and it should
+    be: nothing has ever read from this group, so no worker has started — the same verdict the
+    list gives when no heartbeat has been written. What matters is that it refuses with that
+    sentence rather than with an error about Redis, and that it did not make the group in order
+    to find out.
+    """
+    created: list[str] = []
+    monkeypatch.setattr(
+        redis_server,
+        'xgroup_create',
+        lambda *args, **kwargs: created.append('xgroup_create'),
+    )
+
+    report = check()
+
+    assert created == [], 'probing a stream created the consumer group'
+    assert not report.ok, report.message
+    assert 'no consumer has joined the group' in report.message, report.message
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        **SETTINGS,
+        'BROKER': 'django_aiogram.broker.redis_streams.RedisStreamsBroker',
+        'REDIS_STREAM_KEY': 'TELEGRAM_BOT_STREAM',
+    }
+)
+def test_probing_a_working_stream_writes_nothing_either(redis_server, monkeypatch):
+    """The same property, on the path that reaches every read the probe makes.
+
+    The case above stops at liveness, because a group nobody has joined is a refusal — so it
+    says nothing about the depth read behind it. Here a worker has been and gone: liveness
+    answers with an age, the depth is reached, and neither may create anything.
+
+    The group is made through the broker's own producer and consumer, which is where creating
+    it belongs. Everything after that is observation.
+    """
+    from django_aiogram.broker.redis_streams import RedisStreamsBroker
+
+    broker = RedisStreamsBroker()
+    broker.publish([b'{}'])
+    assert broker.take_nowait() is not None, 'the fixture did not deliver anything'
+
+    created: list[str] = []
+    monkeypatch.setattr(
+        redis_server,
+        'xgroup_create',
+        lambda *args, **kwargs: created.append('xgroup_create'),
+    )
+
+    report = check()
+
+    assert created == [], 'probing an established stream created a group'
+    assert report.ok, report.message
+    assert 'queued' in report.message, report.message
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_fractional_age_over_the_limit_is_refused(redis_server, monkeypatch):
+    """5.9 seconds is over a 5-second limit, and truncating hid that.
+
+    The message keeps whole seconds because that is what an operator set, but the comparison
+    cannot: `int(5.9)` is 5, so the probe used to accept a consumer already past its limit —
+    for the whole second before the age rolled over.
+    """
+    from django_aiogram.broker.models import Liveness
+    from django_aiogram.broker.redis_list import RedisListBroker
+
+    monkeypatch.setattr(RedisListBroker, 'liveness', lambda self: Liveness(reported=True, age=5.9))
+
+    report = check(max_age=5)
+
+    assert not report.ok, report.message
+    assert 'over the 5s limit' in report.message, report.message
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_transport_that_cannot_answer_liveness_is_not_called_dead(redis_server, monkeypatch):
+    """`reported=False` is "nobody outside can see this", and that is not a failure.
+
+    The contract allows a transport whose group membership *is* the liveness signal and which
+    therefore writes nothing an outside probe can read. Judging that as a stale heartbeat would
+    report every such deployment as unhealthy for ever; treating it as an age of zero would be
+    worse, because the line would claim a consumer had just checked in.
+
+    So the probe says so and the depth carries the verdict, which is the only thing left to
+    look at.
+    """
+    from django_aiogram.broker.models import Liveness
+    from django_aiogram.broker.redis_list import RedisListBroker
+
+    monkeypatch.setattr(
+        RedisListBroker,
+        'liveness',
+        lambda self: Liveness(reported=False, age=None, detail='this transport tracks its own consumers'),
+    )
+
+    report = check()
+
+    assert report.ok, report.message
+    assert 'not observable from outside' in report.message, report.message
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_liveness_that_is_too_old_still_refuses(redis_server, monkeypatch):
+    """The other half of the same branch: an age *is* judged, whoever measured it.
+
+    Without this the case above could pass on a probe that had stopped judging liveness
+    altogether — the same green for "nothing to look at" and for "nobody has reported in an
+    hour".
+    """
+    from django_aiogram.broker.models import Liveness
+    from django_aiogram.broker.redis_list import RedisListBroker
+
+    monkeypatch.setattr(RedisListBroker, 'liveness', lambda self: Liveness(reported=True, age=3600.0))
+
+    report = check()
+
+    assert not report.ok
+    assert 'over the' in report.message, report.message
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
@@ -448,8 +589,14 @@ def test_the_container_form_neither_scans_nor_writes(redis_server, monkeypatch):
     Asserted on the calls, not on the output: a message that happens not to mention
     stranded lists proves only that none were found.
     """
+    # written before the recorder is installed, or the probe gets blamed for the heartbeat
+    # this test put there
+    redis_server.set(HEARTBEAT, str(int(time.time())))
     calls: list[str] = []
-    for name in ('scan', 'lmove'):
+    # every write the probe could reach for, not the two that existed when this was written:
+    # asking the broker for liveness and depth put `XGROUP CREATE` on this path, and a test
+    # watching `scan` and `lmove` alone called that clean
+    for name in ('scan', 'lmove', 'xgroup_create', 'xadd', 'set', 'xack', 'xclaim', 'xautoclaim'):
         original = getattr(redis_server, name)
 
         def recording(*args, _name=name, _original=original, **kwargs):
@@ -459,7 +606,6 @@ def test_the_container_form_neither_scans_nor_writes(redis_server, monkeypatch):
 
         monkeypatch.setattr(redis_server, name, recording)
 
-    redis_server.set(HEARTBEAT, str(int(time.time())))
     report = check()
 
     assert report.ok, report.message
@@ -471,7 +617,7 @@ def test_the_container_form_neither_scans_nor_writes(redis_server, monkeypatch):
     # crosses a second boundary between the write above and the read reports `1s` and the
     # equality failed on CI for a probe that was working perfectly. The digits are not
     # what this test is about — the shape of the line is
-    assert re.fullmatch(r'healthy: heartbeat \d+s old, 0 queued', report.message), report.message
+    assert re.fullmatch(r'healthy: consumer \d+s old, 0 queued', report.message), report.message
     assert report.warnings == (), report.warnings
 
 
@@ -566,7 +712,7 @@ def test_a_healthy_process_is_reported_in_success_green(redis_server):
 
     call_command('tgbot_healthcheck', stdout=out, force_color=True)
 
-    assert 'healthy: heartbeat' in out.getvalue(), out.getvalue()
+    assert 'healthy: consumer' in out.getvalue(), out.getvalue()
     assert '\x1b[' in out.getvalue(), 'the healthy line lost its success colour'
 
 
