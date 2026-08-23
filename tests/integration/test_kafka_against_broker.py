@@ -381,3 +381,38 @@ def test_a_handle_this_broker_is_not_holding_settles_nothing(broker, kafka_boots
         second = broker.take_nowait()
         assert second is not None, 'the queue stopped delivering'
         assert second.payload == payload(2), 'a forged handle rewound the partition'
+
+
+def test_a_release_does_not_strand_the_messages_taken_before_it(broker, kafka_bootstrap, kafka_topic):
+    """A rewind invalidates the handles at its offset and above, and nothing below it.
+
+    This is the sequence a single counter per partition got wrong, and it is worse than the bug
+    the counter fixed: `release` deliberately keeps the lower offsets outstanding — they are
+    still in flight and still this worker's to settle — and then a counter refused their handles
+    too. That offset stays in the unsettled set for the life of the process, so its partition is
+    never committed again and every message is redelivered after a restart.
+
+    With `MAX_IN_FLIGHT` above one, which is the ordinary configuration:
+
+    1. take offsets 0 and 1, both issued before any rewind;
+    2. the send for 1 fails, so the consumer releases it — the rewind goes to 1;
+    3. the send for 0 succeeds and acknowledges.
+
+    Step 3 has to work. The proof is a restart: what comes back is the released message alone.
+    """
+    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+        broker.publish([payload(1), payload(2)])
+        first, second = (broker.take_nowait() for _ in range(2))
+        assert first is not None, 'the first message was not delivered'
+        assert second is not None, 'the second message was not delivered'
+
+        broker.release(second.handle)
+        broker.ack(first.handle)
+
+        assert broker.inflight_depth() == 0, 'the message taken before the rewind is still held'
+
+        close_clients()
+        replacement = KafkaBroker()
+        seen = [taken.payload for taken in (replacement.take_nowait() for _ in range(2)) if taken]
+
+        assert seen == [payload(2)], f'the acknowledged message was not committed: {seen}'

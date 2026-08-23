@@ -77,10 +77,21 @@ class KafkaBroker(Broker):
         #: ceiling, and anything settled above it waits for it
         self._unsettled: dict[int, set[int]] = {}
         self._settled: dict[int, set[int]] = {}
-        #: how many times each partition has been rewound. A `release` puts the whole partition
-        #: back to an offset, so every handle from before it means something else now — see
-        #: `_settleable`. Carried in the handle, the way the RabbitMQ broker carries its channel
-        self._epoch: dict[int, int] = {}
+        #: where each partition has been rewound to, in the order it happened. A handle carries
+        #: how many rewinds its partition had seen when it was issued, so settling can ask
+        #: whether any rewind *since* then reached its offset — see `_settleable`.
+        #:
+        #: Positions rather than a count, and that distinction is the whole of it: a rewind to
+        #: offset 1 invalidates the handles at 1 and above and leaves the one at 0 alone, which
+        #: `release` relies on when it keeps the lower offsets outstanding. A count would refuse
+        #: them all, and the lowest of them would then block this partition's commits for ever.
+        #:
+        #: Never pruned, and that is a decision rather than an oversight. Clearing it when
+        #: nothing is outstanding was tried and it costs the diagnosis: a handle arriving after
+        #: that is refused as unknown rather than as rewound, so the log stops saying a message
+        #: is coming back. It grows by one integer per *refused* message, and a consumer
+        #: refusing often enough for that to matter has a louder problem than this list
+        self._rewinds: dict[int, list[int]] = {}
         self._lock = threading.Lock()
 
     def _topic(self) -> str:
@@ -239,7 +250,7 @@ class KafkaBroker(Broker):
         partition, offset = message.partition(), message.offset()  # type: ignore[attr-defined]
         with self._lock:
             self._unsettled.setdefault(partition, set()).add(offset)
-            epoch = self._epoch.get(partition, 0)
+            epoch = len(self._rewinds.get(partition, ()))
         return Taken(payload, (partition, offset, epoch))
 
     def ack(self, handle: object) -> None:
@@ -313,15 +324,18 @@ class KafkaBroker(Broker):
                 held = tracked.get(partition)
                 if held is not None:
                     tracked[partition] = {value for value in held if value < offset}
-            # every handle from before this rewind now names a position that will be delivered
-            # again, so none of them may settle anything
-            self._epoch[partition] = self._epoch.get(partition, 0) + 1
+            # recorded so that settling can tell a handle this rewind invalidated from one it
+            # left alone. Everything at or above `offset` will be delivered again; everything
+            # below it is still in flight and still this worker's to settle
+            self._rewinds.setdefault(partition, []).append(offset)
 
     def _settleable(self, partition: int, offset: int, epoch: int) -> bool:
         """Say whether this handle may settle anything at all; call with the lock held.
 
-        Two questions, and a handle has to pass both. The first is whether this partition is
-        still on the rewind the handle came from. The second is whether this broker is actually
+        Two questions, and a handle has to pass both. The first is whether any rewind since this
+        handle was issued reached its offset — a rewind to a *higher* offset says nothing about
+        it, which is what lets a refused message be given up without stranding the ones taken
+        before it. The second is whether this broker is actually
         holding that offset — `_position` checks the *shape* of a handle and nothing else, so a
         duplicate or a hand-made tuple with the right epoch would otherwise reach `commit` or
         `seek`: a second `ack` would put an already-committed offset back into the settled set,
@@ -348,7 +362,8 @@ class KafkaBroker(Broker):
         or a handle from somewhere else, which `_position` already refuses when it is not even
         the right shape.
         """
-        if epoch != self._epoch.get(partition, 0):
+        since = self._rewinds.get(partition, ())[epoch:]
+        if any(position <= offset for position in since):
             logger.warning(
                 'a message finished after its partition was rewound, so it will be redelivered',
                 extra={'tg_key': self._topic()},
