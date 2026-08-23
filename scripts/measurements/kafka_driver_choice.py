@@ -17,16 +17,18 @@ host retries into a refusal loop rather than failing. `README.md` has the full c
 import asyncio
 import os
 import threading
+import time
 
 from aiokafka import AIOKafkaProducer
 from confluent_kafka import Producer
-from scripts.measurements._timing import configure_reporting, logger, measure
+from confluent_kafka.admin import AdminClient, NewTopic
+from scripts.measurements._timing import configure_reporting, logger, measure, run_name
 
 #: fewer rounds than the AMQP measurement: every confirmed produce here is a broker round trip
 #: of about half a millisecond, so 200 is already half a minute of waiting
 ROUNDS = 200
 BOOTSTRAP = os.environ.get('DJANGO_AIOGRAM_TEST_KAFKA_BOOTSTRAP', '127.0.0.1:9093')
-TOPIC = 'measurement'
+TOPIC = run_name('kafka')
 BODY = b'{"function": "send_message", "chat_id": 1}'
 
 
@@ -46,6 +48,18 @@ class RefusedRecordError(RuntimeError):
 def main() -> None:
     """Measure both drivers with and without waiting, and report what decides it."""
     configure_reporting()
+    admin = _declared()
+    try:
+        _report()
+    finally:
+        # waited for, like the creation: `delete_topics` returns futures, and a process that
+        # exits without reading them can leave the topic standing -- measured, it did
+        for future in admin.delete_topics([TOPIC]).values():
+            future.result(timeout=30)
+
+
+def _report() -> None:
+    """Time every row on the topic this run made, and say what the numbers decide."""
     producer = Producer({'bootstrap.servers': BOOTSTRAP, 'linger.ms': 0})
 
     logger.info('confluent-kafka, synchronous, its own face:')
@@ -69,6 +83,29 @@ def main() -> None:
     )
     loop.call_soon_threadsafe(loop.stop)
     producer.flush(10)
+
+
+def _declared() -> AdminClient:
+    """Create this run's topic and wait until the broker reports it.
+
+    Explicitly, rather than leaving it to automatic creation: the topic name is unique per run
+    so nothing can be measured against somebody else's, which also means the first produce would
+    be the one discovering the topic does not exist yet. `measure` makes one warm-up call and
+    does not count it, but on a fresh name that call is the one that gets refused -- and the
+    refusal is raised rather than averaged, so the run would end instead of warming up.
+
+    The waiting loop is the same shape `tests/integration/conftest.py` uses, and for the same
+    reason: `create_topics` returning is not the broker having the topic.
+    """
+    admin = AdminClient({'bootstrap.servers': BOOTSTRAP})
+    for future in admin.create_topics([NewTopic(TOPIC, num_partitions=1, replication_factor=1)]).values():
+        future.result(timeout=30)
+    for _ in range(100):
+        if TOPIC in admin.list_topics(timeout=10).topics:
+            return admin
+        time.sleep(0.1)
+    msg = f'kafka did not report the topic {TOPIC!r} after creating it'
+    raise RuntimeError(msg)
 
 
 def _queue_one(producer: Producer) -> None:

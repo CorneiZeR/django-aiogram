@@ -75,7 +75,10 @@ def kafka_topic(kafka_bootstrap):
         yield name
     finally:
         close_clients()
-        admin.delete_topics([name])
+        # waited for: the futures are the request, and a fixture that returns without reading
+        # them leaves the topic on the broker for every later run to trip over
+        for future in admin.delete_topics([name]).values():
+            future.result(timeout=30)
 
 
 @pytest.fixture

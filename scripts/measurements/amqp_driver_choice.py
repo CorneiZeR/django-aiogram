@@ -26,11 +26,11 @@ import aio_pika
 import pika
 from aio_pika.abc import AbstractChannel
 from pika.adapters.blocking_connection import BlockingChannel
-from scripts.measurements._timing import configure_reporting, logger, measure
+from scripts.measurements._timing import configure_reporting, logger, measure, run_name
 
 #: a throwaway broker, overridable because a reader's port is their own business
 URL = os.environ.get('DJANGO_AIOGRAM_TEST_AMQP_URL', 'amqp://guest:guest@127.0.0.1:5673/')
-QUEUE = 'measurement'
+QUEUE = run_name('amqp')
 #: the shape of a queued call this package actually sends
 BODY = b'{"function": "send_message", "chat_id": 1}'
 #: everything the transport asks for on every publish except the confirm, which is the variable

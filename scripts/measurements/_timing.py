@@ -7,6 +7,7 @@ makes a number comparable — same rounds, same statistic, same reporting — is
 import logging
 import statistics
 import time
+import uuid
 from collections.abc import Callable
 
 __all__ = ('configure_reporting', 'measure')
@@ -31,6 +32,17 @@ def configure_reporting() -> None:
     handler.setFormatter(logging.Formatter('%(message)s'))
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
+
+
+def run_name(kind: str) -> str:
+    """Name this run's queue, topic or key so it cannot collide with anything already there.
+
+    Every script here creates something on the broker and tears it down afterwards, and the
+    broker is whatever the environment points at. A fixed name would make that teardown destroy
+    somebody else's queue of the same name, and two runs at once would measure each other's
+    traffic. Unique per process, prefixed so a leftover is recognisable as this package's.
+    """
+    return f'django-aiogram-{kind}-{uuid.uuid4().hex[:8]}'
 
 
 def measure(label: str, call: Callable[[], None], rounds: int = ROUNDS) -> float:

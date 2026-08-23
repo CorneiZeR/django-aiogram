@@ -107,7 +107,7 @@ def test_the_kafka_measurement_lingers_as_little_as_the_transport():
     """One send is a batch of one on both sides, or the script reports a latency nobody gets.
 
     This is the defect that was found by asking the question: the transport took librdkafka's
-    default of 5 milliseconds while the script set 0, so the measured 166-232 microseconds was
+    default of 5 milliseconds while the script set 0, so the measured 166-237 microseconds was
     a number no `bot.send()` could reach — the real cost was 6.4 milliseconds.
     """
     script = producer_config(calls_to(parsed('scripts/measurements/kafka_driver_choice.py'), 'Producer')[0])

@@ -93,8 +93,8 @@ aio-pika 10.0.1, confluent-kafka on librdkafka 2.15.0 and aiokafka 0.14.0. Versi
 | `pika`, synchronous | 18 – 20 µs | 323 – 393 µs |
 | `aio-pika`, via a loop thread | 121 – 125 µs | 456 – 495 µs |
 | `pika`, awaited via `to_thread` | 119 – 122 µs | 412 – 423 µs |
-| `confluent-kafka`, synchronous | 0.2 µs | 166 – 232 µs |
-| `aiokafka`, via a loop thread | 66 – 72 µs | 354 – 359 µs |
+| `confluent-kafka`, synchronous | 0.2 – 0.3 µs | 166 – 237 µs |
+| `aiokafka`, via a loop thread | 66 – 75 µs | 354 – 390 µs |
 | `RPUSH`, the list transport's publish | — | 120 – 143 µs |
 | `XADD`, the Streams transport's publish | — | 116 – 121 µs |
 

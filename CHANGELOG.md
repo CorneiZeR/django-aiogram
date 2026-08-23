@@ -32,8 +32,8 @@ Entries land here as the work does; nothing below is released.
 
   ```text
                                     queued locally   waited for the ack
-  confluent-kafka, synchronous               0.2us          166 - 232us
-  aiokafka, handed to a loop thread         66-72us          354 - 359us
+  confluent-kafka, synchronous           0.2 - 0.3us          166 - 237us
+  aiokafka, handed to a loop thread        66 - 75us          354 - 390us
   ```
 
   Ranges rather than single numbers, and that is the point: a first run of this showed 479
@@ -46,7 +46,7 @@ Entries land here as the work does; nothing below is released.
   `aiokafka` ships no `py3-none-any` wheel either, so both drivers are compiled and there is no
   portability difference.
 
-  **A publish waits for the broker** — 166–232µs, against 120–143µs for a Redis list publish
+  **A publish waits for the broker** — 166–237µs, against 120–143µs for a Redis list publish
   measured on the same machine and the same virtualisation, and second only to RabbitMQ.
   `produce()` answers in 0.2µs because librdkafka's own thread does the I/O, and returning there
   would be weaker than the promise `RPUSH` already makes.

@@ -22,11 +22,11 @@ Run it against a throwaway server:
 import os
 
 import redis
-from scripts.measurements._timing import configure_reporting, logger, measure
+from scripts.measurements._timing import configure_reporting, logger, measure, run_name
 
 #: a throwaway server, overridable because a reader's port is their own business
 URL = os.environ.get('DJANGO_AIOGRAM_TEST_REDIS_URL', 'redis://127.0.0.1:6399/0')
-KEY = 'measurement'
+KEY = run_name('baseline')
 #: the shape of a queued call this package actually sends
 BODY = b'{"function": "send_message", "chat_id": 1}'
 

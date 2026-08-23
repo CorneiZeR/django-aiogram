@@ -186,7 +186,7 @@ giving a message up means rewinding to its offset — and everything after it is
 too. **Build idempotency on your own business key**, which the delivery page recommends
 generally and which matters most here.
 
-**A publish waits for the broker** — 166 to 232µs across repeated runs, against 120 to 143µs for
+**A publish waits for the broker** — 166 to 237µs across repeated runs, against 120 to 143µs for
 a Redis list publish measured the same way, and second only to RabbitMQ. `produce()` itself answers in
 0.2µs because librdkafka's own thread does the I/O, and returning there would be a weaker
 promise than `RPUSH` already makes. Automatic topic creation is the broker's setting, not this
