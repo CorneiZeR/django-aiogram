@@ -52,7 +52,9 @@ Entries land here as the work does; nothing below is released.
   unfinished send leaves unacknowledged: trim past a pending entry and `XPENDING` still
   reports it while `XAUTOCLAIM` hands the id back in its *deleted* list, so the message is
   gone and nothing can replay it. `XDEL` additionally costs Redis the ability to answer `lag`
-  at all, permanently for that group, and a depth read then refuses instead of guessing. The
+  at all, and a depth read then refuses instead of guessing — temporarily: measured, the count
+  returns once the group has read to the end of the stream, so it is missing exactly while
+  there is a backlog. The
   broker's own `trim()` stops at the oldest unacknowledged entry.
 
 ### Changed

@@ -89,6 +89,33 @@ def test_every_reclaimed_entry_comes_back_not_just_the_first(broker, redis_serve
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_release_does_not_hand_back_a_send_that_is_still_running(broker, redis_server):
+    """The consumer holds several messages at once, so recovery must skip the live ones.
+
+    `MAX_IN_FLIGHT` exists because sends complete asynchronously: the consumer takes a
+    message, hands it to the loop and takes the next one. So when a *later* message is
+    refused and released, the earlier one may still be on its way to Telegram — and arming
+    recovery from the start of the pending list would hand it out again. A real person gets
+    that message twice, which is worse than the delay this whole mechanism exists to avoid.
+
+    Asserted on identity, not on count: what must come back is the released message, and what
+    must not is the one nobody has settled.
+    """
+    broker.publish([payload(1), payload(2)])
+    still_sending = broker.take_nowait()
+    refused = broker.take_nowait()
+    assert still_sending is not None, 'the fixture did not deliver the first message'
+    assert refused is not None, 'the fixture did not deliver the second message'
+
+    broker.release(refused.handle)
+    again = broker.take_nowait()
+
+    assert again is not None, 'the released message never came back'
+    assert again.handle == refused.handle, 'recovery handed back a send that was still running'
+    assert broker.take_nowait() is None, 'something else came back too'
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
 def test_a_url_that_asks_for_decoding_still_delivers(monkeypatch):
     """`decode_responses` is tolerated, so it must not silently deliver nothing.
 

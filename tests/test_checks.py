@@ -878,6 +878,31 @@ def test_a_named_broker_whose_driver_is_missing_is_reported_with_the_install_lin
     assert 'pip install "django-aiogram[redis]"' in problems[0].hint, problems[0].hint
 
 
+@override_settings(
+    TELEGRAM_BOT={
+        'ENABLED': True,
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker',
+    }
+)
+def test_running_the_checks_leaves_no_broker_behind():
+    """A rule may ask the transport a question without building the one this process uses.
+
+    `I001` reads `needs_identity`, which needs an instance — and reaching for the process-wide
+    accessor to get one would leave a live broker cached in `migrate`, `shell`, `collectstatic`
+    and every other command that runs checks. A throwaway costs nothing and connects to
+    nothing; the cache is for the process that actually sends.
+    """
+    from django_aiogram.broker import registry
+
+    registry.close_broker()
+
+    check_settings()
+
+    assert registry._broker is None, 'running the checks cached a broker for the whole process'
+
+
 @override_settings(TELEGRAM_BOT={'ENABLED': False, 'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker'})
 def test_a_disabled_process_is_not_asked_to_install_a_driver_it_never_calls(monkeypatch):
     """The rule above, gated the way `W002` is gated, and for the same reason.

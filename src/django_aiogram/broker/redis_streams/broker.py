@@ -78,6 +78,12 @@ class RedisStreamsBroker(Broker):
         #: Measured — reading the pending list from an explicit id returns the entries *after*
         #: it, which is what lets an undecodable one be stepped over and left pending.
         self._recovered_upto: str | bytes | None = '0'
+        #: what this consumer has been handed and has not settled. Recovery skips these,
+        #: because a send in progress is not work to hand out again: the consumer holds
+        #: several at once — that is what `MAX_IN_FLIGHT` bounds — so a `release` of a later
+        #: message would otherwise re-deliver an earlier one whose send is still running,
+        #: and that message goes to a real person twice
+        self._unsettled: set[object] = set()
 
     def _key(self) -> str:
         """Name the stream, from this broker's own required setting.
@@ -228,7 +234,7 @@ class RedisStreamsBroker(Broker):
         if recovered is not None:
             return recovered
         block = max(1, int(timeout * 1000))
-        return self._first(
+        return self._fresh(
             connection.xreadgroup(self._group(), self._consumer(), {self._key(): '>'}, count=1, block=block)
         )
 
@@ -239,7 +245,7 @@ class RedisStreamsBroker(Broker):
         recovered = self._recovered(connection)
         if recovered is not None:
             return recovered
-        return self._first(connection.xreadgroup(self._group(), self._consumer(), {self._key(): '>'}, count=1))
+        return self._fresh(connection.xreadgroup(self._group(), self._consumer(), {self._key(): '>'}, count=1))
 
     def _recovered(self, connection: object) -> Taken | None:
         """Hand back one entry this consumer already holds, stepping over what it cannot read.
@@ -271,8 +277,13 @@ class RedisStreamsBroker(Broker):
             # never returns an entry that was already delivered. Ten reclaimed entries came
             # back as one
             self._recovered_upto = identifier
+            if identifier in self._unsettled:
+                # handed out already and still being sent. The cursor moves past it, so a
+                # later `release` of *this* entry arms recovery again and finds it then
+                continue
             taken = self._decode(identifier, fields)
             if taken is not None:
+                self._unsettled.add(identifier)
                 return taken
         # every entry in the page was one this package cannot read. The cursor is past them,
         # so the next call continues rather than meeting the same ones again
@@ -326,6 +337,13 @@ class RedisStreamsBroker(Broker):
             return None
         return Taken(as_bytes(payload), identifier)
 
+    def _fresh(self, response: object) -> Taken | None:
+        """Unwrap a newly delivered entry and remember that this consumer holds it."""
+        taken = self._first(response)
+        if taken is not None:
+            self._unsettled.add(taken.handle)
+        return taken
+
     @classmethod
     def _first(cls, response: object) -> Taken | None:
         """Unwrap one entry from what ``XREADGROUP`` answers, or ``None`` for nothing.
@@ -342,6 +360,7 @@ class RedisStreamsBroker(Broker):
     def ack(self, handle: object) -> None:
         """``XACK`` the entry this handle names, which drops it from the pending list."""
         get_redis().xack(self._key(), self._group(), handle)  # type: ignore[arg-type]
+        self._unsettled.discard(handle)
 
     def release(self, handle: object) -> None:
         """Make a refused entry reclaimable now, instead of after the idle threshold.
@@ -370,6 +389,8 @@ class RedisStreamsBroker(Broker):
             message_ids=[handle],  # type: ignore[list-item]
             idle=heartbeat_ttl() * 1000,
         )
+        # given up, so it is no longer this consumer's to protect from recovery
+        self._unsettled.discard(handle)
         self._recovered_upto = '0'
 
     # ---------------------------------------------------------------- operations

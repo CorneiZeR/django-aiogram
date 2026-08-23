@@ -37,8 +37,13 @@ class StreamLagUnknownError(BrokerError):
 
     ``XINFO GROUPS`` answers ``lag`` with nil once entries have been removed from the middle
     of the stream: measured, one ``XDEL`` of an undelivered entry turns a lag of 4 into
-    ``None`` and it stays that way for the life of the group. Redis is not being coy — it
-    counts by arithmetic on entry ids, and a hole makes the arithmetic wrong.
+    ``None``. Redis is not being coy — it counts by arithmetic on entry ids, and a hole makes
+    the arithmetic wrong.
+
+    It comes back. Measured on the same group: reading through to the end of the stream makes
+    the lag 0 again, and it tracks correctly from there. So this is unavailable exactly while
+    the group is behind *and* a hole exists — which is the worst moment to lose a queue depth
+    and not a permanent state.
 
     So this refuses rather than substituting a number. ``depth()`` drives
     ``HEALTHCHECK_MAX_QUEUE`` and the queue-depth warning, and a plausible-looking estimate
@@ -57,6 +62,7 @@ class StreamLagUnknownError(BrokerError):
         super().__init__(
             f'Redis cannot say how many messages are waiting in {key!r} for group {group!r}: '
             f'XINFO GROUPS reports no lag, which happens once entries have been deleted from '
-            f'the stream. Restore it with XSETID, and do not XDEL or MAXLEN-trim this stream '
-            f'— this broker trims only up to the oldest unacknowledged entry.'
+            f'the stream. It answers again once this group has read through to the end of the '
+            f'stream, or immediately after XSETID. Do not XDEL or MAXLEN-trim this stream — '
+            f'this broker trims only up to the oldest unacknowledged entry.'
         )

@@ -132,8 +132,9 @@ reporting a number that would drive `HEALTHCHECK_MAX_QUEUE` wrongly.
 unfinished send leaves unacknowledged. Measured: trim past a pending entry and `XPENDING`
 still reports it while `XAUTOCLAIM` hands the id back in its *deleted* list — the message is
 gone and no consumer can replay it. `XDEL` additionally costs Redis the ability to answer
-`lag` at all, permanently for that group, at which point a depth read refuses instead of
-guessing. The broker's own `trim()` stops at the oldest unacknowledged entry.
+`lag` at all — a depth read then refuses instead of guessing. That one is temporary:
+measured, the count returns once the group has read through to the end of the stream, so it
+is unavailable exactly while there is a backlog, and `XSETID` restores it at once. The broker's own `trim()` stops at the oldest unacknowledged entry.
 
 ## Rate limits
 

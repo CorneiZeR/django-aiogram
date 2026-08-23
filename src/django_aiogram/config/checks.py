@@ -484,12 +484,18 @@ def _identity_matters() -> bool:
     True when it cannot be answered, which is the safe direction: an unresolvable ``BROKER``
     is `E047`'s finding, and suppressing an unrelated rule on the back of it would hide advice
     that is right for the default transport.
+
+    A throwaway instance rather than :func:`~django_aiogram.broker.registry.get_broker`,
+    which builds the one this process will *use* and caches it. A system check runs in
+    `migrate`, `shell` and every other management command, and leaving a live broker behind
+    in each of them is a side effect nobody asked this rule for. Constructing one costs
+    nothing and connects to nothing — both shipped transports only set flags in `__init__`.
     """
     from django_aiogram.broker.exceptions import BrokerError  # noqa: PLC0415 - only when the checks run
-    from django_aiogram.broker.registry import get_broker  # noqa: PLC0415 - as above
+    from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
 
     try:
-        return bool(get_broker().needs_identity)
+        return bool(broker_class()().needs_identity)
     except (BrokerError, ImproperlyConfigured):
         return True
 
