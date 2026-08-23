@@ -116,7 +116,7 @@ transport you are not using is reported by `W003` as a key nothing reads, which 
 | --- | --- | --- |
 | `django_aiogram.broker.redis_list.RedisListBroker` | `REDIS_URL`, `REDIS_MESSAGES_KEY`, `REDIS_TIMEOUT`, `BLPOP_TIMEOUT` | none — the list has a default name |
 | `django_aiogram.broker.redis_streams.RedisStreamsBroker` | `REDIS_URL`, `REDIS_STREAM_KEY`, `REDIS_STREAM_GROUP`, `REDIS_TIMEOUT`, `BLPOP_TIMEOUT` | **`REDIS_STREAM_KEY`** |
-| `django_aiogram.broker.rabbitmq.RabbitMQBroker` | `RABBITMQ_URL`, `RABBITMQ_QUEUE`, `RABBITMQ_PREFETCH` | **`RABBITMQ_URL`**, **`RABBITMQ_QUEUE`** |
+| `django_aiogram.broker.rabbitmq.RabbitMQBroker` | `RABBITMQ_URL`, `RABBITMQ_QUEUE`, `RABBITMQ_PREFETCH`, `RABBITMQ_TIMEOUT` | **`RABBITMQ_URL`**, **`RABBITMQ_QUEUE`** |
 
 #### Redis Streams
 
@@ -132,6 +132,7 @@ transport you are not using is reported by `W003` as a key nothing reads, which 
 | `RABBITMQ_URL` | **required** | `amqp://user:pass@host:5672/vhost`. No default: it carries credentials and a host, and neither is worth baking in |
 | `RABBITMQ_QUEUE` | **required** | The durable queue messages are published to and consumed from. No default, for the reason `REDIS_STREAM_KEY` has none — where messages go is not something to guess |
 | `RABBITMQ_PREFETCH` | `0` | `basic_qos` prefetch, where 0 means the broker does not limit how many unacknowledged messages a consumer may hold. Left unlimited on purpose: `MAX_IN_FLIGHT` already bounds that, and a prefetch below it would stall the consumer — it would hold its limit of unacknowledged sends and be given nothing more until one finished |
+| `RABBITMQ_TIMEOUT` | `10` | Seconds a call may sit on a *blocked* connection before it gives up. RabbitMQ blocks a publisher's connection under memory or disk pressure, and pika leaves this unset — measured — so a blocked connection would hold every synchronous call on it for ever, and `publish` runs on request threads. A `blocked_connection_timeout` written into `RABBITMQ_URL` wins over this: somebody who wrote one meant it |
 
 A publish here is **confirmed and mandatory**: the broker answers before `send()` returns, and
 a message that cannot be routed raises instead of vanishing into an exchange. That matches what

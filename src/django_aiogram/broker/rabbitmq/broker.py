@@ -29,8 +29,18 @@ __all__ = ('RabbitMQBroker',)
 
 logger = logging.getLogger('django_aiogram')
 
-#: AMQP's own word for "keep this across a broker restart"
-_PERSISTENT = 2
+
+def _tag(handle: object) -> int:
+    """Read a delivery tag out of an opaque handle, or say where it must have come from.
+
+    AMQP names a delivery by an integer the channel assigned, so a handle of any other shape
+    belongs to a different broker — and saying that is better than letting the driver complain
+    about a type it was handed. The Redis list makes the same refusal for the same reason.
+    """
+    if not isinstance(handle, int) or isinstance(handle, bool):
+        msg = f'this broker settles by delivery tag, so a handle must be an int, not {type(handle).__name__}'
+        raise TypeError(msg)
+    return handle
 
 
 class RabbitMQBroker(Broker):
@@ -46,6 +56,7 @@ class RabbitMQBroker(Broker):
         'RABBITMQ_URL': REQUIRED,
         'RABBITMQ_QUEUE': REQUIRED,
         'RABBITMQ_PREFETCH': 0,
+        'RABBITMQ_TIMEOUT': 10,
     }
 
     def __init__(self) -> None:
@@ -69,6 +80,7 @@ class RabbitMQBroker(Broker):
             str(self.option('RABBITMQ_URL')),
             self._queue(),
             int(str(self.option('RABBITMQ_PREFETCH') or 0)),
+            float(str(self.option('RABBITMQ_TIMEOUT') or 10)),
         )
 
     # ------------------------------------------------------------------ producer
@@ -83,11 +95,13 @@ class RabbitMQBroker(Broker):
         """
         if not payloads:
             return
-        from pika import BasicProperties  # noqa: PLC0415 - the driver is an extra
+        from pika import BasicProperties, DeliveryMode  # noqa: PLC0415 - the driver is an extra
         from pika.exceptions import NackError, UnroutableError  # noqa: PLC0415 - as above
 
         channel, queue = self._channel(), self._queue()
-        properties = BasicProperties(delivery_mode=_PERSISTENT)
+        # the driver's own enum rather than the number 2: AMQP spells persistence as a
+        # delivery mode, and its stubs will not accept a bare int for it
+        properties = BasicProperties(delivery_mode=DeliveryMode.Persistent)
         # one try around the loop, not one per payload: a refusal ends the batch either way,
         # and the caller is told which queue refused rather than which message it stopped at
         try:
@@ -154,7 +168,7 @@ class RabbitMQBroker(Broker):
 
     def ack(self, handle: object) -> None:
         """``basic_ack`` the delivery tag, which is what a handle is here."""
-        self._channel().basic_ack(handle)
+        self._channel().basic_ack(_tag(handle))
         self._unsettled.discard(handle)
 
     def release(self, handle: object) -> None:
@@ -166,7 +180,7 @@ class RabbitMQBroker(Broker):
         takes effect at once. Measured: the message is back in the queue and the next take
         returns it.
         """
-        self._channel().basic_nack(handle, requeue=True)
+        self._channel().basic_nack(_tag(handle), requeue=True)
         self._unsettled.discard(handle)
 
     # ---------------------------------------------------------------- operations

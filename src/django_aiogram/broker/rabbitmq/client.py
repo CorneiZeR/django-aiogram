@@ -22,6 +22,8 @@ from django_aiogram.config.settings import SETTINGS_NAME
 
 if TYPE_CHECKING:
     from pika.adapters.blocking_connection import BlockingChannel
+else:  # the annotations above are evaluated at runtime in a `|` union
+    BlockingChannel = Any
 
 __all__ = ('channel_for_thread', 'close_connections')
 
@@ -34,49 +36,80 @@ _opened: list[Any] = []
 _lock = threading.Lock()
 
 
-def channel_for_thread(url: str, queue: str, prefetch: int) -> 'BlockingChannel':
+def channel_for_thread(url: str, queue: str, prefetch: int, blocked_timeout: float) -> 'BlockingChannel':
     """Open or reuse the calling thread's channel, confirmed for publishing.
 
     ``confirm_delivery`` here rather than per publish: it is a channel mode, and turning it on
     once is what makes every ``basic_publish`` on this channel answerable. The queue is
     declared durable on the way, so a broker restart does not lose the queue itself — the
     messages in it are marked persistent by the publisher.
+
+    Reused only while every part of its identity still matches. A settings change that moves
+    the queue or the prefetch has to reach a thread that is not the one running the receiver,
+    and comparing here is how it does: that thread rebuilds on its next ask, without anybody
+    reaching across a connection they do not own.
     """
     from pika import BlockingConnection, URLParameters  # noqa: PLC0415 - the driver is an extra
 
-    existing = getattr(_local, 'channel', None)
-    if existing is not None and getattr(_local, 'url', None) == url and existing.is_open:
+    identity = (url, queue, prefetch, blocked_timeout)
+    existing: BlockingChannel | None = getattr(_local, 'channel', None)
+    if existing is not None and getattr(_local, 'identity', None) == identity and existing.is_open:
         return existing
     if not url:
         msg = f"{SETTINGS_NAME}['RABBITMQ_URL'] is required to talk to RabbitMQ."
         raise ImproperlyConfigured(msg)
-    connection = BlockingConnection(URLParameters(url))
+    parameters = URLParameters(url)
+    if parameters.blocked_connection_timeout is None:
+        # pika leaves this unset, measured, and a broker that blocks the connection under
+        # resource pressure then blocks every synchronous call on it for ever. `publish` runs
+        # on request threads, so that is a web worker that never comes back. An explicit URL
+        # value wins: somebody who wrote one meant it
+        parameters.blocked_connection_timeout = blocked_timeout
+    connection = BlockingConnection(parameters)
     channel = connection.channel()
     channel.confirm_delivery()
     channel.queue_declare(queue=queue, durable=True)
-    if prefetch:
-        channel.basic_qos(prefetch_count=prefetch)
-    _local.url, _local.connection, _local.channel = url, connection, channel
+    # always, including zero. Skipping the call is not the same as asking for no limit: a
+    # server with `default_consumer_prefetch` configured applies it to a consumer that never
+    # sent QoS, so a package documenting 0 as unlimited has to say 0 out loud. Measured,
+    # `basic_qos(prefetch_count=0)` is accepted
+    channel.basic_qos(prefetch_count=prefetch)
+    _local.identity, _local.connection, _local.channel = identity, connection, channel
     with _lock:
         _opened.append(connection)
     return channel
 
 
 def close_connections(**_kwargs: object) -> None:
-    """Close every connection this process opened, from whichever thread asks.
+    """Close this thread's connection, and ask the other threads to close theirs.
 
-    Called at shutdown and from the settings receiver below. Failures are swallowed on
-    purpose: this runs while things are being torn down, and a connection that is already
-    gone is the outcome being asked for.
+    The asking is the point. A ``BlockingConnection`` belongs to the thread that opened it —
+    pika documents ``add_callback_threadsafe`` as the only operation another thread may
+    perform on one — so closing a consumer thread's connection from here would be a race with
+    whatever frame it is in the middle of. It appears to work on an idle connection, which is
+    the worst kind of evidence: the failure needs the owner to be busy.
+
+    So the owner closes it, on its own loop, the next time it processes events. A thread
+    parked somewhere else may never get there, and that is accepted: its connection dies with
+    the process, and it will not be *used* again either way, because
+    :func:`channel_for_thread` rebuilds when the settings behind it have moved.
+
+    Failures are swallowed on purpose: this runs while things are being torn down, and a
+    connection that is already gone is the outcome being asked for.
     """
+    mine = getattr(_local, 'connection', None)
     with _lock:
-        connections, _opened[:] = list(_opened), []
-    for connection in connections:
-        # a connection that is already gone is the outcome being asked for, and this runs
-        # while things are being torn down
+        others = [connection for connection in _opened if connection is not mine]
+        _opened[:] = [connection for connection in _opened if connection is mine and mine is not None]
+    for connection in others:
         with suppress(Exception):
-            connection.close()
-    for attribute in ('url', 'connection', 'channel'):
+            connection.add_callback_threadsafe(connection.close)
+    if mine is not None:
+        with suppress(Exception):
+            mine.close()
+        with _lock:
+            _opened[:] = [connection for connection in _opened if connection is not mine]
+    for attribute in ('identity', 'connection', 'channel'):
         if hasattr(_local, attribute):
             delattr(_local, attribute)
 

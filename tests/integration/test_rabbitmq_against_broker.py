@@ -174,3 +174,88 @@ def test_waiting_for_a_message_returns_without_one(broker, amqp_url):
 
         assert taken is not None, 'a published message did not arrive within the timeout'
         assert taken.payload == payload(5)
+
+
+def test_the_prefetch_is_always_stated_even_when_it_is_unlimited(broker, amqp_url, monkeypatch):
+    """Skipping `basic_qos` is not the same as asking for no limit.
+
+    A server with `default_consumer_prefetch` configured applies it to a consumer that never
+    sent QoS, so a package documenting 0 as unlimited has to say 0 out loud — otherwise the
+    documented default is whatever the operator's `rabbitmq.conf` happens to say, silently.
+    """
+    from pika.adapters.blocking_connection import BlockingChannel
+
+    asked: list[int] = []
+    original = BlockingChannel.basic_qos
+
+    def recording(self, prefetch_size=0, prefetch_count=0, **kwargs):
+        asked.append(prefetch_count)
+        return original(self, prefetch_size, prefetch_count, **kwargs)
+
+    monkeypatch.setattr(BlockingChannel, 'basic_qos', recording)
+
+    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+        broker.publish([payload(1)])
+
+    assert asked == [0], f'prefetch was not stated to the broker: {asked}'
+
+
+def test_a_blocked_connection_cannot_hold_a_call_for_ever(broker, amqp_url):
+    """pika leaves `blocked_connection_timeout` unset, and this transport does not.
+
+    RabbitMQ blocks a publisher's connection under memory or disk pressure, and a blocked
+    connection with no timeout holds every synchronous call on it indefinitely — on a request
+    thread, that is a web worker that never comes back. Asserted on the parameters the
+    connection was built with, because the condition itself needs a broker under pressure.
+    """
+    from django_aiogram.broker.rabbitmq import client
+
+    with override_settings(TELEGRAM_BOT={**settings_for(amqp_url), 'RABBITMQ_TIMEOUT': 3}):
+        broker.publish([payload(1)])
+
+        # `_impl.params` because a `BlockingConnection` is a facade and does not expose the
+        # parameters it was built with — measured, there is no public accessor for them
+        assert client._local.connection._impl.params.blocked_connection_timeout == 3.0
+
+    explicit = f'{amqp_url}?blocked_connection_timeout=7'
+    with override_settings(TELEGRAM_BOT={**settings_for(explicit), 'RABBITMQ_TIMEOUT': 3}):
+        RabbitMQBroker().publish([payload(2)])
+
+        assert client._local.connection._impl.params.blocked_connection_timeout == 7.0, (
+            'a timeout written into the URL was overridden by the setting'
+        )
+
+
+def test_a_settings_change_does_not_reach_across_a_thread(broker, amqp_url):
+    """The connection a worker thread opened is asked to close, not closed from here.
+
+    `BlockingConnection` belongs to the thread that opened it — pika documents
+    `add_callback_threadsafe` as the only thing another thread may do to one — so closing a
+    worker's connection from the settings receiver would race whatever frame it is in. What
+    must hold is that the change still takes effect: the next use rebuilds, because the
+    channel is only reused while the settings behind it match.
+
+    `apublish` is what opens a connection on a thread that is not this one.
+    """
+    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+        asyncio.run(broker.apublish([payload(1)]))
+
+    # leaving the block above fired the receiver, and entering this one fires it again
+    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+        asyncio.run(broker.apublish([payload(2)]))
+
+        assert broker.depth() == 2, 'a publish after a settings change did not arrive'
+
+
+def test_a_handle_from_another_broker_is_refused(broker, amqp_url):
+    """A delivery tag is an integer this channel assigned, so anything else came from elsewhere.
+
+    The Redis list makes the same refusal for the same reason: saying so beats letting the
+    driver complain about a type it was handed, which is a traceback naming a method.
+    """
+    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+        with pytest.raises(TypeError, match='delivery tag'):
+            broker.ack(b'a redis payload')
+
+        with pytest.raises(TypeError, match='delivery tag'):
+            broker.release('not a tag')
