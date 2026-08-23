@@ -13,6 +13,7 @@ what a killed worker does to it, so that is what this arranges.
 
 import asyncio
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from django.test import override_settings
@@ -274,9 +275,12 @@ def test_a_settings_change_does_not_reach_across_a_thread(broker, amqp_url, monk
     assert here not in closed_from, 'a connection was closed directly from a thread that does not own it'
 
     with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+        # measured across the publish, because the first message is still in the queue: a
+        # `>= 1` here would have held whether or not this one arrived
+        before = broker.depth()
         asyncio.run(broker.apublish([payload(2)]))
 
-        assert broker.depth() >= 1, 'a publish after a settings change did not arrive'
+        assert broker.depth() == before + 1, 'a publish after a settings change did not arrive'
 
 
 def test_a_handle_from_another_broker_is_refused(broker, amqp_url):
@@ -423,3 +427,37 @@ def test_the_in_flight_count_forgets_a_lost_channel(broker, amqp_url):
 
         assert again is not None, 'the requeued message did not come back'
         assert broker.inflight_depth() == 1, 'the handle from the closed channel is still counted'
+
+
+def test_two_threads_never_share_a_channel_number(amqp_url):
+    """A handle from one thread must not look current on another.
+
+    The number in a handle says which channel issued the tag, and per-thread numbering would
+    make the first channel on every thread number 1 — so a handle made on one thread and
+    settled on another would pass a check that compares numbers. `apublish` opens a channel on
+    a worker thread, so more than one thread opens them here.
+
+    Asserted on the numbers rather than on a settle, because the collision is what makes the
+    settle unsafe and it is the thing that can be observed directly.
+    """
+    from django_aiogram.broker.rabbitmq import client
+
+    seen: list[int] = []
+
+    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+        broker = RabbitMQBroker()
+        broker.publish([payload(1)])
+        seen.append(client.channel_generation())
+
+        def on_another_thread():
+            broker.publish([payload(2)])
+            return client.channel_generation()
+
+        worker = ThreadPoolExecutor(max_workers=1)
+        try:
+            seen.append(worker.submit(on_another_thread).result(timeout=30))
+        finally:
+            worker.shutdown(wait=True)
+
+    assert 0 not in seen, f'a thread reported no channel at all: {seen}'
+    assert len(set(seen)) == len(seen), f'two threads share a channel number: {seen}'

@@ -11,6 +11,7 @@ so a threaded WSGI server needs one per worker thread — the same shape as the 
 registry ``redis.asyncio`` needs, and for the same reason.
 """
 
+import itertools
 import threading
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any
@@ -30,9 +31,16 @@ __all__ = ('channel_for_thread', 'close_connections')
 #: one connection and channel per thread, discarded when settings change
 _local = threading.local()
 
-#: how many channels this process has opened, ever. A delivery tag is only meaningful on the
-#: channel that issued it, so a handle carries the generation it came from and settling one
-#: from an older channel is refused rather than sent — see `RabbitMQBroker.ack`
+#: which channel a handle came from. A delivery tag is only meaningful on the channel that
+#: issued it, so a handle carries this and settling one from an older channel is refused rather
+#: than sent — see `RabbitMQBroker.ack`.
+#:
+#: Counted for the whole process rather than per thread, and that is not tidiness: per thread,
+#: the first channel on *every* thread is generation 1, so a handle made on one and settled on
+#: another would pass a check that compares numbers. `apublish` runs on a worker thread, so
+#: channels are created on more than one. Unique numbers make the collision impossible instead
+#: of relying on handles never crossing
+_channels = itertools.count(1)
 _generation = threading.local()
 #: every connection this process opened, so `close_connections` can reach the ones it did not
 #: open itself — a test switching settings runs on the thread it is testing from, and a
@@ -92,9 +100,10 @@ def channel_for_thread(url: str, queue: str, prefetch: int, blocked_timeout: flo
         with suppress(Exception):
             connection.close()
         raise
-    # `getattr`, not `+= 1`: this is thread-local, and a worker thread — `apublish` runs on
-    # one — has no attribute to increment the first time it opens a channel
-    _generation.count = channel_generation() + 1
+    # `next` on a process-wide counter, so no two channels anywhere in this process share a
+    # number. `itertools.count` is atomic enough for this: the GIL makes a single `next` on it
+    # indivisible, which is all that is being relied on
+    _generation.count = next(_channels)
     _local.identity, _local.connection, _local.channel = identity, connection, channel
     _local.generation = _generation.count
     with _lock:
@@ -117,10 +126,13 @@ def _drop_this_threads_connection() -> None:
 
 
 def channel_generation() -> int:
-    """Which channel this thread is on, counted from the first one it opened.
+    """Which channel this thread is on, as a number unique across the process.
 
-    Bumped whenever a channel is built, so a delivery tag handed out before a replacement can
-    be told apart from one handed out after it.
+    Taken from a process-wide counter whenever a channel is built, so a delivery tag handed out
+    before a replacement can be told apart from one handed out after it — and from one handed
+    out by another thread, which per-thread numbering could not do.
+
+    ``0`` for a thread that has never opened one, which no handle can carry.
     """
     return int(getattr(_generation, 'count', 0))
 
