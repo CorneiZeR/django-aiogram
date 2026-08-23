@@ -2,6 +2,7 @@
 was only ever set inside an `isinstance` branch that a wrong type never entered.
 """
 
+import builtins
 import pathlib
 import re
 
@@ -777,3 +778,120 @@ def test_the_checks_are_registered_with_django():
     registered = [check for check in registry.get_checks() if check is check_settings]
 
     assert registered, 'apps.ready() no longer registers check_settings with Django'
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        'ENABLED': True,
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost/0?decode_responses=1',
+        'ALLOW_PICKLE': True,
+        'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker',
+    }
+)
+def test_a_check_behind_e047_does_not_crash_looking_for_the_driver(monkeypatch):
+    """A rule reported after `E047` must not replace it with the traceback it prevents.
+
+    Checks report; they do not stop the ones behind them. `E043` asks redis-py whether a URL
+    enables `decode_responses`, and since the driver became an extra that question needs an
+    import — so on a base install with `ALLOW_PICKLE` on, `manage.py check` died with
+    `ModuleNotFoundError: No module named 'redis'` *from inside a check*, which is the exact
+    failure the extras work exists to replace. Measured on a real driverless install before
+    this was fixed.
+
+    `ALLOW_PICKLE` is what makes it reachable: without it `E043` returns before asking, which
+    is why the first driverless measurement of this branch came back clean.
+
+    The import is made to fail rather than the package uninstalled — the suite needs redis for
+    everything else — and `find_spec` is patched alongside it so `E047` reaches the same
+    conclusion and this reads as the one configuration it describes.
+    """
+    real_import = builtins.__import__
+
+    def refuse(name, *args, **kwargs):
+        if name == 'redis' or name.startswith('redis.'):
+            raise ModuleNotFoundError(f"No module named '{name}'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, '__import__', refuse)
+    monkeypatch.setattr('importlib.util.find_spec', lambda name, *args: None if name == 'redis' else True)
+
+    reported = ids(check_settings())
+
+    assert 'django_aiogram.E047' in reported, 'the missing driver was not reported'
+    assert 'django_aiogram.E043' not in reported, 'a rule that cannot ask the driver still answered'
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        'ENABLED': True,
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        # named rather than defaulted, in all four of these: they are about one transport's
+        # behaviour, and a change of default would re-aim them at another one while they
+        # stayed green. This one lost its explicit name to a stacked `override_settings`,
+        # where the inner mapping wins, and went on passing through the default
+        'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker',
+    }
+)
+def test_a_named_broker_whose_driver_is_missing_is_reported_with_the_install_line(monkeypatch):
+    """`redis` left the base dependencies, so this is now a reachable configuration.
+
+    A project that names the Redis list without `django-aiogram[redis]` installed is one
+    `pip install` short of working — and the difference between hearing that from
+    `manage.py check` and hearing `ModuleNotFoundError: redis` from inside a producer is
+    the whole reason `BROKER` is judged rather than trusted.
+
+    The driver is made to look absent through `find_spec`, not uninstalled: the suite runs
+    with redis present because every other test needs it, and an import that really failed
+    would take this process down rather than produce a finding.
+    """
+    monkeypatch.setattr('importlib.util.find_spec', lambda name, *args: None if name == 'redis' else True)
+
+    problems = [problem for problem in check_settings() if str(problem.id) == 'django_aiogram.E047']
+
+    assert problems, 'a broker whose driver is absent produced no finding'
+    assert 'pip install "django-aiogram[redis]"' in problems[0].hint, problems[0].hint
+
+
+@override_settings(TELEGRAM_BOT={'ENABLED': False, 'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker'})
+def test_a_disabled_process_is_not_asked_to_install_a_driver_it_never_calls(monkeypatch):
+    """The rule above, gated the way `W002` is gated, and for the same reason.
+
+    A web container with `ENABLED` off registers every check — that is what makes this
+    worth pinning — and it reaches no transport, so the driver it does not have is not a
+    problem it has. Without the gate this is an `Error`, which fails `manage.py check`
+    outright and can only be answered by installing a driver nothing in that process calls.
+
+    The name is still judged: the sibling case below names a non-broker with the bot
+    disabled and is reported, because a typo is a typo in every process.
+    """
+    monkeypatch.setattr('importlib.util.find_spec', lambda name, *args: None if name == 'redis' else True)
+
+    problems = [problem for problem in check_settings() if str(problem.id) == 'django_aiogram.E047']
+
+    assert not problems, f'a disabled process was asked for a driver: {problems}'
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        'ENABLED': False,
+        'BROKER': 'django_aiogram.producer.client.TelegramBot',
+    }
+)
+def test_a_broker_setting_naming_something_else_is_refused():
+    """Importable and callable is not the same as being a transport.
+
+    A dotted path that resolves is the easy half. This one resolves to a real class that is
+    not a `Broker`, which is what a copied line from the wrong page produces — and it would
+    otherwise fail on the first `publish` with an `AttributeError` naming a method rather
+    than the setting.
+
+    Asserted with the bot **disabled**, which is the half of this rule that is not gated:
+    the process above is excused its missing driver, and this one is not excused its typo,
+    because a name that is wrong here is wrong in the worker that does send.
+    """
+    problems = [problem for problem in check_settings() if str(problem.id) == 'django_aiogram.E047']
+
+    assert problems, 'a BROKER naming a non-broker produced no finding'
+    assert 'not a Broker subclass' in problems[0].msg, problems[0].msg

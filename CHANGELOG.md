@@ -23,6 +23,36 @@ Entries land here as the work does; nothing below is released.
 
 ### Changed
 
+- **No transport driver is a dependency of this package any more.** `pip install
+  django-aiogram` brings Django and aiogram; the driver comes with the transport you name.
+  For the default that is **`pip install "django-aiogram[redis]"`** — an existing project
+  upgrading from 3.x has to add the extra, or `redis` disappears with the rename.
+
+  It is worth the one-time edit because the alternative is every deployment carrying every
+  driver: a project on Kafka has no use for `redis`, and this is what lets the later
+  transports ship without adding to what a base install downloads.
+
+  Nothing guesses. `BROKER` names the transport, and a name whose driver is absent is
+  `E047` at startup carrying that `pip install` line — with one exception that matters to a
+  web container: a process with `ENABLED` off reaches no transport, so it is not asked to
+  install one, the same way `W002` does not ask a disabled process for a `REDIS_URL`. A
+  `BROKER` naming something that is not a transport is still reported there.
+
+  Ignore all of that and the send still says it in words. Measured on a base install with
+  no driver:
+
+  ```text
+  from django_aiogram import bot        → ok
+  bot.send(chat_id=1, text='hi')        → RedisListBroker needs the 'redis' package, which
+                                          is not installed. Install it with:
+                                          pip install "django-aiogram[redis]"
+  ```
+
+  The import working is the part that had to be built: **no module reaches its driver at
+  import time**, so the package, the producer and a transport package all import on a
+  machine that has no driver at all. Annotations moved under `TYPE_CHECKING` and a client
+  is built inside the function that builds it — including aiogram's Redis FSM storage,
+  which a project on `FSM_STORAGE = 'memory'` no longer pays for either.
 - **The consumer and both producers talk to a transport, not to Redis.** What names an
   in-flight message is the transport's business — a payload for a Redis list, an entry id
   for a stream, a delivery tag, an offset — so a take hands back an opaque handle and it

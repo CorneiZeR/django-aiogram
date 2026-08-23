@@ -24,7 +24,11 @@ jobs:
           python-version: '3.13'
           cache: pip
           cache-dependency-path: pyproject.toml
-      - run: pip install -e . --group dev
+      # `.[redis]` and not `.`: the driver is an extra since 4.0, and the suite needs it.
+      # It would arrive anyway — fakeredis depends on redis-py — and that is the reason to
+      # name it: a job that gets its driver by accident goes red on an unrelated dev-group
+      # edit, and says nothing about the extra it was supposed to be exercising
+      - run: pip install -e '.[redis]' --group dev
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy
@@ -55,7 +59,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: pyproject.toml
-      - run: pip install -e . --group dev 'django~=${{ matrix.django-version }}.0'
+      - run: pip install -e '.[redis]' --group dev 'django~=${{ matrix.django-version }}.0'
       - run: python -m pytest -q
 
   test-db:
@@ -71,7 +75,7 @@ jobs:
           python-version: '3.13'
           cache: pip
           cache-dependency-path: pyproject.toml
-      - run: pip install -e . --group dev
+      - run: pip install -e '.[redis]' --group dev
       - run: python -m pytest -q --ds=tests.db_settings tests/db
 
   test-floors:
@@ -91,7 +95,7 @@ jobs:
           # pip understands from 25.1. Every other job runs the runner's own
           # pip, so CI still exercises the one contributors actually have
           pip-version: '25.1'
-      - run: pip install -e . --group dev 'django==5.2.0' 'aiogram==3.30.0' 'redis==6.2.0'
+      - run: pip install -e '.[redis]' --group dev 'django==5.2.0' 'aiogram==3.30.0' 'redis==6.2.0'
       - run: python -m pytest -q
 
   integration:
@@ -135,7 +139,7 @@ jobs:
           python-version: '3.13'
           cache: pip
           cache-dependency-path: pyproject.toml
-      - run: pip install -e . --group dev ${{ matrix.pins }}
+      - run: pip install -e '.[redis]' --group dev ${{ matrix.pins }}
       - run: python -m pytest -q -m integration tests/integration
         env:
           DJANGO_AIOGRAM_TEST_REDIS_URL: redis://localhost:6379/0

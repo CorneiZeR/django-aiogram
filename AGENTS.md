@@ -54,10 +54,14 @@ tests/              pytest, fakeredis, no network
 
 ```shell
 python -m pip install --upgrade pip   # --group is PEP 735, pip 25.1 and up
-pip install -e . --group dev
+pip install -e '.[redis]' --group dev
 ruff check . && ruff format --check . && mypy && python -m pytest -q
 python -m pytest -q --ds=tests.db_settings tests/db
 ```
+
+The extra is named on purpose — the driver is an extra since 4.0, and CI names it in
+every job for the same reason.
+
 
 Those gate every pull request. `pytest` needs no Redis and no token.
 
@@ -229,6 +233,13 @@ Two rules that are not style:
   no driver, so `import django_aiogram.broker.kafka` must not fail on a machine without
   Kafka — otherwise the check that names the missing extra can never run, and the reader
   gets an `ImportError` instead of `pip install "django-aiogram[kafka]"`.
+
+  This binds the modules a transport *reaches through* as well, which is where it was
+  first broken: `django_aiogram.redis` and `producer/client.py` both imported the driver
+  at module scope, so `from django_aiogram import bot` failed on a base install.
+  `tests/test_package_layout.py` imports the transport package and the producer in a fresh
+  interpreter each and fails if `redis` lands in `sys.modules`. Type annotations go under
+  `TYPE_CHECKING`; a client is built inside the function that builds it.
 
 ## Documentation
 

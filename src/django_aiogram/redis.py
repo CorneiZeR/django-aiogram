@@ -6,25 +6,32 @@ them are running. The connection is built on first use rather than at import,
 because Django settings are not readable while the app registry is loading.
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import threading
 import weakref
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from django.core.exceptions import ImproperlyConfigured
 from django.core.signals import setting_changed
-from redis import Redis
-from redis.asyncio import Redis as AsyncRedis
-from redis.connection import parse_url as _parse_url
 
 from django_aiogram.config.settings import SETTINGS_NAME, conf
 from django_aiogram.eventlog.events import worker_identity
 
-#: redis-py ships py.typed but leaves parse_url unannotated, and strict mode refuses
-#: to call it. Naming the shape here keeps the call site honest without an ignore
-parse_url: Callable[[str], dict[str, Any]] = _parse_url
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from redis import Redis
+    from redis.asyncio import Redis as AsyncRedis
+
+# The driver is imported where a connection is built, never at module scope, because
+# `redis` is an extra since 4.0: this module is reached by the producer and by the
+# checks, and both have to work in a process that named another transport. What makes
+# that safe rather than lucky is that nothing here touches the driver until a caller
+# asks for a client — and by then `BROKER` has already been judged, so the reader has
+# seen `E047` and its install line. See AGENTS.md, "transports import drivers lazily".
 
 
 #: the package logger, so a contained failure here is still visible
@@ -137,6 +144,8 @@ def build_client() -> Redis:
     again, and a failed ``send_redis`` records the drop and raises so the caller
     knows nothing was queued.
     """
+    from redis import Redis  # noqa: PLC0415 - the driver is an extra; see the note above
+
     url = conf['REDIS_URL']
     if not url:
         msg = f"{SETTINGS_NAME}['REDIS_URL'] is required to talk to Redis."
@@ -155,6 +164,8 @@ def build_async_client() -> AsyncRedis:
     client cannot be shared the way the synchronous one is. :func:`aget_redis`
     keeps one per loop.
     """
+    from redis.asyncio import Redis as AsyncRedis  # noqa: PLC0415 - as build_client
+
     url = conf['REDIS_URL']
     if not url:
         msg = f"{SETTINGS_NAME}['REDIS_URL'] is required to talk to Redis."
@@ -169,6 +180,10 @@ def url_decodes_responses(url: str) -> bool:
     ``REDIS_URL`` is often shared with a cache backend that wants decoding — but
     pickled payloads cannot survive it, so check E043 refuses that one pairing.
 
+    ``False`` when redis-py is not installed at all, which is not a guess about the URL but
+    a deferral: `E047` has already named the extra to install, and this rule has nothing to
+    add to a deployment that cannot connect to anything yet.
+
     Asked of redis-py rather than parsed here, because the answer is surprising
     and any reimplementation would drift from it. ``decode_responses`` has no
     entry in ``URL_QUERY_ARGUMENT_PARSERS``, so it never goes through a boolean
@@ -177,6 +192,20 @@ def url_decodes_responses(url: str) -> bool:
     **enable** decoding; only an empty value leaves it off, and only because the
     query parser drops blanks before redis-py sees them.
     """
+    try:
+        from redis.connection import parse_url as _parse_url  # noqa: PLC0415 - as build_client
+    except ModuleNotFoundError:
+        # No driver, so there is nothing to ask. This is reached from `E043`, and `E043` is
+        # asked *after* `E047` has already reported the missing extra — checks report, they
+        # do not stop the ones behind them. Raising here would replace that install line with
+        # `ModuleNotFoundError: No module named 'redis'` from inside a system check, which is
+        # the exact failure the extras work exists to prevent. Measured: it did, on a base
+        # install with ALLOW_PICKLE on
+        return False
+
+    #: redis-py ships py.typed but leaves parse_url unannotated, and strict mode refuses
+    #: to call it. Naming the shape here keeps the call site honest without an ignore
+    parse_url: Callable[[str], dict[str, Any]] = _parse_url
     try:
         return bool(parse_url(url).get('decode_responses'))
     except (AttributeError, TypeError, ValueError):

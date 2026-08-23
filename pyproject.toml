@@ -14,7 +14,6 @@ authors = [{ name = "Oleksii Kolosiuk", email = "kolosyuk1@gmail.com" }]
 keywords = ["django", "redis", "aiogram", "telegram", "bot", "docker"]
 dependencies = [
     "django>=5.2",
-    "redis>=6.2",
     "aiogram>=3.30",
 ]
 classifiers = [
@@ -38,6 +37,12 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+# one extra per transport, because a project runs one of them. `redis` left the
+# base dependencies in 4.0: a deployment on Kafka has no use for it, and pulling
+# it anyway is how a base install grows a dependency nobody named. `BROKER` says
+# which one is in use, and a system check refuses at startup with this install
+# line when the driver behind that name is absent
+redis = ["redis>=6.2"]
 # not a runtime dependency: redis-py parses the protocol in C when this is
 # present. Worth it on a busy consumer, pointless on a web tier that only ever
 # pushes, which is why it is opt-in rather than pulled in for everybody

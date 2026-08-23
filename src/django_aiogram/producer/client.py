@@ -17,18 +17,16 @@ from asyncio import AbstractEventLoop
 from collections.abc import Callable, Coroutine, Iterable, Iterator, Mapping
 from concurrent import futures
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from aiogram import Bot, Dispatcher, Router, exceptions
 from aiogram.client.default import DefaultBotProperties
 from aiogram.dispatcher.event.handler import CallbackType
 from aiogram.fsm.storage.base import BaseStorage
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import Update
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
-from redis import Redis
 
 from django_aiogram.api import check_function
 from django_aiogram.broker.registry import get_broker
@@ -51,6 +49,9 @@ from django_aiogram.redis import (
 from django_aiogram.wire.envelope import pack
 from django_aiogram.wire.payloads import describe
 from django_aiogram.wire.serializers import get_serializer
+
+if TYPE_CHECKING:
+    from redis import Redis
 
 logger = logging.getLogger('django_aiogram')
 
@@ -337,6 +338,11 @@ def build_storage() -> BaseStorage:
         if not url:
             msg = f"{SETTINGS_NAME}['REDIS_URL'] is required for the redis FSM storage."
             raise ImproperlyConfigured(msg)
+        # imported here, not at module scope: aiogram's Redis storage imports the driver,
+        # which is an extra since 4.0 — and a project on `memory` or another transport must
+        # be able to import this module at all. `django_aiogram.redis` does the same
+        from aiogram.fsm.storage.redis import RedisStorage  # noqa: PLC0415 - as above
+
         # the same deadlines the shared client gets: every update reads FSM state,
         # so a half-open Redis here wedges the whole bot rather than one send
         return instrumented(RedisStorage.from_url(url, connection_kwargs=connection_kwargs()))
@@ -472,7 +478,7 @@ class TelegramBot:
         return self._router
 
     @property
-    def redis_conn(self) -> Redis:
+    def redis_conn(self) -> 'Redis':
         """The connection every part of this package shares, opened on first use."""
         return get_redis()
 

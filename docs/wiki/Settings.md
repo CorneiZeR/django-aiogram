@@ -14,6 +14,13 @@ measured on `{'ENABLED': False, 'EVENT_LOG': True}`, that process reports `W005`
 warnings. Only a process with `ENABLED` and `EVENT_LOG` both switched off registers
 nothing.
 
+`E047` is split along the same line, which matters to a base install: since 4.0 no
+transport driver is a dependency of this package, and a process that reaches no
+transport is not asked to install one. Measured on a disabled process installed
+without `django-aiogram[redis]`: no `E047`, and `manage.py check` still exits 0. A
+`BROKER` naming something that is not a transport is still reported there, because
+that name is equally wrong in the worker that does send.
+
 ## Credentials
 
 | Setting | Default | Description |
@@ -188,6 +195,7 @@ entry naming a retired one is dead but harmless.
 | `E044` | `DRAIN_TIMEOUT` is not a finite number, or is negative |
 | `E045` | `MAX_IN_FLIGHT` is not an integer, or is negative |
 | `E046` | `REQUIRE_CRASH_SAFE` cannot be read as true or false |
+| `E047` | `BROKER` is empty, names something that is not a broker, names one whose driver is not installed — the hint carries the `pip install` line for that extra — or names one whose own required settings are unset. The last two are gated on the bot being enabled, like `W001` and `W002`: a process that never reaches a transport is not asked to install its driver. The first two are not |
 | `I001` | `WORKER_NAME` is empty **and** the hostname is one Docker generated, so a replacement container gets a different name — which strands whatever the old container was sending. Information rather than a warning because a check cannot tell a consumer from a web process, and every container without `hostname:` matches; `start_tgbot` warns for itself at startup |
 | `I002` | `EVENT_LOG_DATABASE` names an alias and nothing in `DATABASE_ROUTERS` that this check can read sends this app there, so a plain `migrate` may not create the table — `migrate --database=<alias>` still would. Information rather than a warning: a router of your own returning that alias is equally correct, and this cannot see inside one |
 | `W005` | the log is on while its database has no engine, so every event is dropped |
