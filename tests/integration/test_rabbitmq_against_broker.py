@@ -403,3 +403,23 @@ def test_a_connection_whose_setup_fails_is_closed(broker, amqp_url, monkeypatch)
     assert not opened[0].is_open, 'the abandoned connection was left open'
     assert client._opened == [], f'it was recorded anyway: {client._opened}'
     assert real is not None  # the patched method is restored by monkeypatch
+
+
+def test_the_in_flight_count_forgets_a_lost_channel(broker, amqp_url):
+    """An unacknowledged delivery goes back to the queue when its channel closes.
+
+    So it is no longer this worker's work, and counting it as in flight is wrong twice over:
+    the number is too high, and it grows by one per reconnect. Taking the requeued message
+    again would then be counted as a second delivery of something this process holds once.
+    """
+    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+        broker.publish([payload(3)])
+        assert broker.take_nowait() is not None, 'the message was not delivered'
+        assert broker.inflight_depth() == 1
+
+        close_connections()
+
+        again = broker.take_nowait()
+
+        assert again is not None, 'the requeued message did not come back'
+        assert broker.inflight_depth() == 1, 'the handle from the closed channel is still counted'

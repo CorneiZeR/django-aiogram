@@ -145,7 +145,7 @@ class RabbitMQBroker(Broker):
         it is shutting down.
         """
         channel = self._channel()
-        self._forget_a_stale_consumer(channel)
+        self._notice_a_new_channel(channel)
         if self._consumer is None or self._consumer_timeout != timeout:
             self._cancel(channel)
             self._consumer = channel.consume(self._queue(), inactivity_timeout=max(0.001, timeout))
@@ -165,7 +165,7 @@ class RabbitMQBroker(Broker):
         round trip on a path that runs at shutdown, not in the loop.
         """
         channel = self._channel()
-        self._forget_a_stale_consumer(channel)
+        self._notice_a_new_channel(channel)
         self._cancel(channel)
         method, _properties, body = channel.basic_get(self._queue(), auto_ack=False)
         return self._issued(method, body)
@@ -186,18 +186,29 @@ class RabbitMQBroker(Broker):
         self._unsettled.add((generation, tag))
         return Taken(body, (generation, tag))
 
-    def _forget_a_stale_consumer(self, channel: 'BlockingChannel') -> None:
-        """Drop a consumer that belongs to a channel this broker no longer uses.
+    def _notice_a_new_channel(self, channel: 'BlockingChannel') -> None:
+        """Forget what belonged to the channel this broker was using before.
 
-        Dropped rather than cancelled: the channel it was opened on is gone, so there is
-        nothing to cancel and asking would be the failure this avoids. A connection is
-        replaced whenever the settings behind it move or it was closed, which is a live path
-        rather than a theoretical one.
+        Two things belong to a channel, and both are wrong to keep once it is replaced.
+
+        The **consumer** is dropped rather than cancelled: the channel it was opened on is
+        gone, so there is nothing to cancel and asking would be the failure this avoids.
+
+        The **unsettled handles** go too, because they are no longer this worker's work.
+        RabbitMQ requeues an unacknowledged delivery when the channel that held it closes — so
+        those messages are back on the queue, and anybody may take them. Keeping the handles
+        made `inflight_depth()` count deliveries this process no longer holds, growing by one
+        per reconnect, and the same message taken again would be counted twice.
+
+        A connection is replaced whenever the settings behind it move or it was closed, which
+        is a live path rather than a theoretical one.
         """
         if self._consumer is not None and self._consumer_channel is not channel:
             self._consumer = None
             self._consumer_timeout = None
             self._consumer_channel = None
+        current = channel_generation()
+        self._unsettled = {held for held in self._unsettled if _position(held)[0] == current}
 
     def _cancel(self, channel: 'BlockingChannel') -> None:
         """Close the open consumer, if there is one, and forget it."""
