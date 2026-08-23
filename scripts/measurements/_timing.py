@@ -11,10 +11,10 @@ from collections.abc import Callable
 
 __all__ = ('configure_reporting', 'measure')
 
-#: a child of the package's logger, so it propagates to whatever a reader has configured for
-#: `django_aiogram` without mixing benchmark output into it under the same name. Never the root,
-#: which is the rule `AGENTS.md` states
-logger = logging.getLogger('django_aiogram.measurements')
+#: the package's logger, exactly. `tests/test_logging_discipline.py` looks only at `src/`, so a
+#: child name here would pass — but the convention it enforces there is exactness, and a second
+#: spelling of the same idea is the kind of thing a reader has to stop and check
+logger = logging.getLogger('django_aiogram')
 
 #: what a run reports on. The median rather than the mean, because a single scheduling hiccup
 #: in a few hundred rounds moves a mean and says nothing about the driver
@@ -22,7 +22,11 @@ ROUNDS = 300
 
 
 def configure_reporting() -> None:
-    """Send this module's log to stdout, since a measurement's output *is* its result."""
+    """Send this log to stdout, since a measurement's output *is* its result.
+
+    Called by a script a person ran on purpose, which is the only place changing the package
+    logger's level is anybody's business.
+    """
     handler = logging.StreamHandler()
     handler.setFormatter(logging.Formatter('%(message)s'))
     logger.addHandler(handler)

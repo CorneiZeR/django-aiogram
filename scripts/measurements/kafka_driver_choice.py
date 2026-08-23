@@ -30,6 +30,19 @@ TOPIC = 'measurement'
 BODY = b'{"function": "send_message", "chat_id": 1}'
 
 
+class RefusedRecordError(RuntimeError):
+    """The broker declined a record, so there is nothing here worth timing.
+
+    Its own class because the alternative is a long message at the raise site, which the
+    package's own rules refuse — and because a measurement that hits this has to stop rather
+    than average a refusal into its median.
+    """
+
+    def __init__(self, reason: object) -> None:
+        """Name what librdkafka said, since it is the only clue to why."""
+        super().__init__(f'the broker refused a record: {reason}')
+
+
 def main() -> None:
     """Measure both drivers with and without waiting, and report what decides it."""
     configure_reporting()
@@ -70,12 +83,26 @@ def _confirm_one(producer: Producer) -> None:
     The delivery callback is what says it arrived, so this waits on that rather than on
     ``flush`` — which would wait for every record in a producer this measurement shares with
     nothing, but the shape is the one the transport uses.
+
+    A *failed* delivery reaches the same callback, and timing that as an acknowledgement would
+    be measuring how fast this broker says no. So the error is kept and raised: a measurement
+    that quietly averages refusals into its median is worse than one that stops.
     """
     answered = threading.Event()
-    producer.produce(TOPIC, BODY, on_delivery=lambda _error, _message: answered.set())
+    refusal: list[object] = []
+
+    def delivered(error: object, _message: object) -> None:
+        """Record a refusal before releasing the wait, so the raise below cannot miss it."""
+        if error is not None:
+            refusal.append(error)
+        answered.set()
+
+    producer.produce(TOPIC, BODY, on_delivery=delivered)
     producer.poll(0)
     while not answered.is_set():
         producer.poll(0.001)
+    if refusal:
+        raise RefusedRecordError(refusal[0])
 
 
 def _aiokafka_producer() -> tuple[asyncio.AbstractEventLoop, AIOKafkaProducer]:

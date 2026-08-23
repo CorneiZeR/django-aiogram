@@ -64,8 +64,8 @@ the same worker name** — the list is keyed on that name, so a replacement cont
 with a fresh hostname strands it instead. That is what `I001` reports and what
 `manage.py tgbot_reclaim --worker <name>` is the way back from.
 
-**Kafka.** A committed offset is the record, and it says something about *every* message below
-it in that partition rather than about one. So a consumer that holds several sends at once —
+**Kafka.** A committed offset is the *next* record to read, so it says that every offset below
+it in that partition is settled rather than saying anything about one message. So a consumer that holds several sends at once —
 which `MAX_IN_FLIGHT` allows — commits only the highest **contiguous** prefix per partition:
 settle the second while the first is still in flight and nothing is committed for that
 partition until the first finishes, because committing the second would claim the first as
