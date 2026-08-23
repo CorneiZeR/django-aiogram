@@ -463,8 +463,16 @@ class RedisStreamsBroker(Broker):
         ``lag`` and not ``XLEN``: the length counts acknowledged history that has not been
         trimmed away, which would report a busy queue on an idle bot for ever.
         """
-        self._ensure()
-        return self._lag(get_redis().xinfo_groups(self._key()))
+        # no `_ensure()`: reading how much is waiting must not create anything. A container
+        # healthcheck runs twice a minute and `XGROUP CREATE` is a write — it fails outright
+        # on a read-only replica, and on an ACL user allowed to run XINFO and nothing else.
+        # Nothing there yet is nothing waiting
+        try:
+            return self._lag(get_redis().xinfo_groups(self._key()))
+        except Exception as error:
+            if self._absent(error):
+                return 0
+            raise
 
     def inflight_depth(self) -> int:
         """Count the group's pending entries, which is every consumer's in-flight work.
@@ -473,20 +481,33 @@ class RedisStreamsBroker(Broker):
         "how much is unsettled", and after a crash the answer belongs to whoever picks it
         up. The list could only report its own because that was all it could see.
         """
-        self._ensure()
-        return self._count(get_redis().xpending(self._key(), self._group()))
+        try:
+            return self._count(get_redis().xpending(self._key(), self._group()))
+        except Exception as error:
+            # as `depth`: an observation, so nothing is created to make it answerable
+            if self._absent(error):
+                return 0
+            raise
 
     async def adepth(self) -> int:
         """Read the same count on the client belonging to the loop the caller is on."""
-        await self._aensure()
         client = await aget_redis()
-        return self._lag(await client.xinfo_groups(self._key()))
+        try:
+            return self._lag(await client.xinfo_groups(self._key()))
+        except Exception as error:
+            if self._absent(error):
+                return 0
+            raise
 
     async def ainflight_depth(self) -> int:
         """Count the group's pending entries without blocking the loop."""
-        await self._aensure()
         client = await aget_redis()
-        return self._count(await client.xpending(self._key(), self._group()))
+        try:
+            return self._count(await client.xpending(self._key(), self._group()))
+        except Exception as error:
+            if self._absent(error):
+                return 0
+            raise
 
     def _lag(self, groups: object) -> int:
         """Pull this group's ``lag`` out of ``XINFO GROUPS``, or refuse to guess.
@@ -506,6 +527,11 @@ class RedisStreamsBroker(Broker):
                 name = name.decode()
             if name != group:
                 continue
+            if _LAG not in row and _LAG.encode() not in row:
+                # the field itself is missing, which is a server below 7.0 rather than a
+                # stream somebody deleted from. Distinguished here because the read path no
+                # longer goes through `_ensure`, where that used to be caught
+                raise StreamServerTooOldError
             lag = row.get(_LAG, row.get(_LAG.encode()))
             if lag is None:
                 raise StreamLagUnknownError(self._key(), group)
@@ -513,6 +539,17 @@ class RedisStreamsBroker(Broker):
         # the group is gone from under us — dropped by hand, or the stream was deleted. Zero
         # is the honest count of what is waiting for a consumer that no longer has a group
         return 0
+
+    @staticmethod
+    def _absent(error: Exception) -> bool:
+        """Whether this error means the stream or the group does not exist yet.
+
+        Matched on the message rather than the class, as :meth:`_ensure` matches BUSYGROUP,
+        because the driver is imported lazily here. Measured, the three shapes are ``no such
+        key`` from ``XINFO GROUPS``, and ``NOGROUP`` from ``XINFO CONSUMERS`` and ``XPENDING``.
+        """
+        text = str(error).upper()
+        return 'NO SUCH KEY' in text or 'NOGROUP' in text
 
     @staticmethod
     def _idles(rows: object) -> list[int]:
@@ -563,8 +600,14 @@ class RedisStreamsBroker(Broker):
         is alive rather than which one. A group nobody has joined yet reports no age, the
         honest analogue of the list's "no heartbeat has been written".
         """
-        self._ensure()
-        idles = self._idles(get_redis().xinfo_consumers(self._key(), self._group()))
+        try:
+            idles = self._idles(get_redis().xinfo_consumers(self._key(), self._group()))
+        except Exception as error:
+            # the group has not been created, which is what a probe run before any worker
+            # started sees. Reported rather than created: see `depth`
+            if not self._absent(error):
+                raise
+            return Liveness(reported=True, age=None, detail='no consumer has joined the group')
         if not idles:
             return Liveness(reported=True, age=None, detail='no consumer has joined the group')
         return Liveness(reported=True, age=max(0.0, min(idles) / 1000))

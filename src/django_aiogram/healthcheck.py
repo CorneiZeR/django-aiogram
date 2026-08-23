@@ -166,11 +166,12 @@ def _liveness_age(broker: Broker, *, limit: int, ttl: int) -> int | None:
                 f"raise {SETTINGS_NAME}['HEARTBEAT_INTERVAL'] instead"
             )
         raise _UnhealthyError(msg)
-    age = int(report.age)
-    if age > limit:
-        msg = f'the consumer last reported {age}s ago, over the {limit}s limit'
+    # compared before truncating: `int(5.9)` is 5, so `--max-age 5` used to accept a consumer
+    # already past the limit. The message keeps whole seconds, which is what an operator set
+    if report.age > limit:
+        msg = f'the consumer last reported {int(report.age)}s ago, over the {limit}s limit'
         raise _UnhealthyError(msg)
-    return age
+    return int(report.age)
 
 
 def _writes_a_marker(broker: Broker) -> bool:

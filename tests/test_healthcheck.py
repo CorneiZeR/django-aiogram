@@ -439,6 +439,97 @@ def test_a_heartbeat_that_cannot_be_decoded_is_reported(redis_server, monkeypatc
         healthcheck()
 
 
+@override_settings(
+    TELEGRAM_BOT={
+        **SETTINGS,
+        'BROKER': 'django_aiogram.broker.redis_streams.RedisStreamsBroker',
+        'REDIS_STREAM_KEY': 'TELEGRAM_BOT_STREAM',
+    }
+)
+def test_probing_a_stream_creates_nothing(redis_server, monkeypatch):
+    """Observation is read-only, and on this transport that had to be made true.
+
+    Publishing and consuming create the consumer group; reading how much is waiting must not.
+    A container healthcheck runs twice a minute in a fresh process, so a group-creating probe
+    is a write per probe — refused outright on a read-only replica, and by an ACL user allowed
+    to run `XINFO` and nothing else.
+
+    Asserted on the command and on the answer. The answer here is a *refusal*, and it should
+    be: nothing has ever read from this group, so no worker has started — the same verdict the
+    list gives when no heartbeat has been written. What matters is that it refuses with that
+    sentence rather than with an error about Redis, and that it did not make the group in order
+    to find out.
+    """
+    created: list[str] = []
+    monkeypatch.setattr(
+        redis_server,
+        'xgroup_create',
+        lambda *args, **kwargs: created.append('xgroup_create'),
+    )
+
+    report = check()
+
+    assert created == [], 'probing a stream created the consumer group'
+    assert not report.ok, report.message
+    assert 'no consumer has joined the group' in report.message, report.message
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        **SETTINGS,
+        'BROKER': 'django_aiogram.broker.redis_streams.RedisStreamsBroker',
+        'REDIS_STREAM_KEY': 'TELEGRAM_BOT_STREAM',
+    }
+)
+def test_probing_a_working_stream_writes_nothing_either(redis_server, monkeypatch):
+    """The same property, on the path that reaches every read the probe makes.
+
+    The case above stops at liveness, because a group nobody has joined is a refusal — so it
+    says nothing about the depth read behind it. Here a worker has been and gone: liveness
+    answers with an age, the depth is reached, and neither may create anything.
+
+    The group is made through the broker's own producer and consumer, which is where creating
+    it belongs. Everything after that is observation.
+    """
+    from django_aiogram.broker.redis_streams import RedisStreamsBroker
+
+    broker = RedisStreamsBroker()
+    broker.publish([b'{}'])
+    assert broker.take_nowait() is not None, 'the fixture did not deliver anything'
+
+    created: list[str] = []
+    monkeypatch.setattr(
+        redis_server,
+        'xgroup_create',
+        lambda *args, **kwargs: created.append('xgroup_create'),
+    )
+
+    report = check()
+
+    assert created == [], 'probing an established stream created a group'
+    assert report.ok, report.message
+    assert 'queued' in report.message, report.message
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_fractional_age_over_the_limit_is_refused(redis_server, monkeypatch):
+    """5.9 seconds is over a 5-second limit, and truncating hid that.
+
+    The message keeps whole seconds because that is what an operator set, but the comparison
+    cannot: `int(5.9)` is 5, so the probe used to accept a consumer already past its limit —
+    for the whole second before the age rolled over.
+    """
+    from django_aiogram.broker.models import Liveness
+    from django_aiogram.broker.redis_list import RedisListBroker
+
+    monkeypatch.setattr(RedisListBroker, 'liveness', lambda self: Liveness(reported=True, age=5.9))
+
+    report = check(max_age=5)
+
+    assert not report.ok, report.message
+    assert 'over the 5s limit' in report.message, report.message
+
+
 @override_settings(TELEGRAM_BOT=SETTINGS)
 def test_a_transport_that_cannot_answer_liveness_is_not_called_dead(redis_server, monkeypatch):
     """`reported=False` is "nobody outside can see this", and that is not a failure.
@@ -498,8 +589,14 @@ def test_the_container_form_neither_scans_nor_writes(redis_server, monkeypatch):
     Asserted on the calls, not on the output: a message that happens not to mention
     stranded lists proves only that none were found.
     """
+    # written before the recorder is installed, or the probe gets blamed for the heartbeat
+    # this test put there
+    redis_server.set(HEARTBEAT, str(int(time.time())))
     calls: list[str] = []
-    for name in ('scan', 'lmove'):
+    # every write the probe could reach for, not the two that existed when this was written:
+    # asking the broker for liveness and depth put `XGROUP CREATE` on this path, and a test
+    # watching `scan` and `lmove` alone called that clean
+    for name in ('scan', 'lmove', 'xgroup_create', 'xadd', 'set', 'xack', 'xclaim', 'xautoclaim'):
         original = getattr(redis_server, name)
 
         def recording(*args, _name=name, _original=original, **kwargs):
@@ -509,7 +606,6 @@ def test_the_container_form_neither_scans_nor_writes(redis_server, monkeypatch):
 
         monkeypatch.setattr(redis_server, name, recording)
 
-    redis_server.set(HEARTBEAT, str(int(time.time())))
     report = check()
 
     assert report.ok, report.message
