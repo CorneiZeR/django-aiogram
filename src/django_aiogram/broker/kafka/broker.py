@@ -183,10 +183,17 @@ class KafkaBroker(Broker):
     # ------------------------------------------------------------------ consumer
 
     def take(self, timeout: float) -> Taken | None:
-        """``poll`` for one message, waiting up to ``timeout`` seconds.
+        """``poll`` for one message, waiting up to ``timeout`` seconds and no longer.
 
-        The handle is ``(partition, offset)``: Kafka names a message by where it sits, which is
-        also why settling one is not the same as settling the ones before it.
+        The handle is ``(partition, offset, epoch)``: Kafka names a message by where it sits,
+        which is also why settling one is not the same as settling the ones before it.
+
+        ``timeout`` covers joining the group as well as waiting for a message. A consumer that
+        has not joined yet may well spend the whole of it joining and answer "nothing" -- the
+        join carries on inside librdkafka, so the next call finds it done. Giving the join a
+        budget of its own instead, which this did at first, makes a `take(0.05)` block for
+        `KAFKA_TIMEOUT`: the caller's arithmetic about how long a loop iteration can take is
+        then wrong by two orders of magnitude, and the consumer's heartbeat is what pays for it.
         """
         return self._wrap(self._polled(max(0.001, timeout)))
 
@@ -209,28 +216,39 @@ class KafkaBroker(Broker):
         Worth knowing before putting this on a request path. `take` is the method the consumer
         loop uses, and it has a timeout of its own.
         """
-        return self._wrap(self._polled(_FETCH_BUDGET))
+        return self._wrap(self._polled(_FETCH_BUDGET, joining=self._timeout()))
 
-    def _polled(self, timeout: float) -> object:
+    def _polled(self, timeout: float, *, joining: float | None = None) -> object:
         """Poll, and let a consumer that has not joined its group finish joining first.
 
         Any message that arrives while waiting is returned rather than dropped — a poll is how
         librdkafka makes progress, so the join and the first delivery can land in the same call.
+
+        ``joining`` is how long the join may take *beyond* ``timeout``, and only `take_nowait`
+        asks for any. It has no caller waiting on a deadline and one job — to answer about the
+        topic now — so spending `KAFKA_TIMEOUT` on a join it cannot otherwise finish is the
+        right trade there. Measured: the assignment took 3.05 seconds on a local broker, twice
+        the 1.5-second fetch budget that method allows itself. `take` passes nothing, because a
+        method with a timeout in its signature has to honour it.
         """
         consumer = self._consumer()
         if not consumer.assignment():
-            # joining, in slices of its own rather than the caller's: librdkafka makes progress
-            # inside `poll`, and the millisecond a `take_nowait` asks for is not enough of it.
-            # Measured on a local broker, the assignment took 3.05 seconds
-            deadline = time.monotonic() + self._timeout()
+            # in slices rather than one long poll: librdkafka makes progress inside `poll`, and
+            # a slice lets this notice the assignment as soon as it lands instead of waiting
+            # out a budget the join no longer needs
+            deadline = time.monotonic() + (timeout if joining is None else joining)
             while not consumer.assignment() and time.monotonic() < deadline:
-                message = consumer.poll(_JOIN_SLICE)
+                message = consumer.poll(min(_JOIN_SLICE, max(0.001, deadline - time.monotonic())))
                 if message is not None:
                     return message
-        # then the caller's own wait, which starts *after* the join rather than being spent by
-        # it. Being assigned is not the same as having a message in hand: measured, the fetch
-        # that follows the join took another 0.5 seconds, and an earlier version of this
-        # returned "nothing" the moment the assignment landed
+            if joining is None and time.monotonic() >= deadline:
+                # the caller's whole timeout went on joining, which is what it asked to be
+                # bounded by. The join continues inside the driver, so the next call finds it
+                return None
+        # then the wait for a message, which for `take_nowait` starts *after* the join rather
+        # than being spent by it. Being assigned is not the same as having a message in hand:
+        # measured, the fetch that follows the join took another 0.5 seconds, and an earlier
+        # version of this returned "nothing" the moment the assignment landed
         return consumer.poll(timeout)
 
     def _wrap(self, message: object) -> Taken | None:

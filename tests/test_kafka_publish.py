@@ -1,4 +1,6 @@
-"""What `KafkaBroker.publish` does when librdkafka will not take a record.
+"""What `KafkaBroker` does when the driver will not cooperate: a full queue, an unjoined group.
+
+Both need a producer or a consumer that can be told to refuse, so they are here with doubles.
 
 `produce` is asynchronous but not unconditional: it refuses with `BufferError` once the driver's
 own queue is full, which is what a broker that has stopped accepting looks like from inside the
@@ -6,6 +8,8 @@ process after enough sends. That path needs a producer that can be told to refus
 here with a double rather than in the integration suite — filling a real broker's local queue
 means a hundred thousand records and a broker that has actually gone away.
 """
+
+import time
 
 import pytest
 from django.test import override_settings
@@ -130,3 +134,64 @@ def test_the_accepted_prefix_is_counted_in_the_refusal(broker, monkeypatch):
 
     assert '1 message(s) of this batch never reached' in str(refusal.value), str(refusal.value)
     assert 'the 1 before them were accepted' in str(refusal.value), str(refusal.value)
+
+
+class NeverAssigned:
+    """A consumer that never joins its group and answers every poll with nothing.
+
+    What a broker that is up but slow to hand out partitions looks like, and what a broker
+    behind a network problem looks like for as long as the problem lasts.
+    """
+
+    def __init__(self):
+        self.polled = []
+
+    def assignment(self):
+        """Never assigned, which is the whole point of it."""
+        return []
+
+    def poll(self, timeout):
+        """Spend the asked-for time and answer nothing, as a poll with no data does."""
+        self.polled.append(timeout)
+        time.sleep(min(timeout, 0.05))
+
+
+def test_take_does_not_spend_longer_than_it_was_given_on_joining(broker, monkeypatch):
+    """`take(timeout)` has to come back within its timeout even if the group never forms.
+
+    The join used to get a budget of its own — `KAFKA_TIMEOUT` — spent before the caller's
+    timeout began. A consumer loop whose iteration is supposed to last half a second would then
+    block for the whole of it, and the heartbeat it owes is what pays: the arithmetic that keeps
+    a worker looking alive is built on `take` returning when it says it will.
+
+    Bounded at four times the asked-for timeout rather than at exactly it, because the loop
+    polls in slices and the last slice can overshoot; `KAFKA_TIMEOUT` here is ten times that
+    bound, so the case cannot pass by accident.
+    """
+    consumer = NeverAssigned()
+    monkeypatch.setattr(broker, '_consumer', lambda: consumer)
+
+    started = time.monotonic()
+    assert broker.take(0.05) is None
+    spent = time.monotonic() - started
+
+    assert spent < 0.2, f'take(0.05) spent {spent:.2f}s, so it was still joining on its own budget'
+
+
+def test_take_nowait_still_gives_the_join_its_own_budget(broker, monkeypatch):
+    """The one caller with no deadline keeps the behaviour that a join needs more than a fetch.
+
+    Measured, a local assignment took 3.05 seconds against the 1.5-second fetch budget this
+    method allows itself, so bounding its join by that budget would make it answer "nothing"
+    about a topic with something in it — which is exactly what it exists not to do.
+    """
+    consumer = NeverAssigned()
+    monkeypatch.setattr(broker, '_consumer', lambda: consumer)
+
+    started = time.monotonic()
+    assert broker.take_nowait() is None
+    spent = time.monotonic() - started
+
+    # `KAFKA_TIMEOUT` is 0.5 in this module's settings, so the join budget is what is being
+    # observed here rather than a wall-clock guess: it has to exceed the 0.05 a `take` would get
+    assert spent > 0.3, f'take_nowait gave the join only {spent:.2f}s, less than KAFKA_TIMEOUT'
