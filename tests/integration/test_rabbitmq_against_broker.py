@@ -344,3 +344,62 @@ def test_replacing_a_connection_does_not_leave_the_old_one_open(broker, amqp_url
         assert not stranded.is_open, 'the replaced connection was left open'
         assert client._local.connection is not stranded, 'the connection was not replaced at all'
         assert len(client._opened) == 1, f'{len(client._opened)} connections are still held'
+
+
+def test_a_tag_from_a_replaced_channel_is_not_sent(broker, amqp_url, caplog):
+    """A delivery tag means something only on the channel that issued it.
+
+    Settling with a tag from a channel that has been replaced would acknowledge whichever
+    delivery now holds that number on the new one — or draw `PRECONDITION_FAILED - unknown
+    delivery tag`, which closes the channel and takes the rest of the work with it. Neither is
+    a thing to do with a send that finished across a reconnect.
+
+    So nothing is sent, and that is the safe half: the channel that owed the acknowledgement
+    dropped, so RabbitMQ has already put the message back. The message coming back is what the
+    second half asserts.
+    """
+    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+        broker.publish([payload(4)])
+        taken = broker.take_nowait()
+        assert taken is not None
+
+        close_connections()
+
+        with caplog.at_level('WARNING', logger='django_aiogram'):
+            broker.ack(taken.handle)
+
+        assert 'its channel was replaced' in caplog.text, caplog.text
+        again = broker.take_nowait()
+        assert again is not None, 'the message was neither settled nor returned'
+        assert again.payload == payload(4)
+        assert again.handle != taken.handle, 'the same handle came back, so nothing was reissued'
+
+
+def test_a_connection_whose_setup_fails_is_closed(broker, amqp_url, monkeypatch):
+    """A connection built and then abandoned mid-setup is one nothing can ever close.
+
+    It is not in `_opened` and not in the thread's slot, so neither shutdown nor a settings
+    change reaches it. A `queue_declare` the broker disagrees with is the ordinary way to get
+    here, and a project retrying past it would leak a socket per attempt.
+    """
+    from pika.adapters.blocking_connection import BlockingChannel
+
+    from django_aiogram.broker.rabbitmq import client
+
+    opened: list[object] = []
+    real = BlockingChannel.queue_declare
+
+    def refuse(self, *args, **kwargs):
+        opened.append(self.connection)
+        msg = 'the broker disagreed about this queue'
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(BlockingChannel, 'queue_declare', refuse)
+
+    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)), pytest.raises(RuntimeError):
+        broker.publish([payload(1)])
+
+    assert opened, 'the setup was never reached, so this proves nothing'
+    assert not opened[0].is_open, 'the abandoned connection was left open'
+    assert client._opened == [], f'it was recorded anyway: {client._opened}'
+    assert real is not None  # the patched method is restored by monkeypatch

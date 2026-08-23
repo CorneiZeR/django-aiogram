@@ -19,7 +19,11 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from django_aiogram.broker.base import REQUIRED, Broker
 from django_aiogram.broker.models import Taken
-from django_aiogram.broker.rabbitmq.client import channel_for_thread, close_connections
+from django_aiogram.broker.rabbitmq.client import (
+    channel_for_thread,
+    channel_generation,
+    close_connections,
+)
 from django_aiogram.broker.rabbitmq.exceptions import QueueRefusedError
 
 if TYPE_CHECKING:
@@ -30,15 +34,20 @@ __all__ = ('RabbitMQBroker',)
 logger = logging.getLogger('django_aiogram')
 
 
-def _tag(handle: object) -> int:
-    """Read a delivery tag out of an opaque handle, or say where it must have come from.
+def _position(handle: object) -> tuple[int, int]:
+    """Read the channel generation and delivery tag out of an opaque handle.
 
-    AMQP names a delivery by an integer the channel assigned, so a handle of any other shape
-    belongs to a different broker — and saying that is better than letting the driver complain
-    about a type it was handed. The Redis list makes the same refusal for the same reason.
+    AMQP names a delivery by an integer the channel assigned, and the generation says *which*
+    channel — so a handle of any other shape belongs to a different broker, and saying that is
+    better than letting the driver complain about a type it was handed. The Redis list makes
+    the same refusal for the same reason.
     """
-    if not isinstance(handle, int) or isinstance(handle, bool):
-        msg = f'this broker settles by delivery tag, so a handle must be an int, not {type(handle).__name__}'
+    pair = 2  # the channel it came from, and the tag that channel gave it
+    if not isinstance(handle, tuple) or len(handle) != pair or not all(isinstance(p, int) for p in handle):
+        msg = (
+            'this broker settles by delivery tag, so a handle must be the (channel, tag) pair '
+            f'it handed out, not {type(handle).__name__}'
+        )
         raise TypeError(msg)
     return handle
 
@@ -145,8 +154,7 @@ class RabbitMQBroker(Broker):
         method, _properties, body = next(self._consumer)
         if method is None or body is None:
             return None
-        self._unsettled.add(method.delivery_tag)
-        return Taken(body, method.delivery_tag)
+        return self._issued(method, body)
 
     def take_nowait(self) -> Taken | None:
         """Take one message if one is ready, without waiting.
@@ -160,10 +168,23 @@ class RabbitMQBroker(Broker):
         self._forget_a_stale_consumer(channel)
         self._cancel(channel)
         method, _properties, body = channel.basic_get(self._queue(), auto_ack=False)
+        return self._issued(method, body)
+
+    def _issued(self, method: object, body: bytes | None) -> Taken | None:
+        """Hand out a message, remembering which channel's tag this is.
+
+        A delivery tag is an integer the *channel* assigned, and it means nothing on another
+        one — settling with a tag from a replaced channel would acknowledge whichever delivery
+        now holds that number, or draw `PRECONDITION_FAILED - unknown delivery tag`, which
+        closes the channel. So the handle carries the generation it came from, and settling
+        checks it.
+        """
         if method is None or body is None:
             return None
-        self._unsettled.add(method.delivery_tag)
-        return Taken(body, method.delivery_tag)
+        tag = method.delivery_tag  # type: ignore[attr-defined]
+        generation = channel_generation()
+        self._unsettled.add((generation, tag))
+        return Taken(body, (generation, tag))
 
     def _forget_a_stale_consumer(self, channel: 'BlockingChannel') -> None:
         """Drop a consumer that belongs to a channel this broker no longer uses.
@@ -188,8 +209,12 @@ class RabbitMQBroker(Broker):
         channel.cancel()
 
     def ack(self, handle: object) -> None:
-        """``basic_ack`` the delivery tag, which is what a handle is here."""
-        self._channel().basic_ack(_tag(handle))
+        """``basic_ack`` the delivery tag, on the channel that issued it or not at all."""
+        channel = self._channel()
+        tag = self._settleable(handle)
+        if tag is None:
+            return
+        channel.basic_ack(tag)
         self._unsettled.discard(handle)
 
     def release(self, handle: object) -> None:
@@ -201,8 +226,34 @@ class RabbitMQBroker(Broker):
         takes effect at once. Measured: the message is back in the queue and the next take
         returns it.
         """
-        self._channel().basic_nack(_tag(handle), requeue=True)
+        channel = self._channel()
+        tag = self._settleable(handle)
+        if tag is None:
+            return
+        channel.basic_nack(tag, requeue=True)
         self._unsettled.discard(handle)
+
+    def _settleable(self, handle: object) -> int | None:
+        """Find the tag to settle with, or ``None`` when the channel that issued it is gone.
+
+        ``None`` rather than an error, and nothing sent: the channel that owed the
+        acknowledgement has dropped, so RabbitMQ has already put the message back on the queue.
+        Sending the tag anyway would settle whichever delivery now holds that number on the new
+        channel. Doing nothing is what leaves the message where the broker has already put it.
+
+        Reported once per occurrence, because it means a send finished across a reconnect and
+        that message will be delivered again.
+        """
+        generation, tag = _position(handle)
+        current = channel_generation()
+        if generation != current:
+            self._unsettled.discard(handle)
+            logger.warning(
+                'a message finished after its channel was replaced, so it will be redelivered',
+                extra={'tg_key': self._queue()},
+            )
+            return None
+        return tag
 
     # ---------------------------------------------------------------- operations
 

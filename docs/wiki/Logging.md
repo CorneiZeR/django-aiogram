@@ -64,6 +64,7 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `handler failed for queued message` | ERROR | the send itself raised |
 | `dropping undecodable queued message` | ERROR | a payload could not be deserialized |
 | `blocking pop failed, retrying` | ERROR | lost the Redis connection; it retries |
+| `a message finished after its channel was replaced, so it will be redelivered` | WARNING | RabbitMQ: a send completed across a reconnect, and the delivery tag it held is meaningless on the new channel. Nothing is acknowledged, because the broker has already put the message back — so it arrives again, and a handler that is not idempotent sends it twice |
 | `entries were pending but no longer exist in the stream, so that work is lost` | WARNING | Redis Streams: work that was taken and never settled has been deleted from the stream, so those messages are gone. Nothing in this package can cause it — a `MAXLEN` trim or an `XDEL` reached unacknowledged entries. `tg_lost` carries how many |
 | `a stream entry carries no payload field and was left pending` | WARNING | Redis Streams: something else is writing to this stream. The entry is left pending rather than acknowledged, because settling it would be a guess about another producer's data. `tg_entry` names it |
 | `the delivery consumer did not stop in time` | WARNING | the consumer outlived its join at shutdown; a message it holds may be redelivered |

@@ -29,6 +29,11 @@ __all__ = ('channel_for_thread', 'close_connections')
 
 #: one connection and channel per thread, discarded when settings change
 _local = threading.local()
+
+#: how many channels this process has opened, ever. A delivery tag is only meaningful on the
+#: channel that issued it, so a handle carries the generation it came from and settling one
+#: from an older channel is refused rather than sent — see `RabbitMQBroker.ack`
+_generation = threading.local()
 #: every connection this process opened, so `close_connections` can reach the ones it did not
 #: open itself — a test switching settings runs on the thread it is testing from, and a
 #: consumer thread's connection would otherwise outlive the settings that built it
@@ -71,15 +76,27 @@ def channel_for_thread(url: str, queue: str, prefetch: int, blocked_timeout: flo
         # value wins: somebody who wrote one meant it
         parameters.blocked_connection_timeout = blocked_timeout
     connection = BlockingConnection(parameters)
-    channel = connection.channel()
-    channel.confirm_delivery()
-    channel.queue_declare(queue=queue, durable=True)
-    # always, including zero. Skipping the call is not the same as asking for no limit: a
-    # server with `default_consumer_prefetch` configured applies it to a consumer that never
-    # sent QoS, so a package documenting 0 as unlimited has to say 0 out loud. Measured,
-    # `basic_qos(prefetch_count=0)` is accepted
-    channel.basic_qos(prefetch_count=prefetch)
+    try:
+        channel = connection.channel()
+        channel.confirm_delivery()
+        channel.queue_declare(queue=queue, durable=True)
+        # always, including zero. Skipping the call is not the same as asking for no limit: a
+        # server with `default_consumer_prefetch` configured applies it to a consumer that
+        # never sent QoS, so a package documenting 0 as unlimited has to say 0 out loud.
+        # Measured, `basic_qos(prefetch_count=0)` is accepted
+        channel.basic_qos(prefetch_count=prefetch)
+    except BaseException:
+        # nothing has recorded this connection yet, so nothing else can ever close it. A
+        # `queue_declare` the broker disagrees with is the ordinary way to get here, and a
+        # project retrying past it would leak a socket per attempt
+        with suppress(Exception):
+            connection.close()
+        raise
+    # `getattr`, not `+= 1`: this is thread-local, and a worker thread — `apublish` runs on
+    # one — has no attribute to increment the first time it opens a channel
+    _generation.count = channel_generation() + 1
     _local.identity, _local.connection, _local.channel = identity, connection, channel
+    _local.generation = _generation.count
     with _lock:
         _opened.append(connection)
     return channel
@@ -94,9 +111,18 @@ def _drop_this_threads_connection() -> None:
         _opened[:] = [held for held in _opened if held is not connection]
     with suppress(Exception):
         connection.close()
-    for attribute in ('identity', 'connection', 'channel'):
+    for attribute in ('identity', 'connection', 'channel', 'generation'):
         if hasattr(_local, attribute):
             delattr(_local, attribute)
+
+
+def channel_generation() -> int:
+    """Which channel this thread is on, counted from the first one it opened.
+
+    Bumped whenever a channel is built, so a delivery tag handed out before a replacement can
+    be told apart from one handed out after it.
+    """
+    return int(getattr(_generation, 'count', 0))
 
 
 def close_connections(**_kwargs: object) -> None:
