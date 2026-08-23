@@ -28,6 +28,7 @@ SHIPPED: dict[str, tuple[str, str]] = {
     # the same driver and the same extra: Streams is a different data structure on the
     # server, not a different dependency
     'django_aiogram.broker.redis_streams.RedisStreamsBroker': ('redis', 'redis'),
+    'django_aiogram.broker.rabbitmq.RabbitMQBroker': ('pika', 'rabbitmq'),
 }
 
 _lock = threading.Lock()

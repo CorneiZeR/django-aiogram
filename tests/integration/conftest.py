@@ -16,6 +16,9 @@ from django_aiogram.redis import reset_redis
 
 # the marker is registered in pyproject.toml, and each module carries it itself
 REDIS_URL = os.environ.get('DJANGO_AIOGRAM_TEST_REDIS_URL', '')
+#: the AMQP half of the same idea. A transport with no in-memory double needs a server
+#: for every one of its cases, so this one gates a whole module rather than a few tests
+AMQP_URL = os.environ.get('DJANGO_AIOGRAM_TEST_AMQP_URL', '')
 
 
 @pytest.fixture(scope='session')
@@ -23,6 +26,40 @@ def redis_url():
     if not REDIS_URL:
         pytest.skip('set DJANGO_AIOGRAM_TEST_REDIS_URL to run the integration suite')
     return REDIS_URL
+
+
+@pytest.fixture(scope='session')
+def amqp_url():
+    if not AMQP_URL:
+        pytest.skip('set DJANGO_AIOGRAM_TEST_AMQP_URL to run the RabbitMQ suite')
+    return AMQP_URL
+
+
+@pytest.fixture
+def broker_channel(amqp_url):
+    """A raw channel for arranging and inspecting, with the queue deleted around each test.
+
+    **This deletes the queue named below**, before and after every test, so point
+    `DJANGO_AIOGRAM_TEST_AMQP_URL` at a throwaway broker or vhost.
+    """
+    import pika
+
+    from django_aiogram.broker.rabbitmq.client import close_connections
+
+    connection = pika.BlockingConnection(pika.URLParameters(amqp_url))
+    channel = connection.channel()
+    channel.queue_delete(queue=AMQP_QUEUE)
+    close_connections()
+    try:
+        yield channel
+    finally:
+        close_connections()
+        channel.queue_delete(queue=AMQP_QUEUE)
+        connection.close()
+
+
+#: the queue every case in the RabbitMQ suite uses, deleted around each of them
+AMQP_QUEUE = 'integration'
 
 
 @pytest.fixture

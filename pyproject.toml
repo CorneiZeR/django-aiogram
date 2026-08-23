@@ -43,6 +43,12 @@ classifiers = [
 # which one is in use, and a system check refuses at startup with this install
 # line when the driver behind that name is absent
 redis = ["redis>=6.2"]
+# pika rather than aio-pika, and by measurement rather than by which face it matched:
+# crossing the thread boundary costs about 100us whichever driver is used — 119.2us for
+# aio-pika reached from synchronous code against 120.1us for pika reached from a
+# coroutine, which are the same number — so the driver that needs no crossing on the
+# synchronous path wins, and that is where `bot.send()` is called from. 18.9us there
+rabbitmq = ["pika>=1.3"]
 # not a runtime dependency: redis-py parses the protocol in C when this is
 # present. Worth it on a busy consumer, pointless on a web tier that only ever
 # pushes, which is why it is opt-in rather than pulled in for everybody
@@ -63,6 +69,11 @@ dev = [
     # queryset.filter() trips no-any-return under strict. Manager methods are unaffected,
     # which is why only admin.py sees it. Lift the ceiling once upstream fixes it.
     "django-stubs[compatible-mypy]>=5.1,<6.1",
+    # typeshed's stubs for pika, which ships none of its own. Current — the version
+    # tracks the driver, so 1.4.x stubs for a 1.4.x driver — and worth having beyond the
+    # type check: they caught four real mistakes the first time they ran, including a
+    # delivery tag typed as `object` reaching a driver that wants an int
+    "types-pika-ts>=1.4",
     # tests/test_docstring_coverage.py reads `.coderabbit.yaml`, and that file's meaning
     # turns on YAML's own rules: a bare `off` is the boolean false, so the review policy
     # can be silently invalid. Asserting on the text cannot tell an active setting from

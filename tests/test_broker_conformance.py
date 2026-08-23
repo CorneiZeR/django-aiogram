@@ -12,6 +12,7 @@ fixture yet is skipped loudly rather than silently passing.
 """
 
 import asyncio
+import os
 
 import pytest
 from django.test import override_settings
@@ -23,11 +24,18 @@ from django_aiogram.wire.serializers import JsonSerializer
 # `REDIS_STREAM_KEY` has no default — the Streams broker requires it, so a settings dict
 # without it makes every case for that transport an `ImproperlyConfigured` about the fixture
 # rather than an answer about the contract
+#: every transport's required settings, because each case carries its own `override_settings`
+#: and that replaces the whole dict — keys a fixture added on the way in are gone by the time
+#: the body runs. Empty when a server is not configured, which is what the skips are for
+AMQP_URL = os.environ.get('DJANGO_AIOGRAM_TEST_AMQP_URL', '')
+AMQP_QUEUE = 'conformance'
 SETTINGS = {
     'TOKEN': '42:x',
     'REDIS_URL': 'redis://localhost:6379/0',
     'RATE_LIMIT': None,
     'REDIS_STREAM_KEY': 'TELEGRAM_BOT_STREAM',
+    'RABBITMQ_URL': AMQP_URL,
+    'RABBITMQ_QUEUE': AMQP_QUEUE,
 }
 
 
@@ -59,12 +67,44 @@ def broker(request, redis_server):
     from django.utils.module_loading import import_string
 
     path = request.param
+    if 'rabbitmq' in path:
+        yield from _against_rabbitmq(path)
+        return
     if 'redis' not in path:
         pytest.skip(f'no fixture yet for {path}: add one rather than skipping the contract')
     with override_settings(TELEGRAM_BOT=SETTINGS):
         broker = import_string(path)()
         broker.conformance_path = path
         yield broker
+
+
+def _against_rabbitmq(path):
+    """The contract against a real RabbitMQ, or a skip that names how to run it.
+
+    There is no fakeredis for AMQP, so this one needs a server. Skipped loudly rather than
+    quietly passing: a transport whose contract nobody checked is worse than one that says so.
+
+    The queue is deleted and redeclared per case, because these assertions are about counts
+    and a message left by the previous one would answer them wrongly.
+    """
+    if not AMQP_URL:
+        pytest.skip('set DJANGO_AIOGRAM_TEST_AMQP_URL to run the contract against RabbitMQ')
+    import pika
+    from django.utils.module_loading import import_string
+
+    from django_aiogram.broker.rabbitmq.client import close_connections
+
+    scrub = pika.BlockingConnection(pika.URLParameters(AMQP_URL)).channel()
+    scrub.queue_delete(queue=AMQP_QUEUE)
+    with override_settings(TELEGRAM_BOT=SETTINGS):
+        broker = import_string(path)()
+        broker.conformance_path = path
+        try:
+            yield broker
+        finally:
+            close_connections()
+            scrub.queue_delete(queue=AMQP_QUEUE)
+            scrub.connection.close()
 
 
 @pytest.fixture
