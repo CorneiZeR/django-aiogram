@@ -5,7 +5,7 @@ a run that does not wait for the broker is measuring librdkafka's queue rather t
 
 The first run of this said the two drivers were the same speed and the conclusion was written
 down as "latency does not decide it". Repeating it on a warm broker said otherwise —
-``confluent-kafka`` is 1.6 to 2.1 times faster with both waiting — so the parity was a cold
+``confluent-kafka`` is 1.6 to 2.2 times faster with both waiting — so the parity was a cold
 cluster rather than a finding. That is why this is kept rather than remembered: **run it three
 times before believing it**, which the first attempt did not.
 
@@ -61,28 +61,41 @@ def main() -> None:
 def _report() -> None:
     """Time every row on the topic this run made, and say what the numbers decide."""
     producer = Producer({'bootstrap.servers': BOOTSTRAP, 'linger.ms': 0})
-
-    logger.info('confluent-kafka, synchronous, its own face:')
-    measure('queued locally, not confirmed', lambda: _queue_one(producer), rounds=ROUNDS)
-    confluent = measure('waited for the broker ack', lambda: _confirm_one(producer), rounds=ROUNDS)
-
     loop, awaiting = _aiokafka_producer()
-    logger.info('aiokafka, handed to a loop thread (what a sync producer needs):')
-    measure('queued locally, not confirmed', _sender(loop, awaiting, confirmed=False), rounds=ROUNDS)
-    aiokafka = measure('waited for the broker ack', _sender(loop, awaiting, confirmed=True), rounds=ROUNDS)
+    try:
+        logger.info('confluent-kafka, synchronous, its own face:')
+        measure('queued locally, not confirmed', lambda: _queue_one(producer), rounds=ROUNDS)
+        confluent = measure('waited for the broker ack', lambda: _confirm_one(producer), rounds=ROUNDS)
 
-    logger.info('')
-    logger.info(
-        'confluent-kafka %.1f us against aiokafka %.1f us  -> %.2fx',
-        confluent,
-        aiokafka,
-        aiokafka / confluent,
-    )
-    logger.info(
-        'run this three times before believing it: the first single run of it showed a parity that was not real'
-    )
+        logger.info('aiokafka, handed to a loop thread (what a sync producer needs):')
+        measure('queued locally, not confirmed', _sender(loop, awaiting, confirmed=False), rounds=ROUNDS)
+        aiokafka = measure('waited for the broker ack', _sender(loop, awaiting, confirmed=True), rounds=ROUNDS)
+
+        logger.info('')
+        logger.info(
+            'confluent-kafka %.1f us against aiokafka %.1f us  -> %.2fx',
+            confluent,
+            aiokafka,
+            aiokafka / confluent,
+        )
+        logger.info(
+            'run this three times before believing it: the first single run of it showed a parity that was not real'
+        )
+    finally:
+        _stopped(loop, awaiting)
+        producer.flush(10)
+
+
+def _stopped(loop: asyncio.AbstractEventLoop, awaiting: AIOKafkaProducer) -> None:
+    """Close the async producer on its own loop, and only then stop the loop.
+
+    In that order, and in a ``finally``: stopping the loop first leaves the producer's sender
+    task and its connections behind with nothing left to run them, which is the same mistake the
+    AMQP script made with `aio_pika` -- there it announced itself as a page of pending-task
+    warnings after a successful run, and here it would strand whatever the last row queued.
+    """
+    asyncio.run_coroutine_threadsafe(awaiting.stop(), loop).result(30)
     loop.call_soon_threadsafe(loop.stop)
-    producer.flush(10)
 
 
 def _declared() -> AdminClient:

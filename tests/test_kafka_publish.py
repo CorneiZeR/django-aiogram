@@ -1,0 +1,132 @@
+"""What `KafkaBroker.publish` does when librdkafka will not take a record.
+
+`produce` is asynchronous but not unconditional: it refuses with `BufferError` once the driver's
+own queue is full, which is what a broker that has stopped accepting looks like from inside the
+process after enough sends. That path needs a producer that can be told to refuse, so it is
+here with a double rather than in the integration suite — filling a real broker's local queue
+means a hundred thousand records and a broker that has actually gone away.
+"""
+
+import pytest
+from django.test import override_settings
+
+from django_aiogram.broker.kafka import KafkaBroker
+from django_aiogram.broker.kafka.exceptions import ProduceRefusedError
+from django_aiogram.wire.serializers import JsonSerializer
+
+SETTINGS = {
+    'TOKEN': '42:x',
+    'RATE_LIMIT': None,
+    'KAFKA_BOOTSTRAP': '127.0.0.1:9093',
+    'KAFKA_TOPIC': 'publish-double',
+    'KAFKA_GROUP': 'publish-double',
+    # short, because two of these cases wait the whole timeout out: the double refuses for ever
+    # and the point is what `publish` says when the deadline passes, not how long it waits
+    'KAFKA_TIMEOUT': 0.5,
+    # named rather than defaulted, so anything reaching for `get_broker()` cannot quietly
+    # answer with the default list and pass this case against the wrong transport
+    'BROKER': 'django_aiogram.broker.kafka.KafkaBroker',
+}
+
+
+def payload(chat_id):
+    return JsonSerializer().dumps({'function': 'send_message', 'chat_id': chat_id})
+
+
+class FullOnce:
+    """A producer whose queue is full for the first ``refusals`` calls, then takes everything.
+
+    It answers each accepted record on the next ``poll``, which is what librdkafka does: the
+    callback belongs to whoever polls, not to whoever produced.
+    """
+
+    def __init__(self, refusals=1):
+        # `float('inf')` for a queue that never drains: a large integer would not do, because
+        # the retry loop spins as fast as `poll` returns and gets through ten thousand of them
+        # long before a half-second deadline
+        self.refusals = refusals
+        self.accepted = []
+        self.polls = 0
+        self._pending = []
+
+    def produce(self, topic, payload, on_delivery):
+        """Refuse while the queue is 'full', then accept and remember the callback."""
+        if self.refusals:
+            self.refusals -= 1
+            raise BufferError('Local: Queue full')
+        self.accepted.append((topic, payload))
+        self._pending.append(on_delivery)
+
+    def poll(self, _timeout):
+        """Serve every callback that is waiting, as a drained queue would."""
+        self.polls += 1
+        pending, self._pending = self._pending, []
+        for callback in pending:
+            callback(None, object())
+        return len(pending)
+
+
+@pytest.fixture
+def broker():
+    with override_settings(TELEGRAM_BOT=SETTINGS):
+        yield KafkaBroker()
+
+
+def test_a_full_queue_is_waited_out_rather_than_raised(broker, monkeypatch):
+    """A refused record is retried until there is room, and every record still gets answered.
+
+    Without the retry the `BufferError` left `publish` mid-batch: the records already accepted
+    were in flight with nobody waiting for their callbacks, and the caller was told the whole
+    batch had failed — so retrying it sent the accepted prefix a second time.
+    """
+    double = FullOnce(refusals=1)
+    monkeypatch.setattr('django_aiogram.broker.kafka.broker.shared_producer', lambda _bootstrap: double)
+
+    broker.publish([payload(1), payload(2), payload(3)])
+
+    assert len(double.accepted) == 3, f'only {len(double.accepted)} of three records were queued'
+    assert double.polls, 'the full queue was never polled, so nothing could have drained it'
+
+
+def test_a_record_that_never_fits_is_reported_with_what_did(broker, monkeypatch):
+    """A batch that only partly went has to say so, because a blind retry would duplicate it.
+
+    The refusal names both halves: how many never reached the queue and how many were accepted
+    before them. An operator reading it can tell that retrying the whole batch sends the
+    accepted ones twice — which is the choice this transport leaves to the caller, since Kafka
+    has no way to un-send them.
+    """
+    double = FullOnce(refusals=float('inf'))
+    monkeypatch.setattr('django_aiogram.broker.kafka.broker.shared_producer', lambda _bootstrap: double)
+
+    with pytest.raises(ProduceRefusedError) as refusal:
+        broker.publish([payload(1), payload(2)])
+
+    assert 'never reached the local queue' in str(refusal.value), str(refusal.value)
+    assert '2 message(s)' in str(refusal.value), str(refusal.value)
+
+
+def test_the_accepted_prefix_is_counted_in_the_refusal(broker, monkeypatch):
+    """The count of what did get in has to be the truth, not the batch size.
+
+    Arranged so the first record is accepted and the second is refused for ever, which is the
+    case a caller has to reason about: half a batch is on its way and the other half is not.
+    """
+    double = FullOnce(refusals=0)
+    monkeypatch.setattr('django_aiogram.broker.kafka.broker.shared_producer', lambda _bootstrap: double)
+    original = double.produce
+    state = {'seen': 0}
+
+    def produce(topic, payload, on_delivery):
+        state['seen'] += 1
+        if state['seen'] > 1:
+            raise BufferError('Local: Queue full')
+        original(topic, payload, on_delivery)
+
+    double.produce = produce
+
+    with pytest.raises(ProduceRefusedError) as refusal:
+        broker.publish([payload(1), payload(2)])
+
+    assert '1 message(s) of this batch never reached' in str(refusal.value), str(refusal.value)
+    assert 'the 1 before them were accepted' in str(refusal.value), str(refusal.value)

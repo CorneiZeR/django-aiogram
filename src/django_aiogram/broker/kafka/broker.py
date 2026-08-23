@@ -31,7 +31,7 @@ from django_aiogram.broker.kafka.exceptions import ProduceRefusedError
 from django_aiogram.broker.models import Taken
 
 if TYPE_CHECKING:
-    from confluent_kafka import Consumer
+    from confluent_kafka import Consumer, Producer
 
 __all__ = ('KafkaBroker',)
 
@@ -86,12 +86,19 @@ class KafkaBroker(Broker):
         #: `release` relies on when it keeps the lower offsets outstanding. A count would refuse
         #: them all, and the lowest of them would then block this partition's commits for ever.
         #:
-        #: Never pruned, and that is a decision rather than an oversight. Clearing it when
-        #: nothing is outstanding was tried and it costs the diagnosis: a handle arriving after
-        #: that is refused as unknown rather than as rewound, so the log stops saying a message
-        #: is coming back. It grows by one integer per *refused* message, and a consumer
-        #: refusing often enough for that to matter has a louder problem than this list
+        #: Compacted once the partition has nothing left in flight and nothing settled
+        #: awaiting a commit, because at that point no handle this broker still expects can
+        #: need an entry. Without that it grows by one integer per refused message for the life
+        #: of the process, which a worker whose downstream is failing does for ever.
+        #:
+        #: The count of what was dropped is kept in `_rewound`, and a handle older than that
+        #: count is refused *as rewound* rather than as unknown -- which is the diagnosis an
+        #: earlier attempt at pruning lost, and the reason this is a base rather than a reset.
         self._rewinds: dict[int, list[int]] = {}
+        #: how many rewinds each partition saw before `_rewinds` was last compacted, so a
+        #: handle's epoch stays comparable across a compaction: epochs count every rewind ever,
+        #: while the list holds only the ones that can still matter
+        self._rewound: dict[int, int] = {}
         self._lock = threading.Lock()
 
     def _topic(self) -> str:
@@ -133,46 +140,41 @@ class KafkaBroker(Broker):
         if not payloads:
             return
         producer, topic = shared_producer(self._bootstrap()), self._topic()
-        failures: list[str] = []
-        outstanding = [len(payloads)]
-        # a lock of its own, not `self._lock`: the callbacks run on whichever thread is
-        # polling, and `poll` on a process-wide producer serves other threads' callbacks too.
-        # `outstanding[0] -= 1` is a read, a subtract and a store, so two callbacks can lose a
-        # decrement between them — and a lost decrement means this call reports a batch the
-        # broker accepted as unanswered, which a retry then sends twice
-        counted = threading.Lock()
-
-        def delivered(error: object, _message: object) -> None:
-            """Count this record as answered, and note a refusal."""
-            with counted:
-                if error is not None:
-                    failures.append(str(error))
-                outstanding[0] -= 1
-
-        for payload in payloads:
-            producer.produce(topic, payload, on_delivery=delivered)
+        batch = _Batch()
+        # the deadline covers the queueing as well as the waiting, because queueing is a place
+        # this can block: `produce` refuses with `BufferError` once librdkafka's own queue is
+        # full, which is what a broker that has gone away looks like from in here after enough
+        # sends. Letting that escape mid-batch left the records already accepted with nobody
+        # waiting for their callbacks, and told the caller the whole batch had failed -- so a
+        # retry sent the accepted prefix a second time
         deadline = time.monotonic() + self._timeout()
-        while time.monotonic() < deadline:
-            with counted:
-                if not outstanding[0]:
-                    break
+        unqueued = batch.queue(producer, topic, payloads, deadline)
+        while time.monotonic() < deadline and not batch.settled():
             # `poll` is what serves callbacks, including other threads' — which is how
             # librdkafka works and is safe: whoever polls serves whatever is ready
             producer.poll(_CALLBACK_SLICE)
-        with counted:
-            left, refused = outstanding[0], list(failures)
+        left, refused = batch.report()
         if left:
             raise ProduceRefusedError(topic, f'{left} message(s) of this batch went unanswered')
         if refused:
             raise ProduceRefusedError(topic, refused[0])
+        if unqueued:
+            # said last, and said this way round: the rest of the batch *was* accepted and
+            # answered for, so an operator reading this knows a retry of the whole batch would
+            # duplicate what already went
+            raise ProduceRefusedError(
+                topic,
+                f'{unqueued} message(s) of this batch never reached the local queue before the '
+                f'timeout, while the {len(payloads) - unqueued} before them were accepted',
+            )
 
     async def apublish(self, payloads: Seq[bytes]) -> None:
         """Make the same publishes, off the loop's thread.
 
         The driver is synchronous, and the hand-off costs about 100 microseconds — which is
         most of what an awaited publish adds here, because the broker's acknowledgement costs
-        roughly twice that. Measured across five runs, awaiting `aiokafka` natively is 354 to
-        390 microseconds against 166 to 237 for this.
+        roughly twice that. Measured across six runs, awaiting `aiokafka` natively is 354 to
+        492 microseconds against 166 to 237 for this.
         """
         if not payloads:
             return
@@ -250,7 +252,7 @@ class KafkaBroker(Broker):
         partition, offset = message.partition(), message.offset()  # type: ignore[attr-defined]
         with self._lock:
             self._unsettled.setdefault(partition, set()).add(offset)
-            epoch = len(self._rewinds.get(partition, ()))
+            epoch = self._rewound.get(partition, 0) + len(self._rewinds.get(partition, ()))
         return Taken(payload, (partition, offset, epoch))
 
     def ack(self, handle: object) -> None:
@@ -327,7 +329,14 @@ class KafkaBroker(Broker):
             # recorded so that settling can tell a handle this rewind invalidated from one it
             # left alone. Everything at or above `offset` will be delivered again; everything
             # below it is still in flight and still this worker's to settle
-            self._rewinds.setdefault(partition, []).append(offset)
+            rewinds = self._rewinds.setdefault(partition, [])
+            rewinds.append(offset)
+            if not self._unsettled.get(partition) and not self._settled.get(partition):
+                # nothing of this partition is in flight and nothing is waiting to be
+                # committed, so no handle this broker still expects can be judged by any of
+                # these — only handles it has already given up on, which the count refuses
+                self._rewound[partition] = self._rewound.get(partition, 0) + len(rewinds)
+                rewinds.clear()
 
     def _settleable(self, partition: int, offset: int, epoch: int) -> bool:
         """Say whether this handle may settle anything at all; call with the lock held.
@@ -362,8 +371,13 @@ class KafkaBroker(Broker):
         or a handle from somewhere else, which `_position` already refuses when it is not even
         the right shape.
         """
-        since = self._rewinds.get(partition, ())[epoch:]
-        if any(position <= offset for position in since):
+        dropped = self._rewound.get(partition, 0)
+        since = self._rewinds.get(partition, ())[max(0, epoch - dropped) :]
+        # a handle older than the compaction point is refused without asking where the rewinds
+        # went: compaction only happens after at least one of them, and the entries that could
+        # have judged this handle are the ones that were dropped. Refusing is the safe answer
+        # and it keeps the line below saying what a reader needs to hear
+        if epoch < dropped or any(position <= offset for position in since):
             logger.warning(
                 'a message finished after its partition was rewound, so it will be redelivered',
                 extra={'tg_key': self._topic()},
@@ -457,6 +471,78 @@ class KafkaBroker(Broker):
     def close(self) -> None:
         """Flush the producer and leave the group."""
         close_clients()
+
+
+class _Batch:
+    """The records of one ``publish``, and how many of them are still unanswered for.
+
+    A lock of its own, not the broker's: the callbacks run on whichever thread is polling, and
+    ``poll`` on a process-wide producer serves other threads' callbacks too. A decrement is a
+    read, a subtract and a store, so two callbacks can lose one between them -- and a lost
+    decrement means this call reports a batch the broker accepted as unanswered, which a retry
+    then sends twice.
+
+    Counted up as records are accepted rather than down from the batch size, so a record that
+    never reached the queue cannot be waited for -- it is reported instead.
+    """
+
+    def __init__(self) -> None:
+        """Start empty: nothing is queued until :meth:`queue` says so."""
+        self._lock = threading.Lock()
+        self._outstanding = 0
+        self._failures: list[str] = []
+
+    def queue(self, producer: 'Producer', topic: str, payloads: Seq[bytes], deadline: float) -> int:
+        """Queue the whole batch and say how many of it never got in.
+
+        Stops at the first record that cannot be queued before the deadline rather than skipping
+        it: these are a batch, and delivering a hole in the middle of one would be a stranger
+        outcome than delivering a prefix and saying so.
+        """
+        for index, payload in enumerate(payloads):
+            if not self._queued(producer, topic, payload, deadline):
+                return len(payloads) - index
+            with self._lock:
+                self._outstanding += 1
+        return 0
+
+    def settled(self) -> bool:
+        """Say whether every queued record has been answered for."""
+        with self._lock:
+            return not self._outstanding
+
+    def report(self) -> tuple[int, list[str]]:
+        """How many are still unanswered, and what the broker said about the rest."""
+        with self._lock:
+            return self._outstanding, list(self._failures)
+
+    def _queued(self, producer: 'Producer', topic: str, payload: bytes, deadline: float) -> bool:
+        """Put one record in librdkafka's queue, waiting for room, and say whether it got in.
+
+        ``produce`` is asynchronous but not unconditional: it raises ``BufferError`` when the
+        local queue is full, which is what a broker that has stopped accepting looks like from
+        here once enough sends have piled up behind it. ``poll`` is what drains that queue, so
+        waiting for room means polling -- which serves whatever callbacks are ready as it goes.
+
+        ``False`` rather than an exception, because the caller has records of its own already in
+        flight and has to wait for them before it can say anything true about the batch.
+        """
+        while True:
+            try:
+                producer.produce(topic, payload, on_delivery=self._delivered)
+            except BufferError:
+                if time.monotonic() >= deadline:
+                    return False
+                producer.poll(_CALLBACK_SLICE)
+                continue
+            return True
+
+    def _delivered(self, error: object, _message: object) -> None:
+        """Count this record as answered, and note a refusal."""
+        with self._lock:
+            if error is not None:
+                self._failures.append(str(error))
+            self._outstanding -= 1
 
 
 def _position(handle: object) -> tuple[int, int, int]:

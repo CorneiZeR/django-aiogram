@@ -70,14 +70,15 @@ holds several sends at once — which `MAX_IN_FLIGHT` allows — therefore commi
 **contiguous** prefix per partition:
 settle the second while the first is still in flight and nothing is committed for that
 partition until the first finishes, because committing the second would claim the first as
-done. A worker killed at that moment loses nothing: what comes back is every record after the
-last committed offset in that partition, which with `MAX_IN_FLIGHT` above two is more than the
-pair that caused the gap. Partitions are independent: a gap in one does not hold up commits in
+done. A worker killed at that moment loses nothing: replay starts *at* the committed offset,
+because that offset is the next record to read rather than the last one dealt with — so what
+comes back is that record and everything above it in the partition, which with `MAX_IN_FLIGHT`
+above two is more than the pair that caused the gap. Partitions are independent: a gap in one does not hold up commits in
 another.
 
 The same shape has a sharper edge on a refusal. There is no per-message nack, so giving one up
-rewinds that partition to the offset, and **every record after it in that partition** is
-delivered again — the other partitions carry on untouched. Handles taken before the rewind stop
+rewinds that partition to the offset, and **the released record together with every later one
+in that partition** is delivered again — the other partitions carry on untouched. Handles taken before the rewind stop
 being settleable, because the deliveries they name no longer exist; a send that finishes after
 one is reported and settles nothing, and its message comes back with the rest. **Build
 idempotency on your own business key** — the advice below is not decoration on this transport.

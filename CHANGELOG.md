@@ -33,12 +33,12 @@ Entries land here as the work does; nothing below is released.
   ```text
                                     queued locally   waited for the ack
   confluent-kafka, synchronous           0.2 - 0.3us          166 - 237us
-  aiokafka, handed to a loop thread        66 - 75us          354 - 390us
+  aiokafka, handed to a loop thread        66 - 75us          354 - 492us
   ```
 
   Ranges rather than single numbers, and that is the point: a first run of this showed 479
   against 502 and "latency does not decide it" was written down as the finding. Repeating it on
-  a warm broker said 1.6 to 2.1 times instead — the parity was a cold cluster. The decision
+  a warm broker said 1.6 to 2.2 times instead — the parity was a cold cluster. The decision
   stands and its stated reason changed; `scripts/measurements` is kept so the next reader can
   re-take them rather than trust either reading.
 
@@ -67,11 +67,30 @@ Entries land here as the work does; nothing below is released.
   contiguous prefix for each partition and holds anything settled above a gap until the gap
   closes; partitions do not wait for each other.
 
-  `release` rewinds that partition to the offset, so every record after it in that partition is
-  delivered again — Kafka has no per-message nack, and that is the honest consequence rather
-  than a pretence. Handles from before a rewind stop being settleable: a send that finishes
-  afterwards is reported and commits nothing, because accepting it could commit past messages
-  the rewind put back.
+  `release` rewinds that partition to the offset, so the released record **and** every later
+  record in that partition is delivered again — Kafka has no per-message nack, and that is the
+  honest consequence rather than a pretence.
+
+  What a rewind is remembered by is bounded. A handle carries how many rewinds its partition had
+  seen when it was taken, so settling can ask whether any rewind *since* then reached its offset
+  — and that history is compacted the moment the partition has nothing in flight and nothing
+  waiting to be committed, because at that point no handle the broker still expects can need an
+  entry. Without it, a worker whose downstream is failing pays one integer per refusal for as
+  long as it runs. A handle older than the compaction point is refused as rewound rather than as
+  unknown, which keeps the log saying the thing an operator needs to hear.
+
+  **A full local queue is waited out, not raised.** `produce` refuses with `BufferError` once
+  librdkafka's own queue fills, which is what a broker that has stopped accepting looks like
+  from inside the process after enough sends. That used to escape mid-batch: the records already
+  accepted were in flight with nobody waiting for their callbacks, and the caller was told the
+  whole batch had failed, so a retry sent the accepted prefix twice. `publish` now polls for
+  room until its timeout, and if a record still cannot be queued it says how many never got in
+  *and* how many were accepted before them — a batch that only partly went cannot be retried
+  blindly, and Kafka has no way to un-send the half that went.
+
+  Handles from before a rewind stop being settleable: a send that finishes afterwards is
+  reported and commits nothing, because accepting it could commit past messages the rewind put
+  back.
 
   `KAFKA_BOOTSTRAP` and `KAFKA_TOPIC` are required. Nothing here needs `WORKER_NAME`: a
   consumer that dies stops heartbeating, the group rebalances, and its partitions go to another

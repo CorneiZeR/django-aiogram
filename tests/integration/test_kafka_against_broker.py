@@ -277,6 +277,57 @@ def test_a_single_publish_does_not_wait_for_a_batch(broker):
     assert median < 0.003, f'one publish took {median * 1000:.1f}ms, so it waited for a batch'
 
 
+def test_the_rewind_history_does_not_grow_with_every_refusal(broker):
+    """A worker whose downstream keeps failing must not pay memory for how long it has failed.
+
+    `release` records where it rewound to, so a later handle can be told from one the rewind
+    left alone. That history is per partition and append-only, which for a consumer refusing
+    every message -- a downstream that is down, not a bug -- would be one integer per refusal
+    for the life of the process.
+
+    Compaction is possible exactly when the partition has nothing in flight and nothing settled
+    awaiting a commit, which is the state this loop is in after each release. Asserted on the
+    private list because there is no public surface for "how much does this remember", and the
+    invariant is about memory rather than behaviour.
+    """
+    for chat_id in range(12):
+        broker.publish([payload(chat_id)])
+        taken = broker.take_nowait()
+        assert taken is not None, f'nothing to take on round {chat_id}'
+        broker.release(taken.handle)
+
+    remembered = sum(len(offsets) for offsets in broker._rewinds.values())
+    assert remembered <= 1, f'the rewind history grew to {remembered} entries over twelve refusals'
+
+
+def test_a_handle_from_before_a_compaction_is_still_refused_as_rewound(broker, caplog):
+    """Compaction must not turn a stale handle into a settleable one, or into a silent one.
+
+    The entries that would have judged this handle are gone, so the broker cannot say *which*
+    rewind invalidated it -- but it knows the handle predates a compaction, and compaction only
+    happens after a rewind. Refusing it is the safe answer, and saying "rewound" rather than
+    nothing is the diagnosis an earlier attempt at pruning threw away.
+
+    Arranged so the stale handle's offset is taken again afterwards: that is the case where
+    refusing on the offset alone would not be enough, because the offset *is* outstanding
+    again -- held by a different, newer handle.
+    """
+    broker.publish([payload(1)])
+    first = broker.take_nowait()
+    assert first is not None
+    broker.release(first.handle)
+
+    again = broker.take_nowait()
+    assert again is not None, 'the released message did not come back'
+    assert again.handle != first.handle, 'the redelivery reused the stale handle'
+
+    with caplog.at_level('WARNING', logger='django_aiogram'):
+        broker.ack(first.handle)
+
+    assert 'rewound' in caplog.text, f'the refusal was silent: {caplog.text!r}'
+    assert broker.inflight_depth() == 1, 'the stale ack settled the redelivery it did not own'
+
+
 def test_messages_stranded_in_the_producer_are_reported(kafka_bootstrap, caplog):
     """A produce accepted locally and never handed over is a loss, so it is said out loud.
 

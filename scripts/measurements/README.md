@@ -64,6 +64,8 @@ python -m scripts.measurements.redis_baseline
 # the advertised listener matters: with the image's default the broker answers `localhost:9092`
 # from inside the container, and a client on the host retries into a refusal loop rather than
 # failing — which is how the first attempt at this spent ten minutes
+# 4.3.1, which is what the numbers below were taken on; CI pins 4.0.0 instead, deliberately —
+# it tests the oldest 4.x this package supports, and a measurement wants the one it measured
 docker run -d --rm --name kafka -p 9093:9093 \
   -e KAFKA_NODE_ID=1 -e KAFKA_PROCESS_ROLES=broker,controller \
   -e KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9094,HOST://0.0.0.0:9093 \
@@ -75,7 +77,7 @@ docker run -d --rm --name kafka -p 9093:9093 \
   -e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1 \
   -e KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1 \
   -e KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1 \
-  apache/kafka:4.0.0
+  apache/kafka:4.3.1
 .measure/bin/python -m scripts.measurements.kafka_driver_choice
 ```
 
@@ -94,7 +96,7 @@ aio-pika 10.0.1, confluent-kafka on librdkafka 2.15.0 and aiokafka 0.14.0. Versi
 | `aio-pika`, via a loop thread | 121 – 125 µs | 456 – 495 µs |
 | `pika`, awaited via `to_thread` | 119 – 122 µs | 412 – 423 µs |
 | `confluent-kafka`, synchronous | 0.2 – 0.3 µs | 166 – 237 µs |
-| `aiokafka`, via a loop thread | 66 – 75 µs | 354 – 390 µs |
+| `aiokafka`, via a loop thread | 66 – 75 µs | 354 – 492 µs |
 | `RPUSH`, the list transport's publish | — | 120 – 143 µs |
 | `XADD`, the Streams transport's publish | — | 116 – 121 µs |
 
@@ -109,7 +111,7 @@ face pays it, and the faces are not equal traffic: `bot.send()` is called from v
 management commands, `asend()` is for ASGI. pika charges the rare one.
 
 **Kafka: `confluent-kafka`.** The consumer is a thread, where a synchronous driver belongs;
-`aiokafka` would need an event loop inside it. It is also 1.6 to 2.1 times faster on the
+`aiokafka` would need an event loop inside it. It is also 1.6 to 2.2 times faster on the
 confirmed face, which is the correction worth reading: the *first* run of that script showed 479
 against 502 µs and "latency does not decide it" went into the changelog on the strength of it.
 Three runs on a warm broker say otherwise. **Run these three times before believing them** — the
