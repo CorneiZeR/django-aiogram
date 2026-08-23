@@ -78,8 +78,9 @@ def shared_producer(bootstrap: str) -> 'Producer':
         # `linger.ms` at 0 because `publish` waits for the broker to answer, so librdkafka's
         # default of 5 milliseconds is paid on every send while it holds a batch open for
         # records that are not coming: measured, one confirmed publish costs 6.4ms on the
-        # default against 241us at 0. Batching still happens -- what is switched off is the
-        # waiting for it, which is the only part a one-message send can pay for
+        # default against 241us at 0. Batching still happens -- a `publish` of a hundred
+        # payloads costs 0.44ms here against 7.01ms on the default, 4.4us a message -- so what
+        # is switched off is the waiting, and the bulk path is faster for it too
         _producer = (bootstrap, KafkaProducer({'bootstrap.servers': bootstrap, 'linger.ms': 0}))
         return _producer[1]
 

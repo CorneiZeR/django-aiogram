@@ -265,13 +265,16 @@ classifiers = fields.get_all('Classifier') or []
 for expected in ('Framework :: AsyncIO', 'Framework :: Django :: 6.1', 'Typing :: Typed'):
     assert expected in classifiers, f'{expected} is missing from the wheel metadata'
 extras = fields.get_all('Provides-Extra') or []
-# `redis` is what the E047 hint tells a reader to install, so its absence here would make
-# that hint a dead end — the one metadata field this release's install story rests on
-for expected in ('redis', 'hiredis'):
+# every transport's refusal names the extra that fixes it, so an extra missing here turns that
+# hint into a dead end — the one metadata field this release's install story rests on. One name
+# per transport plus hiredis, which is the only optional speed-up
+for expected in ('redis', 'hiredis', 'rabbitmq', 'kafka'):
     assert expected in extras, f'{expected} is missing from Provides-Extra: {extras}'
-# dev is for this repository, not for anyone installing the package
-assert 'dev' not in extras, f'the dev extra shipped in the wheel: {extras}'
-print('    classifiers, extras and the absence of dev all check out')
+# dev and measure are for this repository, not for anyone installing the package: both are
+# dependency groups, and a group that leaks into Provides-Extra is a packaging mistake
+for refused in ('dev', 'measure'):
+    assert refused not in extras, f'the {refused} group shipped as an extra: {extras}'
+print('    classifiers, one extra per transport, and no dev or measure among them')
 META
 
 echo

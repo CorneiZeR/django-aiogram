@@ -54,7 +54,9 @@ Entries land here as the work does; nothing below is released.
   default, waiting for records to join it, and a send here is a batch of one that then waits for
   the broker's answer — so the default is paid in full on every `bot.send()`: measured, 6.4ms
   against 241µs, 26× for batching nothing. Batching still happens; what is switched off is
-  waiting for it. Found by asking the question a review had just asked of the RabbitMQ
+  waiting for it, and that is measured too rather than hoped for: one `publish` of a hundred
+  payloads costs 0.44ms at 0 against 7.01ms on the default, which is 4.4µs a message — so the
+  bulk path is faster as well, not traded away for the single one. Found by asking the question a review had just asked of the RabbitMQ
   measurement — whether the script measures what the transport actually does — of the Kafka one.
 
   **Offsets are committed only where they are contiguous, per partition.** A consumer holding
