@@ -240,3 +240,30 @@ def test_a_handle_from_another_broker_is_refused(broker, kafka_bootstrap, kafka_
 
         with pytest.raises(TypeError, match='partition, offset'):
             broker.release(7)
+
+
+def test_messages_stranded_in_the_producer_are_reported(kafka_bootstrap, caplog):
+    """A produce accepted locally and never handed over is a loss, so it is said out loud.
+
+    `publish` waits for the broker, so anything still in librdkafka's queue when its producer
+    is replaced was accepted and then blocked on the way out. Dropping the producer on top of
+    that loses those messages in silence — and a settings change during a burst is the ordinary
+    way there.
+
+    Arranged against a bootstrap address with nothing behind it, which is what a broker that
+    has gone away looks like from here. Measured: `flush` answers with how many are left.
+    """
+    from django_aiogram.broker.kafka import client
+
+    with override_settings(TELEGRAM_BOT=settings_for('127.0.0.1:1', 'unreachable')):
+        producer = client.shared_producer('127.0.0.1:1')
+        for _ in range(3):
+            producer.produce('unreachable', b'{}')
+
+        with caplog.at_level('WARNING', logger='django_aiogram'):
+            client.close_clients()
+
+    assert 'never reached the broker' in caplog.text, caplog.text
+    assert any(record.tg_count == 3 for record in caplog.records if hasattr(record, 'tg_count')), (
+        f'the count was not reported: {[getattr(r, "tg_count", None) for r in caplog.records]}'
+    )

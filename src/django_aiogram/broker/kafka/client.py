@@ -11,6 +11,7 @@ The other argument in the plan turned out to be false and is recorded so it is n
 compiled and there is no portability difference between them.
 """
 
+import logging
 import threading
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any
@@ -20,12 +21,19 @@ from django.core.signals import setting_changed
 
 from django_aiogram.config.settings import SETTINGS_NAME
 
+logger = logging.getLogger('django_aiogram')
+
 if TYPE_CHECKING:
     from confluent_kafka import Consumer, Producer
 else:  # the annotations below are evaluated at runtime in a `|` union
     Consumer = Producer = Any
 
 __all__ = ('close_clients', 'consumer_for_thread', 'metadata_client', 'shared_producer')
+
+#: how long a producer being replaced or closed is given to hand over what it holds. Not the
+#: transport's `KAFKA_TIMEOUT`: this runs while settings are changing or a process is going
+#: away, which is exactly when reading a setting is least reliable
+_DRAIN_SECONDS = 5
 
 #: librdkafka's producer is thread-safe and keeps its own I/O thread, so one per process is
 #: right — and a second would mean a second connection pool for no reason
@@ -58,9 +66,7 @@ def shared_producer(bootstrap: str) -> 'Producer':
             msg = f"{SETTINGS_NAME}['KAFKA_BOOTSTRAP'] is required to talk to Kafka."
             raise ImproperlyConfigured(msg)
         if _producer is not None:
-            # flushed rather than dropped: the queue is librdkafka's, and abandoning it would
-            # abandon messages this process has already been told it accepted
-            _producer[1].flush(5)
+            _drain(_producer[1])
         _producer = (bootstrap, KafkaProducer({'bootstrap.servers': bootstrap}))
         return _producer[1]
 
@@ -98,6 +104,27 @@ def consumer_for_thread(bootstrap: str, topic: str, group: str, timeout: float) 
     consumer.subscribe([topic])
     _local.identity, _local.consumer = identity, consumer
     return consumer
+
+
+def _drain(producer: 'Producer') -> None:
+    """Flush what the producer still holds, and say so when it could not all go.
+
+    The queue is librdkafka's, and this process has already told a caller that every message
+    in it was accepted — `publish` waits for the broker before it returns, so anything left
+    here was accepted by librdkafka and then blocked on the way out. Dropping the producer on
+    top of that loses them in silence.
+
+    ``flush`` answers with how many are still queued — measured, 3 against an unreachable
+    broker — so the count is reported. It cannot be recovered from here: the producer is being
+    replaced because its servers changed, or the process is shutting down, and there is nowhere
+    for them to go either way. Saying how many is the honest part.
+    """
+    remaining = producer.flush(_DRAIN_SECONDS)
+    if remaining:
+        logger.warning(
+            'kafka messages were accepted locally and never reached the broker',
+            extra={'tg_count': remaining},
+        )
 
 
 def metadata_client(bootstrap: str, group: str, timeout: float) -> 'Consumer':
@@ -178,7 +205,7 @@ def close_clients(**_kwargs: object) -> None:
     global _producer  # noqa: PLW0603 - as above
     with _producer_lock:
         if _producer is not None:
-            _producer[1].flush(5)
+            _drain(_producer[1])
             _producer = None
     _drop_this_threads_consumer()
     _drop_this_threads_reader()
@@ -190,4 +217,4 @@ def _forget(**kwargs: object) -> None:
         close_clients()
 
 
-setting_changed.connect(_forget)
+setting_changed.connect(_forget, dispatch_uid='django_aiogram.broker.kafka.client')

@@ -175,4 +175,4 @@ def _forget(**kwargs: object) -> None:
         close_connections()
 
 
-setting_changed.connect(_forget)
+setting_changed.connect(_forget, dispatch_uid='django_aiogram.broker.rabbitmq.client')
