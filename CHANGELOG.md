@@ -25,27 +25,30 @@ Entries land here as the work does; nothing below is released.
   The fourth, and the one whose model differs most: the other three settle a *message*, and
   Kafka settles a *position*.
 
-  **`confluent-kafka`, not `aiokafka`** — and here, unlike RabbitMQ, the latency did not choose
-  it. Held to the same guarantee, on Apache Kafka 4 over loopback, median of 200 produces:
+  **`confluent-kafka`, not `aiokafka`**, decided by the consumer being a thread: a synchronous
+  driver belongs in one, and `aiokafka` would need an event loop inside it — the machinery that
+  lost `aio-pika` the RabbitMQ decision. On Apache Kafka 4 over loopback, both waiting for the
+  broker, it is the faster one as well:
 
   ```text
-                                              queued locally   waited for the ack
-  confluent-kafka, synchronous                        0.2us               479.2us
-  aiokafka, handed to a loop thread                  66.0us               502.1us
-  confluent-kafka, awaited via to_thread                  —               388.2us
+                                    queued locally   waited for the ack
+  confluent-kafka, synchronous               0.2us          166 - 232us
+  aiokafka, handed to a loop thread         66-72us          354 - 359us
   ```
 
-  479 against 502 is nothing: the round trip to the broker dominates and the driver disappears
-  behind it. So the decision is about the *consumer*, which is a thread — a synchronous driver
-  belongs in one, and `aiokafka` would need an event loop inside it, which is the machinery
-  that lost `aio-pika` the RabbitMQ decision. The plan's other argument turned out to be false
-  and is recorded so it is not reopened: `aiokafka` ships no `py3-none-any` wheel either, so
-  both drivers are compiled and there is no portability difference.
+  Ranges rather than single numbers, and that is the point: a first run of this showed 479
+  against 502 and "latency does not decide it" was written down as the finding. Repeating it on
+  a warm broker said 1.6 to 2.1 times instead — the parity was a cold cluster. The decision
+  stands and its stated reason changed; `scripts/measurements` is kept so the next reader can
+  re-take them rather than trust either reading.
 
-  **A publish waits for the broker**, at about 480µs, which makes Kafka the most expensive
-  publish of the four — roughly 25× a Redis list. `produce()` answers in 0.2µs because
-  librdkafka's own thread does the I/O, and returning there would be weaker than the promise
-  `RPUSH` already makes.
+  The plan's other argument turned out to be false and is recorded so it is not reopened:
+  `aiokafka` ships no `py3-none-any` wheel either, so both drivers are compiled and there is no
+  portability difference.
+
+  **A publish waits for the broker**, which makes Kafka the most expensive publish of the four —
+  roughly 10× a Redis list. `produce()` answers in 0.2µs because librdkafka's own thread does
+  the I/O, and returning there would be weaker than the promise `RPUSH` already makes.
 
   **Offsets are committed only where they are contiguous, per partition.** A consumer holding
   several sends cannot settle them in whatever order they finish: committing the second while

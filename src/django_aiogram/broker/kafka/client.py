@@ -1,10 +1,14 @@
 """One producer per process, one consumer per thread, because that is what librdkafka allows.
 
-``confluent-kafka`` rather than ``aiokafka``, and unlike RabbitMQ the latency did not decide
-it: held to the same guarantee the two are 479 and 502 microseconds, which is the round trip to
-the broker with the driver invisible behind it. What decided it is that the consumer here is a
-thread — a synchronous driver belongs in one — and that `aiokafka` would need an event loop
-inside that thread, which is the machinery that lost `aio-pika` the RabbitMQ decision.
+``confluent-kafka`` rather than ``aiokafka``, and for two reasons that were measured in that
+order. The consumer here is a thread, and a synchronous driver belongs in one: `aiokafka` would
+need an event loop inside it, which is the machinery that lost `aio-pika` the RabbitMQ decision.
+
+And it is faster on the face that matters. Held to the same guarantee — both waiting for the
+broker — three runs put ``confluent-kafka`` at 166 to 222 microseconds against ``aiokafka``'s
+354 to 359, so 1.6 to 2.1 times. An earlier single run showed 479 against 502 and the parity was
+written down as the finding; it was a cold broker, and the number that survived repetition is
+this one. Re-take them with ``scripts/measurements`` rather than trusting either.
 
 The other argument in the plan turned out to be false and is recorded so it is not reopened:
 `aiokafka` is **not** pure Python. It ships no ``py3-none-any`` wheel, so both drivers are

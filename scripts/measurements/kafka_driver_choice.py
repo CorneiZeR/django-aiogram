@@ -1,0 +1,116 @@
+"""Which Kafka driver to use, measured the same way — and the answer is not about latency.
+
+The same 2x2 as the AMQP one, with the guarantee held constant: ``produce`` answers locally, so
+a run that does not wait for the broker is measuring librdkafka's queue rather than a delivery.
+
+The first run of this said the two drivers were the same speed and the conclusion was written
+down as "latency does not decide it". Repeating it on a warm broker said otherwise —
+``confluent-kafka`` is 1.6 to 2.1 times faster with both waiting — so the parity was a cold
+cluster rather than a finding. That is why this is kept rather than remembered: **run it three
+times before believing it**, which the first attempt did not.
+
+Run it against a throwaway broker whose advertised listener the host can reach — with the
+image's own default it answers ``localhost:9092`` from inside the container and a client on the
+host retries into a refusal loop rather than failing. `README.md` has the full command.
+"""
+
+import asyncio
+import os
+import threading
+
+from aiokafka import AIOKafkaProducer
+from confluent_kafka import Producer
+from scripts.measurements._timing import configure_reporting, logger, measure
+
+#: fewer rounds than the AMQP measurement: every confirmed produce here is a broker round trip
+#: of about half a millisecond, so 200 is already half a minute of waiting
+ROUNDS = 200
+BOOTSTRAP = os.environ.get('DJANGO_AIOGRAM_TEST_KAFKA_BOOTSTRAP', '127.0.0.1:9093')
+TOPIC = 'measurement'
+BODY = b'{"function": "send_message", "chat_id": 1}'
+
+
+def main() -> None:
+    """Measure both drivers with and without waiting, and report what decides it."""
+    configure_reporting()
+    producer = Producer({'bootstrap.servers': BOOTSTRAP, 'linger.ms': 0})
+
+    logger.info('confluent-kafka, synchronous, its own face:')
+    measure('queued locally, not confirmed', lambda: _queue_one(producer), rounds=ROUNDS)
+    confluent = measure('waited for the broker ack', lambda: _confirm_one(producer), rounds=ROUNDS)
+
+    loop, awaiting = _aiokafka_producer()
+    logger.info('aiokafka, handed to a loop thread (what a sync producer needs):')
+    measure('queued locally, not confirmed', _sender(loop, awaiting, confirmed=False), rounds=ROUNDS)
+    aiokafka = measure('waited for the broker ack', _sender(loop, awaiting, confirmed=True), rounds=ROUNDS)
+
+    logger.info('')
+    logger.info(
+        'confluent-kafka %.1f us against aiokafka %.1f us  -> %.2fx',
+        confluent,
+        aiokafka,
+        aiokafka / confluent,
+    )
+    logger.info(
+        'run this three times before believing it: the first single run of it showed a parity that was not real'
+    )
+    loop.call_soon_threadsafe(loop.stop)
+    producer.flush(10)
+
+
+def _queue_one(producer: Producer) -> None:
+    """Hand one record to librdkafka and return without waiting for the broker."""
+    producer.produce(TOPIC, BODY)
+    producer.poll(0)
+
+
+def _confirm_one(producer: Producer) -> None:
+    """Hand over one record and wait for the broker to answer for it.
+
+    The delivery callback is what says it arrived, so this waits on that rather than on
+    ``flush`` — which would wait for every record in a producer this measurement shares with
+    nothing, but the shape is the one the transport uses.
+    """
+    answered = threading.Event()
+    producer.produce(TOPIC, BODY, on_delivery=lambda _error, _message: answered.set())
+    producer.poll(0)
+    while not answered.is_set():
+        producer.poll(0.001)
+
+
+def _aiokafka_producer() -> tuple[asyncio.AbstractEventLoop, AIOKafkaProducer]:
+    """Start a loop on a thread of its own and a producer on it.
+
+    A thread for the reason the AMQP measurement needs one: this is what a synchronous caller
+    would have to do to reach an async-native driver.
+    """
+    loop = asyncio.new_event_loop()
+    threading.Thread(target=loop.run_forever, daemon=True).start()
+
+    async def start() -> AIOKafkaProducer:
+        producer = AIOKafkaProducer(bootstrap_servers=BOOTSTRAP, linger_ms=0)
+        await producer.start()
+        return producer
+
+    return loop, asyncio.run_coroutine_threadsafe(start(), loop).result(60)
+
+
+def _sender(loop: asyncio.AbstractEventLoop, producer: AIOKafkaProducer, *, confirmed: bool) -> object:
+    """Build a synchronous call that sends one record through ``loop``.
+
+    ``send`` answers with a future for the delivery; awaiting that future is what makes this the
+    confirmed row, and dropping it is the queued one.
+    """
+
+    async def queued() -> None:
+        await producer.send(TOPIC, BODY)
+
+    async def waited() -> None:
+        await (await producer.send(TOPIC, BODY))
+
+    chosen = waited if confirmed else queued
+    return lambda: asyncio.run_coroutine_threadsafe(chosen(), loop).result(60)
+
+
+if __name__ == '__main__':
+    main()

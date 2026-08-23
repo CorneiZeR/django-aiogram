@@ -12,11 +12,13 @@ class ProduceRefusedError(BrokerError):
     measured at 0.2 microseconds, and the broker's acknowledgement arrives later on a delivery
     callback. Returning at that first point would be a weaker promise than the rest of this
     package makes — ``RPUSH`` answers with the new list length before ``send()`` returns — so
-    this transport waits, at 479 microseconds, and reports what came back.
+    this transport waits, at 166 to 232 microseconds across repeated runs, and reports what came
+    back.
 
     That makes Kafka the slowest publish of the four by some distance, and the number belongs
     in the documentation rather than in a footnote: it is the guarantee's price, not the
-    driver's. Measured, ``aiokafka`` waits 502 microseconds for the same thing.
+    driver's — though not only: measured over three runs, ``aiokafka`` waits 354 to 359
+    microseconds for the same acknowledgement, so this driver is the faster one as well.
     """
 
     def __init__(self, topic: str, reason: str) -> None:
