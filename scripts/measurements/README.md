@@ -67,7 +67,7 @@ docker run -d --rm --name kafka -p 9093:9093 \
   -e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1 \
   -e KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1 \
   -e KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1 \
-  apache/kafka:latest
+  apache/kafka:4.0.0
 .measure/bin/python -m scripts.measurements.kafka_driver_choice
 ```
 
@@ -76,7 +76,9 @@ so a reader with a broker already running needs no edits.
 
 ## What they answered
 
-One machine, loopback, RabbitMQ 4 and Apache Kafka 4, CPython 3.13:
+One machine, loopback, CPython 3.13.14, RabbitMQ 4.3.5 and Apache Kafka 4.3.1, with pika 1.4.4,
+aio-pika 10.0.1, confluent-kafka on librdkafka 2.15.0 and aiokafka 0.14.0. Versions rather than
+"4", because a broker or a driver release is exactly the sort of thing that moves these:
 
 | | unconfirmed | confirmed |
 | --- | --- | --- |

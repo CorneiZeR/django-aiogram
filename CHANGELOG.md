@@ -104,7 +104,7 @@ Entries land here as the work does; nothing below is released.
   loop`, exactly as `redis.asyncio` does.
 
   **Publishes are confirmed, mandatory and persistent**, which costs 323–393µs against 18–20µs
-  for a publish that promises none of it. That buys the promise the package already makes:
+  for the same publish with only the confirm taken off. That buys the promise the package already makes:
   `RPUSH` answers with the new length, so a Redis publish is acknowledged before `send()`
   returns and a failure raises. Unconfirmed AMQP publishing is weaker than that — a broker that
   dies before persisting the message loses it in silence — so the RabbitMQ transport is roughly
