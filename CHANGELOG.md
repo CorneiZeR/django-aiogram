@@ -107,20 +107,20 @@ Entries land here as the work does; nothing below is released.
   the `await` half — is wrong, and the first measurement that said so was wrong too:
   `aio_pika.Connection.channel()` confirms publishes by default and `pika`'s does not, so
   comparing them directly put a confirmed publish next to fire-and-forget. Held constant, on
-  RabbitMQ 4 over loopback, medians of 300 publishes, five runs, each row emptying the queue
+  RabbitMQ 4 over loopback, medians of 300 publishes, six runs, each row emptying the queue
   first and publishing exactly what this transport publishes — persistent and `mandatory`, with
   only the confirm varying:
 
   ```text
                                           unconfirmed     confirmed
   pika, synchronous, its own face           18 - 20us   323 - 393us
-  aio-pika, handed to a loop thread        121 - 125us   456 - 495us
+  aio-pika, handed to a loop thread        121 - 125us   456 - 501us
   pika, awaited via asyncio.to_thread      119 - 122us   412 - 423us
   ```
 
-  The decisive part is that two of those are the same number in the unconfirmed column, 0.98
-  to 1.00 times each other with each run paired against itself. (The confirmed column is not
-  equal and is not meant to be — 412–423 against 456–495 — because it also carries the confirm,
+  The decisive part is that two of those are the same number in the unconfirmed column, within
+  four per cent of each other run for run. (The confirmed column is not equal and is not meant
+  to be — 412–423 against 456–501 — because it also carries the confirm,
   which aio-pika waits for on the loop.) Crossing the thread boundary costs about 100µs
   whichever driver is used, so the question is
   which face pays it, and the faces are not equal. `bot.send()` is called from views, tasks and

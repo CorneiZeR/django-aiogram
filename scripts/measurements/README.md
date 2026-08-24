@@ -109,7 +109,7 @@ aio-pika 10.0.1, confluent-kafka on librdkafka 2.15.0 and aiokafka 0.14.0. Versi
 | AMQP | unconfirmed | confirmed |
 | --- | --- | --- |
 | `pika`, synchronous | 18 – 20 µs | 323 – 393 µs |
-| `aio-pika`, via a loop thread | 121 – 125 µs | 456 – 495 µs |
+| `aio-pika`, via a loop thread | 121 – 125 µs | 456 – 501 µs |
 | `pika`, awaited via `to_thread` | 119 – 122 µs | 412 – 423 µs |
 
 | Kafka | queued locally | waited for the ack |
@@ -130,7 +130,7 @@ acknowledged one.
 **RabbitMQ: `pika`.** The two bridged rows are the same number in the **unconfirmed** column —
 119–122 against 121–125 µs, within four per cent of each other run for run — so crossing the
 thread boundary is the price rather than the library, about 100 µs either way.
-(The confirmed column is not equal and is not meant to be: 412–423 against 456–495 is 0.83 to
+(The confirmed column is not equal and is not meant to be: 412–423 against 456–501 is 0.83 to
 0.93, because that column also carries the confirm, and aio-pika waits for it on the loop.)
 
 That makes the question which face pays it, and the faces are not equal traffic: `bot.send()` is

@@ -198,7 +198,7 @@ class KafkaBroker(Broker):
 
         The driver is synchronous, and the hand-off costs about 100 microseconds — which is
         most of what an awaited publish adds here, because the broker's acknowledgement costs
-        roughly twice that. Measured across eleven runs, awaiting `aiokafka` natively is 354 to
+        roughly twice that. Measured across eleven runs, awaiting `aiokafka` natively is 351 to
         492 microseconds against 166 to 295 for this.
         """
         if not payloads:

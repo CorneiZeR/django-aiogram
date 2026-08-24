@@ -1,9 +1,11 @@
 """The divisor the other two scripts' multiples are quoted against.
 
 `CHANGELOG.md`, `Settings.md` and this directory's README all describe the AMQP and Kafka
-publishes as a multiple of a Redis list publish -- roughly 18x and roughly 10x. Those multiples
-were being quoted against a number nobody had written down, which makes five claims unreadable
-in the direction that matters: a reader cannot check a ratio whose divisor is invisible.
+publishes as a multiple of a Redis list publish. They used to quote one -- "roughly 18x", "roughly
+10x" -- against a number nobody had written down, which makes a claim unreadable in the direction
+that matters: a reader cannot check a ratio whose divisor is invisible. This is the divisor, and
+on the footing it shares with the broker measurements the multiples come out at about two and a
+half and about one and a half.
 
 So this measures the baseline the same way and on the same protocol as the other two: median of
 300, run it more than once. What it times is the one call `RedisListBroker.publish` makes -- a

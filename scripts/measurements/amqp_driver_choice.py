@@ -21,6 +21,8 @@ import asyncio
 import os
 import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from typing import NamedTuple
 
 import aio_pika
 import pika
@@ -39,6 +41,10 @@ BODY = b'{"function": "send_message", "chat_id": 1}'
 #: package makes -- the same mistake as putting a confirmed publish next to a fire-and-forget
 #: one, one level down. Held constant across every row so that only the confirm varies.
 PERSISTENT = pika.DeliveryMode.Persistent
+
+#: the bridged rows' channels, on the pool's single worker: both rows run there, each wanting a
+#: channel of its own, and a connection can only be closed by the thread that owns it
+_bridged = threading.local()
 
 
 def main() -> None:
@@ -59,7 +65,35 @@ def _report(
     unconfirmed_channel: AbstractChannel,
     confirmed_channel: AbstractChannel,
 ) -> None:
+    """Time every row and say what the numbers decide.
+
+    The executor for the bridged rows is made and unmade here, because that is the whole of its
+    life: one worker, so the pika connections it opens have a nameable thread to be closed on.
+    """
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix='bridged') as pool:
+        try:
+            _time_them(Channels(plain, confirming, unconfirmed_channel, confirmed_channel), loop, pool)
+        finally:
+            _closed_on_its_thread(pool)
+
+
+class Channels(NamedTuple):
+    """The four channels a run opens: two pika, two aio-pika, confirmed and not.
+
+    Grouped rather than passed one by one, so the function that times them takes three arguments
+    instead of six -- and so a reader sees them as what they are, one fixture per row.
+    """
+
+    plain: BlockingChannel
+    confirming: BlockingChannel
+    unconfirmed: AbstractChannel
+    confirmed: AbstractChannel
+
+
+def _time_them(channels: Channels, loop: asyncio.AbstractEventLoop, pool: ThreadPoolExecutor) -> None:
     """Time every row and say what the numbers decide."""
+    plain, confirming = channels.plain, channels.confirming
+    unconfirmed_channel, confirmed_channel = channels.unconfirmed, channels.confirmed
     logger.info('pika, on its own synchronous face:')
     measure('unconfirmed', _purged(_pika_publish(plain), plain))
     pika_confirmed = measure('confirmed', _purged(_pika_publish(confirming), plain))
@@ -72,8 +106,8 @@ def _report(
     # each of these publishes through a connection its *own* thread opened, which is what the
     # transport does and what pika allows: a `BlockingConnection` belongs to one thread, so
     # sharing the main thread's from an executor would be measuring an unsupported path
-    pika_queued_bridged = measure('unconfirmed', _purged(_threaded(loop, confirmed=False), plain))
-    measure('confirmed', _purged(_threaded(loop, confirmed=True), plain))
+    pika_queued_bridged = measure('unconfirmed', _purged(_threaded(loop, pool, confirmed=False), plain))
+    measure('confirmed', _purged(_threaded(loop, pool, confirmed=True), plain))
 
     logger.info('')
     logger.info(
@@ -139,31 +173,53 @@ def _publisher(loop: asyncio.AbstractEventLoop, channel: AbstractChannel) -> Cal
     return lambda: asyncio.run_coroutine_threadsafe(publish(), loop).result(30)
 
 
-def _threaded(loop: asyncio.AbstractEventLoop, *, confirmed: bool) -> Callable[[], None]:
+def _threaded(loop: asyncio.AbstractEventLoop, pool: ThreadPoolExecutor, *, confirmed: bool) -> Callable[[], None]:
     """Build a call that publishes through pika from a thread, awaited from ``loop``.
 
-    The channel is opened by whichever thread the publish lands on, and kept there. That is not
+    The channel is opened by the thread the publish lands on, and kept there. That is not
     ceremony: pika documents ``add_callback_threadsafe`` as the only operation another thread may
     perform on a ``BlockingConnection``, so a shared connection would make this row a
     measurement of something the driver does not support. The transport keeps one connection per
     thread for the same reason.
+
+    ``pool`` has one worker, which is what makes the connection closable: a connection belongs
+    to its thread, so the only way to close it is to hand the close to that same thread — and
+    with an arbitrary pool there is no way to name it. One worker also makes the row measure one
+    hand-off rather than an average over however many threads the default pool grew.
     """
-    local = threading.local()
 
     def publish() -> None:
-        channel = getattr(local, 'channel', None)
+        opened = getattr(_bridged, 'channels', None)
+        if opened is None:
+            opened = _bridged.channels = {}
+        channel = opened.get(confirmed)
         if channel is None:
             connection = pika.BlockingConnection(pika.URLParameters(URL))
             channel = connection.channel()
             if confirmed:
                 channel.confirm_delivery()
-            local.channel = channel
+            opened[confirmed] = channel
         _pika_publish(channel)()
 
     async def awaited() -> None:
-        await asyncio.to_thread(publish)
+        await loop.run_in_executor(pool, publish)
 
     return lambda: asyncio.run_coroutine_threadsafe(awaited(), loop).result(30)
+
+
+def _closed_on_its_thread(pool: ThreadPoolExecutor) -> None:
+    """Close whatever pika connection the pool's worker opened, on that worker.
+
+    Every bridged row runs on this one thread, so this is where its connections live and the
+    only place they can be closed from. Without it a run leaves them open until the process
+    exits, which is the same untidiness as leaving the queue behind.
+    """
+
+    def close() -> None:
+        for channel in getattr(_bridged, 'channels', {}).values():
+            channel.connection.close()
+
+    pool.submit(close).result(30)
 
 
 def _pika_publish(channel: BlockingChannel) -> Callable[[], None]:
