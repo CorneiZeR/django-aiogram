@@ -197,14 +197,32 @@ def _aiokafka_producer() -> tuple[asyncio.AbstractEventLoop, AIOKafkaProducer]:
     async-native driver, and the synchronous caller is the one this package has.
     """
     loop = asyncio.new_event_loop()
-    threading.Thread(target=loop.run_forever, daemon=True).start()
+    runner = threading.Thread(target=loop.run_forever, daemon=True)
+    runner.start()
 
     async def start() -> AIOKafkaProducer:
         producer = AIOKafkaProducer(bootstrap_servers=BOOTSTRAP, linger_ms=0)
-        await producer.start()
+        try:
+            await producer.start()
+        except BaseException:
+            # closed on the loop that made it, while that loop is still running: a producer
+            # whose `start` failed still holds what it opened on the way, and aiokafka says so
+            # -- 'Unclosed AIOKafkaProducer', measured
+            await producer.stop()
+            raise
         return producer
 
-    return loop, asyncio.run_coroutine_threadsafe(start(), loop).result(60)
+    starting = asyncio.run_coroutine_threadsafe(start(), loop)
+    try:
+        return loop, starting.result(60)
+    except BaseException:
+        # the loop is running before there is anything to run on it, so a start that fails or
+        # times out would otherwise leave this thread turning for the life of the process --
+        # the caller's cleanup only begins once this has returned something to clean up
+        starting.cancel()
+        loop.call_soon_threadsafe(loop.stop)
+        runner.join(timeout=10)
+        raise
 
 
 def _sender(loop: asyncio.AbstractEventLoop, producer: AIOKafkaProducer, *, confirmed: bool) -> object:
