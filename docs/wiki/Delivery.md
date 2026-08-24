@@ -78,10 +78,12 @@ does not hold up commits in another.
 
 The same shape has a sharper edge on a refusal. There is no per-message nack, so giving one up
 rewinds that partition to the offset, and **the released record together with every later one
-in that partition** is delivered again — the other partitions carry on untouched. Handles taken
-before the rewind stop being settleable, because the deliveries they name no longer exist; a
-send that finishes after
-one is reported and settles nothing, and its message comes back with the rest. **Build
+in that partition** is delivered again — the other partitions carry on untouched. A handle the
+rewind *reached* stops being settleable — one naming its offset or a higher one — because the
+delivery it named no longer exists; a send that finishes afterwards is reported and settles
+nothing, and its message comes back with the rest. Handles below the rewind are untouched and
+still this worker's to settle, which is why the broker records where each rewind went rather
+than how many there have been. **Build
 idempotency on your own business key** — the advice below is not decoration on this transport.
 
 **RabbitMQ.** The least of any of them: an unacknowledged message returns to the
