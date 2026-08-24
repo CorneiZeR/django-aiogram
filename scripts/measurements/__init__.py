@@ -1,4 +1,4 @@
-"""The measurements two driver decisions and every quoted ratio rest on, kept to be re-taken.
+"""The measurements behind two driver decisions and every quoted ratio, kept to be re-taken.
 
 Not tests: each needs a broker, and what they produce is a number to read rather than a pass or
 a fail. `README.md` beside them says how to run each one and what it answered.

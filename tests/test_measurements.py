@@ -135,6 +135,14 @@ def test_the_baseline_times_the_command_its_transport_publishes_with(command, tr
         for call in calls_to(argument, command)
     ]
     assert timed, f'nothing handed to measure() calls {command}, which one of its own rows names'
+    assert len(timed) == 1, f'{len(timed)} timed {command} calls: a row times one publish or it is not that row'
+
+    # exactly two arguments, the key and one payload: `rpush(KEY, BODY, BODY)` would still be an
+    # `rpush` handed to `measure`, and it would publish two messages per sample -- halving the
+    # divisor that five ratios are quoted against, with nothing here noticing
+    passed = [ast.unparse(argument) for argument in timed[0].args]
+    assert len(passed) == 2, f'{command} was timed with {passed}, which is not one key and one payload'
+
     published = calls_to(parsed(transport), command)
     assert published, f'{transport} no longer publishes with {command}, so the baseline is measuring the wrong call'
 

@@ -1,4 +1,4 @@
-# The measurements two decisions and every quoted ratio rest on
+# The measurements behind two driver decisions and every ratio these pages quote
 
 `BROKER`'s driver for RabbitMQ and for Kafka was chosen by running these, not by reading about
 the libraries, and the ratios the pages quote are divided by a number measured here rather than

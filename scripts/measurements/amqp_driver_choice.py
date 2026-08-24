@@ -26,6 +26,7 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from typing import NamedTuple
 
 import aio_pika
@@ -151,17 +152,37 @@ def _time_them(channels: Channels, loop: asyncio.AbstractEventLoop, pool: Thread
 def _pika_channels() -> tuple[BlockingChannel, BlockingChannel]:
     """Open a channel that confirms nothing and one that confirms everything.
 
-    The second open is guarded, because a helper that raises halfway leaves the caller nothing
-    to clean up with: the first connection would be open and unreachable.
+    Both opens are guarded, because a helper that raises halfway leaves the caller nothing to
+    clean up with: whatever it had opened would be open and unreachable. Every connection it got
+    as far as making is closed, not only the first -- ``confirm_delivery`` is a round trip and
+    can fail once the second connection already exists.
     """
-    plain = pika.BlockingConnection(pika.URLParameters(URL)).channel()
+    opened: list[pika.BlockingConnection] = []
+    channels: list[BlockingChannel] = []
     try:
-        plain.queue_declare(queue=QUEUE, durable=True)
-        confirming = pika.BlockingConnection(pika.URLParameters(URL)).channel()
-        confirming.confirm_delivery()
+        for confirms in (False, True):
+            connection = pika.BlockingConnection(pika.URLParameters(URL))
+            opened.append(connection)
+            channel = connection.channel()
+            if confirms:
+                channel.confirm_delivery()
+            else:
+                channel.queue_declare(queue=QUEUE, durable=True)
+            channels.append(channel)
     except BaseException:
-        plain.connection.close()
+        # the queue too, if this got as far as declaring it: the rule is that a run leaves the
+        # broker as it found it, and a failure here would otherwise declare a durable queue that
+        # nothing will ever delete -- observed, from a test of this very path
+        if channels:
+            with suppress(BaseException):
+                channels[0].queue_delete(QUEUE)
+        # every connection this got as far as opening, not just the first: `confirm_delivery`
+        # is a round trip and can fail after the second connection exists
+        for connection in opened:
+            with suppress(BaseException):
+                connection.close()
         raise
+    plain, confirming = channels
     return plain, confirming
 
 
