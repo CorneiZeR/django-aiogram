@@ -5,7 +5,7 @@ a run that does not wait for the broker is measuring librdkafka's queue rather t
 
 The first run of this said the two drivers were the same speed and the conclusion was written
 down as "latency does not decide it". Repeating it on a warm broker said otherwise —
-``confluent-kafka`` is 1.6 to 2.2 times faster with both waiting — so the parity was a cold
+``confluent-kafka`` is 1.4 to 2.2 times faster with both waiting — so the parity was a cold
 cluster rather than a finding. That is why this is kept rather than remembered: **run it three
 times before believing it**, which the first attempt did not.
 
@@ -82,8 +82,12 @@ def _report() -> None:
             'run this three times before believing it: the first single run of it showed a parity that was not real'
         )
     finally:
-        _stopped(loop, awaiting)
-        producer.flush(10)
+        try:
+            _stopped(loop, awaiting)
+        finally:
+            # the synchronous producer is drained whatever the async one did: it holds records
+            # this run produced, and they are the only thing here that can still be lost
+            producer.flush(10)
 
 
 def _stopped(loop: asyncio.AbstractEventLoop, awaiting: AIOKafkaProducer) -> None:
@@ -94,8 +98,12 @@ def _stopped(loop: asyncio.AbstractEventLoop, awaiting: AIOKafkaProducer) -> Non
     last row queued and, on an async driver that notices, ends a successful run in a page of
     pending-task warnings.
     """
-    asyncio.run_coroutine_threadsafe(awaiting.stop(), loop).result(30)
-    loop.call_soon_threadsafe(loop.stop)
+    try:
+        asyncio.run_coroutine_threadsafe(awaiting.stop(), loop).result(30)
+    finally:
+        # even if stopping the producer failed: a loop left running holds its thread, and the
+        # caller's `flush` below never runs if this raises on the way out
+        loop.call_soon_threadsafe(loop.stop)
 
 
 def _declared() -> AdminClient:

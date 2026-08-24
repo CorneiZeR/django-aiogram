@@ -32,13 +32,13 @@ Entries land here as the work does; nothing below is released.
 
   ```text
                                     queued locally   waited for the ack
-  confluent-kafka, synchronous           0.2 - 0.3us          166 - 237us
+  confluent-kafka, synchronous           0.2 - 0.3us          166 - 295us
   aiokafka, handed to a loop thread        66 - 75us          354 - 492us
   ```
 
   Ranges rather than single numbers, and that is the point: a first run of this showed 479
   against 502 and "latency does not decide it" was written down as the finding. Repeating it on
-  a warm broker said 1.6 to 2.2 times instead — the parity was a cold cluster. The decision
+  a warm broker said 1.4 to 2.2 times instead — the parity was a cold cluster. The decision
   stands and its stated reason changed; `scripts/measurements` is kept so the next reader can
   re-take them rather than trust either reading.
 
@@ -46,7 +46,7 @@ Entries land here as the work does; nothing below is released.
   `aiokafka` ships no `py3-none-any` wheel either, so both drivers are compiled and there is no
   portability difference.
 
-  **A publish waits for the broker** — 166 to 237µs for one message, across six runs.
+  **A publish waits for the broker** — 166 to 295µs for one message, across seven runs.
   `produce()` answers in 0.2µs because librdkafka's own thread does the I/O, and returning there
   would be weaker than the promise `RPUSH` already makes. How that compares with the other three
   is a question about all four on one footing, which is not this entry's to answer.

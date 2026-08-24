@@ -12,18 +12,24 @@ class ProduceRefusedError(BrokerError):
     measured at 0.2 microseconds, and the broker's acknowledgement arrives later on a delivery
     callback. Returning at that first point would be a weaker promise than the rest of this
     package makes — ``RPUSH`` answers with the new list length before ``send()`` returns — so
-    this transport waits, at 166 to 237 microseconds across repeated runs, and reports what came
+    this transport waits, at 166 to 295 microseconds across repeated runs, and reports what came
     back.
 
     The number belongs in the documentation rather than in a footnote: it is the guarantee's
     price, not the driver's — though not only: measured over
-    six runs, ``aiokafka`` waits 354 to 492 microseconds for the same acknowledgement, so this
+    seven runs, ``aiokafka`` waits 354 to 492 microseconds for the same acknowledgement, so this
     driver is the faster one as well.
     """
 
     def __init__(self, topic: str, reason: str) -> None:
-        """Name the topic and what librdkafka said, since neither is in the traceback."""
+        """Name the topic and what librdkafka said, since neither is in the traceback.
+
+        Both kept as attributes as well as formatted into the message: a caller that wants to
+        tell a missing topic from a broker that would not acknowledge should not have to parse
+        English to do it.
+        """
         self.topic = topic
+        self.reason = reason
         super().__init__(
             f'Kafka would not accept a message for topic {topic!r}: {reason}. The topic may not '
             f'exist and automatic creation may be off, or the required acknowledgements may be '

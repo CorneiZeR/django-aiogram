@@ -124,8 +124,8 @@ class KafkaBroker(Broker):
 
         ``produce`` answers locally — measured at 0.2 microseconds, because librdkafka's own
         thread does the I/O — and returning there would be a weaker promise than the rest of
-        this package makes. So the delivery callbacks are waited for, at 166 to 237 microseconds
-        for one message across six runs. Where that sits among the four is a question about
+        this package makes. So the delivery callbacks are waited for, at 166 to 295 microseconds
+        for one message across seven runs. Where that sits among the four is a question about
         all four measured on one footing, which `scripts/measurements` answers and this does not.
 
         Waited for by counting *this call's* callbacks rather than by flushing. The producer is
@@ -173,8 +173,8 @@ class KafkaBroker(Broker):
 
         The driver is synchronous, and the hand-off costs about 100 microseconds — which is
         most of what an awaited publish adds here, because the broker's acknowledgement costs
-        roughly twice that. Measured across six runs, awaiting `aiokafka` natively is 354 to
-        492 microseconds against 166 to 237 for this.
+        roughly twice that. Measured across seven runs, awaiting `aiokafka` natively is 354 to
+        492 microseconds against 166 to 295 for this.
         """
         if not payloads:
             return

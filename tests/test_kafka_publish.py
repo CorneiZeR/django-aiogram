@@ -108,6 +108,10 @@ def test_a_record_that_never_fits_is_reported_with_what_did(broker, monkeypatch)
 
     assert 'never reached the local queue' in str(refusal.value), str(refusal.value)
     assert '2 message(s)' in str(refusal.value), str(refusal.value)
+    # and inspectable without reading English: a caller deciding whether to retry should not
+    # have to match on a sentence
+    assert refusal.value.topic == 'publish-double', refusal.value.topic
+    assert 'never reached the local queue' in refusal.value.reason, refusal.value.reason
 
 
 def test_the_accepted_prefix_is_counted_in_the_refusal(broker, monkeypatch):

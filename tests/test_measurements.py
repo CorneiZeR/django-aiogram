@@ -45,11 +45,32 @@ def producer_config(call):
     }
 
 
+def keyword_args(call):
+    """The call's keywords as ``{name: source}``, for a client configured by keyword."""
+    return {keyword.arg: ast.unparse(keyword.value) for keyword in call.keywords}
+
+
+def test_both_drivers_are_measured_at_the_same_batching_setting():
+    """Holding the guarantee constant includes holding the batching constant.
+
+    The script's whole claim is that one driver waits less than the other for the same
+    acknowledgement. `confluent-kafka` is configured through a dict and `aiokafka` through
+    keywords, so it is easy to set one and forget the other — and a run with 0 on one side and
+    the driver's default on the other would report a difference that is mostly `linger`.
+    """
+    tree = parsed('scripts/measurements/kafka_driver_choice.py')
+    confluent = producer_config(calls_to(tree, 'Producer')[0])
+    aiokafka = keyword_args(calls_to(tree, 'AIOKafkaProducer')[0])
+
+    assert confluent.get('linger.ms') == '0', f'confluent-kafka is not measured at 0: {confluent}'
+    assert aiokafka.get('linger_ms') == '0', f'aiokafka is not measured at 0: {aiokafka}'
+
+
 def test_the_kafka_measurement_lingers_as_little_as_the_transport():
     """One send is a batch of one on both sides, or the script reports a latency nobody gets.
 
     This is the defect that was found by asking the question: the transport took librdkafka's
-    default of 5 milliseconds while the script set 0, so the measured 166-237 microseconds was
+    default of 5 milliseconds while the script set 0, so the measured 166-295 microseconds was
     a number no `bot.send()` could reach — the real cost was 6.4 milliseconds.
     """
     script = producer_config(calls_to(parsed('scripts/measurements/kafka_driver_choice.py'), 'Producer')[0])

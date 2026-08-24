@@ -178,11 +178,11 @@ settled out of order until the gap below it closes. Nothing is lost, and a burst
 delays the commit rather than skipping it.
 
 The same shape has a sharper edge on `release`. There is no per-message nack in Kafka, so
-giving a message up means rewinding to its offset — and everything after it is delivered again
-too. **Build idempotency on your own business key**, which the delivery page recommends
+giving a message up means rewinding to its offset — and that record, together with every later
+one in its partition, is delivered again. **Build idempotency on your own business key**, which the delivery page recommends
 generally and which matters most here.
 
-**A publish waits for the broker** — 166 to 237µs for one message, across six runs. `produce()`
+**A publish waits for the broker** — 166 to 295µs for one message, across seven runs. `produce()`
 itself answers in 0.2µs because librdkafka's own thread does the I/O, and returning there would
 be a weaker promise than `RPUSH` already makes. Automatic topic creation is the broker's setting, not this
 package's: with it off, a missing topic is a refusal at publish time.

@@ -5,12 +5,15 @@ order. The consumer here is a thread, and a synchronous driver belongs in one: `
 need an event loop inside it, which is the machinery that lost `aio-pika` the RabbitMQ decision.
 
 And it is faster on the face that matters. Held to the same guarantee — both waiting for the
-broker — six runs put ``confluent-kafka`` at 166 to 237 microseconds against ``aiokafka``'s
-354 to 492, so 1.6 to 2.2 times. Both spreads are about 40 per cent of their own floor, which
-is what a laptop's broker does to a half-millisecond round trip -- the gap between the drivers
-is what survives it. An earlier single run showed 479 against 502 and the parity was
-written down as the finding; it was a cold broker, and the number that survived repetition is
-this one. Re-take them with ``scripts/measurements`` rather than trusting either.
+broker — seven runs put ``confluent-kafka`` at 166 to 295 microseconds against ``aiokafka``'s
+354 to 492, so 1.4 to 2.2 times. Read the ratio rather than either span: both are wide — 78 per
+cent of their own floor for this driver — because a containerised broker on one laptop is what is
+being timed as much as the driver is. The ratio is taken run by run, so it survives a machine that
+was busier on one of them; the spans do not, and every re-run so far has widened them.
+
+An earlier single run showed 479 against 502 and that parity was written down as the finding. It
+was a cold broker, and the reading that survived repetition is this one. Re-take them with
+``scripts/measurements`` rather than trusting either.
 
 The other argument in the plan turned out to be false and is recorded so it is not reopened:
 `aiokafka` is **not** pure Python. It ships no ``py3-none-any`` wheel, so both drivers are
