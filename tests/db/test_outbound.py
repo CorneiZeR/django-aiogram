@@ -193,7 +193,7 @@ def test_the_pacing_figure_measures_the_attempt_that_sent_it():
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': 'redis://localhost:6379/0'})
 def test_queueing_records_the_id_the_caller_was_given(redis_server):
     instance = TelegramBot()
-    identifier = instance.send_redis(chat_id=7, text='hi')
+    identifier = instance.enqueue(chat_id=7, text='hi')
     recorder.flush(timeout=5)
 
     row = TelegramEvent.objects.get(kind=EventKind.OUTBOUND_QUEUED.value)
@@ -209,7 +209,7 @@ def test_the_consumer_records_what_it_took_off_the_queue(redis_server):
     """The row that makes queue latency measurable, and the one that ties the
     two processes together."""
     instance = TelegramBot()
-    identifier = instance.send_redis(chat_id=7, text='hi')
+    identifier = instance.enqueue(chat_id=7, text='hi')
 
     handled = []
     BlpopDelivery(handler=lambda **kwargs: handled.append(kwargs)).consume_pending()
@@ -364,7 +364,7 @@ def test_a_queue_that_refuses_the_message_records_the_drop_and_raises(redis_serv
     instance = TelegramBot()
 
     with pytest.raises(ConnectionError):
-        instance.send_redis(chat_id=7, text='hi')
+        instance.enqueue(chat_id=7, text='hi')
     recorder.flush(timeout=5)
 
     assert not TelegramEvent.objects.filter(kind=EventKind.OUTBOUND_QUEUED.value).exists()

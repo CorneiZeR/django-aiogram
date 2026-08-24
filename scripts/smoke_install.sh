@@ -235,7 +235,8 @@ from typing_extensions import assert_type
 
 from redis import Redis
 
-from django_aiogram import bot, redis_conn
+from django_aiogram import bot
+from django_aiogram.redis import redis_conn
 
 def notify(chat_id: int) -> None:
     bot.send(chat_id=chat_id, text='hi')
@@ -249,9 +250,12 @@ async def notify_from_async(chat_id: int) -> None:
     assert_type(await bot.aqueue_depth(), int)
     bot.close(drain_timeout=0.5)
 
-# redis_conn forwards through __getattr__, so it resolved to Any while
-# get_redis() did not. Nothing is called here: this is the installed package's
-# typing, checked without a server
+# redis_conn forwards through __getattr__, so it resolved to Any while get_redis() did not.
+# Nothing is called here: this is the installed package's typing, checked without a server.
+#
+# Imported from `django_aiogram.redis` since 4.0 rather than from the package: the shortcut was
+# removed, and this line is also the check that the move kept the annotation — a re-export is
+# the easiest place to lose one
 assert_type(redis_conn, Redis)
 PY
 "$work/venv/bin/mypy" --strict uses_it.py 2>&1 | sed 's/^/    /'

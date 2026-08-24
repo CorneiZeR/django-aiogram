@@ -157,7 +157,7 @@ def test_a_receiver_gets_events_with_the_log_off(redis_server, collected):
     records nothing and the receiver is never called. This is the base case the
     other tests specialise.
     """
-    TelegramBot().send_redis(chat_id=7, text='hi')
+    TelegramBot().enqueue(chat_id=7, text='hi')
     recorder.flush(timeout=5)
 
     assert not recorder.enabled, 'this test is meaningless with the log on'
@@ -176,7 +176,7 @@ def test_the_payload_is_not_summarized_for_a_receiver(redis_server, collected, m
     called = []
     monkeypatch.setattr('django_aiogram.producer.client.describe', lambda kwargs: called.append(kwargs) or {})
 
-    TelegramBot().send_redis(chat_id=7, text='hi')
+    TelegramBot().enqueue(chat_id=7, text='hi')
     recorder.flush(timeout=5)
 
     assert called == [], 'the payload was summarized for a receiver that cannot use it'
@@ -283,7 +283,7 @@ def test_nothing_is_recorded_and_no_thread_runs_when_nobody_reads(redis_server):
     the writer thread is the observable difference.
     """
     before = {thread.name for thread in threading.enumerate()}
-    TelegramBot().send_redis(chat_id=7, text='hi')
+    TelegramBot().enqueue(chat_id=7, text='hi')
     recorder.record(Event(kind='outbound.queued', correlation_id=uuid.uuid4()))
 
     assert not recorder.active
@@ -304,7 +304,7 @@ def test_event_log_kinds_filters_receivers_too(redis_server, collected):
     setting doing its job. The pass condition is that one arrived and the other did
     not.
     """
-    TelegramBot().send_redis(chat_id=7, text='hi')  # outbound.queued, excluded
+    TelegramBot().enqueue(chat_id=7, text='hi')  # outbound.queued, excluded
     recorder.record(Event(kind='outbound.sent'))  # admitted
     recorder.flush(timeout=5)
 
@@ -328,7 +328,7 @@ def test_one_broken_receiver_does_not_cost_the_others_their_batch(redis_server, 
     events_recorded.connect(broken, weak=False, dispatch_uid='tests.metrics.broken')
     try:
         with caplog.at_level('ERROR', logger='django_aiogram'):
-            TelegramBot().send_redis(chat_id=7, text='hi')
+            TelegramBot().enqueue(chat_id=7, text='hi')
             recorder.flush(timeout=5)
     finally:
         events_recorded.disconnect(dispatch_uid='tests.metrics.broken')
@@ -379,7 +379,7 @@ def test_a_metrics_only_writer_does_not_close_a_connection_it_never_opened(redis
     closed = []
     monkeypatch.setattr(recorder, '_close_connections', lambda: closed.append(True))
 
-    TelegramBot().send_redis(chat_id=7, text='hi')
+    TelegramBot().enqueue(chat_id=7, text='hi')
     recorder.flush(timeout=5)
     recorder.stop(timeout=5)
 
@@ -399,7 +399,7 @@ def test_a_writer_that_wrote_still_closes_its_connection(redis_server, collected
     monkeypatch.setattr(recorder, '_close_connections', lambda: closed.append(True))
     monkeypatch.setattr(recorder, '_write', lambda batch: None)
 
-    TelegramBot().send_redis(chat_id=7, text='hi')
+    TelegramBot().enqueue(chat_id=7, text='hi')
     recorder.flush(timeout=5)
     recorder.stop(timeout=5)
 
@@ -432,7 +432,7 @@ def test_a_receiver_cannot_change_what_was_written(redis_server, collected, monk
 
     events_recorded.connect(vandal, weak=False, dispatch_uid='tests.metrics.vandal')
     try:
-        TelegramBot().send_redis(chat_id=7, text='hi')
+        TelegramBot().enqueue(chat_id=7, text='hi')
         recorder.flush(timeout=5)
     finally:
         events_recorded.disconnect(dispatch_uid='tests.metrics.vandal')
@@ -459,7 +459,7 @@ def test_a_receiver_cannot_take_the_batch_from_the_next_one(redis_server, collec
 
     events_recorded.connect(inspect, weak=False, dispatch_uid='tests.metrics.inspect')
     try:
-        TelegramBot().send_redis(chat_id=7, text='hi')
+        TelegramBot().enqueue(chat_id=7, text='hi')
         recorder.flush(timeout=5)
     finally:
         events_recorded.disconnect(dispatch_uid='tests.metrics.inspect')
@@ -502,7 +502,7 @@ def test_a_receiver_still_gets_the_detail_a_seam_measured_itself(redis_server, c
     monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', refuse)
 
     with pytest.raises(ConnectionError):
-        TelegramBot().send_redis(chat_id=7, text='hi')
+        TelegramBot().enqueue(chat_id=7, text='hi')
     recorder.flush(timeout=5)
 
     assert kinds(collected) == ['outbound.dropped'], f'the receiver saw {kinds(collected)}'
@@ -528,7 +528,7 @@ def test_a_failed_write_still_reaches_a_receiver(redis_server, collected, monkey
     monkeypatch.setattr(recorder, '_write', refuse)
 
     with caplog.at_level('ERROR', logger='django_aiogram'):
-        TelegramBot().send_redis(chat_id=7, text='hi')
+        TelegramBot().enqueue(chat_id=7, text='hi')
         recorder.flush(timeout=5)
 
     assert kinds(collected) == ['outbound.queued'], f'a failed write cost the receiver its batch: {kinds(collected)}'
@@ -635,7 +635,7 @@ def test_the_synchronous_flag_does_nothing_for_a_receiver_only_process(redis_ser
         dispatch_uid='tests.metrics.syncthread',
     )
     try:
-        TelegramBot().send_redis(chat_id=7, text='hi')
+        TelegramBot().enqueue(chat_id=7, text='hi')
         recorder.flush(timeout=5)
     finally:
         events_recorded.disconnect(dispatch_uid='tests.metrics.syncthread')
@@ -692,7 +692,7 @@ def test_a_receiver_that_cannot_even_be_named_costs_nobody_their_batch(redis_ser
     events_recorded.connect(receiver, weak=False, dispatch_uid='tests.metrics.hostile')
     try:
         with caplog.at_level('ERROR', logger='django_aiogram'):
-            TelegramBot().send_redis(chat_id=7, text='hi')
+            TelegramBot().enqueue(chat_id=7, text='hi')
             recorder.flush(timeout=5)
     finally:
         events_recorded.disconnect(dispatch_uid='tests.metrics.hostile')
@@ -737,7 +737,7 @@ def test_a_failure_while_reporting_a_receiver_costs_nobody_their_batch(redis_ser
     events_recorded.connect(broken_receiver, weak=False, dispatch_uid='tests.metrics.broken')
     monkeypatch.setattr(recorder_module.logger, 'error', hostile)
     try:
-        TelegramBot().send_redis(chat_id=7, text='hi')
+        TelegramBot().enqueue(chat_id=7, text='hi')
         recorder.flush(timeout=5)
     finally:
         events_recorded.disconnect(dispatch_uid='tests.metrics.broken')

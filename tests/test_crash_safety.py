@@ -210,9 +210,9 @@ def test_send_raw_refuses_a_non_api_method():
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x'})
-def test_send_redis_refuses_a_non_api_method(redis_server):
+def test_enqueue_refuses_a_non_api_method(redis_server):
     with pytest.raises(ValueError, match='not a Telegram API method'):
-        TelegramBot().send_redis('download_file', file_path='x')
+        TelegramBot().enqueue('download_file', file_path='x')
     assert redis_server.llen('TELEGRAM_BOT_MESSAGE') == 0
 
 

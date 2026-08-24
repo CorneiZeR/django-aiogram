@@ -32,18 +32,20 @@ its exception messages, and those messages are what an `error` column holds.
 The table grows without bound until `manage.py tgbot_prune_events` runs. Set
 `EVENT_LOG_RETENTION_DAYS` and schedule it; `W006` warns while it is unset.
 
-## The Redis queue is a trust boundary
+## The queue is a trust boundary
 
-`send_redis` puts a serialized aiogram call into a Redis list, and the bot
-worker executes whatever it finds there. Anything able to write to that list
-can therefore choose which Telegram API call the bot makes, with which
-arguments.
+`enqueue` puts a serialized aiogram call on the queue and the bot worker executes whatever it
+finds there. Anything able to write to that queue can therefore choose which Telegram API call
+the bot makes, with which arguments.
 
-Keep Redis reachable only from your own services, and require authentication.
+Which queue depends on `BROKER` — a Redis list or stream, an AMQP queue, a Kafka topic — and the
+boundary is the same in every case. Keep the broker reachable only from your own services, and
+require authentication: Redis with `requirepass` or a password in `REDIS_URL`, RabbitMQ with a
+user that is not `guest`, Kafka with SASL.
 
 ### Pickle
 
-Unpickling queue data turns "can write to the list" into "can execute code in
+Unpickling queue data turns "can write to the queue" into "can execute code in
 the bot container". Payloads are JSON, and pickled ones are **refused by
 default**.
 

@@ -305,7 +305,7 @@ def test_an_idle_consumer_survives_more_rounds_than_the_deadline(server, redis_u
         thread = delivery.start_thread()
         try:
             time.sleep(4.5)  # at least four empty rounds at the capped timeout
-            TelegramBot().send_redis(chat_id=99, text='still alive')
+            TelegramBot().enqueue(chat_id=99, text='still alive')
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline and not handled:
                 time.sleep(0.05)

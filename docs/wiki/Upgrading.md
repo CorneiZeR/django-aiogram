@@ -55,6 +55,27 @@ django_redis_aiogram_event` is yours to run, and this package will never run it 
 Nothing is detected from what happens to be installed. Name the broker you want, and the
 absence of its driver is a startup complaint rather than a runtime surprise.
 
+## Rename what used to say Redis
+
+Four public names said where a message went. Where it goes is a setting now, so they are gone —
+removed rather than aliased, because an alias that outlives the release it was written for is a
+second name for the same thing for ever.
+
+| 3.x | 4.0 | why |
+| --- | --- | --- |
+| `bot.send_redis(...)` | `bot.enqueue(...)` | the queue is a list, a stream, an AMQP queue or a Kafka topic, depending on `BROKER` |
+| `await bot.asend_redis(...)` | `await bot.aenqueue(...)` | the same, on the awaiting half |
+| `bot.redis_conn` | `from django_aiogram.redis import redis_conn` | a client that can carry any of four transports should not answer for one |
+| `from django_aiogram import get_redis, redis_conn` | `from django_aiogram.redis import get_redis, redis_conn` | the package stopped exporting one transport's client from its front door |
+
+The last two are moves rather than removals: the objects are the same, they are as lazy as they
+were, and there is still one connection behind them. Only the shortcut through the package is
+gone. `bot.send()` is untouched — it still delivers directly inside the worker and queues
+everywhere else, and `enqueue` is what it calls when it queues.
+
+Nothing is renamed in the settings: `REDIS_URL` and the rest still say Redis because they *are*
+Redis's, and a project that runs the list transport writes exactly what it wrote before.
+
 # From 3.0 to 3.1
 
 ## Make your handlers idempotent, on your own key
@@ -279,7 +300,7 @@ bot.send(chat_id=chat_id, text=text)
 ```
 
 It queues from your app and calls Telegram directly inside the bot container.
-`send_redis` and `send_raw` still work.
+`enqueue` and `send_raw` still work.
 
 ## 6. Drain the 1.x queue, then drop the flag
 
@@ -287,7 +308,7 @@ If you needed `'ALLOW_PICKLE': True` for the upgrade window, the order in which
 you close it again matters — a 1.x producer keeps writing pickled payloads:
 
 1. upgrade or stop **every** producer: web, celery, anything calling
-   `send_redis`
+   `enqueue`
 2. wait for the queue **and** every in-flight list to reach zero:
    `LLEN <REDIS_MESSAGES_KEY>` and `LLEN` on each
    `<REDIS_MESSAGES_KEY>:processing*` key — on Redis 6.2+ a message being sent

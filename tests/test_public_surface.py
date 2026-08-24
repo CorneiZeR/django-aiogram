@@ -18,21 +18,27 @@ import pytest
 from django.test import override_settings
 
 import django_aiogram
-from django_aiogram import TelegramBot, bot
+from django_aiogram import TelegramBot
+from django_aiogram import redis as redis_module
 from django_aiogram.config.checks import check_settings
 from django_aiogram.config.enums import DeliveryKind, SerializerKind, StorageKind, UpdateMode
 
-#: attributes that predate 2.0 and are reached for directly
+#: attributes that predate 2.0 and are reached for directly. `redis_conn` was one of them and
+#: is not any more: 4.0 removed the client's Redis-named property, because a client that can
+#: carry four transports should not answer for one of them. `django_aiogram.redis.redis_conn`
+#: is the same object in the module that owns it
 INHERITED_ATTRIBUTES = (
     'bot',  # the aiogram Bot
     'dispatcher',
     'loop',
     'max_retries',
-    'redis_conn',
 )
 
-#: methods that predate 2.0
-INHERITED_METHODS = ('start_polling', 'send_raw', 'send_redis')
+#: methods that predate 2.0. `send_redis` is `enqueue` in 4.0, for the reason the removed
+#: attribute above gives -- the name said where the message went, and where it goes is now a
+#: setting. Pinned here rather than among 4.0's additions because the *method* is the 2.x
+#: contract under a new name, and losing it would be a break rather than a rename
+INHERITED_METHODS = ('start_polling', 'send_raw', 'enqueue')
 
 #: every observer aiogram has a decorator for
 OBSERVER_DECORATORS = (
@@ -58,11 +64,14 @@ TWO_X_ADDITIONS = ('send', 'router', 'enabled', 'is_worker', 'rate_limiter', 'cl
 
 #: 3.1.0's additions. Kept apart from the tuple above because that one is the 2.x
 #: contract and must not be edited to make a later change pass
-THREE_ONE_ADDITIONS = ('asend', 'asend_redis', 'send_many', 'asend_many')
-THREE_ONE_COROUTINES = ('asend', 'asend_redis', 'asend_many', 'aqueue_depth', 'ainflight_depth', 'aclose')
+THREE_ONE_ADDITIONS = ('asend', 'aenqueue', 'send_many', 'asend_many')
+THREE_ONE_COROUTINES = ('asend', 'aenqueue', 'asend_many', 'aqueue_depth', 'ainflight_depth', 'aclose')
 THREE_ONE_INTROSPECTION = ('queue_depth', 'inflight_depth')
 
-MODULE_EXPORTS = ('TelegramBot', 'bot', 'conf', 'redis_conn', 'get_redis', '__version__')
+#: what `import django_aiogram` gives you. `redis_conn` and `get_redis` left in 4.0: one
+#: transport's client is not the package's business to export, and both are still importable
+#: from `django_aiogram.redis`, which the case below pins
+MODULE_EXPORTS = ('TelegramBot', 'bot', 'conf', '__version__')
 
 #: 3.1.0 makes the metrics seam public, and with it the shape of what receivers get.
 #: Written out rather than read off the dataclass, which is the point: a field
@@ -102,6 +111,19 @@ def test_the_method_is_still_callable(name):
 def test_the_package_still_exports_it(name):
     assert name in django_aiogram.__all__, f'{name} left __all__'
     assert getattr(django_aiogram, name, None) is not None
+
+
+def test_the_package_exports_nothing_else():
+    """Equality, not membership: a name *arriving* is as much a decision as one leaving.
+
+    The parametrised case above asks whether each expected name is still there, which says
+    nothing about a fifth appearing. 4.0 removed two — `get_redis` and `redis_conn`, a
+    transport's client exported from a package that carries four — and with membership alone
+    they could be put back and no case would notice.
+    """
+    assert set(django_aiogram.__all__) == set(MODULE_EXPORTS), (
+        f'the package exports {sorted(django_aiogram.__all__)}, pinned as {sorted(MODULE_EXPORTS)}'
+    )
 
 
 @pytest.mark.parametrize('name', OBSERVER_DECORATORS)
@@ -155,15 +177,22 @@ def test_the_construction_arguments_1_x_accepted():
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
-def test_redis_conn_is_the_shared_connection(redis_server):
-    """1.x reached through the bot for the connection; it must still be one."""
-    assert bot.redis_conn is redis_server
+def test_the_redis_client_is_shared_and_lives_in_its_own_module(redis_server):
+    """Still one connection, and still reachable — through the module rather than the package.
 
-    another = TelegramBot()
-    try:
-        assert another.redis_conn is bot.redis_conn, 'a second instance opened its own'
-    finally:
-        another.close()
+    1.x reached for it through the bot and 2.x through `django_aiogram.redis_conn`. Both are
+    gone in 4.0: a package with four transports should not export a name for one of them, and a
+    client that can carry any of them should not have a property answering for Redis. What is
+    pinned here is that the object did not move house and is still shared.
+    """
+    # through the module rather than a name bound at import: the suite patches
+    # `django_aiogram.redis.get_redis`, and a reference taken here would keep pointing at the
+    # real one -- the same trap `tests/conftest.py` names for lazily imported transports
+    assert redis_module.get_redis() is redis_server
+    assert redis_module.redis_conn.ping() == redis_server.ping()
+
+    assert not hasattr(TelegramBot(), 'redis_conn'), 'the client kept a transport-named property'
+    assert not hasattr(django_aiogram, 'redis_conn'), 'the package still exports it'
 
 
 ENUM_CLASSES = ('DeliveryKind', 'SerializerKind', 'StorageKind', 'UpdateMode', 'RateLimitKey', 'SerializationTag')
