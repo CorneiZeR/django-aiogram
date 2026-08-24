@@ -111,6 +111,12 @@ def test_every_amqp_publish_is_mandatory_and_persistent(source):
         )
 
 
+#: what each baseline row must hand its command, spelled as the script spells it: one key and one
+#: payload for the list, one key and the single-field mapping for the stream. The payload matters
+#: as much as the count -- an empty body is a different measurement
+EXPECTED = {'rpush': ['KEY', 'BODY'], 'xadd': ['KEY', "{b'p': BODY}"]}
+
+
 @pytest.mark.parametrize(
     ('command', 'transport'),
     [
@@ -137,11 +143,12 @@ def test_the_baseline_times_the_command_its_transport_publishes_with(command, tr
     assert timed, f'nothing handed to measure() calls {command}, which one of its own rows names'
     assert len(timed) == 1, f'{len(timed)} timed {command} calls: a row times one publish or it is not that row'
 
-    # exactly two arguments, the key and one payload: `rpush(KEY, BODY, BODY)` would still be an
-    # `rpush` handed to `measure`, and it would publish two messages per sample -- halving the
-    # divisor that five ratios are quoted against, with nothing here noticing
+    # the arguments themselves, not their number: `rpush(KEY, BODY, BODY)` publishes two messages
+    # per sample and would halve the divisor five ratios are quoted against, while
+    # `rpush(OTHER_KEY, b'')` would time an empty payload into a key nothing else touches. Both
+    # are still an `rpush` handed to `measure`, and both would pass a count
     passed = [ast.unparse(argument) for argument in timed[0].args]
-    assert len(passed) == 2, f'{command} was timed with {passed}, which is not one key and one payload'
+    assert passed == EXPECTED[command], f'{command} was timed with {passed}, not {EXPECTED[command]}'
 
     published = calls_to(parsed(transport), command)
     assert published, f'{transport} no longer publishes with {command}, so the baseline is measuring the wrong call'

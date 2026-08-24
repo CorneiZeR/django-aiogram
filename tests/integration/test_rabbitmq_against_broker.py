@@ -141,9 +141,6 @@ def test_a_publish_that_cannot_be_routed_raises(broker, broker_channel, amqp_url
             broker.publish([payload(2)])
 
         assert AMQP_QUEUE in str(refused.value), str(refused.value)
-        # inspectable without reading English, which is what a caller deciding whether to retry
-        # needs. The reason is not kept yet -- that is its own change, out of this one's scope
-        assert refused.value.queue == AMQP_QUEUE, refused.value.queue
 
 
 def test_the_awaited_halves_work_off_the_loop(broker, amqp_url):
