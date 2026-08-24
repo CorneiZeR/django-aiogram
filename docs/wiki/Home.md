@@ -25,7 +25,8 @@ bot.send(chat_id=CHAT_ID, text='hello')
 
 ## Going further
 
-* **[[Delivery]]** — how messages get from Redis to Telegram, and which mode to pick
+* **[[Delivery]]** — how a message gets from the queue to Telegram, what each transport
+  guarantees, and which mode to pick
 * **[[Webhook]]** — receiving updates over HTTP instead of polling for them
 * **[[Rate-limits|Rate limits]]** — staying inside Telegram's published limits
 * **[[Deployment]]** — docker-compose recipes, disabling the bot per process
