@@ -1,0 +1,12 @@
+# The driver versions the recorded numbers were taken on, so the recipe in README.md can
+# reproduce the table rather than whatever pip resolves today. The package's own lower bounds
+# stay in `pyproject.toml`: they say what the transports work with, which is a different
+# question from what these measurements ran against.
+#
+# Re-take the numbers rather than trust them, and if you re-take them on other versions, say
+# so beside the new figures — a driver release is exactly the sort of thing that moves these.
+pika==1.4.4
+aio-pika==10.0.1
+confluent-kafka==2.15.0
+aiokafka==0.14.0
+redis==8.1.0

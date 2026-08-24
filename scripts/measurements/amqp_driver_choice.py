@@ -207,12 +207,23 @@ def _aio_pika_channels() -> tuple[
 
     async def open_them() -> tuple[aio_pika.abc.AbstractRobustConnection, AbstractChannel, AbstractChannel]:
         connection = await aio_pika.connect_robust(URL)
+        declaring: AbstractChannel | None = None
         try:
             confirmed = await connection.channel(publisher_confirms=True)
+            declaring = confirmed
             unconfirmed = await connection.channel(publisher_confirms=False)
             await confirmed.declare_queue(QUEUE, durable=True)
         except BaseException:
-            await connection.close()
+            # the queue first, on the channel that would have declared it: `declare_queue` can
+            # raise after the broker has already made it -- a timeout waiting for the reply is
+            # enough -- and a durable queue nobody deletes is exactly what this run must not
+            # leave behind. Then the connection, whether that worked or not
+            try:
+                if declaring is not None:
+                    with suppress(BaseException):
+                        await declaring.queue_delete(QUEUE)
+            finally:
+                await connection.close()
             raise
         return connection, unconfirmed, confirmed
 

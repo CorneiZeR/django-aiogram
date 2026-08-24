@@ -71,11 +71,17 @@ for all three scripts, so that "same way" includes the interpreter:
 
 ```shell
 python -m venv .measure
-.measure/bin/pip install -e '.[redis,rabbitmq,kafka]' --group measure
+.measure/bin/pip install -e '.[redis,rabbitmq,kafka]' --group measure \
+  -c scripts/measurements/constraints.txt
 ```
 
 `--group measure` needs pip 25.1+ or uv, the same floor `--group dev` has. `redis` is in there
 for the baseline, which needs no group of its own.
+
+The constraints file pins the five drivers to the versions the table below was taken on. Without
+it the recipe resolves whatever is newest against the package's lower bounds, which is the right
+answer for installing the package and the wrong one for reproducing a measurement. Re-take the
+numbers on other versions by all means — and then say beside them which versions those were.
 
 ```shell
 # pinned, like the Kafka image below: `rabbitmq:4` and `redis:8` move, and a run that follows
