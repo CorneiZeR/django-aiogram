@@ -15,6 +15,7 @@ host retries into a refusal loop rather than failing. `README.md` has the full c
 """
 
 import asyncio
+import contextlib
 import os
 import threading
 import time
@@ -200,16 +201,15 @@ def _aiokafka_producer() -> tuple[asyncio.AbstractEventLoop, AIOKafkaProducer]:
     runner = threading.Thread(target=loop.run_forever, daemon=True)
     runner.start()
 
+    #: the producer as soon as it exists, so the failure path can close it without depending on
+    #: cancellation being processed first: `Future.cancel` asks, and `loop.stop` can win the race
+    #: -- which would leave aiokafka's own 'Unclosed AIOKafkaProducer' behind, measured
+    made: list[AIOKafkaProducer] = []
+
     async def start() -> AIOKafkaProducer:
         producer = AIOKafkaProducer(bootstrap_servers=BOOTSTRAP, linger_ms=0)
-        try:
-            await producer.start()
-        except BaseException:
-            # closed on the loop that made it, while that loop is still running: a producer
-            # whose `start` failed still holds what it opened on the way, and aiokafka says so
-            # -- 'Unclosed AIOKafkaProducer', measured
-            await producer.stop()
-            raise
+        made.append(producer)
+        await producer.start()
         return producer
 
     starting = asyncio.run_coroutine_threadsafe(start(), loop)
@@ -220,6 +220,11 @@ def _aiokafka_producer() -> tuple[asyncio.AbstractEventLoop, AIOKafkaProducer]:
         # times out would otherwise leave this thread turning for the life of the process --
         # the caller's cleanup only begins once this has returned something to clean up
         starting.cancel()
+        if made:
+            # closed on the loop that made it and *waited for*, before that loop is stopped:
+            # scheduling the stop and moving on leaves the same open socket as not scheduling it
+            with contextlib.suppress(BaseException):
+                asyncio.run_coroutine_threadsafe(made[0].stop(), loop).result(10)
         loop.call_soon_threadsafe(loop.stop)
         runner.join(timeout=10)
         raise

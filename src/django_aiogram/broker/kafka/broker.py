@@ -125,7 +125,10 @@ class KafkaBroker(Broker):
         driver's own complaint about a key the reader never wrote. Said here instead, naming the
         setting and the bound.
         """
-        timeout = float(str(self.option('KAFKA_TIMEOUT') or 10))
+        # no `or 10` here: the default is declared in `OPTIONS`, so `option` already answers
+        # with it — and `or` would read a configured 0 as unset and hand back 10, which is the
+        # one value that most needs to reach the bound below
+        timeout = float(str(self.option('KAFKA_TIMEOUT')))
         if not _SOCKET_FLOOR <= timeout <= _SOCKET_CEILING:
             msg = (
                 f"{SETTINGS_NAME}['KAFKA_TIMEOUT'] is {timeout}, which librdkafka will not "
