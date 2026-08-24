@@ -12,6 +12,7 @@ means a hundred thousand records and a broker that has actually gone away.
 import time
 
 import pytest
+from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 
 from django_aiogram.broker.kafka import KafkaBroker
@@ -35,6 +36,34 @@ SETTINGS = {
 
 def payload(chat_id):
     return JsonSerializer().dumps({'function': 'send_message', 'chat_id': chat_id})
+
+
+@pytest.mark.parametrize('timeout', [0.005, 301, 600])
+def test_a_timeout_the_driver_would_refuse_is_refused_here_by_name(broker, timeout):
+    """A setting librdkafka will not take has to fail with the setting's name, not the driver's.
+
+    `KAFKA_TIMEOUT` becomes `socket.timeout.ms`, which accepts 10ms to 300s. Outside that range
+    building a client fails with librdkafka complaining about a key nobody wrote — so the
+    complaint is made here instead, where it can say which setting and what the bound is.
+    """
+    # `_timeout()` rather than a method that uses it: everything else here would reach the
+    # driver's import first, and the unit legs do not install it
+    with (
+        override_settings(TELEGRAM_BOT=SETTINGS | {'KAFKA_TIMEOUT': timeout}),
+        pytest.raises(ImproperlyConfigured) as refusal,
+    ):
+        broker._timeout()
+
+    assert 'KAFKA_TIMEOUT' in str(refusal.value), str(refusal.value)
+    assert 'socket.timeout.ms' in str(refusal.value), str(refusal.value)
+
+
+def test_a_timeout_the_driver_accepts_is_left_alone(broker):
+    """The bound must not refuse what the driver would have taken, which is most of the range."""
+    with override_settings(TELEGRAM_BOT=SETTINGS | {'KAFKA_TIMEOUT': 300}):
+        assert broker._timeout() == 300
+    with override_settings(TELEGRAM_BOT=SETTINGS | {'KAFKA_TIMEOUT': 0.01}):
+        assert broker._timeout() == 0.01
 
 
 class FullOnce:

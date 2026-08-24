@@ -168,7 +168,7 @@ is unavailable exactly while there is a backlog, and `XSETID` restores it at onc
 | `KAFKA_BOOTSTRAP` | **required** | `host:port[,host:port…]`. No default, for the reason the AMQP URL has none |
 | `KAFKA_TOPIC` | **required** | The topic messages are produced to and consumed from |
 | `KAFKA_GROUP` | `'django-aiogram'` | The consumer group every worker joins, so they share the partitions instead of each reading all of them |
-| `KAFKA_TIMEOUT` | `10` | Seconds any single call may take — the socket timeout, and how long a publish waits for the broker's acknowledgement before it reports a refusal |
+| `KAFKA_TIMEOUT` | `10` | Seconds any single call may take — the socket timeout, and how long a publish waits for the broker's acknowledgement before it reports a refusal. Between `0.01` and `300`, which is what librdkafka accepts for the setting this becomes; outside that it is refused at startup rather than by the driver |
 
 **Kafka settles a position, not a message**, and that is the difference to understand before
 choosing it. Committing offset N says every message below N has been dealt with. So a consumer

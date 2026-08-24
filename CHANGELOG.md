@@ -86,9 +86,12 @@ Entries land here as the work does; nothing below is released.
   *and* how many were accepted before them — a batch that only partly went cannot be retried
   blindly, and Kafka has no way to un-send the half that went.
 
-  Handles from before a rewind stop being settleable: a send that finishes afterwards is
-  reported and commits nothing, because accepting it could commit past messages the rewind put
-  back.
+  A handle the rewind *reached* stops being settleable — one naming its offset or a higher one —
+  and a send that finishes afterwards is reported and commits nothing, because accepting it
+  could commit past messages the rewind put back. Handles below the rewind are untouched and
+  still this worker's to settle, which is why the broker records where each rewind went rather
+  than how many there have been: counting them refuses the lot, and the lowest of those then
+  blocks the partition's commits for ever.
 
   `KAFKA_BOOTSTRAP` and `KAFKA_TOPIC` are required. Nothing here needs `WORKER_NAME`: a
   consumer that dies stops heartbeating, the group rebalances, and its partitions go to another

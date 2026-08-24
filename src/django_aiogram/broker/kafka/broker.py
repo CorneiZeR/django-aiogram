@@ -20,6 +20,8 @@ from collections.abc import Mapping
 from collections.abc import Sequence as Seq
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
+from django.core.exceptions import ImproperlyConfigured
+
 from django_aiogram.broker.base import REQUIRED, Broker
 from django_aiogram.broker.kafka.client import (
     close_clients,
@@ -29,6 +31,7 @@ from django_aiogram.broker.kafka.client import (
 )
 from django_aiogram.broker.kafka.exceptions import ProduceRefusedError
 from django_aiogram.broker.models import Taken
+from django_aiogram.config.settings import SETTINGS_NAME
 
 if TYPE_CHECKING:
     from confluent_kafka import Consumer, Producer
@@ -53,6 +56,11 @@ _CALLBACK_SLICE = 0.05
 #: millisecond answers "nothing" about a topic that has something in it. `take_nowait` is
 #: therefore bounded rather than instant, and this is the bound
 _FETCH_BUDGET = 1.5
+
+#: what librdkafka accepts for ``socket.timeout.ms``, in seconds — 10 milliseconds to 300 —
+#: because `KAFKA_TIMEOUT` becomes that setting, and a value outside this range makes building
+#: the client fail with the driver's complaint about a key the reader never wrote
+_SOCKET_FLOOR, _SOCKET_CEILING = 0.01, 300.0
 
 
 class KafkaBroker(Broker):
@@ -110,8 +118,22 @@ class KafkaBroker(Broker):
         return str(self.option('KAFKA_BOOTSTRAP'))
 
     def _timeout(self) -> float:
-        """How long any single call may take before the broker is unreachable."""
-        return float(str(self.option('KAFKA_TIMEOUT') or 10))
+        """How long any single call may take before the broker is unreachable.
+
+        Refused outside what librdkafka accepts for ``socket.timeout.ms``: this number becomes
+        that setting, so a value outside the range makes building a client fail with the
+        driver's own complaint about a key the reader never wrote. Said here instead, naming the
+        setting and the bound.
+        """
+        timeout = float(str(self.option('KAFKA_TIMEOUT') or 10))
+        if not _SOCKET_FLOOR <= timeout <= _SOCKET_CEILING:
+            msg = (
+                f"{SETTINGS_NAME}['KAFKA_TIMEOUT'] is {timeout}, which librdkafka will not "
+                f'take: it becomes `socket.timeout.ms`, and that accepts {_SOCKET_FLOOR} to '
+                f'{_SOCKET_CEILING} seconds.'
+            )
+            raise ImproperlyConfigured(msg)
+        return timeout
 
     def _consumer(self) -> 'Consumer':
         """Reach this thread's consumer, subscribed on first use."""
