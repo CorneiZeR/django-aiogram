@@ -151,9 +151,57 @@ class NeverAssigned:
         return []
 
     def poll(self, timeout):
-        """Spend the asked-for time and answer nothing, as a poll with no data does."""
+        """Spend the asked-for time and answer nothing, as a poll with no data does.
+
+        The whole time, not a capped slice of it: a double that returns early from a long poll
+        makes 'how long did `take` spend' unmeasurable, which is the only thing these cases ask.
+        """
         self.polled.append(timeout)
-        time.sleep(min(timeout, 0.05))
+        time.sleep(timeout)
+
+
+class AssignedAfter:
+    """A consumer that joins partway through, which is the case that ends the join early.
+
+    `NeverAssigned` cannot reach the branch below it: a join that never finishes means the
+    caller's whole timeout goes on joining, and the poll that follows never runs. What breaks
+    the contract is the *other* path — the assignment lands, the join loop exits with time to
+    spare, and a poll for the full timeout then doubles the wait.
+    """
+
+    def __init__(self, after=2):
+        self.after = after
+        self.polls = []
+
+    def assignment(self):
+        """Nothing until `after` polls have gone by, then one partition."""
+        return [] if len(self.polls) < self.after else ['a partition']
+
+    def poll(self, timeout):
+        """Spend the asked-for time and answer nothing, as `NeverAssigned` does and why."""
+        self.polls.append(timeout)
+        time.sleep(timeout)
+
+
+def test_take_does_not_poll_again_for_time_it_already_spent_joining(broker, monkeypatch):
+    """A join that finishes early must leave the poll only what is left, not the whole timeout.
+
+    This is the path `NeverAssigned` cannot exercise, and it is the one that doubles the wait:
+    the join loop returns as soon as the assignment lands, and polling for the full timeout
+    after that makes `take(0.3)` come back at 0.6.
+    """
+    consumer = AssignedAfter(after=2)
+    monkeypatch.setattr(broker, '_consumer', lambda: consumer)
+
+    # one second, because the join polls in slices of `_JOIN_SLICE` and this needs the
+    # assignment to land with time to spare: two slices is 0.4s, leaving 0.6s for the poll that
+    # follows. Polling for the whole second there instead would come back at 1.4
+    started = time.monotonic()
+    assert broker.take(1.0) is None
+    spent = time.monotonic() - started
+
+    assert spent < 1.15, f'take(1.0) spent {spent:.2f}s, so the poll ignored what the join had used'
+    assert len(consumer.polls) > 2, 'the poll after the join never ran, so this proves nothing'
 
 
 def test_take_does_not_spend_longer_than_it_was_given_on_joining(broker, monkeypatch):

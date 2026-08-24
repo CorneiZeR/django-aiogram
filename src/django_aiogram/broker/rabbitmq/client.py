@@ -2,9 +2,10 @@
 
 ``pika`` was chosen by measurement rather than by which face it matched — see the changelog.
 The short version: reaching across the thread boundary costs about 100 microseconds whichever
-driver is used (measured, 119.2 for aio-pika from synchronous code and 120.1 for pika from a
-coroutine, which are the same number), so the driver that needs no crossing on the *common*
-path wins. That path is synchronous: a view, a task, a management command.
+driver is used (measured over four runs, 121 to 125 microseconds for aio-pika from synchronous
+code against 119 to 122 for pika from a coroutine -- the same number, 0.98 to 1.00 times each
+other run for run), so the driver that needs no crossing on the *common* path wins. That path
+is synchronous: a view, a task, a management command.
 
 The cost pika brings instead is this module. A ``BlockingConnection`` belongs to one thread,
 so a threaded WSGI server needs one per worker thread — the same shape as the per-loop

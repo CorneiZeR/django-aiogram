@@ -105,14 +105,21 @@ somewhere because five claims elsewhere are quoted as a multiple of them. Redis 
 disk here and neither transport waits for one, which is why they have no unconfirmed column: a
 list publish *is* the acknowledged one.
 
-**RabbitMQ: `pika`.** The two bridged rows are the same number, so crossing the thread boundary
-is the price rather than the library — about 100 µs either way, 0.98 to 1.00 times each other. That makes the question which
-face pays it, and the faces are not equal traffic: `bot.send()` is called from views, tasks and
+**RabbitMQ: `pika`.** The two bridged rows are the same number in the **unconfirmed** column —
+119–122 against 121–125 µs, 0.98 to 1.00 times each other when each run is paired with itself —
+so crossing the thread boundary is the price rather than the library, about 100 µs either way.
+(The confirmed column is not equal and is not meant to be: 412–423 against 456–495 is 0.83 to
+0.93, because that column also carries the confirm, and aio-pika waits for it on the loop.)
+
+That makes the question which face pays it, and the faces are not equal traffic: `bot.send()` is called from views, tasks and
 management commands, `asend()` is for ASGI. pika charges the rare one.
 
 **Kafka: `confluent-kafka`.** The consumer is a thread, where a synchronous driver belongs;
 `aiokafka` would need an event loop inside it. It is also 1.6 to 2.2 times faster on the
-confirmed face, which is the correction worth reading: the *first* run of that script showed 479
+confirmed face — **each run against itself**, which is the only pairing that means anything when
+a laptop's broker moves both numbers together; dividing the spans against each other instead
+would read 1.5 to 3.0 and describe a run that never happened. That ratio is also the correction
+worth reading: the *first* run of that script showed 479
 against 502 µs and "latency does not decide it" went into the changelog on the strength of it.
 Three runs on a warm broker say otherwise. **Run these three times before believing them** — the
 Kafka ranges above are why the tables here give ranges at all.

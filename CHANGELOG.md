@@ -116,7 +116,10 @@ Entries land here as the work does; nothing below is released.
   pika, awaited via asyncio.to_thread      119 - 122us   412 - 423us
   ```
 
-  The decisive part is that two of those are the same number — 0.98 to 1.00 times each other.
+  The decisive part is that two of those are the same number in the unconfirmed column, 0.98
+  to 1.00 times each other with each run paired against itself. (The confirmed column is not
+  equal and is not meant to be — 412–423 against 456–495 — because it also carries the confirm,
+  which aio-pika waits for on the loop.)
   Crossing the thread boundary costs about 100µs whichever driver is used, so the question is
   which face pays it, and the faces are not equal. `bot.send()` is called from views, tasks and
   management commands; `asend()` is for ASGI and is rarer. `pika` charges the rare one and

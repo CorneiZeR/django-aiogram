@@ -232,24 +232,28 @@ class KafkaBroker(Broker):
         method with a timeout in its signature has to honour it.
         """
         consumer = self._consumer()
+        deadline = time.monotonic() + timeout
         if not consumer.assignment():
             # in slices rather than one long poll: librdkafka makes progress inside `poll`, and
             # a slice lets this notice the assignment as soon as it lands instead of waiting
             # out a budget the join no longer needs
-            deadline = time.monotonic() + (timeout if joining is None else joining)
-            while not consumer.assignment() and time.monotonic() < deadline:
-                message = consumer.poll(min(_JOIN_SLICE, max(0.001, deadline - time.monotonic())))
+            joined_by = deadline if joining is None else time.monotonic() + joining
+            while not consumer.assignment() and time.monotonic() < joined_by:
+                message = consumer.poll(min(_JOIN_SLICE, max(0.001, joined_by - time.monotonic())))
                 if message is not None:
                     return message
             if joining is None and time.monotonic() >= deadline:
                 # the caller's whole timeout went on joining, which is what it asked to be
                 # bounded by. The join continues inside the driver, so the next call finds it
                 return None
-        # then the wait for a message, which for `take_nowait` starts *after* the join rather
-        # than being spent by it. Being assigned is not the same as having a message in hand:
-        # measured, the fetch that follows the join took another 0.5 seconds, and an earlier
-        # version of this returned "nothing" the moment the assignment landed
-        return consumer.poll(timeout)
+        # then the wait for a message. `take_nowait` gets its whole fetch budget here, because
+        # its join was extra rather than taken out of it — being assigned is not the same as
+        # having a message in hand, and the fetch that follows a join took another 0.5 seconds,
+        # measured. `take` gets only what is left of what it was given: polling for the full
+        # timeout after spending some of it on the join would return at twice the timeout,
+        # which is the contract this method's signature makes
+        remaining = timeout if joining is not None else max(0.001, deadline - time.monotonic())
+        return consumer.poll(remaining)
 
     def _wrap(self, message: object) -> Taken | None:
         """Turn a polled message into a :class:`Taken`, or ``None`` for nothing and for errors.
