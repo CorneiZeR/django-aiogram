@@ -226,19 +226,42 @@ def test_the_awaited_halves_work_off_the_loop(broker, kafka_bootstrap, kafka_top
     *is* measured here is the wait: 166 to 295 microseconds for the acknowledgement, which is
     what made the driver choice a question about the consumer rather than about latency.
     """
+    #: which thread each synchronous half actually ran on. The results alone cannot say: they
+    #: would be identical if `apublish` called `publish` inline on the loop's own thread, and
+    #: then this case would pass while the thing it is named for had gone
+    ran_on: list[int] = []
+    published, measured = KafkaBroker.publish, KafkaBroker.depth
+
+    def watched_publish(self, payloads):
+        ran_on.append(threading.get_ident())
+        return published(self, payloads)
+
+    def watched_depth(self):
+        ran_on.append(threading.get_ident())
+        return measured(self)
+
     with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
 
         async def on_a_loop():
             await broker.apublish([])
             after_nothing = await broker.adepth()
             await broker.apublish([payload(11), payload(12)])
-            return after_nothing, await broker.adepth(), await broker.ainflight_depth()
+            return threading.get_ident(), after_nothing, await broker.adepth(), await broker.ainflight_depth()
 
-        after_nothing, after_two, inflight = asyncio.run(on_a_loop())
+        KafkaBroker.publish, KafkaBroker.depth = watched_publish, watched_depth
+        try:
+            loop_thread, after_nothing, after_two, inflight = asyncio.run(on_a_loop())
+        finally:
+            KafkaBroker.publish, KafkaBroker.depth = published, measured
 
         assert after_nothing == 0, 'awaiting an empty publish queued something'
         assert after_two == 2, 'the awaited publishes did not arrive'
         assert inflight == 0
+
+        assert ran_on, 'neither half reached the synchronous method, so this proves nothing'
+        assert loop_thread not in ran_on, (
+            f'a synchronous half ran on the loop thread {loop_thread}, so there was no hand-off: {ran_on}'
+        )
 
 
 def test_a_handle_from_another_broker_is_refused(broker, kafka_bootstrap, kafka_topic):

@@ -47,8 +47,10 @@ BODY = b'{"function": "send_message", "chat_id": 1}'
 #: one, one level down. Held constant across every row so that only the confirm varies.
 PERSISTENT = pika.DeliveryMode.Persistent
 
-#: the bridged rows' channels, on the pool's single worker: both rows run there, each wanting a
-#: channel of its own, and a connection can only be closed by the thread that owns it
+#: the bridged rows' channels and the connections behind them, on the pool's single worker: both
+#: rows run there, each wanting a channel of its own, and a connection can only be closed by the
+#: thread that owns it. The connections are kept separately because one may exist without a
+#: channel -- `channel()` is a round trip and can fail
 _bridged = threading.local()
 
 
@@ -277,9 +279,16 @@ def _from_a_coroutine(loop: asyncio.AbstractEventLoop, pool: ThreadPoolExecutor,
         opened = getattr(_bridged, 'channels', None)
         if opened is None:
             opened = _bridged.channels = {}
+        held = getattr(_bridged, 'connections', None)
+        if held is None:
+            held = _bridged.connections = []
         channel = opened.get(confirmed)
         if channel is None:
             connection = pika.BlockingConnection(pika.URLParameters(URL))
+            # recorded before the channel is asked for, because `channel()` and
+            # `confirm_delivery` are round trips: a failure in either would otherwise leave a
+            # connection nothing knows about, and the closer works from what it knows
+            held.append(connection)
             channel = connection.channel()
             if confirmed:
                 channel.confirm_delivery()
@@ -308,8 +317,12 @@ def _closed_on_its_thread(pool: ThreadPoolExecutor) -> None:
     """
 
     def close() -> None:
-        for channel in getattr(_bridged, 'channels', {}).values():
-            channel.connection.close()
+        # every connection this thread opened, whether or not it got a channel, and each in a
+        # `suppress` of its own: one close failing must not strand the rest
+        for connection in getattr(_bridged, 'connections', []):
+            with suppress(BaseException):
+                connection.close()
+        _bridged.channels, _bridged.connections = {}, []
 
     pool.submit(close).result(30)
 
