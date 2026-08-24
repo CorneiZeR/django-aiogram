@@ -5,6 +5,7 @@ makes a number comparable — same rounds, same statistic, same reporting — is
 """
 
 import logging
+import math
 import statistics
 import time
 import uuid
@@ -64,7 +65,10 @@ def report(label: str, samples: list[float]) -> float:
     point of this module.
     """
     median = statistics.median(samples)
-    ninetieth = sorted(samples)[int(len(samples) * 0.9)]
+    # nearest rank: the p90 of 300 samples is the 270th, which is index 269. `int(n * 0.9)`
+    # names index 270 -- the 271st -- and for ten samples it names the maximum
+    ordered = sorted(samples)
+    ninetieth = ordered[math.ceil(len(ordered) * 0.9) - 1]
     logger.info('  %-46s %9.1f us   (p90 %9.1f)', label, median, ninetieth)
     return median
 

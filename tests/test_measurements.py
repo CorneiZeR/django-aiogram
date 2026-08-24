@@ -13,6 +13,7 @@ live in the `measure` group, which a test environment has no reason to install.
 
 import ast
 import pathlib
+import re
 
 import pytest
 
@@ -136,6 +137,44 @@ def test_the_baseline_times_the_command_its_transport_publishes_with(command, tr
     assert timed, f'nothing handed to measure() calls {command}, which one of its own rows names'
     published = calls_to(parsed(transport), command)
     assert published, f'{transport} no longer publishes with {command}, so the baseline is measuring the wrong call'
+
+
+#: `\u2013` written as an escape rather than as itself: the README spells its spans with an en
+#: dash, so the pattern needs the character, and the literal reads as a hyphen at a glance
+SPAN = re.compile(r'(\d+(?:\.\d+)?)\s*(?:to|[\u2013-])\s*(\d+(?:\.\d+)?)\s*(?:\u00b5s|us\b|microseconds)')
+
+QUOTING = [*sorted(str(path) for path in pathlib.Path('src').rglob('*.py')), 'pyproject.toml']
+
+
+def spans(relative):
+    """Every microsecond range in a file, with the wrapping flattened first.
+
+    Flattened because these are prose: a span written across a line break matches nothing
+    otherwise, which is how `354 to 492` survived three sweeps for it while five other places
+    said 351.
+    """
+    flat = re.sub(r'\s+', ' ', (ROOT / relative).read_text())
+    return set(SPAN.findall(flat))
+
+
+@pytest.mark.parametrize('source', QUOTING)
+def test_every_quoted_span_is_one_the_measurements_recorded(source):
+    """A measured range may be quoted anywhere, but only the README decides what it is.
+
+    Docstrings across four transports quote these numbers, and each re-run moves one of them.
+    Updating the table and missing a docstring is the failure this catches -- it happened four
+    times in this release, twice because the phrase was wrapped across two lines and a search
+    for it found nothing.
+
+    Both directions are covered by the one assertion: a span in the source that the README does
+    not list is either a docstring nobody updated or a number nobody measured, and there is no
+    third case.
+    """
+    recorded = spans('scripts/measurements/README.md')
+    assert recorded, 'the README lists no spans at all -- has its table moved?'
+
+    unrecorded = {f'{low}-{high}' for low, high in spans(source) - recorded}
+    assert not unrecorded, f'{source} quotes {sorted(unrecorded)}, which the README does not record'
 
 
 def test_both_drivers_are_measured_at_the_same_batching_setting():

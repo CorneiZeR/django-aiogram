@@ -141,7 +141,7 @@ the Redis transports already do — `RPUSH` answers with the new length — and 
 guarantee costs: measured, 323–393µs against 18–20µs for the same publish with only the confirm
 taken off. Most of that is the disk rather than the round trip — the same publish without
 persistence is 135–173µs. Against a Redis list publish measured the same way, on the same machine
-and the same virtualisation, it is roughly two and a half times: 120–143µs there. Read the
+and the same virtualisation, it is roughly two to three times: 120–147µs there. Read the
 ordering rather than the multiple, which moves with the footing — a *native* Redis publishes in
 14–19µs, and the multiple against that is twenty.
 
@@ -187,7 +187,7 @@ one in its partition, is delivered again. **Build idempotency on your own busine
 the delivery page recommends generally and which matters most here.
 
 **A publish waits for the broker** — 166 to 295µs for one message, across eleven runs, which on
-this footing is one and a half to two and a half times a Redis list publish and second only to
+this footing is one to two and a half times a Redis list publish and second only to
 RabbitMQ. `produce()` itself answers in 0.2µs because librdkafka's own thread does the I/O, and
 returning there would be a weaker promise than `RPUSH` already makes. Automatic topic creation
 is the broker's setting, not this package's: with it off, a missing topic is a refusal at

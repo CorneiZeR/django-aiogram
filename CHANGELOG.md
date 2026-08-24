@@ -46,9 +46,8 @@ Entries land here as the work does; nothing below is released.
   portability difference.
 
   **A publish waits for the broker** — 166 to 295µs for one message, across eleven runs. On the
-  footing every number in this release is measured on, that is between one and a half and two
-  and a half times a Redis list publish, and second only to RabbitMQ's confirmed and persistent
-  one. `produce()` answers in 0.2µs because librdkafka's own thread does the I/O, and returning
+  footing every number in this release is measured on, that is one to two and a half times a
+  Redis list publish, and second only to RabbitMQ's confirmed and persistent one. `produce()` answers in 0.2µs because librdkafka's own thread does the I/O, and returning
   there would be weaker than the promise `RPUSH` already makes.
 
   Which is why the producer sets **`linger.ms` to 0**. The driver holds a batch open for 5ms by
@@ -137,7 +136,7 @@ Entries land here as the work does; nothing below is released.
   already makes: `RPUSH` answers with the new length, so a Redis publish is acknowledged before
   `send()` returns and a failure raises. Unconfirmed AMQP publishing is weaker than that — a
   broker that dies before persisting the message loses it in silence — so the RabbitMQ transport
-  costs roughly two and a half times a Redis list publish, which measures 120–143µs on the same
+  costs roughly two to three times a Redis list publish, which measures 120–147µs on the same
   machine and virtualisation as the brokers above. That is the guarantee rather than the driver,
   and most of it is the disk: dropping persistence alone takes the same publish to 135–173µs.
 

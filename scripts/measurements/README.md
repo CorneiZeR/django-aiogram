@@ -61,22 +61,23 @@ publisher flow control, which is a different thing to be timing.
 ## Running them
 
 The drivers they need but the package does not ship — the two that were *not* chosen — live in
-their own dependency group, so nobody installs a driver they cannot configure:
+their own dependency group, so nobody installs a driver they cannot configure. One environment
+for all three scripts, so that "same way" includes the interpreter:
 
 ```shell
 python -m venv .measure
-.measure/bin/pip install -e '.[rabbitmq,kafka]' --group measure
+.measure/bin/pip install -e '.[redis,rabbitmq,kafka]' --group measure
 ```
 
-`--group measure` needs pip 25.1+ or uv, the same floor `--group dev` has. The baseline needs
-neither group, since `redis` is a shipped extra.
+`--group measure` needs pip 25.1+ or uv, the same floor `--group dev` has. `redis` is in there
+for the baseline, which needs no group of its own.
 
 ```shell
 docker run -d --rm --name amqp -p 5673:5672 rabbitmq:4
 .measure/bin/python -m scripts.measurements.amqp_driver_choice
 
 docker run -d --rm --name redis -p 6399:6379 redis:8
-python -m scripts.measurements.redis_baseline
+.measure/bin/python -m scripts.measurements.redis_baseline
 ```
 
 ```shell
@@ -119,8 +120,8 @@ aio-pika 10.0.1, confluent-kafka on librdkafka 2.15.0 and aiokafka 0.14.0. Versi
 
 | Baseline | | acknowledged |
 | --- | --- | --- |
-| `RPUSH`, the list transport's publish | — | 120 – 143 µs |
-| `XADD`, the Streams transport's publish | — | 116 – 121 µs |
+| `RPUSH`, the list transport's publish | — | 120 – 147 µs |
+| `XADD`, the Streams transport's publish | — | 116 – 124 µs |
 
 The last table is the divisor, and it is a table rather than a sentence because several claims
 elsewhere are quoted as a multiple of it. Redis is asked for no disk here and neither transport
