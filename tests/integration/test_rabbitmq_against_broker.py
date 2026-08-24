@@ -155,15 +155,19 @@ def test_the_awaited_halves_work_off_the_loop(broker, amqp_url):
     `apublish` called `publish` inline on the loop's own thread. So the thread each synchronous
     half ran on is recorded, and none of them may be the loop's.
     """
-    ran_on: list[int] = []
+    # one list per method, not one between them: a single list is non-empty as soon as *either*
+    # half reaches its synchronous method, so a half that stopped calling its own would leave the
+    # assertion looking satisfied by the other one
+    publishing: list[int] = []
+    measuring: list[int] = []
     published, measured = RabbitMQBroker.publish, RabbitMQBroker.depth
 
     def watched_publish(self, payloads):
-        ran_on.append(threading.get_ident())
+        publishing.append(threading.get_ident())
         return published(self, payloads)
 
     def watched_depth(self):
-        ran_on.append(threading.get_ident())
+        measuring.append(threading.get_ident())
         return measured(self)
 
     with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
@@ -184,10 +188,10 @@ def test_the_awaited_halves_work_off_the_loop(broker, amqp_url):
         assert after_two == 2, 'the awaited publishes did not arrive'
         assert inflight == 0
 
-        assert ran_on, 'neither half reached the synchronous method, so this proves nothing'
-        assert loop_thread not in ran_on, (
-            f'a synchronous half ran on the loop thread {loop_thread}, so there was no hand-off: {ran_on}'
-        )
+        assert publishing, 'apublish never reached publish, so this proves nothing about it'
+        assert measuring, 'adepth never reached depth, so this proves nothing about it'
+        assert loop_thread not in publishing, f'publish ran on the loop thread: {publishing}'
+        assert loop_thread not in measuring, f'depth ran on the loop thread: {measuring}'
 
 
 def test_waiting_for_a_message_returns_without_one(broker, amqp_url):

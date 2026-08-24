@@ -137,12 +137,13 @@ Entries land here as the work does; nothing below is released.
   for the same publish with only the confirm taken off. That buys the promise the package
   already makes: `RPUSH` answers with the new length, so a Redis publish is acknowledged before
   `send()` returns and a failure raises. Unconfirmed AMQP publishing is weaker than that — a
-  broker that dies before persisting the message loses it in silence — so the RabbitMQ transport
-  costs a few times a Redis list publish, which measures 120–147µs on the same machine and
-  virtualisation. The two are not divided here: they come from different scripts run at different
-  times, so there is no pair from one run to take a ratio from, and an ordering is what the pair
-  supports. That ordering is the guarantee rather than the driver, and most of it is the disk:
-  dropping persistence alone takes the same publish to 135–173µs.
+  broker that dies before persisting the message loses it in silence — so this is the most
+  expensive publish of the four, above Kafka's 166–295µs and a Redis list publish's 120–147 on the
+  same machine and virtualisation. Those figures are not divided against each other: they come
+  from different scripts run at different times, so there is no pair from one run to take a ratio
+  from, and an ordering is what they support. That ordering is the guarantee rather than the
+  driver, and most of it is the disk: dropping persistence alone takes the same publish to
+  135–173µs.
 
   **The multiple is not portable, and earlier drafts of this entry quoted one that was not
   measured.** All four numbers here come from brokers in containers on one laptop, where the

@@ -229,15 +229,19 @@ def test_the_awaited_halves_work_off_the_loop(broker, kafka_bootstrap, kafka_top
     #: which thread each synchronous half actually ran on. The results alone cannot say: they
     #: would be identical if `apublish` called `publish` inline on the loop's own thread, and
     #: then this case would pass while the thing it is named for had gone
-    ran_on: list[int] = []
+    # one list per method, not one between them: a single list is non-empty as soon as *either*
+    # half reaches its synchronous method, so a half that stopped calling its own would leave the
+    # assertion looking satisfied by the other one
+    publishing: list[int] = []
+    measuring: list[int] = []
     published, measured = KafkaBroker.publish, KafkaBroker.depth
 
     def watched_publish(self, payloads):
-        ran_on.append(threading.get_ident())
+        publishing.append(threading.get_ident())
         return published(self, payloads)
 
     def watched_depth(self):
-        ran_on.append(threading.get_ident())
+        measuring.append(threading.get_ident())
         return measured(self)
 
     with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
@@ -258,10 +262,10 @@ def test_the_awaited_halves_work_off_the_loop(broker, kafka_bootstrap, kafka_top
         assert after_two == 2, 'the awaited publishes did not arrive'
         assert inflight == 0
 
-        assert ran_on, 'neither half reached the synchronous method, so this proves nothing'
-        assert loop_thread not in ran_on, (
-            f'a synchronous half ran on the loop thread {loop_thread}, so there was no hand-off: {ran_on}'
-        )
+        assert publishing, 'apublish never reached publish, so this proves nothing about it'
+        assert measuring, 'adepth never reached depth, so this proves nothing about it'
+        assert loop_thread not in publishing, f'publish ran on the loop thread: {publishing}'
+        assert loop_thread not in measuring, f'depth ran on the loop thread: {measuring}'
 
 
 def test_a_handle_from_another_broker_is_refused(broker, kafka_bootstrap, kafka_topic):

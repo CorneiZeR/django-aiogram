@@ -166,11 +166,14 @@ def _pika_channels() -> tuple[BlockingChannel, BlockingChannel]:
             connection = pika.BlockingConnection(pika.URLParameters(URL))
             opened.append(connection)
             channel = connection.channel()
+            # recorded before the declaration, for the reason the async half records its own:
+            # `queue_declare` can raise after the broker has made the queue, and the handler
+            # deletes it through the channel it knows about
+            channels.append(channel)
             if confirms:
                 channel.confirm_delivery()
             else:
                 channel.queue_declare(queue=QUEUE, durable=True)
-            channels.append(channel)
     except BaseException:
         # the queue too, if this got as far as declaring it: the rule is that a run leaves the
         # broker as it found it, and a failure here would otherwise declare a durable queue that

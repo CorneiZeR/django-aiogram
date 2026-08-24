@@ -144,11 +144,11 @@ persistence is 135–173µs. A Redis list publish, measured the same way and on 
 120–147µs.
 
 Those two are **not divided here**, and that is deliberate: they come from different scripts run
-at different times, so there is no pair of numbers from one run to divide. What the pair supports
-is an ordering — a confirmed, persistent AMQP publish costs a few times a Redis list one — and the
+at different times, so there is no pair of numbers from one run to divide. What they support is an
+ordering — this is the most expensive publish of the four, above Kafka's 166–295µs — and the
 ordering is also the only part that survives a change of footing. A *native* Redis publish was
-measured at 14–19µs in 3.1.0, against which the same AMQP publish is twenty times rather than
-three.
+measured at 14–19µs in 3.1.0, and a multiple against that baseline would read quite differently
+from one against this.
 
 Nothing here needs `WORKER_NAME`. An unacknowledged message returns to the queue when the
 channel that held it drops, which is what a worker being killed does to it — so there is no

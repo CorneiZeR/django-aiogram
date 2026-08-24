@@ -39,8 +39,9 @@ holds the two to the same value.
 **Quote the divisor or do not quote the multiple — and only divide within one run.** These
 ratios were carried for a while as "~10×" and "~18×" against a Redis publish nobody had measured
 here: a figure of 14–19 µs taken in 3.1.0 on a *native* server, while every broker number below
-comes from a container. On one footing the confirmed AMQP publish is a few times a list publish
-and on the other it is twenty, and both readings are honest about their own machine.
+comes from a container. Compare the same AMQP publish against a native list publish and against a
+containerised one and the answers are an order of magnitude apart, both of them honest about
+their own machine — which is the whole reason to name the machine rather than the multiple.
 
 `redis_baseline.py` exists so the divisor is a row in the table rather than folklore. But a row
 in the table is not a licence to divide: the tables come from three scripts run at different
