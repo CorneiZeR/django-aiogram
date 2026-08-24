@@ -64,6 +64,28 @@ the same worker name** — the list is keyed on that name, so a replacement cont
 with a fresh hostname strands it instead. That is what `I001` reports and what
 `manage.py tgbot_reclaim --worker <name>` is the way back from.
 
+**Kafka.** A committed offset is the *next* record to read, so it says that every offset below
+it in that partition is settled rather than saying anything about one message. A consumer that
+holds several sends at once — which `MAX_IN_FLIGHT` allows — therefore commits only the highest
+**contiguous** prefix per partition: settle the second while the first is still in flight and
+nothing is committed for that partition until the first finishes, because committing the second
+would claim the first as done. A worker killed at that moment loses nothing: replay starts *at*
+the committed offset, because that offset is the next record to read rather than the last one
+dealt with — so what
+comes back is that record and everything above it in the partition, which with `MAX_IN_FLIGHT`
+above two is more than the pair that caused the gap. Partitions are independent: a gap in one
+does not hold up commits in another.
+
+The same shape has a sharper edge on a refusal. There is no per-message nack, so giving one up
+rewinds that partition to the offset, and **the released record together with every later one
+in that partition** is delivered again — the other partitions carry on untouched. A handle the
+rewind *reached* stops being settleable — one naming its offset or a higher one — because the
+delivery it named no longer exists; a send that finishes afterwards is reported and settles
+nothing, and its message comes back with the rest. Handles below the rewind are untouched and
+still this worker's to settle, which is why the broker records where each rewind went rather
+than how many there have been. **Build
+idempotency on your own business key** — the advice below is not decoration on this transport.
+
 **RabbitMQ.** The least of any of them: an unacknowledged message returns to the
 queue when the channel that held it drops, and a worker being killed drops its
 channel by dying. So there is no in-flight list, `reclaim()` has nothing to do and

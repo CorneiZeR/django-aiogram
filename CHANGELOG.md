@@ -21,6 +21,82 @@ Entries land here as the work does; nothing below is released.
   A transport with no sensible default for where a message goes marks that setting required
   and refuses at startup without it.
 
+- **A Kafka transport**, `django_aiogram.broker.kafka.KafkaBroker`, on the **`[kafka]`** extra.
+  The fourth, and the one whose model differs most: the other three settle a *message*, and
+  Kafka settles a *position*.
+
+  **`confluent-kafka`, not `aiokafka`**, decided by the consumer being a thread: a synchronous
+  driver belongs in one, and an async-native driver would need an event loop inside it. On
+  Apache Kafka 4 over loopback, both waiting for the broker, it is the faster one as well:
+
+  ```text
+                                    queued locally   waited for the ack
+  confluent-kafka, synchronous           0.2 - 0.3us          166 - 295us
+  aiokafka, handed to a loop thread        66 - 75us          354 - 492us
+  ```
+
+  Ranges rather than single numbers, and that is the point: a first run of this showed 479
+  against 502 and "latency does not decide it" was written down as the finding. Repeating it on
+  a warm broker said 1.3 to 2.2 times instead — the parity was a cold cluster. The decision
+  stands and its stated reason changed; `scripts/measurements` is kept so the next reader can
+  re-take them rather than trust either reading.
+
+  The plan's other argument turned out to be false and is recorded so it is not reopened:
+  `aiokafka` ships no `py3-none-any` wheel either, so both drivers are compiled and there is no
+  portability difference.
+
+  **A publish waits for the broker** — 166 to 295µs for one message, across ten runs.
+  `produce()` answers in 0.2µs because librdkafka's own thread does the I/O, and returning there
+  would be weaker than the promise `RPUSH` already makes. How that compares with the other three
+  is a question about all four on one footing, which is not this entry's to answer.
+
+  Which is why the producer sets **`linger.ms` to 0**. The driver holds a batch open for 5ms by
+  default, waiting for records to join it, and a send here is a batch of one that then waits for
+  the broker's answer — so the default is paid in full on every `bot.send()`: measured, 6.4ms
+  against 241µs, 26× for batching nothing. Batching still happens; what is switched off is
+  waiting for it, and that is measured too rather than hoped for: one `publish` of a hundred
+  payloads costs 0.44ms at 0 against 7.01ms on the default, which is 4.4µs a message — so the
+  bulk path is faster as well, not traded away for the single one. Found by asking of this
+  script the question worth asking of any of them: does it measure what the transport does?
+
+  **Offsets are committed only where they are contiguous, per partition.** A consumer holding
+  several sends cannot settle them in whatever order they finish: committing the second while
+  the first is in flight would claim the first as done. So the broker commits the highest
+  contiguous prefix for each partition and holds anything settled above a gap until the gap
+  closes; partitions do not wait for each other.
+
+  `release` rewinds that partition to the offset, so the released record **and** every later
+  record in that partition is delivered again — Kafka has no per-message nack, and that is the
+  honest consequence rather than a pretence.
+
+  What a rewind is remembered by is bounded. A handle carries how many rewinds its partition had
+  seen when it was taken, so settling can ask whether any rewind *since* then reached its offset
+  — and that history is compacted the moment the partition has nothing in flight and nothing
+  waiting to be committed, because at that point no handle the broker still expects can need an
+  entry. Without it, a worker whose downstream is failing pays one integer per refusal for as
+  long as it runs. A handle older than the compaction point is refused as rewound rather than as
+  unknown, which keeps the log saying the thing an operator needs to hear.
+
+  **A full local queue is waited out, not raised.** `produce` refuses with `BufferError` once
+  librdkafka's own queue fills, which is what a broker that has stopped accepting looks like
+  from inside the process after enough sends. That used to escape mid-batch: the records already
+  accepted were in flight with nobody waiting for their callbacks, and the caller was told the
+  whole batch had failed, so a retry sent the accepted prefix twice. `publish` now polls for
+  room until its timeout, and if a record still cannot be queued it says how many never got in
+  *and* how many were accepted before them — a batch that only partly went cannot be retried
+  blindly, and Kafka has no way to un-send the half that went.
+
+  A handle the rewind *reached* stops being settleable — one naming its offset or a higher one —
+  and a send that finishes afterwards is reported and commits nothing, because accepting it
+  could commit past messages the rewind put back. Handles below the rewind are untouched and
+  still this worker's to settle, which is why the broker records where each rewind went rather
+  than how many there have been: counting them refuses the lot, and the lowest of those then
+  blocks the partition's commits for ever.
+
+  `KAFKA_BOOTSTRAP` and `KAFKA_TOPIC` are required. Nothing here needs `WORKER_NAME`: a
+  consumer that dies stops heartbeating, the group rebalances, and its partitions go to another
+  member from the last committed offset.
+
 - **A RabbitMQ transport**, `django_aiogram.broker.rabbitmq.RabbitMQBroker`, on the
   **`[rabbitmq]`** extra. The transport that needs least from this package: an unacknowledged
   message returns to the queue when the channel that held it drops, so there is no worker name

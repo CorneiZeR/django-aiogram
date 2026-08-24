@@ -24,11 +24,14 @@ jobs:
           python-version: '3.13'
           cache: pip
           cache-dependency-path: pyproject.toml
-      # `.[redis]` and not `.`: the driver is an extra since 4.0, and the suite needs it.
-      # It would arrive anyway — fakeredis depends on redis-py — and that is the reason to
-      # name it: a job that gets its driver by accident goes red on an unrelated dev-group
-      # edit, and says nothing about the extra it was supposed to be exercising
-      - run: pip install -e '.[redis]' --group dev
+      # every extra, in this job alone: `mypy` checks the whole package, and a transport whose
+      # driver is absent is a module it cannot resolve. The stubs in the dev group cover pika,
+      # which ships none of its own — but confluent-kafka carries its types *in the package*,
+      # so the type check needs the package installed rather than a stub for it.
+      #
+      # This was found by CI rather than by me: my own `mypy` was green because every driver
+      # was in that virtualenv, so the gate I ran was weaker than the one here
+      - run: pip install -e '.[redis,rabbitmq,kafka]' --group dev
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy
@@ -177,6 +180,72 @@ jobs:
       - run: python -m pytest -q -m integration tests/integration/test_rabbitmq_against_broker.py
         env:
           DJANGO_AIOGRAM_TEST_AMQP_URL: amqp://guest:guest@localhost:5672/
+
+  integration-kafka:
+    # its own job for the reason the rabbitmq one has its own: the transports share no server
+    name: integration (kafka)
+    runs-on: ubuntu-latest
+    services:
+      kafka:
+        image: apache/kafka:4.0.0
+        ports: ['9092:9092']
+        env:
+          # KRaft, single node, and a listener the runner can reach. The image's own default
+          # advertises `localhost:9092` from inside the container, which a client on the host
+          # cannot connect to — it retries into a refusal loop rather than failing, which is
+          # how the first attempt at this measurement spent ten minutes
+          KAFKA_NODE_ID: 1
+          KAFKA_PROCESS_ROLES: broker,controller
+          KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9094
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+          KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9094
+          KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+          KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+          KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e '.[redis,kafka]' --group dev
+      # a broker with no readiness probe of its own, so this waits for one it can use: the
+      # metadata request an ordinary client makes. `sleep`ing a guessed number of seconds is
+      # how a suite starts failing on a slow runner and nowhere else
+      - run: |
+          python - <<'PY'
+          import time
+          from confluent_kafka.admin import AdminClient
+          admin = AdminClient({'bootstrap.servers': 'localhost:9092'})
+          for attempt in range(60):
+              try:
+                  admin.list_topics(timeout=5)
+              except Exception as error:  # noqa: BLE001
+                  print(f'not ready ({attempt}): {error}')
+                  time.sleep(2)
+              else:
+                  print(f'ready after {attempt} attempt(s)')
+                  break
+          else:
+              raise SystemExit('kafka never became ready')
+          PY
+      # the conformance suite as well as the transport's own module, for the reason the
+      # rabbitmq leg runs it: those cases skip without a broker and nobody hears them
+      - run: python -m pytest -q tests/test_broker_conformance.py
+        env:
+          DJANGO_AIOGRAM_TEST_KAFKA_BOOTSTRAP: localhost:9092
+      - run: python -m pytest -q -m integration tests/integration/test_kafka_against_broker.py
+        env:
+          DJANGO_AIOGRAM_TEST_KAFKA_BOOTSTRAP: localhost:9092
+      # and the transport's unit module, which needs no broker but does need the driver: one of
+      # its cases reaches a method that imports it, and this is the only leg that installs it
+      - run: python -m pytest -q tests/test_kafka_publish.py
 
   smoke:
     # the unit suite imports from src/, so only an install can catch a packaging

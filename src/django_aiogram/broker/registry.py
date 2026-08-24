@@ -29,6 +29,7 @@ SHIPPED: dict[str, tuple[str, str]] = {
     # server, not a different dependency
     'django_aiogram.broker.redis_streams.RedisStreamsBroker': ('redis', 'redis'),
     'django_aiogram.broker.rabbitmq.RabbitMQBroker': ('pika', 'rabbitmq'),
+    'django_aiogram.broker.kafka.KafkaBroker': ('confluent_kafka', 'kafka'),
 }
 
 _lock = threading.Lock()

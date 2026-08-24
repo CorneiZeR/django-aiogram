@@ -13,6 +13,7 @@ fixture yet is skipped loudly rather than silently passing.
 
 import asyncio
 import os
+import time
 
 import pytest
 from django.test import override_settings
@@ -29,6 +30,7 @@ from django_aiogram.wire.serializers import JsonSerializer
 #: the body runs. Empty when a server is not configured, which is what the skips are for
 AMQP_URL = os.environ.get('DJANGO_AIOGRAM_TEST_AMQP_URL', '')
 AMQP_QUEUE = 'conformance'
+KAFKA_BOOTSTRAP = os.environ.get('DJANGO_AIOGRAM_TEST_KAFKA_BOOTSTRAP', '')
 SETTINGS = {
     'TOKEN': '42:x',
     'REDIS_URL': 'redis://localhost:6379/0',
@@ -36,6 +38,11 @@ SETTINGS = {
     'REDIS_STREAM_KEY': 'TELEGRAM_BOT_STREAM',
     'RABBITMQ_URL': AMQP_URL,
     'RABBITMQ_QUEUE': AMQP_QUEUE,
+    'KAFKA_BOOTSTRAP': KAFKA_BOOTSTRAP,
+    # a topic per case, because Kafka cannot delete messages from one and a group that has
+    # committed cannot be rewound cheaply — the fixture makes the name unique instead
+    'KAFKA_TOPIC': 'conformance',
+    'KAFKA_GROUP': 'conformance',
 }
 
 
@@ -70,12 +77,70 @@ def broker(request, redis_server):
     if 'rabbitmq' in path:
         yield from _against_rabbitmq(path)
         return
+    if 'kafka' in path:
+        yield from _against_kafka(path)
+        return
     if 'redis' not in path:
         pytest.skip(f'no fixture yet for {path}: add one rather than skipping the contract')
     with override_settings(TELEGRAM_BOT=SETTINGS):
         broker = import_string(path)()
         broker.conformance_path = path
         yield broker
+
+
+def _against_kafka(path):
+    """The contract against a real Kafka, on a topic of this case's own.
+
+    A fresh topic per case rather than a cleaned one: Kafka does not delete a message when it
+    is settled — an offset moves — so "the queue is empty" cannot be arranged by tidying up.
+    The group name goes with it, or a group that had committed on the previous topic would
+    bring that position along.
+
+    Skipped loudly without a broker, for the reason the AMQP branch is: a transport whose
+    contract nobody checked is worse than one that says so.
+    """
+    if not KAFKA_BOOTSTRAP:
+        pytest.skip('set DJANGO_AIOGRAM_TEST_KAFKA_BOOTSTRAP to run the contract against Kafka')
+    import uuid
+
+    from django.utils.module_loading import import_string
+
+    from django_aiogram.broker.kafka.client import close_clients
+
+    unique = f'conformance-{uuid.uuid4().hex[:12]}'
+    # written into the shared mapping, not into a copy of it. Each case carries its own
+    # `override_settings(TELEGRAM_BOT=SETTINGS)`, and that replaces the whole dict when the
+    # case starts — after this fixture has run — so a per-case value has to be *in* the
+    # mapping the decorator reads, or the body gets the module-level topic instead. The same
+    # shape of mistake as the AMQP settings, from the other side
+    SETTINGS['KAFKA_TOPIC'] = SETTINGS['KAFKA_GROUP'] = unique
+    # created before the broker is built, because subscribing to a topic that does not exist
+    # yet leaves the consumer with no assignment — the coordinator has nothing to give it — and
+    # every `take` then waits out its whole budget for a topic the first publish would create.
+    # A transport's contract is that the topic exists; making it is the operator's job, or the
+    # broker's `auto.create.topics.enable`, and here it is the fixture's
+    _make_kafka_topic(unique)
+    with override_settings(TELEGRAM_BOT=SETTINGS):
+        broker = import_string(path)()
+        broker.conformance_path = path
+        try:
+            yield broker
+        finally:
+            close_clients()
+
+
+def _make_kafka_topic(name):
+    """Create a topic and wait until the cluster reports it, or skip saying it could not."""
+    from confluent_kafka.admin import AdminClient, NewTopic
+
+    admin = AdminClient({'bootstrap.servers': KAFKA_BOOTSTRAP})
+    for future in admin.create_topics([NewTopic(name, num_partitions=1, replication_factor=1)]).values():
+        future.result(timeout=30)
+    for _ in range(60):
+        if name in admin.list_topics(timeout=10).topics:
+            return
+        time.sleep(0.1)
+    pytest.skip(f'kafka did not report the topic {name!r} after creating it')
 
 
 def _against_rabbitmq(path):

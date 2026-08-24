@@ -117,6 +117,7 @@ transport you are not using is reported by `W003` as a key nothing reads, which 
 | `django_aiogram.broker.redis_list.RedisListBroker` | `REDIS_URL`, `REDIS_MESSAGES_KEY`, `REDIS_TIMEOUT`, `BLPOP_TIMEOUT` | none — the list has a default name |
 | `django_aiogram.broker.redis_streams.RedisStreamsBroker` | `REDIS_URL`, `REDIS_STREAM_KEY`, `REDIS_STREAM_GROUP`, `REDIS_TIMEOUT`, `BLPOP_TIMEOUT` | **`REDIS_STREAM_KEY`** |
 | `django_aiogram.broker.rabbitmq.RabbitMQBroker` | `RABBITMQ_URL`, `RABBITMQ_QUEUE`, `RABBITMQ_PREFETCH`, `RABBITMQ_TIMEOUT` | **`RABBITMQ_URL`**, **`RABBITMQ_QUEUE`** |
+| `django_aiogram.broker.kafka.KafkaBroker` | `KAFKA_BOOTSTRAP`, `KAFKA_TOPIC`, `KAFKA_GROUP`, `KAFKA_TIMEOUT` | **`KAFKA_BOOTSTRAP`**, **`KAFKA_TOPIC`** |
 
 #### Redis Streams
 
@@ -159,6 +160,37 @@ gone and no consumer can replay it. `XDEL` additionally costs Redis the ability 
 `lag` at all — a depth read then refuses instead of guessing. That one is temporary:
 measured, the count returns once the group has read through to the end of the stream, so it
 is unavailable exactly while there is a backlog, and `XSETID` restores it at once. The broker's own `trim()` stops at the oldest unacknowledged entry.
+
+#### Kafka
+
+| Setting | Default | Description |
+| ------- | ------- | ----------- |
+| `KAFKA_BOOTSTRAP` | **required** | `host:port[,host:port…]`. No default, for the reason the AMQP URL has none |
+| `KAFKA_TOPIC` | **required** | The topic messages are produced to and consumed from |
+| `KAFKA_GROUP` | `'django-aiogram'` | The consumer group every worker joins, so they share the partitions instead of each reading all of them |
+| `KAFKA_TIMEOUT` | `10` | Seconds any single call may take — the socket timeout, and how long a publish waits for the broker's acknowledgement before it reports a refusal. Between `0.01` and `300`, which is what librdkafka accepts for the setting this becomes; outside that it is refused at startup rather than by the driver |
+
+**Kafka settles a position, not a message**, and that is the difference to understand before
+choosing it. Committing offset N says every message below N has been dealt with. So a consumer
+holding several sends at once — which `MAX_IN_FLIGHT` allows — cannot settle them in whatever
+order they finish: this broker commits the highest **contiguous** prefix and holds anything
+settled out of order until the gap below it closes. Nothing is lost, and a burst of slow sends
+delays the commit rather than skipping it.
+
+The same shape has a sharper edge on `release`. There is no per-message nack in Kafka, so
+giving a message up means rewinding to its offset — and that record, together with every later
+one in its partition, is delivered again. **Build idempotency on your own business key**, which the delivery page recommends
+generally and which matters most here.
+
+**A publish waits for the broker** — 166 to 295µs for one message, across ten runs. `produce()`
+itself answers in 0.2µs because librdkafka's own thread does the I/O, and returning there would
+be a weaker promise than `RPUSH` already makes. Automatic topic creation is the broker's setting, not this
+package's: with it off, a missing topic is a refusal at publish time.
+
+Nothing here needs `WORKER_NAME`. A consumer that dies stops heartbeating, the group
+rebalances, and its partitions go to another member from the last committed offset — so
+`reclaim()` has nothing to do, `tgbot_reclaim` refuses, and the healthcheck reports the
+consumer as not observable from outside.
 
 ## Rate limits
 
