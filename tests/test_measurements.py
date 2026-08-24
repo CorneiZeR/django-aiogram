@@ -41,6 +41,22 @@ def keywords(call):
     return {keyword.arg: ast.unparse(keyword.value) for keyword in call.keywords}
 
 
+def assigned(tree):
+    """Every ``name = value`` in ``tree`` as ``{name: source}``, at any depth.
+
+    Both files build their properties into a local and pass the local, so resolving the name is
+    what lets an assertion follow the value that actually reaches ``basic_publish`` instead of
+    settling for a persistent one existing somewhere in the file.
+    """
+    found = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    found[target.id] = ast.unparse(node.value)
+    return found
+
+
 def producer_config(call):
     """The ``{key: source}`` of a producer built from a dict literal, or ``{}``."""
     if not call.args or not isinstance(call.args[0], ast.Dict):
@@ -74,12 +90,18 @@ def test_every_amqp_publish_is_mandatory_and_persistent(source):
         )
         assert 'properties' in passed, f'{source}: a publish with no properties cannot be persistent'
 
-    properties = calls_to(tree, 'BasicProperties')
-    assert properties, f'{source} builds no BasicProperties'
-    for built in properties:
-        mode = keywords(built).get('delivery_mode', '')
+        # resolved to what it names rather than taken as read: asserting that *a* persistent
+        # BasicProperties exists in the file would pass on a publish handed a different,
+        # transient one — which is the shape of every defect this test exists to catch
+        names = assigned(tree)
+        properties = passed['properties']
+        built = names.get(properties, properties)
+        assert 'BasicProperties' in built, (
+            f'{source}: the properties reaching basic_publish are {built!r}, not a BasicProperties'
+        )
+        mode = keywords(ast.parse(built).body[0].value).get('delivery_mode', '')
         assert 'PERSISTENT' in mode.upper(), (
-            f'{source}: delivery_mode {mode!r} is not persistent, so the broker answers before it writes'
+            f'{source}: delivery_mode {mode!r} reaches basic_publish, so the broker answers before it writes'
         )
 
 
@@ -97,8 +119,16 @@ def test_the_baseline_times_the_command_its_transport_publishes_with(command, tr
     cheaper command would understate every one of them — and quietly, because a ratio reads as
     a measurement whichever command produced it.
     """
-    baseline = calls_to(parsed('scripts/measurements/redis_baseline.py'), command)
-    assert baseline, f'the baseline no longer times {command}, which its own row names'
+    # inside what `measure` is handed, not anywhere in the file: a baseline that timed `LLEN`
+    # while an `RPUSH` sat two lines above it would otherwise pass, and its row would then be
+    # the divisor for five ratios
+    timed = [
+        call
+        for measured in calls_to(parsed('scripts/measurements/redis_baseline.py'), 'measure')
+        for argument in measured.args
+        for call in calls_to(argument, command)
+    ]
+    assert timed, f'nothing handed to measure() calls {command}, which one of its own rows names'
     published = calls_to(parsed(transport), command)
     assert published, f'{transport} no longer publishes with {command}, so the baseline is measuring the wrong call'
 

@@ -65,6 +65,20 @@ def shared_producer(bootstrap: str) -> 'Producer':
 
     Configured for one message at a time, because that is what a send is: see the comment on
     ``linger.ms`` below for the 6.4 milliseconds the driver's default charges for it.
+
+    The lock is held only long enough to hand back a reference, so a settings change or a
+    shutdown can drain and drop this producer while a `publish` is still using it. That was
+    considered and left alone, because a drain is not a close: ``flush`` empties the queue and
+    the object goes on working for whoever holds it. Measured -- a producer flushed and dropped
+    from here accepted another record and had it acknowledged, with no error. And `publish`
+    polls the producer it was given, so its own records are answered on its own thread; if they
+    are not, it raises rather than returning as though they went.
+
+    A lease that made `close_clients` wait for publishes in flight would close a window that
+    loses nothing and open one that matters: a publish blocked on an unreachable broker would
+    hold shutdown for ``KAFKA_TIMEOUT`` on top of the grace arithmetic `Deployment.md` states.
+    What the window does cost is the count `_drain` reports, which is taken before those later
+    records exist and can therefore understate what was still in the queue at shutdown.
     """
     from confluent_kafka import Producer as KafkaProducer  # noqa: PLC0415 - the driver is an extra
 
