@@ -36,13 +36,18 @@ transport took librdkafka's default of 5 ms, so the figure it reported was one n
 could reach — 6.4 ms against 241 µs, measured. The transport sets it to 0 now, and the test
 holds the two to the same value.
 
-**Quote the divisor or do not quote the multiple.** These ratios were carried for a while as
-"~10×" and "~18×" against a Redis publish nobody had measured here — a figure of 14–19 µs taken
-in 3.1.0 on a *native* server, while every broker number below comes from a container. On one
-footing the confirmed AMQP publish is two and a half times a list publish and on the other it is
-twenty, and both readings are honest about their own machine. `redis_baseline.py` exists so the
-divisor is a row in the table rather than folklore; what survives a change of footing is only
-the ordering, Streams ≤ list < Kafka < RabbitMQ.
+**Quote the divisor or do not quote the multiple — and only divide within one run.** These
+ratios were carried for a while as "~10×" and "~18×" against a Redis publish nobody had measured
+here: a figure of 14–19 µs taken in 3.1.0 on a *native* server, while every broker number below
+comes from a container. On one footing the confirmed AMQP publish is a few times a list publish
+and on the other it is twenty, and both readings are honest about their own machine.
+
+`redis_baseline.py` exists so the divisor is a row in the table rather than folklore. But a row
+in the table is not a licence to divide: the tables come from three scripts run at different
+times, so there is no single run holding both numbers, and a ratio between them would be the
+span-over-span arithmetic this file rejects one rule below. Only the two ratios *inside* a script
+are quoted — driver against driver, bridge against bridge — and across the tables the claim is an
+ordering: Streams ≤ list < Kafka < RabbitMQ.
 
 **Run each one more than once.** The first single run of the Kafka one showed 479µs against 502,
 and "latency does not decide it" went into the changelog on the strength of it. Repeating it on a

@@ -46,8 +46,10 @@ Entries land here as the work does; nothing below is released.
   portability difference.
 
   **A publish waits for the broker** — 166 to 295µs for one message, across eleven runs. On the
-  footing every number in this release is measured on, that is one to two and a half times a
-  Redis list publish, and second only to RabbitMQ's confirmed and persistent one. `produce()` answers in 0.2µs because librdkafka's own thread does the I/O, and returning
+  footing every number in this release is measured on, a Redis list publish is 120–147µs and
+  RabbitMQ's confirmed one 323–393, which puts this between them. Not divided against them: the
+  three come from scripts run separately, so there is no single run to take a ratio from.
+  `produce()` answers in 0.2µs because librdkafka's own thread does the I/O, and returning
   there would be weaker than the promise `RPUSH` already makes.
 
   Which is why the producer sets **`linger.ms` to 0**. The driver holds a batch open for 5ms by
@@ -136,9 +138,11 @@ Entries land here as the work does; nothing below is released.
   already makes: `RPUSH` answers with the new length, so a Redis publish is acknowledged before
   `send()` returns and a failure raises. Unconfirmed AMQP publishing is weaker than that — a
   broker that dies before persisting the message loses it in silence — so the RabbitMQ transport
-  costs roughly two to three times a Redis list publish, which measures 120–147µs on the same
-  machine and virtualisation as the brokers above. That is the guarantee rather than the driver,
-  and most of it is the disk: dropping persistence alone takes the same publish to 135–173µs.
+  costs a few times a Redis list publish, which measures 120–147µs on the same machine and
+  virtualisation. The two are not divided here: they come from different scripts run at different
+  times, so there is no pair from one run to take a ratio from, and an ordering is what the pair
+  supports. That ordering is the guarantee rather than the driver, and most of it is the disk:
+  dropping persistence alone takes the same publish to 135–173µs.
 
   **The multiple is not portable, and earlier drafts of this entry quoted one that was not
   measured.** All four numbers here come from brokers in containers on one laptop, where the
