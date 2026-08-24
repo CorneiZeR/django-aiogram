@@ -15,9 +15,8 @@ class ProduceRefusedError(BrokerError):
     this transport waits, at 166 to 237 microseconds across repeated runs, and reports what came
     back.
 
-    That makes Kafka the second slowest publish of the four, behind RabbitMQ's confirmed and
-    persistent one at 323 to 393, and the number belongs in the documentation rather than in a
-    footnote: it is the guarantee's price, not the driver's — though not only: measured over
+    The number belongs in the documentation rather than in a footnote: it is the guarantee's
+    price, not the driver's — though not only: measured over
     six runs, ``aiokafka`` waits 354 to 492 microseconds for the same acknowledgement, so this
     driver is the faster one as well.
     """

@@ -125,8 +125,8 @@ class KafkaBroker(Broker):
         ``produce`` answers locally — measured at 0.2 microseconds, because librdkafka's own
         thread does the I/O — and returning there would be a weaker promise than the rest of
         this package makes. So the delivery callbacks are waited for, at 166 to 237 microseconds
-        for one message across repeated runs — the second most expensive publish of the four,
-        behind RabbitMQ's confirmed and persistent one at 323 to 393.
+        for one message across six runs. Where that sits among the four is a question about
+        all four measured on one footing, which `scripts/measurements` answers and this does not.
 
         Waited for by counting *this call's* callbacks rather than by flushing. The producer is
         one per process, and `flush` waits for everything in it: a caller would then wait on

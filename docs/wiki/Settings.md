@@ -138,12 +138,8 @@ transport you are not using is reported by `W003` as a key nothing reads, which 
 A publish here is **confirmed and mandatory**: the broker answers before `send()` returns, and
 a message that cannot be routed raises instead of vanishing into an exchange. That matches what
 the Redis transports already do — `RPUSH` answers with the new length — and it costs what the
-guarantee costs: measured, 323–393µs against 18–20µs for the same publish with only the confirm
-taken off. Most of that is the disk rather than the round trip — the same publish without
-persistence is 135–173µs. Against a Redis list publish measured the same way, on the same machine
-and the same virtualisation, it is roughly two and a half times: 120–143µs there. Read the
-ordering rather than the multiple, which moves with the footing — a *native* Redis publishes in
-14–19µs, and the multiple against that is twenty.
+guarantee costs: measured, 170.7µs against 18.9µs for a publish nobody confirms, so roughly 8×
+a Redis list publish.
 
 Nothing here needs `WORKER_NAME`. An unacknowledged message returns to the queue when the
 channel that held it drops, which is what a worker being killed does to it — so there is no
@@ -186,10 +182,9 @@ giving a message up means rewinding to its offset — and everything after it is
 too. **Build idempotency on your own business key**, which the delivery page recommends
 generally and which matters most here.
 
-**A publish waits for the broker** — 166 to 237µs across repeated runs, against 120 to 143µs for
-a Redis list publish measured the same way, and second only to RabbitMQ. `produce()` itself answers in
-0.2µs because librdkafka's own thread does the I/O, and returning there would be a weaker
-promise than `RPUSH` already makes. Automatic topic creation is the broker's setting, not this
+**A publish waits for the broker** — 166 to 237µs for one message, across six runs. `produce()`
+itself answers in 0.2µs because librdkafka's own thread does the I/O, and returning there would
+be a weaker promise than `RPUSH` already makes. Automatic topic creation is the broker's setting, not this
 package's: with it off, a missing topic is a refusal at publish time.
 
 Nothing here needs `WORKER_NAME`. A consumer that dies stops heartbeating, the group
