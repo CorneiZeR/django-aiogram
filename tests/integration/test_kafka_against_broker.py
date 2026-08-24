@@ -221,23 +221,51 @@ def test_asking_the_depth_does_not_join_the_group(broker, kafka_bootstrap, kafka
 def test_the_awaited_halves_work_off_the_loop(broker, kafka_bootstrap, kafka_topic):
     """`apublish` and `adepth` go through a thread, because the driver is synchronous.
 
-    The hand-off costs about 100 microseconds and is invisible here: waiting for the broker's
-    acknowledgement costs five times that, which is the measurement that made the driver choice
-    a question about the consumer rather than about latency.
+    What that hand-off costs has not been measured for this driver, and the ratio this docstring
+    used to quote came from the AMQP script -- a different library on a different broker. What
+    *is* measured here is the wait: 166 to 295 microseconds for the acknowledgement, which is
+    what made the driver choice a question about the consumer rather than about latency.
     """
+    #: which thread each synchronous half actually ran on. The results alone cannot say: they
+    #: would be identical if `apublish` called `publish` inline on the loop's own thread, and
+    #: then this case would pass while the thing it is named for had gone
+    # one list per method, not one between them: a single list is non-empty as soon as *either*
+    # half reaches its synchronous method, so a half that stopped calling its own would leave the
+    # assertion looking satisfied by the other one
+    publishing: list[int] = []
+    measuring: list[int] = []
+    published, measured = KafkaBroker.publish, KafkaBroker.depth
+
+    def watched_publish(self, payloads):
+        publishing.append(threading.get_ident())
+        return published(self, payloads)
+
+    def watched_depth(self):
+        measuring.append(threading.get_ident())
+        return measured(self)
+
     with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
 
         async def on_a_loop():
             await broker.apublish([])
             after_nothing = await broker.adepth()
             await broker.apublish([payload(11), payload(12)])
-            return after_nothing, await broker.adepth(), await broker.ainflight_depth()
+            return threading.get_ident(), after_nothing, await broker.adepth(), await broker.ainflight_depth()
 
-        after_nothing, after_two, inflight = asyncio.run(on_a_loop())
+        KafkaBroker.publish, KafkaBroker.depth = watched_publish, watched_depth
+        try:
+            loop_thread, after_nothing, after_two, inflight = asyncio.run(on_a_loop())
+        finally:
+            KafkaBroker.publish, KafkaBroker.depth = published, measured
 
         assert after_nothing == 0, 'awaiting an empty publish queued something'
         assert after_two == 2, 'the awaited publishes did not arrive'
         assert inflight == 0
+
+        assert publishing, 'apublish never reached publish, so this proves nothing about it'
+        assert measuring, 'adepth never reached depth, so this proves nothing about it'
+        assert loop_thread not in publishing, f'publish ran on the loop thread: {publishing}'
+        assert loop_thread not in measuring, f'depth ran on the loop thread: {measuring}'
 
 
 def test_a_handle_from_another_broker_is_refused(broker, kafka_bootstrap, kafka_topic):

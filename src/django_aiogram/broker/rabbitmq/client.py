@@ -1,10 +1,11 @@
 """One connection per thread, because ``BlockingConnection`` is not thread-safe.
 
 ``pika`` was chosen by measurement rather than by which face it matched — see the changelog.
-The short version: reaching across the thread boundary costs about 100 microseconds whichever
-driver is used (measured, 119.2 for aio-pika from synchronous code and 120.1 for pika from a
-coroutine, which are the same number), so the driver that needs no crossing on the *common*
-path wins. That path is synchronous: a view, a task, a management command.
+The short version: each driver has one face it must bridge, and the two bridges do not cost the
+same. Measured over five runs, a synchronous caller reaching aio-pika's loop pays 121 to 131
+microseconds while a coroutine reaching pika's thread pays 67 to 85 -- about half. So the driver
+that needs no crossing on the *common* path is also the cheaper one where it does cross, and the
+common path is synchronous: a view, a task, a management command.
 
 The cost pika brings instead is this module. A ``BlockingConnection`` belongs to one thread,
 so a threaded WSGI server needs one per worker thread — the same shape as the per-loop
@@ -175,4 +176,4 @@ def _forget(**kwargs: object) -> None:
         close_connections()
 
 
-setting_changed.connect(_forget)
+setting_changed.connect(_forget, dispatch_uid='django_aiogram.broker.rabbitmq.client')

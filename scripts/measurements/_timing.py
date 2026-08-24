@@ -5,12 +5,13 @@ makes a number comparable — same rounds, same statistic, same reporting — is
 """
 
 import logging
+import math
 import statistics
 import time
 import uuid
 from collections.abc import Callable
 
-__all__ = ('configure_reporting', 'measure')
+__all__ = ('configure_reporting', 'measure', 'report')
 
 #: the package's logger, exactly. `tests/test_logging_discipline.py` looks only at `src/`, so a
 #: child name here would pass — but the convention it enforces there is exactness, and a second
@@ -52,9 +53,22 @@ def measure(label: str, call: Callable[[], None], rounds: int = ROUNDS) -> float
     connection, a topic lookup or a channel, none of which is what is being compared.
     """
     call()
-    samples = [_one(call) for _ in range(rounds)]
+    return report(label, [_one(call) for _ in range(rounds)])
+
+
+def report(label: str, samples: list[float]) -> float:
+    """Report the median of ``samples`` in microseconds, the way :func:`measure` reports its own.
+
+    Separate from `measure` for the one row that cannot be timed from here: timing a hand-off
+    *into* a thread has to start on the thread that hands it over, so that row collects its own
+    samples and brings them back. Same statistic and same line either way, which is the whole
+    point of this module.
+    """
     median = statistics.median(samples)
-    ninetieth = sorted(samples)[int(rounds * 0.9)]
+    # nearest rank: the p90 of 300 samples is the 270th, which is index 269. `int(n * 0.9)`
+    # names index 270 -- the 271st -- and for ten samples it names the maximum
+    ordered = sorted(samples)
+    ninetieth = ordered[math.ceil(len(ordered) * 0.9) - 1]
     logger.info('  %-46s %9.1f us   (p90 %9.1f)', label, median, ninetieth)
     return median
 

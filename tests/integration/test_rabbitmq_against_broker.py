@@ -146,24 +146,52 @@ def test_a_publish_that_cannot_be_routed_raises(broker, broker_channel, amqp_url
 def test_the_awaited_halves_work_off_the_loop(broker, amqp_url):
     """`apublish` and `adepth` go through a thread, because the driver is synchronous.
 
-    That hand-off is the price the driver decision put on this face — about 100 microseconds,
-    measured, which is what the other driver would have charged the synchronous caller. Worth
-    a case because a thread and a `BlockingConnection` are exactly the combination that
-    deadlocks when it is done wrong.
+    That hand-off is the price the driver decision put on this face — 67 to 85 microseconds,
+    measured, against the 121 to 131 the other driver would have charged the synchronous caller
+    on its face instead. Worth a case because a thread and a `BlockingConnection` are exactly
+    the combination that deadlocks when it is done wrong.
+
+    The depths alone cannot say whether the hand-off happened: they would read the same if
+    `apublish` called `publish` inline on the loop's own thread. So the thread each synchronous
+    half ran on is recorded, and none of them may be the loop's.
     """
+    # one list per method, not one between them: a single list is non-empty as soon as *either*
+    # half reaches its synchronous method, so a half that stopped calling its own would leave the
+    # assertion looking satisfied by the other one
+    publishing: list[int] = []
+    measuring: list[int] = []
+    published, measured = RabbitMQBroker.publish, RabbitMQBroker.depth
+
+    def watched_publish(self, payloads):
+        publishing.append(threading.get_ident())
+        return published(self, payloads)
+
+    def watched_depth(self):
+        measuring.append(threading.get_ident())
+        return measured(self)
+
     with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
 
         async def on_a_loop():
             await broker.apublish([])
             after_nothing = await broker.adepth()
             await broker.apublish([payload(11), payload(12)])
-            return after_nothing, await broker.adepth(), await broker.ainflight_depth()
+            return threading.get_ident(), after_nothing, await broker.adepth(), await broker.ainflight_depth()
 
-        after_nothing, after_two, inflight = asyncio.run(on_a_loop())
+        RabbitMQBroker.publish, RabbitMQBroker.depth = watched_publish, watched_depth
+        try:
+            loop_thread, after_nothing, after_two, inflight = asyncio.run(on_a_loop())
+        finally:
+            RabbitMQBroker.publish, RabbitMQBroker.depth = published, measured
 
         assert after_nothing == 0, 'awaiting an empty publish queued something'
         assert after_two == 2, 'the awaited publishes did not arrive'
         assert inflight == 0
+
+        assert publishing, 'apublish never reached publish, so this proves nothing about it'
+        assert measuring, 'adepth never reached depth, so this proves nothing about it'
+        assert loop_thread not in publishing, f'publish ran on the loop thread: {publishing}'
+        assert loop_thread not in measuring, f'depth ran on the loop thread: {measuring}'
 
 
 def test_waiting_for_a_message_returns_without_one(broker, amqp_url):

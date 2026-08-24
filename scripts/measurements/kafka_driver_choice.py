@@ -93,8 +93,8 @@ def _stopped(loop: asyncio.AbstractEventLoop, awaiting: AIOKafkaProducer) -> Non
 
     In that order, and in a ``finally``: stopping the loop first leaves the producer's sender
     task and its connections behind with nothing left to run them, which strands whatever the
-    last row queued and, on an async driver that notices, ends a successful run in a page of
-    pending-task warnings.
+    last row queued -- and on `aio_pika`, which notices, ended a successful run of the AMQP
+    script in a page of pending-task warnings.
     """
     try:
         asyncio.run_coroutine_threadsafe(awaiting.stop(), loop).result(30)

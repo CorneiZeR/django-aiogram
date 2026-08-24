@@ -138,8 +138,17 @@ transport you are not using is reported by `W003` as a key nothing reads, which 
 A publish here is **confirmed and mandatory**: the broker answers before `send()` returns, and
 a message that cannot be routed raises instead of vanishing into an exchange. That matches what
 the Redis transports already do — `RPUSH` answers with the new length — and it costs what the
-guarantee costs: measured, 170.7µs against 18.9µs for a publish nobody confirms, so roughly 8×
-a Redis list publish.
+guarantee costs: measured, 323–393µs against 15–20µs for the same publish with only the confirm
+taken off. Most of that is the disk rather than the round trip — the same publish without
+persistence is 135–173µs. A Redis list publish, measured the same way and on the same machine, is
+120–147µs.
+
+Those two are **not divided here**, and that is deliberate: they come from different scripts run
+at different times, so there is no pair of numbers from one run to divide. What they support is an
+ordering — this is the most expensive publish of the four, above Kafka's 166–295µs — and the
+ordering is also the only part that survives a change of footing. A *native* Redis publish was
+measured at 14–19µs in 3.1.0, and a multiple against that baseline would read quite differently
+from one against this.
 
 Nothing here needs `WORKER_NAME`. An unacknowledged message returns to the queue when the
 channel that held it drops, which is what a worker being killed does to it — so there is no
@@ -179,13 +188,16 @@ delays the commit rather than skipping it.
 
 The same shape has a sharper edge on `release`. There is no per-message nack in Kafka, so
 giving a message up means rewinding to its offset — and that record, together with every later
-one in its partition, is delivered again. **Build idempotency on your own business key**, which the delivery page recommends
-generally and which matters most here.
+one in its partition, is delivered again. **Build idempotency on your own business key**, which
+the delivery page recommends generally and which matters most here.
 
-**A publish waits for the broker** — 166 to 295µs for one message, across ten runs. `produce()`
-itself answers in 0.2µs because librdkafka's own thread does the I/O, and returning there would
-be a weaker promise than `RPUSH` already makes. Automatic topic creation is the broker's setting, not this
-package's: with it off, a missing topic is a refusal at publish time.
+**A publish waits for the broker** — 166 to 295µs for one message, across eleven runs. On the
+same footing a Redis list publish is 120–147µs and RabbitMQ's confirmed one 323–393, which puts
+this between them; the numbers are not divided against each other, for the reason the AMQP
+section above gives. `produce()` itself answers in 0.2µs because librdkafka's own thread does the
+I/O, and returning there would be a weaker promise than `RPUSH` already makes. Automatic topic
+creation is the broker's setting, not this package's: with it off, a missing topic is a refusal at
+publish time.
 
 Nothing here needs `WORKER_NAME`. A consumer that dies stops heartbeating, the group
 rebalances, and its partitions go to another member from the last committed offset — so

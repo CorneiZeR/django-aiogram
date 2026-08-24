@@ -32,7 +32,7 @@ Entries land here as the work does; nothing below is released.
   ```text
                                     queued locally   waited for the ack
   confluent-kafka, synchronous           0.2 - 0.3us          166 - 295us
-  aiokafka, handed to a loop thread        66 - 75us          354 - 492us
+  aiokafka, handed to a loop thread        66 - 75us          351 - 492us
   ```
 
   Ranges rather than single numbers, and that is the point: a first run of this showed 479
@@ -45,10 +45,12 @@ Entries land here as the work does; nothing below is released.
   `aiokafka` ships no `py3-none-any` wheel either, so both drivers are compiled and there is no
   portability difference.
 
-  **A publish waits for the broker** — 166 to 295µs for one message, across ten runs.
-  `produce()` answers in 0.2µs because librdkafka's own thread does the I/O, and returning there
-  would be weaker than the promise `RPUSH` already makes. How that compares with the other three
-  is a question about all four on one footing, which is not this entry's to answer.
+  **A publish waits for the broker** — 166 to 295µs for one message, across eleven runs. On the
+  footing every number in this release is measured on, a Redis list publish is 120–147µs and
+  RabbitMQ's confirmed one 323–393, which puts this between them. Not divided against them: the
+  three come from scripts run separately, so there is no single run to take a ratio from.
+  `produce()` answers in 0.2µs because librdkafka's own thread does the I/O, and returning
+  there would be weaker than the promise `RPUSH` already makes.
 
   Which is why the producer sets **`linger.ms` to 0**. The driver holds a batch open for 5ms by
   default, waiting for records to join it, and a send here is a batch of one that then waits for
@@ -106,29 +108,50 @@ Entries land here as the work does; nothing below is released.
   the `await` half — is wrong, and the first measurement that said so was wrong too:
   `aio_pika.Connection.channel()` confirms publishes by default and `pika`'s does not, so
   comparing them directly put a confirmed publish next to fire-and-forget. Held constant, on
-  RabbitMQ 4 over loopback, median of 300 publishes:
+  RabbitMQ 4 over loopback, medians of 300 publishes, six runs, each row emptying the queue
+  first and publishing exactly what this transport publishes — persistent and `mandatory`, with
+  only the confirm varying:
 
   ```text
-                                          unconfirmed   confirmed
-  pika, synchronous, its own face              18.9us      170.7us
-  aio-pika, handed to a loop thread           119.2us      290.6us
-  pika, awaited via asyncio.to_thread         120.1us            —
+                                          unconfirmed     confirmed
+  pika, on its own synchronous face          15 - 20us   323 - 393us
+  aio-pika, reached by a sync caller       121 - 131us   456 - 511us
+  pika, reached from a coroutine            67 - 85us   404 - 406us
   ```
 
-  The decisive part is that two of those are the same number. Crossing the thread boundary
-  costs about 100µs whichever driver is used, so the question is which face pays it — and the
-  faces are not equal. `bot.send()` is called from views, tasks and management commands;
-  `asend()` is for ASGI and is rarer. `pika` charges the rare one and leaves the common one at
-  18.9µs. `aio-pika` also cannot serve a synchronous caller simply: its connections are
+  Each driver has exactly one face it must bridge, and **the two bridges do not cost the same**.
+  Reaching a thread from a coroutine is 67–85µs; reaching a loop from a synchronous caller is
+  121–131µs — about half, 0.53 to 0.64 times. An earlier version of this measured pika's bridge
+  from the caller instead of from the loop, which added the hand-off the other row *is*, and the
+  two then looked like the same number; the conclusion drawn from that — "the hand-off is the
+  price, not the library" — was true of the arithmetic and not of the drivers.
+
+  So `pika` wins twice. It is free on the face this package's traffic uses: `bot.send()` is
+  called from views, tasks and management commands, at 15–20µs unconfirmed with nothing to
+  bridge. And it is the cheaper of the two on the rare face, where `asend()` reaches it from a
+  coroutine. `aio-pika` also cannot serve a synchronous caller simply: its connections are
   loop-affine, so `async_to_sync` over one built elsewhere raises `attached to a different
   loop`, exactly as `redis.asyncio` does.
 
-  **Publishes are confirmed and mandatory**, which costs 170.7µs against 18.9µs. That buys the
-  promise the package already makes: `RPUSH` answers with the new length, so a Redis publish is
-  acknowledged before `send()` returns and a failure raises. Unconfirmed AMQP publishing is
-  weaker than that — a broker that dies before persisting the message loses it in silence — so
-  the RabbitMQ transport is about 8× a Redis list publish, and that is the guarantee rather than
-  the driver.
+  **Publishes are confirmed, mandatory and persistent**, which costs 323–393µs against 15–20µs
+  for the same publish with only the confirm taken off. That buys the promise the package
+  already makes: `RPUSH` answers with the new length, so a Redis publish is acknowledged before
+  `send()` returns and a failure raises. Unconfirmed AMQP publishing is weaker than that — a
+  broker that dies before persisting the message loses it in silence — so this is the most
+  expensive publish of the four, above Kafka's 166–295µs and a Redis list publish's 120–147 on the
+  same machine and virtualisation. Those figures are not divided against each other: they come
+  from different scripts run at different times, so there is no pair from one run to take a ratio
+  from, and an ordering is what they support. That ordering is the guarantee rather than the
+  driver, and most of it is the disk: dropping persistence alone takes the same publish to
+  135–173µs.
+
+  **The multiple is not portable, and earlier drafts of this entry quoted one that was not
+  measured.** All four numbers here come from brokers in containers on one laptop, where the
+  virtualised loopback is most of a Redis publish; 3.1.0 measured a native list publish at
+  14–19µs, and against *that* baseline the same AMQP publish is twenty times rather than two and
+  a half. What survives a change of footing is the ordering — Streams ≤ list < Kafka < RabbitMQ
+  — so `scripts/measurements/redis_baseline.py` is shipped alongside the other two to make the
+  divisor visible rather than assumed.
 
   `RABBITMQ_URL` and `RABBITMQ_QUEUE` are both required. `RABBITMQ_PREFETCH` defaults to
   unlimited on purpose: `MAX_IN_FLIGHT` already bounds unacknowledged sends, and a prefetch
