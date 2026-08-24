@@ -119,7 +119,7 @@ Entries land here as the work does; nothing below is released.
 
   Each driver has exactly one face it must bridge, and **the two bridges do not cost the same**.
   Reaching a thread from a coroutine is 67–85µs; reaching a loop from a synchronous caller is
-  121–131µs — about half, 0.55 to 0.64 times. An earlier version of this measured pika's bridge
+  121–131µs — about half, 0.54 to 0.64 times. An earlier version of this measured pika's bridge
   from the caller instead of from the loop, which added the hand-off the other row *is*, and the
   two then looked like the same number; the conclusion drawn from that — "the hand-off is the
   price, not the library" — was true of the arithmetic and not of the drivers.
@@ -131,7 +131,7 @@ Entries land here as the work does; nothing below is released.
   loop-affine, so `async_to_sync` over one built elsewhere raises `attached to a different
   loop`, exactly as `redis.asyncio` does.
 
-  **Publishes are confirmed, mandatory and persistent**, which costs 323–393µs against 18–20µs
+  **Publishes are confirmed, mandatory and persistent**, which costs 323–393µs against 15–20µs
   for the same publish with only the confirm taken off. That buys the promise the package
   already makes: `RPUSH` answers with the new length, so a Redis publish is acknowledged before
   `send()` returns and a failure raises. Unconfirmed AMQP publishing is weaker than that — a

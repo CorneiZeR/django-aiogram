@@ -138,7 +138,7 @@ transport you are not using is reported by `W003` as a key nothing reads, which 
 A publish here is **confirmed and mandatory**: the broker answers before `send()` returns, and
 a message that cannot be routed raises instead of vanishing into an exchange. That matches what
 the Redis transports already do — `RPUSH` answers with the new length — and it costs what the
-guarantee costs: measured, 323–393µs against 18–20µs for the same publish with only the confirm
+guarantee costs: measured, 323–393µs against 15–20µs for the same publish with only the confirm
 taken off. Most of that is the disk rather than the round trip — the same publish without
 persistence is 135–173µs. Against a Redis list publish measured the same way, on the same machine
 and the same virtualisation, it is roughly two to three times: 120–147µs there. Read the

@@ -221,9 +221,10 @@ def test_asking_the_depth_does_not_join_the_group(broker, kafka_bootstrap, kafka
 def test_the_awaited_halves_work_off_the_loop(broker, kafka_bootstrap, kafka_topic):
     """`apublish` and `adepth` go through a thread, because the driver is synchronous.
 
-    The hand-off is a fraction of the wait and invisible here: waiting for the broker's
-    acknowledgement costs five times that, which is the measurement that made the driver choice
-    a question about the consumer rather than about latency.
+    What that hand-off costs has not been measured for this driver, and the ratio this docstring
+    used to quote came from the AMQP script -- a different library on a different broker. What
+    *is* measured here is the wait: 166 to 295 microseconds for the acknowledgement, which is
+    what made the driver choice a question about the consumer rather than about latency.
     """
     with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
 

@@ -143,7 +143,16 @@ def test_the_baseline_times_the_command_its_transport_publishes_with(command, tr
 #: dash, so the pattern needs the character, and the literal reads as a hyphen at a glance
 SPAN = re.compile(r'(\d+(?:\.\d+)?)\s*(?:to|[\u2013-])\s*(\d+(?:\.\d+)?)\s*(?:\u00b5s|us\b|microseconds)')
 
-QUOTING = [*sorted(str(path) for path in pathlib.Path('src').rglob('*.py')), 'pyproject.toml']
+#: everywhere a measured span is quoted: the code, the packaging comment that explains an extra,
+#: and the prose. The changelog is read only as far as its first released heading -- a released
+#: section is frozen history and must not be dragged to match a number re-taken since
+QUOTING = [
+    *sorted(str(path) for path in pathlib.Path('src').rglob('*.py')),
+    'pyproject.toml',
+    'CHANGELOG.md',
+    'docs/wiki/Settings.md',
+    'docs/wiki/Delivery.md',
+]
 
 
 def spans(relative):
@@ -152,9 +161,16 @@ def spans(relative):
     Flattened because these are prose: a span written across a line break matches nothing
     otherwise, which is how `354 to 492` survived three sweeps for it while five other places
     said 351.
+
+    The changelog is read only down to its second `## ` heading. Everything below that is
+    released, and a released entry records what was measured then -- holding it to a number
+    re-taken since would make the test demand that history be rewritten.
     """
-    flat = re.sub(r'\s+', ' ', (ROOT / relative).read_text())
-    return set(SPAN.findall(flat))
+    text = (ROOT / relative).read_text()
+    if relative == 'CHANGELOG.md':
+        headings = [match.start() for match in re.finditer(r'^## ', text, re.MULTILINE)]
+        text = text[headings[0] : headings[1]]
+    return set(SPAN.findall(re.sub(r'\s+', ' ', text)))
 
 
 @pytest.mark.parametrize('source', QUOTING)
@@ -175,6 +191,36 @@ def test_every_quoted_span_is_one_the_measurements_recorded(source):
 
     unrecorded = {f'{low}-{high}' for low, high in spans(source) - recorded}
     assert not unrecorded, f'{source} quotes {sorted(unrecorded)}, which the README does not record'
+
+
+def test_the_aio_pika_row_publishes_the_same_promise():
+    """The other driver's row has to make the same promise, or the comparison is of two things.
+
+    `basic_publish` is pika's spelling; aio-pika publishes through `default_exchange.publish`
+    with the durability on the message rather than on the call. Checking only the first leaves
+    the row this one is compared against free to drop persistence -- which is the defect the
+    whole guarantee-constant rule exists to catch, and it would show up as aio-pika looking
+    faster.
+    """
+    tree = parsed('scripts/measurements/amqp_driver_choice.py')
+    # the exchange's method, not any call spelled `publish`: the script also has an inner
+    # coroutine of that name, and matching it would assert about the wrong thing
+    published = [call for call in calls_to(tree, 'publish') if isinstance(call.func, ast.Attribute)]
+    assert published, 'the script no longer publishes through an exchange'
+
+    for call in published:
+        passed = keywords(call)
+        assert passed.get('mandatory') == 'True', (
+            f'an aio-pika publish without mandatory=True lets an unroutable message vanish: {passed}'
+        )
+
+    messages = calls_to(tree, 'Message')
+    assert messages, 'the script builds no aio_pika.Message'
+    for built in messages:
+        mode = keywords(built).get('delivery_mode', '')
+        assert 'PERSISTENT' in mode.upper(), (
+            f'delivery_mode {mode!r} on the message means the broker answers before it writes'
+        )
 
 
 def test_both_drivers_are_measured_at_the_same_batching_setting():

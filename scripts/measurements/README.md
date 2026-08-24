@@ -73,10 +73,12 @@ python -m venv .measure
 for the baseline, which needs no group of its own.
 
 ```shell
-docker run -d --rm --name amqp -p 5673:5672 rabbitmq:4
+# pinned, like the Kafka image below: `rabbitmq:4` and `redis:8` move, and a run that follows
+# this file should be able to reproduce the table rather than a later broker's timings
+docker run -d --rm --name amqp -p 5673:5672 rabbitmq:4.3.5
 .measure/bin/python -m scripts.measurements.amqp_driver_choice
 
-docker run -d --rm --name redis -p 6399:6379 redis:8
+docker run -d --rm --name redis -p 6399:6379 redis:8.10.0
 .measure/bin/python -m scripts.measurements.redis_baseline
 ```
 
@@ -103,9 +105,10 @@ docker run -d --rm --name kafka -p 9093:9093 \
 
 ## What they answered
 
-One machine, loopback, CPython 3.13.14, RabbitMQ 4.3.5 and Apache Kafka 4.3.1, with pika 1.4.4,
-aio-pika 10.0.1, confluent-kafka on librdkafka 2.15.0 and aiokafka 0.14.0. Versions rather than
-"4", because a broker or a driver release is exactly the sort of thing that moves these.
+One machine, loopback, CPython 3.13.14, with RabbitMQ 4.3.5, Apache Kafka 4.3.1 and Redis
+8.10.0, and pika 1.4.4, aio-pika 10.0.1, confluent-kafka on librdkafka 2.15.0 and aiokafka
+0.14.0. Versions rather than "4", because a broker or a driver release is exactly the sort of
+thing that moves these — which is why the recipes above name them too.
 
 | AMQP | unconfirmed | confirmed |
 | --- | --- | --- |
@@ -130,7 +133,7 @@ acknowledged one.
 
 **RabbitMQ: `pika`.** Each driver has one face it has to bridge, and the two bridges do not cost
 the same: reaching a *thread* from a coroutine is 67–85 µs, reaching a *loop* from a synchronous
-caller is 121–131 µs — about half, 0.55 to 0.64 times, four runs. An earlier version of this
+caller is 121–131 µs — about half, 0.54 to 0.64 times, five runs. An earlier version of this
 measured the pika bridge from the caller rather than from the loop, which added the very
 hand-off the other row *is*, and the two then looked like the same number.
 

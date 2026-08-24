@@ -52,14 +52,23 @@ _bridged = threading.local()
 
 
 def main() -> None:
-    """Measure both drivers on both faces and report what the numbers decide."""
+    """Measure both drivers on both faces and report what the numbers decide.
+
+    Each thing is released by the ``finally`` of the block that acquired it, rather than by one
+    teardown at the end: opening the aio-pika side is itself a step that can fail, and a single
+    ``try`` entered after both factories have returned would leak the pika connections when the
+    second one raised. The rule is that a failed run leaves the broker as it was found too.
+    """
     configure_reporting()
     plain, confirming = _pika_channels()
-    loop, connection, unconfirmed_channel, confirmed_channel = _aio_pika_channels()
     try:
-        _report(plain, confirming, loop, unconfirmed_channel, confirmed_channel)
+        loop, connection, unconfirmed_channel, confirmed_channel = _aio_pika_channels()
+        try:
+            _report(plain, confirming, loop, unconfirmed_channel, confirmed_channel)
+        finally:
+            _tear_down_aio_pika(loop, connection)
     finally:
-        _tear_down(plain, confirming, loop, connection)
+        _tear_down_pika(plain, confirming)
 
 
 def _report(
@@ -274,24 +283,33 @@ def _purged(call: Callable[[], None], keeper: BlockingChannel) -> Callable[[], N
     return once
 
 
-def _tear_down(
-    plain: BlockingChannel,
-    confirming: BlockingChannel,
-    loop: asyncio.AbstractEventLoop,
-    connection: aio_pika.abc.AbstractRobustConnection,
-) -> None:
-    """Close what was opened and leave the broker as it was found.
+def _tear_down_aio_pika(loop: asyncio.AbstractEventLoop, connection: aio_pika.abc.AbstractRobustConnection) -> None:
+    """Close the aio-pika connection on its own loop, then stop that loop.
 
-    The aio-pika connection is closed on the loop that owns it and *before* the loop stops:
-    stopping first leaves its reader, writer and heartbeat tasks pending, which is what made a
-    successful run end in a page of ``Task was destroyed but it is pending``. The queue goes last
-    because it is the only durable trace a run leaves behind.
+    In that order: stopping first leaves the connection's reader, writer and heartbeat tasks
+    pending, which is what made a successful run end in a page of ``Task was destroyed but it is
+    pending``. The loop is stopped from a ``finally`` because a close that times out must not
+    leave the thread turning.
     """
-    asyncio.run_coroutine_threadsafe(connection.close(), loop).result(30)
-    loop.call_soon_threadsafe(loop.stop)
-    plain.queue_delete(QUEUE)
-    plain.connection.close()
-    confirming.connection.close()
+    try:
+        asyncio.run_coroutine_threadsafe(connection.close(), loop).result(30)
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+
+
+def _tear_down_pika(plain: BlockingChannel, confirming: BlockingChannel) -> None:
+    """Delete the run's queue and close both synchronous connections.
+
+    The queue goes first because it is the only durable trace a run leaves behind, and each
+    close is in a ``finally`` of its own so that one failing does not strand the other.
+    """
+    try:
+        plain.queue_delete(QUEUE)
+    finally:
+        try:
+            plain.connection.close()
+        finally:
+            confirming.connection.close()
 
 
 if __name__ == '__main__':
