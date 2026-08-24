@@ -26,9 +26,8 @@ Entries land here as the work does; nothing below is released.
   Kafka settles a *position*.
 
   **`confluent-kafka`, not `aiokafka`**, decided by the consumer being a thread: a synchronous
-  driver belongs in one, and `aiokafka` would need an event loop inside it — the machinery that
-  lost `aio-pika` the RabbitMQ decision. On Apache Kafka 4 over loopback, both waiting for the
-  broker, it is the faster one as well:
+  driver belongs in one, and an async-native driver would need an event loop inside it. On
+  Apache Kafka 4 over loopback, both waiting for the broker, it is the faster one as well:
 
   ```text
                                     queued locally   waited for the ack
@@ -46,7 +45,7 @@ Entries land here as the work does; nothing below is released.
   `aiokafka` ships no `py3-none-any` wheel either, so both drivers are compiled and there is no
   portability difference.
 
-  **A publish waits for the broker** — 166 to 295µs for one message, across nine runs.
+  **A publish waits for the broker** — 166 to 295µs for one message, across ten runs.
   `produce()` answers in 0.2µs because librdkafka's own thread does the I/O, and returning there
   would be weaker than the promise `RPUSH` already makes. How that compares with the other three
   is a question about all four on one footing, which is not this entry's to answer.

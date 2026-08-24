@@ -1,7 +1,7 @@
-"""Which Kafka driver to use, measured the same way — and the answer is not about latency.
+"""Which Kafka driver to use, and the answer is not the one latency alone would give.
 
-The same 2x2 as the AMQP one, with the guarantee held constant: ``produce`` answers locally, so
-a run that does not wait for the broker is measuring librdkafka's queue rather than a delivery.
+Both drivers on both faces, with the guarantee held constant: ``produce`` answers locally, so a
+run that does not wait for the broker is measuring librdkafka's queue rather than a delivery.
 
 The first run of this said the two drivers were the same speed and the conclusion was written
 down as "latency does not decide it". Repeating it on a warm broker said otherwise —
@@ -24,8 +24,8 @@ from confluent_kafka import Producer
 from confluent_kafka.admin import AdminClient, NewTopic
 from scripts.measurements._timing import configure_reporting, logger, measure, run_name
 
-#: fewer rounds than the AMQP measurement: every confirmed produce here is a broker round trip
-#: of about half a millisecond, so 200 is already half a minute of waiting
+#: 200 rather than more: every confirmed produce here is a broker round trip of about half a
+#: millisecond, so this is already half a minute of waiting
 ROUNDS = 200
 BOOTSTRAP = os.environ.get('DJANGO_AIOGRAM_TEST_KAFKA_BOOTSTRAP', '127.0.0.1:9093')
 TOPIC = run_name('kafka')
@@ -193,8 +193,8 @@ def _confirm_one(producer: Producer) -> None:
 def _aiokafka_producer() -> tuple[asyncio.AbstractEventLoop, AIOKafkaProducer]:
     """Start a loop on a thread of its own and a producer on it.
 
-    A thread for the reason the AMQP measurement needs one: this is what a synchronous caller
-    would have to do to reach an async-native driver.
+    A thread because that is what a synchronous caller would have to do to reach an
+    async-native driver, and the synchronous caller is the one this package has.
     """
     loop = asyncio.new_event_loop()
     threading.Thread(target=loop.run_forever, daemon=True).start()
