@@ -4,9 +4,9 @@ Run [aiogram](https://docs.aiogram.dev/) in a container next to Django, write
 handlers as ordinary Django app code, and send Telegram messages from anywhere
 in the project.
 
-Only the bot container runs the polling loop. Elsewhere `send()` queues the
-message through Redis and returns; `send_raw()` skips the queue and talks to
-Telegram from the calling process.
+Only the bot container runs the polling loop. Elsewhere `send()` queues the message and
+returns; which queue that is — a Redis list or stream, an AMQP queue, a Kafka topic — is what
+`BROKER` names. `send_raw()` skips the queue and talks to Telegram from the calling process.
 
 ```python
 from django_aiogram import bot

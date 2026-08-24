@@ -325,7 +325,9 @@ soon as step 2 holds.
 
 ## 7. Re-silence checks if you had to
 
-Ids moved from `telegram_bot.EXXX` to `django_redis_aiogram.EXXX`.
+Ids moved from `telegram_bot.EXXX` to `django_redis_aiogram.EXXX` — and in 4.0 to
+`django_aiogram.EXXX`, which is the prefix to silence if you are reading this page on the way
+from 1.x to 4.0 rather than stopping at 2.0.
 
 ## Behavior that changed by itself
 

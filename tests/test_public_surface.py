@@ -189,7 +189,10 @@ def test_the_redis_client_is_shared_and_lives_in_its_own_module(redis_server):
     # `django_aiogram.redis.get_redis`, and a reference taken here would keep pointing at the
     # real one -- the same trap `tests/conftest.py` names for lazily imported transports
     assert redis_module.get_redis() is redis_server
-    assert redis_module.redis_conn.ping() == redis_server.ping()
+    # identity, not a matching answer: `ping() == ping()` is True for any two live connections,
+    # so it would pass while `redis_conn` opened one of its own -- which is the contract this
+    # case is named for
+    assert redis_module.redis_conn.connection_pool is redis_server.connection_pool
 
     assert not hasattr(TelegramBot(), 'redis_conn'), 'the client kept a transport-named property'
     assert not hasattr(django_aiogram, 'redis_conn'), 'the package still exports it'

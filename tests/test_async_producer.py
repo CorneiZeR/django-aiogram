@@ -14,6 +14,7 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
+from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 from redis.exceptions import (
     ConnectionError,  # noqa: A004 - shadowing the builtin is the point: this is what redis-py raises
@@ -240,6 +241,34 @@ def test_the_ids_come_back_in_the_order_the_chats_were_given(redis_server, bulk)
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_broker_that_cannot_be_resolved_does_not_spend_the_mention(caplog, monkeypatch):
+    """The once-per-process line belongs to the first caller who can act on it.
+
+    `aenqueue` used to be named before the broker was resolved, so a call that then raised on a
+    misconfigured `BROKER` wrote nothing, said nothing, and left the latch set — and the first
+    caller who *could* have moved to the awaiting twin heard silence.
+    """
+    latch = threading.Event()
+    monkeypatch.setattr('django_aiogram.producer.client._asend_mentioned', latch)
+
+    def refuse():
+        msg = 'BROKER names something that cannot be imported'
+        raise ImproperlyConfigured(msg)
+
+    monkeypatch.setattr('django_aiogram.producer.client.get_broker', refuse)
+    instance = TelegramBot()
+
+    async def one_send():
+        with pytest.raises(ImproperlyConfigured):
+            instance.enqueue(chat_id=1, text='hi')
+
+    with caplog.at_level('WARNING', logger='django_aiogram'):
+        asyncio.run(one_send())
+
+    assert not latch.is_set(), 'a call that queued nothing spent the once-per-process mention'
+    assert not [r for r in caplog.records if MENTION in r.getMessage()], 'it also said it'
+
+
 def test_send_from_a_loop_mentions_asend_once(redis_server, caplog, monkeypatch):
     """Said once, and not a `DeprecationWarning`.
 

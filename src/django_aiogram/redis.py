@@ -387,8 +387,9 @@ def as_bytes(value: bytes | str) -> bytes:
 class RedisProxy:
     """Forwards attribute access to the lazily created connection.
 
-    Exists so `from django_aiogram import redis_conn` stays a plain
-    module-level import without connecting at import time.
+    Exists so ``from django_aiogram.redis import redis_conn`` stays a plain module-level import
+    without connecting at import time. The package exported this name until 4.0, which stopped
+    handing out one transport's client from a package that carries four.
     """
 
     def __getattr__(self, item: str) -> Any:  # noqa: ANN401 - a forwarded Redis method may return anything

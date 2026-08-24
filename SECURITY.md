@@ -52,7 +52,7 @@ default**.
 `ALLOW_PICKLE` lifts the refusal. It exists as the escape hatch for payloads
 JSON cannot describe — not as a migration aid — so treat turning it on as
 extending the bot container's trust boundary to everything that can write to
-the Redis list:
+the queue, whichever broker holds it:
 
 ```python
 TELEGRAM_BOT = {

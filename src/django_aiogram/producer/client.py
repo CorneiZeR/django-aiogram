@@ -1265,7 +1265,7 @@ class TelegramBot:
     ) -> uuid.UUID:
         """Queue a message for the bot worker to deliver, whichever transport carries it.
 
-        Named for what happens rather than for where it lands: this was ``enqueue`` when
+        Named for what happens rather than for where it lands: this was ``send_redis`` when
         Redis was the only answer, and the queue is now a list, a stream, an AMQP queue or a
         Kafka topic depending on ``BROKER``. `send` decides between this and delivering
         directly; this one always queues.
@@ -1276,13 +1276,17 @@ class TelegramBot:
         if not accepted:
             return identifier
 
-        _mention_asend('aenqueue')
         # before the context manager, like the awaiting twin does: a `BROKER` that cannot be
         # resolved is a misconfiguration, and inside `queueing` it would be recorded as a
         # *queueing* drop — which the event log defines as a write that may still have been
         # applied, so re-sending may duplicate. Nothing was written, and the two producers
         # promise the same rows
         broker = get_broker()
+        # after the broker resolves, not before: the mention fires once per process, so a call
+        # that is about to raise on a misconfigured `BROKER` would otherwise spend it and leave
+        # the first caller who could have acted on the advice hearing nothing. Same reasoning as
+        # `check_function` in `send`, one failure mode further along
+        _mention_asend('aenqueue')
         with queueing(function, [(identifier, kwargs)]) as write:
             broker.publish(write.payloads)
         return identifier

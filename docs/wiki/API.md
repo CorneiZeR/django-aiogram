@@ -32,7 +32,7 @@ the function if that matters.
 | `bot.loop` | the event loop this bot's work runs on | on first use, one per instance |
 | `bot.router` | the `Router` the decorators register on | with the instance |
 | `bot.max_retries` | how many times a rate-limited send is retried | from `MAX_RETRIES`, or the constructor |
-| `bot.enabled` | whether this process should reach Telegram or the broker at all | read per access |
+| `bot.enabled` | whether this process should send at all; the depth reads below are the exception | read per access |
 | `bot.rate_limiter` | the limiter for this token, shared with any other instance holding it | on first use |
 | `bot.is_worker` | whether this process is the one polling Telegram | read per access |
 
