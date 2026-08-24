@@ -243,6 +243,9 @@ jobs:
       - run: python -m pytest -q -m integration tests/integration/test_kafka_against_broker.py
         env:
           DJANGO_AIOGRAM_TEST_KAFKA_BOOTSTRAP: localhost:9092
+      # and the transport's unit module, which needs no broker but does need the driver: one of
+      # its cases reaches a method that imports it, and this is the only leg that installs it
+      - run: python -m pytest -q tests/test_kafka_publish.py
 
   smoke:
     # the unit suite imports from src/, so only an install can catch a packaging

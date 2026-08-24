@@ -182,6 +182,11 @@ def test_depth_spends_one_timeout_across_its_calls_rather_than_one_each(broker, 
     makes them fall, a timeout each makes them identical. Five calls here — the topic, the
     committed offsets, and one watermark per partition.
     """
+    # the only case here that needs the driver installed: `depth()` imports `TopicPartition` to
+    # name the partitions it asks about, and the unit legs install `.[redis]` alone. The Kafka
+    # leg has it and runs this module, so the case is exercised rather than quietly skipped
+    pytest.importorskip('confluent_kafka')
+
     metadata = Metadata(partitions=3)
     monkeypatch.setattr('django_aiogram.broker.kafka.broker.metadata_client', lambda *_args: metadata)
 
