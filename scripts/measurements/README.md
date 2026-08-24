@@ -21,7 +21,7 @@ on, and the decision rests on the column where they both wait.
 
 **Run it more than once.** The first single run of this showed 479µs against 502 and "latency
 does not decide it" went into the changelog on the strength of it. Repeating it on a warm broker
-said 1.4 to 2.2 times instead — the parity was a cold cluster. Every figure below is a span
+said 1.3 to 2.2 times instead — the parity was a cold cluster. Every figure below is a span
 across runs for that reason, and the ratio is each run paired against itself: dividing the spans
 against each other would read 1.5 to 3.0 and describe a run that never happened.
 
@@ -82,7 +82,7 @@ release is exactly the sort of thing that moves these:
 | `aiokafka`, via a loop thread | 66 – 75 µs | 354 – 492 µs |
 
 **`confluent-kafka`.** The consumer is a thread, where a synchronous driver belongs; `aiokafka`
-would need an event loop inside it. It is also 1.4 to 2.2 times faster on the face that waits,
+would need an event loop inside it. It is also 1.3 to 2.2 times faster on the face that waits,
 run for run. Both spreads are about 40 per cent of their own floor, which is what a laptop's
 broker does to a half-millisecond round trip — the gap between the drivers is what survives it.
 

@@ -50,7 +50,7 @@ redis = ["redis>=6.2"]
 # synchronous path wins, and that is where `bot.send()` is called from. 18.9us there
 rabbitmq = ["pika>=1.3"]
 # confluent-kafka rather than aiokafka. The consumer is a thread, where a synchronous driver
-# belongs — and, measured over seven runs with both waiting for the broker, it is also the
+# belongs — and, measured over nine runs with both waiting for the broker, it is also the
 # faster one: 166-295us against 354-492us, each run paired against itself. A single earlier run showed parity (479 against 502)
 # on a cold broker and that reading did not survive repetition. The plan's other argument was
 # false and is recorded so it is not reopened: aiokafka ships no py3-none-any wheel either

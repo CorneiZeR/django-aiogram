@@ -125,7 +125,7 @@ class KafkaBroker(Broker):
         ``produce`` answers locally — measured at 0.2 microseconds, because librdkafka's own
         thread does the I/O — and returning there would be a weaker promise than the rest of
         this package makes. So the delivery callbacks are waited for, at 166 to 295 microseconds
-        for one message across seven runs. Where that sits among the four is a question about
+        for one message across nine runs. Where that sits among the four is a question about
         all four measured on one footing, which `scripts/measurements` answers and this does not.
 
         Waited for by counting *this call's* callbacks rather than by flushing. The producer is
@@ -173,7 +173,7 @@ class KafkaBroker(Broker):
 
         The driver is synchronous, and the hand-off costs about 100 microseconds — which is
         most of what an awaited publish adds here, because the broker's acknowledgement costs
-        roughly twice that. Measured across seven runs, awaiting `aiokafka` natively is 354 to
+        roughly twice that. Measured across nine runs, awaiting `aiokafka` natively is 354 to
         492 microseconds against 166 to 295 for this.
         """
         if not payloads:
@@ -436,6 +436,11 @@ class KafkaBroker(Broker):
         And through a client that never subscribes, which is the part that matters more: a
         subscription is group membership, so asking the depth from a web process used to make
         it a member and hand it partitions nobody would poll.
+
+        ``KAFKA_TIMEOUT`` bounds the whole call rather than each of the driver calls inside it.
+        There are two plus one per partition, so a per-call timeout would let an unreachable
+        broker hold a healthcheck for that many multiples of it — and this is the method a
+        healthcheck uses, where a probe that outlasts its own budget reads as a dead worker.
         """
         from confluent_kafka import TopicPartition  # noqa: PLC0415 - the driver is an extra
 
@@ -446,16 +451,17 @@ class KafkaBroker(Broker):
         # the consumer it was checking on
         consumer = metadata_client(self._bootstrap(), str(self.option('KAFKA_GROUP')), self._timeout())
         topic = self._topic()
-        described = consumer.list_topics(topic, timeout=self._timeout()).topics.get(topic)
+        deadline = time.monotonic() + self._timeout()
+        described = consumer.list_topics(topic, timeout=_left(deadline)).topics.get(topic)
         if described is None or described.error is not None:
             # the topic does not exist yet, so nothing is waiting in it. A publish would
             # create it or refuse, and either way that is `publish`'s report to make
             return 0
         parts = [TopicPartition(topic, number) for number in sorted(described.partitions)]
-        committed = {part.partition: part.offset for part in consumer.committed(parts, timeout=self._timeout())}
+        committed = {part.partition: part.offset for part in consumer.committed(parts, timeout=_left(deadline))}
         waiting = 0
         for part in parts:
-            low, high = consumer.get_watermark_offsets(part, timeout=self._timeout(), cached=False)
+            low, high = consumer.get_watermark_offsets(part, timeout=_left(deadline), cached=False)
             position = committed.get(part.partition, _NO_OFFSET)
             waiting += max(0, high - (low if position == _NO_OFFSET else position))
         # minus what this process is holding, because taking a message on Kafka moves nothing:
@@ -565,6 +571,16 @@ class _Batch:
             if error is not None:
                 self._failures.append(str(error))
             self._outstanding -= 1
+
+
+def _left(deadline: float) -> float:
+    """Give what is left before ``deadline``, never zero: zero means 'do not block at all'.
+
+    librdkafka reads a timeout of 0 as a poll rather than as an expiry, so a call handed the
+    remainder of an exhausted deadline would come back with 'nothing' instead of an error. A
+    millisecond is the smallest thing that still means 'ask'.
+    """
+    return max(0.001, deadline - time.monotonic())
 
 
 def _position(handle: object) -> tuple[int, int, int]:

@@ -5,7 +5,7 @@ a run that does not wait for the broker is measuring librdkafka's queue rather t
 
 The first run of this said the two drivers were the same speed and the conclusion was written
 down as "latency does not decide it". Repeating it on a warm broker said otherwise —
-``confluent-kafka`` is 1.4 to 2.2 times faster with both waiting — so the parity was a cold
+``confluent-kafka`` is 1.3 to 2.2 times faster with both waiting — so the parity was a cold
 cluster rather than a finding. That is why this is kept rather than remembered: **run it three
 times before believing it**, which the first attempt did not.
 
@@ -52,10 +52,7 @@ def main() -> None:
     try:
         _report()
     finally:
-        # waited for, like the creation: `delete_topics` returns futures, and a process that
-        # exits without reading them can leave the topic standing -- measured, it did
-        for future in admin.delete_topics([TOPIC]).values():
-            future.result(timeout=30)
+        _deleted(admin)
 
 
 def _report() -> None:
@@ -121,12 +118,42 @@ def _declared() -> AdminClient:
     admin = AdminClient({'bootstrap.servers': BOOTSTRAP})
     for future in admin.create_topics([NewTopic(TOPIC, num_partitions=1, replication_factor=1)]).values():
         future.result(timeout=30)
-    for _ in range(100):
-        if TOPIC in admin.list_topics(timeout=10).topics:
-            return admin
-        time.sleep(0.1)
+    # from here the topic exists, so every way out of this function has to remove it: the
+    # caller's cleanup only runs once this has returned, and a readiness check that times out
+    # or raises would otherwise leave the topic behind for every later run to trip over
+    try:
+        ready = _reported(admin)
+    except BaseException:
+        _deleted(admin)
+        raise
+    if ready:
+        return admin
+    _deleted(admin)
     msg = f'kafka did not report the topic {TOPIC!r} after creating it'
     raise RuntimeError(msg)
+
+
+def _reported(admin: AdminClient) -> bool:
+    """Wait for the broker to list this run's topic, and say whether it did.
+
+    `create_topics` returning is not the broker having the topic, and a produce to one it has
+    not caught up with is refused rather than queued.
+    """
+    for _ in range(100):
+        if TOPIC in admin.list_topics(timeout=10).topics:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def _deleted(admin: AdminClient) -> None:
+    """Remove this run's topic, waiting for the broker to say it is gone.
+
+    Waited for, like the creation: ``delete_topics`` returns futures, and a process that exits
+    without reading them can leave the topic standing -- measured, it did.
+    """
+    for future in admin.delete_topics([TOPIC]).values():
+        future.result(timeout=30)
 
 
 def _queue_one(producer: Producer) -> None:

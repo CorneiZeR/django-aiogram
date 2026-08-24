@@ -140,6 +140,61 @@ def test_the_accepted_prefix_is_counted_in_the_refusal(broker, monkeypatch):
     assert 'the 1 before them were accepted' in str(refusal.value), str(refusal.value)
 
 
+class Metadata:
+    """A metadata client that answers plausibly and records the timeout it was handed.
+
+    An unreachable broker cannot show this: `depth()` asks the driver two things plus one per
+    partition, and against a dead address the *first* of them raises, so the call comes back in
+    about one timeout whether or not the others would have had their own. What separates the two
+    is the numbers passed in — falling, or the same every time.
+    """
+
+    def __init__(self, partitions=3):
+        self.partitions = partitions
+        self.timeouts = []
+
+    def list_topics(self, topic, timeout):
+        """Answer with one topic of `partitions` partitions and no error."""
+        self.timeouts.append(timeout)
+        described = type('Described', (), {'partitions': dict.fromkeys(range(self.partitions)), 'error': None})
+        return type('Metadata', (), {'topics': {topic: described}})
+
+    def committed(self, parts, timeout):
+        """Answer that nothing has been committed, which reads as the whole log waiting."""
+        self.timeouts.append(timeout)
+        return parts
+
+    def get_watermark_offsets(self, _part, timeout, cached):
+        """Answer with an empty partition, since the count is not what this case is about."""
+        self.timeouts.append(timeout)
+        return 0, 0
+
+
+def test_depth_spends_one_timeout_across_its_calls_rather_than_one_each(broker, monkeypatch):
+    """A healthcheck's probe must not outlast its own budget, whatever the broker is doing.
+
+    `depth()` makes two driver calls plus one per partition. A timeout on each would let a slow
+    broker hold the call for that many multiples of `KAFKA_TIMEOUT` — and this is the method
+    `queue_depth()` and the healthcheck use, where a probe that outlasts its budget reads as a
+    dead worker.
+
+    Asserted on the timeouts the driver is handed, because that is what differs: one deadline
+    makes them fall, a timeout each makes them identical. Five calls here — the topic, the
+    committed offsets, and one watermark per partition.
+    """
+    metadata = Metadata(partitions=3)
+    monkeypatch.setattr('django_aiogram.broker.kafka.broker.metadata_client', lambda *_args: metadata)
+
+    assert broker.depth() == 0
+    assert len(metadata.timeouts) == 5, f'depth() asked the driver {len(metadata.timeouts)} things, not five'
+    assert metadata.timeouts == sorted(metadata.timeouts, reverse=True), (
+        f'the timeouts did not fall, so each call had its own: {metadata.timeouts}'
+    )
+    assert metadata.timeouts[-1] < metadata.timeouts[0], (
+        f'the last call was given as long as the first: {metadata.timeouts}'
+    )
+
+
 class NeverAssigned:
     """A consumer that never joins its group and answers every poll with nothing.
 

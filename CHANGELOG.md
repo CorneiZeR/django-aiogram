@@ -38,7 +38,7 @@ Entries land here as the work does; nothing below is released.
 
   Ranges rather than single numbers, and that is the point: a first run of this showed 479
   against 502 and "latency does not decide it" was written down as the finding. Repeating it on
-  a warm broker said 1.4 to 2.2 times instead — the parity was a cold cluster. The decision
+  a warm broker said 1.3 to 2.2 times instead — the parity was a cold cluster. The decision
   stands and its stated reason changed; `scripts/measurements` is kept so the next reader can
   re-take them rather than trust either reading.
 
@@ -46,7 +46,7 @@ Entries land here as the work does; nothing below is released.
   `aiokafka` ships no `py3-none-any` wheel either, so both drivers are compiled and there is no
   portability difference.
 
-  **A publish waits for the broker** — 166 to 295µs for one message, across seven runs.
+  **A publish waits for the broker** — 166 to 295µs for one message, across nine runs.
   `produce()` answers in 0.2µs because librdkafka's own thread does the I/O, and returning there
   would be weaker than the promise `RPUSH` already makes. How that compares with the other three
   is a question about all four on one footing, which is not this entry's to answer.
@@ -57,9 +57,8 @@ Entries land here as the work does; nothing below is released.
   against 241µs, 26× for batching nothing. Batching still happens; what is switched off is
   waiting for it, and that is measured too rather than hoped for: one `publish` of a hundred
   payloads costs 0.44ms at 0 against 7.01ms on the default, which is 4.4µs a message — so the
-  bulk path is faster as well, not traded away for the single one. Found by asking the question
-  a review had just asked of the RabbitMQ measurement — whether the script measures what the
-  transport actually does — of the Kafka one.
+  bulk path is faster as well, not traded away for the single one. Found by asking of this
+  script the question worth asking of any of them: does it measure what the transport does?
 
   **Offsets are committed only where they are contiguous, per partition.** A consumer holding
   several sends cannot settle them in whatever order they finish: committing the second while
