@@ -243,3 +243,11 @@ def test_take_nowait_still_gives_the_join_its_own_budget(broker, monkeypatch):
     # `KAFKA_TIMEOUT` is 0.5 in this module's settings, so the join budget is what is being
     # observed here rather than a wall-clock guess: it has to exceed the 0.05 a `take` would get
     assert spent > 0.3, f'take_nowait gave the join only {spent:.2f}s, less than KAFKA_TIMEOUT'
+    # and the total is not what separates the two paths -- a join bounded by the fetch budget
+    # spends the whole 1.5 seconds of it in slices and takes just as long. What separates them
+    # is the *sizes*: the fetch after the join asks for the entire budget, which only happens
+    # when the join was extra rather than taken out of it, and every poll before it is a slice
+    assert max(consumer.polled) > 1.0, (
+        f'no poll asked for the fetch budget, so the join was bounded by it: {consumer.polled}'
+    )
+    assert sum(consumer.polled[:-1]) > 0.3, f'the join itself was not given KAFKA_TIMEOUT: {consumer.polled}'
