@@ -139,9 +139,20 @@ def test_the_baseline_times_the_command_its_transport_publishes_with(command, tr
     assert published, f'{transport} no longer publishes with {command}, so the baseline is measuring the wrong call'
 
 
-#: `\u2013` written as an escape rather than as itself: the README spells its spans with an en
-#: dash, so the pattern needs the character, and the literal reads as a hyphen at a glance
-SPAN = re.compile(r'(\d+(?:\.\d+)?)\s*(?:to|[\u2013-])\s*(\d+(?:\.\d+)?)\s*(?:\u00b5s|us\b|microseconds)')
+#: a measured range, in either of the two ways these files write one. `\u2013` is an escape
+#: rather than the character because the literal reads as a hyphen at a glance.
+#:
+#: The unit is optional after `to` and required after a dash, which is not fussiness: prose
+#: writes "323 to 393 microseconds against 18 to 20" and means microseconds both times, and that
+#: second span is where a drift hid from an earlier version of this pattern. A dash without a
+#: unit, meanwhile, is usually a character class -- `[0-9]`, `0-0` -- and never a measurement.
+#: The lookahead after the `to` form is what keeps other units out: `0 to 90 000 ms` would
+#: otherwise read as the pair (0, 90), and a millisecond measurement is not one of these.
+_OTHER_UNIT = r'(?!\s*(?:\d|ms\b|milliseconds|seconds|second\b|s\b|minutes|MiB|MB|KB))'
+SPAN = re.compile(
+    rf'(\d+(?:\.\d+)?)\s+to\s+(\d+(?:\.\d+)?)(?:\s*(?:\u00b5s|us\b|microseconds))?{_OTHER_UNIT}'
+    r'|(\d+(?:\.\d+)?)\s*[\u2013-]\s*(\d+(?:\.\d+)?)\s*(?:\u00b5s|us\b|microseconds)'
+)
 
 #: everywhere a measured span is quoted: the code, the packaging comment that explains an extra,
 #: and the prose. The changelog is read only as far as its first released heading -- a released
@@ -170,7 +181,9 @@ def spans(relative):
     if relative == 'CHANGELOG.md':
         headings = [match.start() for match in re.finditer(r'^## ', text, re.MULTILINE)]
         text = text[headings[0] : headings[1]]
-    return set(SPAN.findall(re.sub(r'\s+', ' ', text)))
+    # two alternatives, so each match carries one pair and two empty strings
+    found = SPAN.findall(re.sub(r'\s+', ' ', text))
+    return {(low, high) for match in found for low, high in (match[:2], match[2:]) if low}
 
 
 @pytest.mark.parametrize('source', QUOTING)

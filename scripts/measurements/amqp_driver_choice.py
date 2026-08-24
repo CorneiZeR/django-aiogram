@@ -62,11 +62,11 @@ def main() -> None:
     configure_reporting()
     plain, confirming = _pika_channels()
     try:
-        loop, connection, unconfirmed_channel, confirmed_channel = _aio_pika_channels()
+        loop, runner, connection, unconfirmed_channel, confirmed_channel = _aio_pika_channels()
         try:
             _report(plain, confirming, loop, unconfirmed_channel, confirmed_channel)
         finally:
-            _tear_down_aio_pika(loop, connection)
+            _tear_down_aio_pika(loop, runner, connection)
     finally:
         _tear_down_pika(plain, confirming)
 
@@ -149,16 +149,28 @@ def _time_them(channels: Channels, loop: asyncio.AbstractEventLoop, pool: Thread
 
 
 def _pika_channels() -> tuple[BlockingChannel, BlockingChannel]:
-    """Open a channel that confirms nothing and one that confirms everything."""
+    """Open a channel that confirms nothing and one that confirms everything.
+
+    The second open is guarded, because a helper that raises halfway leaves the caller nothing
+    to clean up with: the first connection would be open and unreachable.
+    """
     plain = pika.BlockingConnection(pika.URLParameters(URL)).channel()
-    plain.queue_declare(queue=QUEUE, durable=True)
-    confirming = pika.BlockingConnection(pika.URLParameters(URL)).channel()
-    confirming.confirm_delivery()
+    try:
+        plain.queue_declare(queue=QUEUE, durable=True)
+        confirming = pika.BlockingConnection(pika.URLParameters(URL)).channel()
+        confirming.confirm_delivery()
+    except BaseException:
+        plain.connection.close()
+        raise
     return plain, confirming
 
 
 def _aio_pika_channels() -> tuple[
-    asyncio.AbstractEventLoop, aio_pika.abc.AbstractRobustConnection, AbstractChannel, AbstractChannel
+    asyncio.AbstractEventLoop,
+    threading.Thread,
+    aio_pika.abc.AbstractRobustConnection,
+    AbstractChannel,
+    AbstractChannel,
 ]:
     """Start a loop on a thread of its own and open two channels on it.
 
@@ -167,17 +179,40 @@ def _aio_pika_channels() -> tuple[
     loop`` — measured, and the reason this row is what a real implementation would cost.
     """
     loop = asyncio.new_event_loop()
-    threading.Thread(target=loop.run_forever, daemon=True).start()
+    runner = threading.Thread(target=loop.run_forever, daemon=True)
+    runner.start()
 
     async def open_them() -> tuple[aio_pika.abc.AbstractRobustConnection, AbstractChannel, AbstractChannel]:
         connection = await aio_pika.connect_robust(URL)
-        confirmed = await connection.channel(publisher_confirms=True)
-        unconfirmed = await connection.channel(publisher_confirms=False)
-        await confirmed.declare_queue(QUEUE, durable=True)
+        try:
+            confirmed = await connection.channel(publisher_confirms=True)
+            unconfirmed = await connection.channel(publisher_confirms=False)
+            await confirmed.declare_queue(QUEUE, durable=True)
+        except BaseException:
+            await connection.close()
+            raise
         return connection, unconfirmed, confirmed
 
-    connection, unconfirmed, confirmed = asyncio.run_coroutine_threadsafe(open_them(), loop).result(30)
-    return loop, connection, unconfirmed, confirmed
+    try:
+        connection, unconfirmed, confirmed = asyncio.run_coroutine_threadsafe(open_them(), loop).result(30)
+    except BaseException:
+        # the loop is turning before there is anything on it, so a connect that fails would
+        # otherwise leave this thread running for the life of the process -- measured, it did,
+        # and an earlier check of this path looked at queues and connections but not threads
+        _stopped(loop, runner)
+        raise
+    return loop, runner, connection, unconfirmed, confirmed
+
+
+def _stopped(loop: asyncio.AbstractEventLoop, runner: threading.Thread) -> None:
+    """Stop the loop, wait for its thread, and close it -- in that order and always.
+
+    Closing before the thread has stopped raises, and leaving the loop open on a daemon thread
+    is what makes a run end in a `ResourceWarning` rather than in silence.
+    """
+    loop.call_soon_threadsafe(loop.stop)
+    runner.join(timeout=10)
+    loop.close()
 
 
 def _publisher(loop: asyncio.AbstractEventLoop, channel: AbstractChannel) -> Callable[[], None]:
@@ -283,18 +318,22 @@ def _purged(call: Callable[[], None], keeper: BlockingChannel) -> Callable[[], N
     return once
 
 
-def _tear_down_aio_pika(loop: asyncio.AbstractEventLoop, connection: aio_pika.abc.AbstractRobustConnection) -> None:
-    """Close the aio-pika connection on its own loop, then stop that loop.
+def _tear_down_aio_pika(
+    loop: asyncio.AbstractEventLoop,
+    runner: threading.Thread,
+    connection: aio_pika.abc.AbstractRobustConnection,
+) -> None:
+    """Close the aio-pika connection on its own loop, then stop and close that loop.
 
     In that order: stopping first leaves the connection's reader, writer and heartbeat tasks
     pending, which is what made a successful run end in a page of ``Task was destroyed but it is
-    pending``. The loop is stopped from a ``finally`` because a close that times out must not
-    leave the thread turning.
+    pending``. The stop is in a ``finally`` because a close that times out must not leave the
+    thread turning either.
     """
     try:
         asyncio.run_coroutine_threadsafe(connection.close(), loop).result(30)
     finally:
-        loop.call_soon_threadsafe(loop.stop)
+        _stopped(loop, runner)
 
 
 def _tear_down_pika(plain: BlockingChannel, confirming: BlockingChannel) -> None:

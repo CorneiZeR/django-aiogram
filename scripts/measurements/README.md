@@ -133,9 +133,11 @@ acknowledged one.
 
 **RabbitMQ: `pika`.** Each driver has one face it has to bridge, and the two bridges do not cost
 the same: reaching a *thread* from a coroutine is 67–85 µs, reaching a *loop* from a synchronous
-caller is 121–131 µs — about half, 0.54 to 0.64 times, five runs. An earlier version of this
-measured the pika bridge from the caller rather than from the loop, which added the very
-hand-off the other row *is*, and the two then looked like the same number.
+caller is 121–131 µs — about half. The ratio has read 0.53 to 0.64 across six runs, its floor
+moving down on each of the last three, so "about half" is the part to read.
+
+An earlier version of this measured the pika bridge from the caller rather than from the loop,
+which added the very hand-off the other row *is*, and the two then looked like the same number.
 
 So pika wins twice rather than once: it is free on the face this package's traffic actually
 uses — `bot.send()` from views, tasks and management commands — and it is the cheaper of the two
