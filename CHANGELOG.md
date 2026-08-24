@@ -113,23 +113,24 @@ Entries land here as the work does; nothing below is released.
 
   ```text
                                           unconfirmed     confirmed
-  pika, synchronous, its own face           18 - 20us   323 - 393us
-  aio-pika, handed to a loop thread        121 - 125us   456 - 501us
-  pika, awaited via asyncio.to_thread      119 - 122us   412 - 423us
+  pika, on its own synchronous face          15 - 20us   323 - 393us
+  aio-pika, reached by a sync caller       121 - 131us   456 - 511us
+  pika, reached from a coroutine            67 - 85us   404 - 406us
   ```
 
-  The decisive part is that two of those are the same number in the unconfirmed column, within
-  four per cent of each other run for run. (The confirmed column is not equal and is not meant
-  to be — 412–423 against 456–501 — because it also carries the confirm,
-  which aio-pika waits for on the loop.) Crossing the thread boundary costs about 100µs
-  whichever driver is used, so the question is
-  which face pays it, and the faces are not equal. `bot.send()` is called from views, tasks and
-  management commands; `asend()` is for ASGI and is rarer. `pika` charges the rare one and
-  leaves the common one at 18–20µs unconfirmed. The hand-off being a constant means the
-  driver's share shrinks as the guarantee grows: on the confirmed face the gap is 1.2 to 1.4
-  times rather than the multiple an unconfirmed comparison would suggest. `aio-pika` also cannot
-  serve a synchronous caller simply: its connections are loop-affine, so `async_to_sync` over one
-  built elsewhere raises `attached to a different loop`, exactly as `redis.asyncio` does.
+  Each driver has exactly one face it must bridge, and **the two bridges do not cost the same**.
+  Reaching a thread from a coroutine is 67–85µs; reaching a loop from a synchronous caller is
+  121–131µs — about half, 0.55 to 0.64 times. An earlier version of this measured pika's bridge
+  from the caller instead of from the loop, which added the hand-off the other row *is*, and the
+  two then looked like the same number; the conclusion drawn from that — "the hand-off is the
+  price, not the library" — was true of the arithmetic and not of the drivers.
+
+  So `pika` wins twice. It is free on the face this package's traffic uses: `bot.send()` is
+  called from views, tasks and management commands, at 15–20µs unconfirmed with nothing to
+  bridge. And it is the cheaper of the two on the rare face, where `asend()` reaches it from a
+  coroutine. `aio-pika` also cannot serve a synchronous caller simply: its connections are
+  loop-affine, so `async_to_sync` over one built elsewhere raises `attached to a different
+  loop`, exactly as `redis.asyncio` does.
 
   **Publishes are confirmed, mandatory and persistent**, which costs 323–393µs against 18–20µs
   for the same publish with only the confirm taken off. That buys the promise the package

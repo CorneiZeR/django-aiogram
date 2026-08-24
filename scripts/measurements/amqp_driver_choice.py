@@ -2,7 +2,10 @@
 
 The producer's ordinary caller is synchronous — a view, a task, a management command — and
 ``asend`` is not, so whichever driver ships, one of those two faces reaches the other across a
-thread boundary. This measures both drivers on both faces.
+thread boundary. This measures both drivers on both faces, and each bridge is timed from the
+side that pays it: a synchronous caller reaching aio-pika's loop, and a coroutine reaching
+pika's thread. Timing the second from the caller instead would add the first, which is how an
+earlier version of this made them look like the same number.
 
 **The guarantee has to be held constant, and the first attempt at this did not.**
 ``aio_pika.Connection.channel()`` confirms publishes by default and ``pika``'s does not, so
@@ -20,6 +23,7 @@ Run it against a throwaway broker:
 import asyncio
 import os
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import NamedTuple
@@ -28,7 +32,7 @@ import aio_pika
 import pika
 from aio_pika.abc import AbstractChannel
 from pika.adapters.blocking_connection import BlockingChannel
-from scripts.measurements._timing import configure_reporting, logger, measure, run_name
+from scripts.measurements._timing import ROUNDS, configure_reporting, logger, measure, report, run_name
 
 #: a throwaway broker, overridable because a reader's port is their own business
 URL = os.environ.get('DJANGO_AIOGRAM_TEST_AMQP_URL', 'amqp://guest:guest@127.0.0.1:5673/')
@@ -106,8 +110,12 @@ def _time_them(channels: Channels, loop: asyncio.AbstractEventLoop, pool: Thread
     # each of these publishes through a connection its *own* thread opened, which is what the
     # transport does and what pika allows: a `BlockingConnection` belongs to one thread, so
     # sharing the main thread's from an executor would be measuring an unsupported path
-    pika_queued_bridged = measure('unconfirmed', _purged(_threaded(loop, pool, confirmed=False), plain))
-    measure('confirmed', _purged(_threaded(loop, pool, confirmed=True), plain))
+    # purged here rather than through `_purged`, because this row brings back samples instead of
+    # a callable to wrap — the rule is the same, an empty queue before each row starts
+    plain.queue_purge(QUEUE)
+    pika_queued_bridged = report('unconfirmed', _from_a_coroutine(loop, pool, confirmed=False))
+    plain.queue_purge(QUEUE)
+    report('confirmed', _from_a_coroutine(loop, pool, confirmed=True))
 
     logger.info('')
     logger.info(
@@ -120,12 +128,15 @@ def _time_them(channels: Channels, loop: asyncio.AbstractEventLoop, pool: Thread
     # crossing the thread boundary costs the same either way, so the run has to show it: these
     # two rows are the same work bridged in opposite directions
     logger.info(
-        'bridged either way: aio-pika %.1f us against pika %.1f us  -> %.2fx',
+        'the bridge each driver has to pay: into a loop %.1f us, into a thread %.1f us -> %.2fx',
         aio_queued,
         pika_queued_bridged,
         pika_queued_bridged / aio_queued,
     )
-    logger.info('a ratio near 1 is the finding: the hand-off is the price, not the library')
+    logger.info(
+        'below 1 is the finding: reaching a thread costs about half what reaching a loop does, '
+        'so pika is free on the common face and the cheaper of the two on the rare one'
+    )
 
 
 def _pika_channels() -> tuple[BlockingChannel, BlockingChannel]:
@@ -173,8 +184,17 @@ def _publisher(loop: asyncio.AbstractEventLoop, channel: AbstractChannel) -> Cal
     return lambda: asyncio.run_coroutine_threadsafe(publish(), loop).result(30)
 
 
-def _threaded(loop: asyncio.AbstractEventLoop, pool: ThreadPoolExecutor, *, confirmed: bool) -> Callable[[], None]:
-    """Build a call that publishes through pika from a thread, awaited from ``loop``.
+def _from_a_coroutine(loop: asyncio.AbstractEventLoop, pool: ThreadPoolExecutor, *, confirmed: bool) -> list[float]:
+    """Time, from *inside* the loop, what a coroutine pays to publish through pika.
+
+    Timed on the loop rather than from the caller, and that is the point of the shape: timing it
+    from the caller would add the caller-to-loop hand-off, which the aio-pika row does not pay --
+    that row *is* a synchronous caller reaching a loop. Comparing the two would put one hand-off
+    against two and call them the same number, which is the mistake the guarantee-constant rule
+    exists to stop, one level up.
+
+    So a coroutine on the loop collects the samples, timing only its own ``run_in_executor`` and
+    the publish at the end of it, and brings them back for `report`.
 
     The channel is opened by the thread the publish lands on, and kept there. That is not
     ceremony: pika documents ``add_callback_threadsafe`` as the only operation another thread may
@@ -201,10 +221,17 @@ def _threaded(loop: asyncio.AbstractEventLoop, pool: ThreadPoolExecutor, *, conf
             opened[confirmed] = channel
         _pika_publish(channel)()
 
-    async def awaited() -> None:
+    async def timed() -> list[float]:
+        """Warm up once uncounted, then time each hand-off from the thread that makes it."""
         await loop.run_in_executor(pool, publish)
+        samples = []
+        for _ in range(ROUNDS):
+            started = time.perf_counter()
+            await loop.run_in_executor(pool, publish)
+            samples.append((time.perf_counter() - started) * 1e6)
+        return samples
 
-    return lambda: asyncio.run_coroutine_threadsafe(awaited(), loop).result(30)
+    return asyncio.run_coroutine_threadsafe(timed(), loop).result(300)
 
 
 def _closed_on_its_thread(pool: ThreadPoolExecutor) -> None:

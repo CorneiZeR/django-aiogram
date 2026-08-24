@@ -108,9 +108,9 @@ aio-pika 10.0.1, confluent-kafka on librdkafka 2.15.0 and aiokafka 0.14.0. Versi
 
 | AMQP | unconfirmed | confirmed |
 | --- | --- | --- |
-| `pika`, synchronous | 18 – 20 µs | 323 – 393 µs |
-| `aio-pika`, via a loop thread | 121 – 125 µs | 456 – 501 µs |
-| `pika`, awaited via `to_thread` | 119 – 122 µs | 412 – 423 µs |
+| `pika`, on its own synchronous face | 15 – 20 µs | 323 – 393 µs |
+| `aio-pika`, reached from a synchronous caller | 121 – 131 µs | 456 – 511 µs |
+| `pika`, reached from a coroutine | 67 – 85 µs | 404 – 406 µs |
 
 | Kafka | queued locally | waited for the ack |
 | --- | --- | --- |
@@ -127,15 +127,16 @@ elsewhere are quoted as a multiple of it. Redis is asked for no disk here and ne
 waits for one, which is why those rows have no unconfirmed column: a list publish *is* the
 acknowledged one.
 
-**RabbitMQ: `pika`.** The two bridged rows are the same number in the **unconfirmed** column —
-119–122 against 121–125 µs, within four per cent of each other run for run — so crossing the
-thread boundary is the price rather than the library, about 100 µs either way.
-(The confirmed column is not equal and is not meant to be: 412–423 against 456–501 is 0.83 to
-0.93, because that column also carries the confirm, and aio-pika waits for it on the loop.)
+**RabbitMQ: `pika`.** Each driver has one face it has to bridge, and the two bridges do not cost
+the same: reaching a *thread* from a coroutine is 67–85 µs, reaching a *loop* from a synchronous
+caller is 121–131 µs — about half, 0.55 to 0.64 times, four runs. An earlier version of this
+measured the pika bridge from the caller rather than from the loop, which added the very
+hand-off the other row *is*, and the two then looked like the same number.
 
-That makes the question which face pays it, and the faces are not equal traffic: `bot.send()` is
-called from views, tasks and management commands, `asend()` is for ASGI. pika charges the rare
-one.
+So pika wins twice rather than once: it is free on the face this package's traffic actually
+uses — `bot.send()` from views, tasks and management commands — and it is the cheaper of the two
+on the rare one, where `asend()` reaches it from a coroutine. The confirmed column says the same
+thing more quietly: 404–406 against 456–511.
 
 **`confluent-kafka`.** The consumer is a thread, where a synchronous driver belongs; `aiokafka`
 would need an event loop inside it. It is also 1.3 to 2.2 times faster on the face that waits,

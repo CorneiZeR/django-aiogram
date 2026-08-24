@@ -221,7 +221,7 @@ def test_asking_the_depth_does_not_join_the_group(broker, kafka_bootstrap, kafka
 def test_the_awaited_halves_work_off_the_loop(broker, kafka_bootstrap, kafka_topic):
     """`apublish` and `adepth` go through a thread, because the driver is synchronous.
 
-    The hand-off costs about 100 microseconds and is invisible here: waiting for the broker's
+    The hand-off is a fraction of the wait and invisible here: waiting for the broker's
     acknowledgement costs five times that, which is the measurement that made the driver choice
     a question about the consumer rather than about latency.
     """

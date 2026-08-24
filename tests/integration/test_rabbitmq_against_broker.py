@@ -150,8 +150,9 @@ def test_a_publish_that_cannot_be_routed_raises(broker, broker_channel, amqp_url
 def test_the_awaited_halves_work_off_the_loop(broker, amqp_url):
     """`apublish` and `adepth` go through a thread, because the driver is synchronous.
 
-    That hand-off is the price the driver decision put on this face — about 100 microseconds,
-    measured, which is what the other driver would have charged the synchronous caller. Worth
+    That hand-off is the price the driver decision put on this face — 67 to 85 microseconds,
+    measured, against the 121 to 131 the other driver would have charged the synchronous caller
+    on its face instead. Worth
     a case because a thread and a `BlockingConnection` are exactly the combination that
     deadlocks when it is done wrong.
     """

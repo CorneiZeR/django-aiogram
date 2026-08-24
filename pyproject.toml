@@ -44,10 +44,10 @@ classifiers = [
 # line when the driver behind that name is absent
 redis = ["redis>=6.2"]
 # pika rather than aio-pika, and by measurement rather than by which face it matched:
-# crossing the thread boundary costs about 100us whichever driver is used — 121-125us for
-# aio-pika reached from synchronous code against 119-122us for pika reached from a
-# coroutine, which are the same number — so the driver that needs no crossing on the
-# synchronous path wins, and that is where `bot.send()` is called from. 18.9us there
+# the two bridges do not cost the same — 121-131us for aio-pika reached from synchronous code
+# against 67-85us for pika reached from a coroutine — so the driver that needs no crossing on
+# the synchronous path is also the cheaper one where it does cross, and the synchronous path is
+# where `bot.send()` is called from. 15-20us there
 rabbitmq = ["pika>=1.3"]
 # confluent-kafka rather than aiokafka. The consumer is a thread, where a synchronous driver
 # belongs — and, measured over eleven runs with both waiting for the broker, it is also the

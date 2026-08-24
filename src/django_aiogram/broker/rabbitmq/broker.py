@@ -5,9 +5,10 @@ message returns to the queue when the channel drops, so there is no worker name 
 in-flight list to reclaim and nothing to write down about liveness — three things the Redis
 list needs machinery for.
 
-``pika`` rather than ``aio-pika``, decided by measurement: crossing the thread boundary costs
-about 100 microseconds whichever driver is used, so the one that needs no crossing on the
-synchronous path — which is where ``bot.send()`` is called from — wins. See
+``pika`` rather than ``aio-pika``, decided by measurement: a coroutine reaching a thread costs
+67 to 85 microseconds against 121 to 131 for a synchronous caller reaching a loop, so the driver
+that needs no crossing on the synchronous path — which is where ``bot.send()`` is called from —
+is also the cheaper one where it does have to cross. See
 :mod:`django_aiogram.broker.rabbitmq.client`.
 """
 
@@ -127,9 +128,9 @@ class RabbitMQBroker(Broker):
     async def apublish(self, payloads: Seq[bytes]) -> None:
         """Make the same publishes, off the loop's thread.
 
-        The driver is synchronous, so this is where the hand-off is paid — measured at about
-        100 microseconds, which is what the *other* driver would have charged the synchronous
-        caller instead. A thread rather than a second connection library: one way of talking
+        The driver is synchronous, so this is where the hand-off is paid — measured at 67 to 85
+        microseconds, against the 121 to 131 the *other* driver would have charged the
+        synchronous caller instead. A thread rather than a second connection library: one way of talking
         to RabbitMQ is enough.
         """
         if not payloads:
