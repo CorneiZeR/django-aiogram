@@ -50,8 +50,12 @@ def main() -> None:
             streamed,
         )
     finally:
-        client.delete(KEY)
-        client.close()
+        # nested, so a delete that raises still closes the client: the key is this run's own and
+        # losing it is untidy, but leaving the connection open is the thing that outlives the run
+        try:
+            client.delete(KEY)
+        finally:
+            client.close()
 
 
 if __name__ == '__main__':

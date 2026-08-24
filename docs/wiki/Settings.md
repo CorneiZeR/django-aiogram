@@ -142,8 +142,8 @@ guarantee costs: measured, 323–393µs against 15–20µs for the same publish 
 taken off. Most of that is the disk rather than the round trip — the same publish without
 persistence is 135–173µs. Against a Redis list publish measured the same way, on the same machine
 and the same virtualisation, it is roughly two to three times: 120–147µs there. Read the
-ordering rather than the multiple, which moves with the footing — a *native* Redis publishes in
-14–19µs, and the multiple against that is twenty.
+ordering rather than the multiple, which moves with the footing — a *native* Redis publish was
+measured at 14–19µs, and the multiple against that is twenty.
 
 Nothing here needs `WORKER_NAME`. An unacknowledged message returns to the queue when the
 channel that held it drops, which is what a worker being killed does to it — so there is no

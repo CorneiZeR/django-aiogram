@@ -141,10 +141,9 @@ def test_a_publish_that_cannot_be_routed_raises(broker, broker_channel, amqp_url
             broker.publish([payload(2)])
 
         assert AMQP_QUEUE in str(refused.value), str(refused.value)
-        # and inspectable without reading English, which is what a caller deciding whether to
-        # retry needs: the same pair the Kafka refusal keeps
+        # inspectable without reading English, which is what a caller deciding whether to retry
+        # needs. The reason is not kept yet -- that is its own change, out of this one's scope
         assert refused.value.queue == AMQP_QUEUE, refused.value.queue
-        assert refused.value.reason, 'the refusal kept no reason to look at'
 
 
 def test_the_awaited_halves_work_off_the_loop(broker, amqp_url):
@@ -152,23 +151,46 @@ def test_the_awaited_halves_work_off_the_loop(broker, amqp_url):
 
     That hand-off is the price the driver decision put on this face — 67 to 85 microseconds,
     measured, against the 121 to 131 the other driver would have charged the synchronous caller
-    on its face instead. Worth
-    a case because a thread and a `BlockingConnection` are exactly the combination that
-    deadlocks when it is done wrong.
+    on its face instead. Worth a case because a thread and a `BlockingConnection` are exactly
+    the combination that deadlocks when it is done wrong.
+
+    The depths alone cannot say whether the hand-off happened: they would read the same if
+    `apublish` called `publish` inline on the loop's own thread. So the thread each synchronous
+    half ran on is recorded, and none of them may be the loop's.
     """
+    ran_on: list[int] = []
+    published, measured = RabbitMQBroker.publish, RabbitMQBroker.depth
+
+    def watched_publish(self, payloads):
+        ran_on.append(threading.get_ident())
+        return published(self, payloads)
+
+    def watched_depth(self):
+        ran_on.append(threading.get_ident())
+        return measured(self)
+
     with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
 
         async def on_a_loop():
             await broker.apublish([])
             after_nothing = await broker.adepth()
             await broker.apublish([payload(11), payload(12)])
-            return after_nothing, await broker.adepth(), await broker.ainflight_depth()
+            return threading.get_ident(), after_nothing, await broker.adepth(), await broker.ainflight_depth()
 
-        after_nothing, after_two, inflight = asyncio.run(on_a_loop())
+        RabbitMQBroker.publish, RabbitMQBroker.depth = watched_publish, watched_depth
+        try:
+            loop_thread, after_nothing, after_two, inflight = asyncio.run(on_a_loop())
+        finally:
+            RabbitMQBroker.publish, RabbitMQBroker.depth = published, measured
 
         assert after_nothing == 0, 'awaiting an empty publish queued something'
         assert after_two == 2, 'the awaited publishes did not arrive'
         assert inflight == 0
+
+        assert ran_on, 'neither half reached the synchronous method, so this proves nothing'
+        assert loop_thread not in ran_on, (
+            f'a synchronous half ran on the loop thread {loop_thread}, so there was no hand-off: {ran_on}'
+        )
 
 
 def test_waiting_for_a_message_returns_without_one(broker, amqp_url):
