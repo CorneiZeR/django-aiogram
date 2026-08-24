@@ -44,13 +44,13 @@ classifiers = [
 # line when the driver behind that name is absent
 redis = ["redis>=6.2"]
 # pika rather than aio-pika, and by measurement rather than by which face it matched:
-# crossing the thread boundary costs about 100us whichever driver is used — 119.2us for
-# aio-pika reached from synchronous code against 120.1us for pika reached from a
+# crossing the thread boundary costs about 100us whichever driver is used — 121-125us for
+# aio-pika reached from synchronous code against 119-122us for pika reached from a
 # coroutine, which are the same number — so the driver that needs no crossing on the
 # synchronous path wins, and that is where `bot.send()` is called from. 18.9us there
 rabbitmq = ["pika>=1.3"]
 # confluent-kafka rather than aiokafka. The consumer is a thread, where a synchronous driver
-# belongs — and, measured over ten runs with both waiting for the broker, it is also the
+# belongs — and, measured over eleven runs with both waiting for the broker, it is also the
 # faster one: 166-295us against 354-492us, each run paired against itself. A single earlier run showed parity (479 against 502)
 # on a cold broker and that reading did not survive repetition. The plan's other argument was
 # false and is recorded so it is not reopened: aiokafka ships no py3-none-any wheel either
@@ -87,14 +87,15 @@ dev = [
     "pyyaml>=6",
 ]
 
-# the driver this package did **not** choose, and nothing else. `scripts/measurements` compares
-# it against the one it ships, so the comparison stays re-runnable — a driver release or a faster
-# broker could move the numbers the choice rests on, and a decision nobody can re-check quietly
-# rots.
+# the drivers this package did **not** choose, and nothing else. `scripts/measurements` compares
+# them against the ones it ships, so the comparisons stay re-runnable — a driver release or a
+# faster broker could move the numbers the choices rest on, and a decision nobody can re-check
+# quietly rots.
 #
 # Its own group rather than the dev one: a contributor running the suite has no use for a driver
 # the package cannot be configured to use, and `dev` is what CI installs on every leg.
 measure = [
+    "aio-pika>=9",
     "aiokafka>=0.12",
 ]
 

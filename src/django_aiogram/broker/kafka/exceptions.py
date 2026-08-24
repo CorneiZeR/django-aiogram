@@ -17,7 +17,7 @@ class ProduceRefusedError(BrokerError):
 
     The number belongs in the documentation rather than in a footnote: it is the guarantee's
     price, not the driver's — though not only: measured over
-    ten runs, ``aiokafka`` waits 354 to 492 microseconds for the same acknowledgement, so this
+    eleven runs, ``aiokafka`` waits 351 to 492 microseconds for the same acknowledgement, so this
     driver is the faster one as well.
     """
 

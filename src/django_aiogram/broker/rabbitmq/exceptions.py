@@ -10,7 +10,8 @@ class QueueRefusedError(BrokerError):
 
     This transport publishes with ``mandatory`` and publisher confirms on, so a message that
     cannot be routed comes back as an error rather than disappearing. That is a deliberate
-    cost: measured, confirms take a publish from 18.9 to 170.7 microseconds.
+    cost: measured, the confirmed, mandatory, persistent publish this transport makes takes
+    323 to 393 microseconds against 18 to 20 for the same publish with only the confirm off.
 
     It is what keeps the promise the package already makes everywhere else. ``RPUSH`` answers
     with the new list length, so a Redis publish is acknowledged by the server before
@@ -20,8 +21,14 @@ class QueueRefusedError(BrokerError):
     """
 
     def __init__(self, queue: str, reason: str) -> None:
-        """Name the queue and what the broker said, since neither is guessable from a trace."""
+        """Name the queue and what the broker said, since neither is guessable from a trace.
+
+        Both kept as attributes as well as formatted into the message, which is what the Kafka
+        refusal does and for the same reason: a caller telling a missing queue from a broker out
+        of resources should not have to parse English to do it.
+        """
         self.queue = queue
+        self.reason = reason
         super().__init__(
             f'RabbitMQ refused a message for queue {queue!r}: {reason}. The queue may not '
             f'exist, or the broker may be out of resources — a publish here is confirmed, so '
