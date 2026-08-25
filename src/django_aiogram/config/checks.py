@@ -806,8 +806,18 @@ def _redis_is_in_use() -> bool:
 
     broker = str(conf.get('BROKER') or '').strip()
     driver, _extra = SHIPPED.get(broker, ('', ''))
-    if driver == 'redis':
-        return True
+    return driver == 'redis' or _redis_fsm_storage()
+
+
+def _redis_fsm_storage() -> bool:
+    """Whether ``FSM_STORAGE`` names the Redis store.
+
+    Compared as a member first, because ``str()`` on one does not give its value:
+    ``StorageKind`` mixes in ``str``, and since 3.11 ``str(StorageKind.REDIS)`` is
+    ``'StorageKind.REDIS'``. Normalising that reads ``'storagekind.redis'`` and matches
+    nothing, so a project passing the enum this package publishes — which `API.md` documents
+    it for — had its warning suppressed and then needed ``REDIS_URL`` at runtime anyway.
+    """
     storage = conf.get('FSM_STORAGE')
     if isinstance(storage, StorageKind):
         return storage is StorageKind.REDIS
@@ -823,6 +833,18 @@ def _filled_in_when_enabled(key: str, *, hint: str, only_if: Callable[[], bool] 
     ``only_if`` narrows the rule to configurations that need the setting at all. `W001` needs
     none: every deployment talks to Telegram. `W002` does, because since 4.0 three of the four
     transports never open a Redis connection.
+
+    **The gate on ``ENABLED`` leaves one hole, measured and kept.** ``Dispatcher`` is built with
+    :func:`build_storage` the first time anything touches it, and neither ``start_polling`` nor
+    ``feed_update`` reads ``ENABLED`` first — both are public, and `API.md` says 1.x code drives
+    them by hand. So a disabled process driving the dispatcher itself, with the Redis store named
+    and no URL, raises ``ImproperlyConfigured`` after a clean ``manage.py check``.
+
+    Warning regardless of the flag was tried and is worse: ``FSM_STORAGE`` defaults to ``redis``,
+    so — measured — settings of ``{'ENABLED': False}`` alone produce `W002`. That is every image
+    build, migration container and CI job, warned about a URL they exist not to need, which is
+    how an operator learns to stop reading the list. The hole needs a caller who disabled the bot
+    and then drove its dispatcher anyway; the noise needs nothing.
     """
     if only_if is not None and not only_if():
         return []

@@ -73,12 +73,19 @@ purpose. See below.
 - `start_tgbot` reports why and exits
 
 The queue readers are the exception, and worth knowing before a monitor calls one:
-`queue_depth()` and `inflight_depth()` are **not** no-ops here. They are reads, not
-sends, so a disabled process still needs `REDIS_URL` to answer them and raises
-`ImproperlyConfigured` without one.
+`queue_depth()` and `inflight_depth()` are **not** no-ops here. They are reads rather
+than sends, so a disabled process still needs whatever its transport connects with —
+`REDIS_URL` on the two Redis brokers, `RABBITMQ_URL`, `KAFKA_BOOTSTRAP` — and the
+driver behind it. Without the setting they raise `ImproperlyConfigured`; without the
+driver, `BrokerDependencyError`. `manage.py check` asks a disabled process for neither.
 
-A disabled process needs no token, and needs a reachable Redis only if something
-asks it for a queue depth.
+`inflight_depth()` has a second limit on two of the four: RabbitMQ and Kafka keep the
+count in the worker's own memory, because neither protocol exposes "taken but not
+settled", so anywhere else it answers zero — correctly, and uselessly. See
+**[[Delivery]]** for which transport keeps what.
+
+So a disabled process needs no token, and needs its broker reachable only if something
+asks it for a depth.
 
 `ENABLED` is parsed rather than tested for truthiness — `'false'`, `'no'`,
 `'off'` and `0` all disable the bot, and an unparseable value raises rather

@@ -74,8 +74,11 @@ queues, the synchronous one writes to a socket on the calling thread — which u
 thread serving requests, and on the first call that includes a connect bounded by whatever
 timeout the transport `BROKER` names declares. Inside the worker both take the direct route
 instead: `send_raw` schedules onto the bot's loop and returns, the first connection is to
-Telegram rather than to a broker, and no `BROKER` setting is involved. The ids, the rows and the
-routing are identical either way.
+Telegram rather than to a broker, and no `BROKER` setting is involved.
+
+So the two routes share their ids and their event rows and share no socket: one writes to the
+queue `BROKER` names, the other to Telegram. That is the whole of the difference, and it is why
+`send()` deciding for you is the point rather than a convenience.
 
 `send_many` queues one message per chat, a chunk of them per round trip, and
 returns an id per message in the order the chats were given. `asend_many` is its
