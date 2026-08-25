@@ -19,11 +19,13 @@ services:
     image: ${IMAGE}
     command: python manage.py start_tgbot
     restart: always
-    # not decoration: the in-flight list is keyed on this name, and without it
-    # Docker invents a new one for each container it creates — see Delivery.
-    # One name is one worker: scale this service and every replica resolves to
-    # this hostname, shares one in-flight list, and reclaims what the others are
-    # still sending. Give each replica its own WORKER_NAME to run more than one
+    # the Redis list's requirement, and only its: that transport keys the in-flight
+    # list on this name, and without `hostname:` Docker invents a new one for each
+    # container it creates — see Redis-list. One name is one worker: scale this
+    # service and every replica resolves to this hostname, shares one in-flight list
+    # and reclaims what the others are still sending. Give each replica its own
+    # WORKER_NAME to run more than one. On the other three transports this line is
+    # optional and nothing strands without it
     hostname: telegram-bot-1
     env_file: .env
     environment:
@@ -34,6 +36,82 @@ services:
     image: redis:7-alpine
     restart: always
 ```
+
+That is the default transport. The shape does not change for the other three — one bot
+container, everything else queueing — only the service it depends on and the settings that
+name it.
+
+**Redis Streams** needs no new service: the same server, a different data structure.
+
+```yaml
+    environment:
+      DJANGO_AIOGRAM_BROKER: django_aiogram.broker.redis_streams.RedisStreamsBroker
+      DJANGO_AIOGRAM_REDIS_STREAM_KEY: telegram-bot
+```
+
+**RabbitMQ.** `hostname:` becomes optional — the broker requeues what a dropped channel held,
+so nothing is keyed on a name.
+
+```yaml
+  telegram_bot:
+    # …as above, and
+    depends_on: [rabbitmq]
+    environment:
+      DJANGO_AIOGRAM_ENABLED: 1
+      DJANGO_AIOGRAM_BROKER: django_aiogram.broker.rabbitmq.RabbitMQBroker
+      DJANGO_AIOGRAM_RABBITMQ_URL: amqp://bot:${RABBITMQ_PASSWORD}@rabbitmq:5672/
+      DJANGO_AIOGRAM_RABBITMQ_QUEUE: telegram-bot
+
+  rabbitmq:
+    image: rabbitmq:4
+    restart: always
+    # a user that is not `guest`: the default account is refused from anywhere but
+    # localhost, and a queue anything untrusted can write to is a queue that chooses
+    # which Telegram call the bot makes — see SECURITY.md
+    environment:
+      RABBITMQ_DEFAULT_USER: bot
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 10s
+```
+
+**Kafka.** Read **[[Kafka]]** before this one rather than after: ordering is per partition and a
+refusal replays a run of messages, and neither is something to discover in production.
+
+```yaml
+  telegram_bot:
+    # …as above, and
+    depends_on: [kafka]
+    environment:
+      DJANGO_AIOGRAM_ENABLED: 1
+      DJANGO_AIOGRAM_BROKER: django_aiogram.broker.kafka.KafkaBroker
+      DJANGO_AIOGRAM_KAFKA_BOOTSTRAP: kafka:9092
+      DJANGO_AIOGRAM_KAFKA_TOPIC: telegram-bot
+
+  kafka:
+    image: apache/kafka:4.0.0
+    restart: always
+    # the advertised listener is the whole configuration: with the image's default the
+    # broker answers `localhost:9092`, which is itself from inside the container, and a
+    # client elsewhere retries into a refusal loop rather than failing
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9094
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+```
+
+A single-broker Kafka with replication factor 1 is a development recipe. It is here because the
+listener configuration is the part everybody loses an afternoon to, not because one broker is a
+production answer.
 
 ## Upgrading to 3.0: order matters, once
 
@@ -185,6 +263,9 @@ than clean.
 ```shell
 pip install 'django-aiogram[hiredis]'
 ```
+
+Only on the two Redis transports; the other drivers do their own parsing and this extra does
+nothing for them.
 
 redis-py parses replies in Python unless `hiredis` is present, and then in C. Nothing
 in this package needs it and nothing changes if it is absent — it is an extra rather
