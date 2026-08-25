@@ -91,3 +91,6 @@ waiting, and the bulk path is faster for it too.
   the API borrows a thread and uses the same connection the synchronous half does.
 - The depth a probe reports is the group's lag rather than a queue length, which is the same
   question answered by different arithmetic.
+- `bot.inflight_depth()` answers from **this process's memory**. Kafka has nothing to ask: an
+  offset is either committed or not, and "taken but not settled" exists only here. So it is a
+  reading for the bot container; anywhere else it is zero, correctly and uselessly.

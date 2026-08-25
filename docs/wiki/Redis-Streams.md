@@ -67,5 +67,7 @@ RabbitMQ. `scripts/measurements` re-takes all three.
   choose against a backlog you are willing to lose.
 - The group is created on first use with `MKSTREAM`, at id 0, so a group joining a stream that
   already has entries starts at the beginning rather than skipping what nobody has read.
+- `bot.inflight_depth()` reads the group's pending list off the server, so any process can ask
+  it. Like the list and unlike the other two, the answer does not depend on which process asks.
 - `decode_responses` on a shared `REDIS_URL` is the same trap it is on the list, and `E043`
   refuses the same combination.

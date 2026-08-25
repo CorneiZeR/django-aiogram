@@ -63,6 +63,11 @@ native server, which is the reason to quote the divisor rather than the multiple
 - `RABBITMQ_PREFETCH` and `MAX_IN_FLIGHT` bound the same thing from two ends: the broker's
   window on unacknowledged deliveries, and this consumer's on outstanding sends. Setting only
   the second leaves the broker willing to hand over more than the worker will hold.
+- `bot.inflight_depth()` answers from **this process's memory**, because AMQP has no
+  unacknowledged count to ask for — the management HTTP API has one, and reaching for it would
+  mean a second way of talking to the broker for a number the contract defines as this worker's.
+  So the reading is only meaningful inside the bot container; from a web process it is zero, and
+  correctly so. `queue_depth()` has no such limitation.
 - The connection registry outlives the threads that owned its entries, which is a known
   rough edge rather than a designed one — a thread that exits without closing leaves its entry
   behind.

@@ -80,6 +80,9 @@ here more than anywhere: an unbounded list turns draining a backlog into quadrat
   walks the whole keyspace, and the count is a floor rather than a total.
 - A refusal is a no-op. There is nothing to nack — the message is already in the in-flight list,
   and leaving it there *is* the refusal.
+- `bot.inflight_depth()` reads that list off the server, so any process can ask it — and naming
+  another worker is how a monitor sees what a dead one left. Only two of the four transports can
+  answer that from outside the worker; this is one.
 - `decode_responses` in a `REDIS_URL` shared with a cache backend meets bytes it cannot decode.
   `E043` refuses that combination when pickle is allowed, because the failure lands inside
   redis-py before any code here runs.
