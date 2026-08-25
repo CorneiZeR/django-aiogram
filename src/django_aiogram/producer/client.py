@@ -1444,8 +1444,8 @@ class TelegramBot:
     def queue_depth(self) -> int:
         """How many messages are waiting for a worker to take them.
 
-        One read, asked of whichever transport ``BROKER`` names — a list length, a
-        stream's, a queue's message count, a topic's lag. Named for what it measures
+        One read, asked of whichever transport ``BROKER`` names — the length of a list
+        or a stream, a queue's message count, a topic's lag. Named for what it measures
         rather than for any one of those commands, which is what let the name survive
         4.0 unchanged while everything under it became four implementations.
 

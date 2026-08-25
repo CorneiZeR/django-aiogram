@@ -1,9 +1,9 @@
 """Serialization of queued aiogram calls.
 
 JSON is the format. Pickle stays behind ``ALLOW_PICKLE`` as the escape hatch for
-payloads JSON cannot describe, off by default because unpickling the queue makes
-anything able to write to the queue able to execute code in the container — whichever
-transport ``BROKER`` names holds it.
+payloads JSON cannot describe, off by default because unpickling means anything that
+can write to the queue can execute code in the container — whichever transport
+``BROKER`` names holds that queue.
 
 Two aiogram details make plain ``model_dump(mode='json')`` insufficient:
 

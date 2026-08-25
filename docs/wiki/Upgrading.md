@@ -94,7 +94,7 @@ Then, in a shell on a non-bot process:
 from django_aiogram import bot
 
 bot.queue_depth()  # crosses the broker boundary, sends nothing
-bot.enqueue(chat_id=YOUR_ID, text='upgrade check')  # `send_redis` under its 4.0 name
+bot.enqueue(chat_id=YOUR_ID, text='upgrade check')  # `enqueue` replaces `send_redis` in 4.0
 ```
 
 Read the depth first. It is the only step that proves the transport is configured *and*
