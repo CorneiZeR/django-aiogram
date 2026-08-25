@@ -77,6 +77,34 @@ everywhere else, and `enqueue` is what it calls when it queues.
 Nothing is renamed in the settings: `REDIS_URL` and the rest still say Redis because they *are*
 Redis's, and a project that runs the list transport writes exactly what it wrote before.
 
+## Verifying the upgrade
+
+```shell
+pip show django-redis-aiogram   # nothing: the old distribution is gone, not shadowed
+python manage.py check
+```
+
+`check` is where this hop fails loudest, and deliberately so: a `BROKER` whose driver is not
+installed is refused here rather than left to raise `ModuleNotFoundError` inside the first
+send, in a producer, in production.
+
+Then, in a shell on a non-bot process:
+
+```python
+from django_aiogram import bot
+
+bot.queue_depth()  # crosses the broker boundary, sends nothing
+bot.enqueue(chat_id=YOUR_ID, text='upgrade check')  # `send_redis` under its 4.0 name
+```
+
+Read the depth first. It is the only step that proves the transport is configured *and*
+reachable without putting a message on the queue, and it answers whether or not the process is
+`ENABLED` — so it works on the web tier you keep from sending, which is where you are most
+likely to be standing.
+
+Then confirm the bot container logs `message sent`. If the depth answered and this does not,
+the queue is fine and the worker is not: see **[[Troubleshooting]]**.
+
 # From 3.0 to 3.1
 
 ## Make your handlers idempotent, on your own key

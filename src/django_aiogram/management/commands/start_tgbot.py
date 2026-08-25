@@ -2,7 +2,7 @@
 
 This is the long-running process a bot container is built around. It owns two
 things at once — whatever brings updates in, and the consumer that drains the
-Redis queue — and has to shut both down cleanly when the container stops.
+queue ``BROKER`` names — and has to shut both down cleanly when the container stops.
 """
 
 import contextlib

@@ -9,7 +9,7 @@ def no_default_kwargs(_function: str, /) -> dict[str, Any]:
 
 
 DEFAULTS: dict[str, Any] = {
-    # whether this process should talk to Telegram or Redis at all
+    # whether this process should talk to Telegram or the broker at all
     'ENABLED': True,
     'TOKEN': '',
     'REDIS_URL': '',

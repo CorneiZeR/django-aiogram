@@ -1317,7 +1317,7 @@ class TelegramBot:
     def _accept_bulk(self, function: str) -> bool:
         """Whether this process should write, decided once for the whole batch.
 
-        A disabled bot reaches neither Telegram nor Redis, and still returns an id
+        A disabled bot reaches neither Telegram nor the broker, and still returns an id
         per message — the same contract :meth:`enqueue` has, so a caller can
         store the ids beside its own rows whether or not this deployment sends.
 
@@ -1443,8 +1443,14 @@ class TelegramBot:
     def queue_depth(self) -> int:
         """How many messages are waiting for a worker to take them.
 
-        One ``LLEN``. Named for what it measures rather than the command, because
-        the queue is a Redis list only until 4.0 makes the broker pluggable.
+        One read, asked of whichever transport ``BROKER`` names — a list length, a
+        stream's, a queue's message count, a topic's lag. Named for what it measures
+        rather than for any one of those commands, which is what let the name survive
+        4.0 unchanged while everything under it became four implementations.
+
+        Answers whether or not this process is `ENABLED`: that setting gates sending,
+        and a web tier kept from sending is exactly where someone asks how deep the
+        queue is.
 
         Growing is not by itself a fault — producers can outpace delivery, and
         ``MAX_IN_FLIGHT`` holds intake back on purpose. See **Troubleshooting**.
