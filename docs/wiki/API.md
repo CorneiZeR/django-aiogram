@@ -31,29 +31,29 @@ the function if that matters.
 | `bot.dispatcher` | the aiogram `Dispatcher`, with the configured FSM storage | on first use |
 | `bot.loop` | the event loop this bot's work runs on | on first use, one per instance |
 | `bot.router` | the `Router` the decorators register on | with the instance |
-| `bot.redis_conn` | the shared Redis connection | on first use; raises if `REDIS_URL` is empty |
 | `bot.max_retries` | how many times a rate-limited send is retried | from `MAX_RETRIES`, or the constructor |
-| `bot.enabled` | whether this process should reach Telegram or Redis at all | read per access |
+| `bot.enabled` | whether this process should send at all; the depth reads below are the exception | read per access |
 | `bot.rate_limiter` | the limiter for this token, shared with any other instance holding it | on first use |
 | `bot.is_worker` | whether this process is the one polling Telegram | read per access |
 
-These are public. 1.x code drives them directly — running the loop by hand,
-feeding the dispatcher, reusing the connection — and that keeps working;
-`tests/test_public_surface.py` fails if any of them disappears.
+These are public. 1.x code drives them directly — running the loop by hand, feeding the
+dispatcher — and that keeps working; `tests/test_public_surface.py` fails if any of them
+disappears. Reusing the connection through `bot.redis_conn` is the one that stopped: 4.0 removed
+it, and `django_aiogram.redis.redis_conn` is the same object in the module that owns it.
 
 ## Sending
 
 | | |
 | --- | --- |
 | `bot.send(function='send_message', **kwargs)` | queue it, or call Telegram directly inside the bot container |
-| `bot.send_redis(...)` | always queue |
+| `bot.enqueue(...)` | always queue |
 | `bot.send_raw(...)` | always call Telegram from this process |
 | `bot.send_many(chat_ids, function='send_message', *, chunk_size=100, **kwargs)` | queue rather than call, one message per chat, a chunk per round trip |
 
 `function` must name a Telegram API method aiogram exposes; anything else raises
 `ValueError` before it reaches the queue. See **[[Sending-messages|Sending messages]]**.
 
-`send`, `send_redis` and `send_raw` return a **correlation id** — a `uuid.UUID`
+`send`, `enqueue` and `send_raw` return a **correlation id** — a `uuid.UUID`
 that ties every row about that message together, whichever process wrote it.
 It is not one per message and not an idempotency key: a handler's replies inherit
 the id of the update that caused them, so one id can cover several messages.
@@ -68,14 +68,15 @@ identifier = bot.send(chat_id=chat_id, text='hello')
 Receipt.objects.create(order=order, telegram_correlation_id=identifier)
 ```
 
-Before 3.0 they returned `None`, so every existing call site still compiles.
+Before 3.0 they returned `None`, so gaining a return value broke no call site. The 4.0
+renames did — see **[[Upgrading]]** for each old name against what to call instead.
 
 ### From code already on an event loop
 
 | | |
 | --- | --- |
 | `await bot.asend(...)` | as `send`, without the blocking socket write |
-| `await bot.asend_redis(...)` | as `send_redis` |
+| `await bot.aenqueue(...)` | as `enqueue` |
 | `await bot.asend_many(...)` | as `send_many` |
 
 Same signatures, same rows, and the same correlation id — resolved on the caller's
@@ -91,19 +92,26 @@ serializes each chunk between its awaits, and that part is ordinary CPU work on
 the loop's thread. A fan-out large enough to matter belongs in a task, not in a
 request.
 
-Each loop gets its own client, because `redis.asyncio` connections are loop-affine.
-`await bot.aclose()` closes the one belonging to the loop that calls it, and it is
-worth calling from a lifespan shutdown if your server has one — it is the only
-path that closes the connection on the loop it belongs to, which is the only loop
-that may close it. Without it the connection stays open until the client is
-collected, and Python may say so with a `ResourceWarning`. **[[Deployment]]** has
+**On the Redis transports**, each loop gets its own client, because `redis.asyncio`
+connections are loop-affine. `await bot.aclose()` closes the one belonging to the loop
+that calls it, and it is worth calling from a lifespan shutdown if your server has one —
+it is the only path that closes the connection on the loop it belongs to, which is the
+only loop that may close it. Without it the connection stays open until the client is
+collected, and Python may say so with a `ResourceWarning`.
+
+RabbitMQ and Kafka have no such client: their drivers are synchronous, so the awaiting
+half borrows a thread and publishes through the same connection the synchronous half
+uses. `aclose()` is a no-op there — it closes a Redis client those deployments never
+open — and the connection it did not close belongs to the process rather than to any
+loop. Nothing about the async API changes; what changes is that there is nothing for a
+lifespan shutdown to release. **[[Deployment]]** has
 the shutdown recipe.
 
 ### Queue introspection
 
 | | |
 | --- | --- |
-| `bot.queue_depth()` | messages waiting for a worker, one `LLEN` |
+| `bot.queue_depth()` | messages waiting for a worker; one read, of whichever transport `BROKER` names |
 | `bot.inflight_depth(worker=None)` | messages one worker is part-way through sending |
 | `await bot.aqueue_depth()` / `await bot.ainflight_depth(...)` | the same read, without holding the loop |
 
@@ -114,9 +122,12 @@ the four methods above; if you hold a client of your own, you own closing it on 
 loop that made it.
 
 These four are reads rather than sends, so `ENABLED=0` does not turn them into
-no-ops the way it does every send: they still connect, and without `REDIS_URL` they
-raise `ImproperlyConfigured` rather than answering zero. A monitor that runs in a
-disabled process needs the URL.
+no-ops the way it does every send: they still connect, and without whatever the
+configured transport connects with — `REDIS_URL` for the two Redis brokers, the
+equivalent for the others — they raise `ImproperlyConfigured` rather than
+answering zero, and `BrokerDependencyError` when it is the driver that is absent
+rather than the setting. A monitor that runs in a disabled process still needs that setting, and the
+driver: `manage.py check` does not ask a disabled process for either.
 
 `inflight_depth` defaults to this process's own worker identity; naming another is
 how a monitor reads a list left behind by a worker that is gone. The key scheme
@@ -191,13 +202,21 @@ fresh event loop and HTTP session that nothing closes — see **[[Sending-messag
 ## Module level
 
 ```python
-from django_aiogram import TelegramBot, bot, conf, get_redis, redis_conn, __version__
+from django_aiogram import TelegramBot, bot, conf, __version__
 ```
 
 `conf` reads `settings.TELEGRAM_BOT` on first access, falls back to
-`DJANGO_AIOGRAM_<NAME>` for scalars, and resets itself on
-`override_settings`. `redis_conn` is a lazy proxy over `get_redis()`; both hand
-back the one connection.
+`DJANGO_AIOGRAM_<NAME>` for scalars, and resets itself on `override_settings`.
+
+**`get_redis` and `redis_conn` left this list in 4.0**, along with `bot.redis_conn`. They are
+Redis's, and a package that carries four transports should not export one transport's client
+from its front door. Nothing about them changed otherwise — same objects, same laziness, one
+connection — so code that wants Redis for its own keys imports them from the module that owns
+them:
+
+```python
+from django_aiogram.redis import get_redis, redis_conn
+```
 
 ## Values the settings accept
 

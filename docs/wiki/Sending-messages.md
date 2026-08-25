@@ -6,9 +6,13 @@ from django_aiogram import bot
 bot.send(chat_id=CHAT_ID, text='hello')
 ```
 
-`send()` picks the route: inside the bot container it calls Telegram directly,
-anywhere else it queues the call through Redis. Callers do not have to know
-which process they are in.
+`send()` picks the route: inside the bot container it calls Telegram directly, anywhere else
+it queues the call through whichever transport `BROKER` names. Callers do not have to know which
+process they are in.
+
+Both routes are gated on `ENABLED`. A disabled process reaches neither Telegram nor the broker
+and returns the correlation id anyway, so a caller storing it beside its own row gets the same
+value whether or not this deployment sends.
 
 Any Telegram API method aiogram exposes works — pass its name first. The name
 is checked against that allowlist, so a queued payload cannot reach anything
@@ -24,7 +28,7 @@ bot.send('send_chat_action', chat_id=CHAT_ID, action='typing')
 | Method | Behavior |
 | ------ | --------- |
 | `send()` | direct in the bot container, queued elsewhere |
-| `send_redis()` | always queue |
+| `enqueue()` | always queue |
 | `send_raw()` | always call Telegram from this process |
 
 `send_raw` from a web process that does not serve the webhook builds its own event
@@ -65,10 +69,16 @@ async def announce_from_async(chat_ids):
     return await bot.asend_many(chat_ids, text='we are back')
 ```
 
-`asend` is `send` for code already on an event loop. The synchronous one writes to
-a socket on the calling thread, which under ASGI is the thread serving requests —
-and on the first call that includes a TCP connect bounded by `REDIS_TIMEOUT`. The
-ids, the rows and the routing are identical.
+`asend` is `send` for code already on an event loop. **Outside the bot container**, where it
+queues, the synchronous one writes to a socket on the calling thread — which under ASGI is the
+thread serving requests, and on the first call that includes a connect bounded by whatever
+timeout the transport `BROKER` names declares. Inside the worker both take the direct route
+instead: `send_raw` schedules onto the bot's loop and returns, the first connection is to
+Telegram rather than to a broker, and no `BROKER` setting is involved.
+
+So the two routes share their ids and their event rows and share no socket: one writes to the
+queue `BROKER` names, the other to Telegram. That is the whole of the difference, and it is why
+`send()` deciding for you is the point rather than a convenience.
 
 `send_many` queues one message per chat, a chunk of them per round trip, and
 returns an id per message in the order the chats were given. `asend_many` is its

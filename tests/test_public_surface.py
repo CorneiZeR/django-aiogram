@@ -2,9 +2,13 @@
 
 1.x `TelegramBot` was a dataclass, so its internals were part of how people used
 it: driving `loop` by hand, feeding `dispatcher`, reusing `redis_conn`. The lazy
-rewrite turned every one of those into a property. They all still exist — this
-file is what keeps them existing, because a refactor that drops one would
+rewrite turned every one of those into a property, and all but one still exist —
+this file is what keeps them existing, because a refactor that drops one would
 otherwise be caught only indirectly, if at all.
+
+`redis_conn` is the exception, removed in 4.0 and pinned here from the other side: the
+cases at the bottom fail if a removed name comes back. Both directions are the job, and
+this docstring went on saying "they all still exist" after one of them had stopped.
 
 The names are written out rather than derived from the code: a list generated
 from the class under test would agree with any change to it.
@@ -18,21 +22,27 @@ import pytest
 from django.test import override_settings
 
 import django_aiogram
-from django_aiogram import TelegramBot, bot
+from django_aiogram import TelegramBot
+from django_aiogram import redis as redis_module
 from django_aiogram.config.checks import check_settings
 from django_aiogram.config.enums import DeliveryKind, SerializerKind, StorageKind, UpdateMode
 
-#: attributes that predate 2.0 and are reached for directly
+#: attributes that predate 2.0 and are reached for directly. `redis_conn` was one of them and
+#: is not any more: 4.0 removed the client's Redis-named property, because a client that can
+#: carry four transports should not answer for one of them. `django_aiogram.redis.redis_conn`
+#: is the same object in the module that owns it
 INHERITED_ATTRIBUTES = (
     'bot',  # the aiogram Bot
     'dispatcher',
     'loop',
     'max_retries',
-    'redis_conn',
 )
 
-#: methods that predate 2.0
-INHERITED_METHODS = ('start_polling', 'send_raw', 'send_redis')
+#: methods that predate 2.0. `send_redis` is `enqueue` in 4.0, for the reason the removed
+#: attribute above gives -- the name said where the message went, and where it goes is now a
+#: setting. Pinned here rather than among 4.0's additions because the *method* is the 2.x
+#: contract under a new name, and losing it would be a break rather than a rename
+INHERITED_METHODS = ('start_polling', 'send_raw', 'enqueue')
 
 #: every observer aiogram has a decorator for
 OBSERVER_DECORATORS = (
@@ -58,11 +68,24 @@ TWO_X_ADDITIONS = ('send', 'router', 'enabled', 'is_worker', 'rate_limiter', 'cl
 
 #: 3.1.0's additions. Kept apart from the tuple above because that one is the 2.x
 #: contract and must not be edited to make a later change pass
-THREE_ONE_ADDITIONS = ('asend', 'asend_redis', 'send_many', 'asend_many')
-THREE_ONE_COROUTINES = ('asend', 'asend_redis', 'asend_many', 'aqueue_depth', 'ainflight_depth', 'aclose')
+THREE_ONE_ADDITIONS = ('asend', 'aenqueue', 'send_many', 'asend_many')
+THREE_ONE_COROUTINES = ('asend', 'aenqueue', 'asend_many', 'aqueue_depth', 'ainflight_depth', 'aclose')
 THREE_ONE_INTROSPECTION = ('queue_depth', 'inflight_depth')
 
-MODULE_EXPORTS = ('TelegramBot', 'bot', 'conf', 'redis_conn', 'get_redis', '__version__')
+#: what `import django_aiogram` gives you. `redis_conn` and `get_redis` left in 4.0: one
+#: transport's client is not the package's business to export, and both are still importable
+#: from `django_aiogram.redis`, which the case below pins
+MODULE_EXPORTS = ('TelegramBot', 'bot', 'conf', '__version__')
+
+#: what 4.0 took away, pinned by its absence. The tuples above are membership checks, and
+#: membership cannot fail when a name comes *back*: `hasattr` would find a restored
+#: `TelegramBot.send_redis`, `MODULE_EXPORTS` would still equal `__all__` for a lazy
+#: `get_redis` put back in `_EXPORTS`, and every case here would stay green while the
+#: Redis-named surface this release removed worked again. The equality case below covers
+#: `__all__` alone, which is why these are separate: a lazy export is reachable without
+#: being in it
+REMOVED_FROM_THE_PACKAGE = ('get_redis', 'redis_conn')
+REMOVED_FROM_THE_CLIENT = ('send_redis', 'asend_redis', 'redis_conn')
 
 #: 3.1.0 makes the metrics seam public, and with it the shape of what receivers get.
 #: Written out rather than read off the dataclass, which is the point: a field
@@ -102,6 +125,33 @@ def test_the_method_is_still_callable(name):
 def test_the_package_still_exports_it(name):
     assert name in django_aiogram.__all__, f'{name} left __all__'
     assert getattr(django_aiogram, name, None) is not None
+
+
+def test_the_package_exports_nothing_else():
+    """Equality, not membership: a name *arriving* is as much a decision as one leaving.
+
+    The parametrised case above asks whether each expected name is still there, which says
+    nothing about a fifth appearing. 4.0 removed two — `get_redis` and `redis_conn`, a
+    transport's client exported from a package that carries four — and with membership alone
+    they could be put back and no case would notice.
+    """
+    assert set(django_aiogram.__all__) == set(MODULE_EXPORTS), (
+        f'the package exports {sorted(django_aiogram.__all__)}, pinned as {sorted(MODULE_EXPORTS)}'
+    )
+
+
+@pytest.mark.parametrize('name', REMOVED_FROM_THE_PACKAGE)
+def test_the_package_no_longer_resolves_it(name):
+    """A lazy export is reachable without being in ``__all__``, so ask the module itself."""
+    assert not hasattr(django_aiogram, name), (
+        f'{name} resolves again on the package; 4.0 moved it to django_aiogram.redis'
+    )
+
+
+@pytest.mark.parametrize('name', REMOVED_FROM_THE_CLIENT)
+def test_the_client_no_longer_carries_it(name):
+    """Restoring one as an alias would leave two names for one thing, which is the drift 4.0 ended."""
+    assert not hasattr(TelegramBot, name), f'{name} is back on TelegramBot; see enqueue and aenqueue'
 
 
 @pytest.mark.parametrize('name', OBSERVER_DECORATORS)
@@ -155,15 +205,25 @@ def test_the_construction_arguments_1_x_accepted():
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
-def test_redis_conn_is_the_shared_connection(redis_server):
-    """1.x reached through the bot for the connection; it must still be one."""
-    assert bot.redis_conn is redis_server
+def test_the_redis_client_is_shared_and_lives_in_its_own_module(redis_server):
+    """Still one connection, and still reachable — through the module rather than the package.
 
-    another = TelegramBot()
-    try:
-        assert another.redis_conn is bot.redis_conn, 'a second instance opened its own'
-    finally:
-        another.close()
+    1.x reached for it through the bot and 2.x through `django_aiogram.redis_conn`. Both are
+    gone in 4.0: a package with four transports should not export a name for one of them, and a
+    client that can carry any of them should not have a property answering for Redis. What is
+    pinned here is that the object did not move house and is still shared.
+    """
+    # through the module rather than a name bound at import: the suite patches
+    # `django_aiogram.redis.get_redis`, and a reference taken here would keep pointing at the
+    # real one -- the same trap `tests/conftest.py` names for lazily imported transports
+    assert redis_module.get_redis() is redis_server
+    # identity, not a matching answer: `ping() == ping()` is True for any two live connections,
+    # so it would pass while `redis_conn` opened one of its own -- which is the contract this
+    # case is named for
+    assert redis_module.redis_conn.connection_pool is redis_server.connection_pool
+
+    assert not hasattr(TelegramBot(), 'redis_conn'), 'the client kept a transport-named property'
+    assert not hasattr(django_aiogram, 'redis_conn'), 'the package still exports it'
 
 
 ENUM_CLASSES = ('DeliveryKind', 'SerializerKind', 'StorageKind', 'UpdateMode', 'RateLimitKey', 'SerializationTag')

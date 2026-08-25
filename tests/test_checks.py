@@ -16,6 +16,7 @@ from django.test import override_settings
 
 from django_aiogram.config.checks import CHECKS, check_settings, worker_name_problems
 from django_aiogram.config.defaults import DEFAULTS
+from django_aiogram.config.enums import StorageKind
 from django_aiogram.config.settings import blpop_ceiling
 from django_aiogram.eventlog.dbrouter import TelegramEventLogRouter
 from django_aiogram.eventlog.events import worker_identity
@@ -944,3 +945,98 @@ def test_a_broker_setting_naming_something_else_is_refused():
 
     assert problems, 'a BROKER naming a non-broker produced no finding'
     assert 'not a Broker subclass' in problems[0].msg, problems[0].msg
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        'ENABLED': True,
+        'TOKEN': '42:x',
+        'BROKER': 'django_aiogram.broker.kafka.KafkaBroker',
+        'KAFKA_BOOTSTRAP': 'localhost:9092',
+        'FSM_STORAGE': 'memory',
+    }
+)
+def test_a_kafka_deployment_is_not_asked_for_a_redis_url():
+    """`W002` asked every enabled bot for `REDIS_URL` while Redis was the only transport.
+
+    Three of the four never open a Redis connection, so on this configuration the warning is
+    about a key nothing reads — and a warning about an unused setting is how an operator
+    learns to stop reading the list it is in.
+    """
+    reported = [problem for problem in check_settings() if str(problem.id) == 'django_aiogram.W002']
+
+    assert reported == [], f'a Kafka deployment was asked for a Redis URL: {reported}'
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        'ENABLED': True,
+        'TOKEN': '42:x',
+        'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker',
+        'FSM_STORAGE': 'memory',
+    }
+)
+def test_a_redis_broker_with_no_url_is_still_asked_for_one():
+    """The other direction, which is what makes the rule above a narrowing and not a removal."""
+    reported = [problem for problem in check_settings() if str(problem.id) == 'django_aiogram.W002']
+
+    assert reported, 'a Redis broker with no URL produced no warning'
+    assert 'BROKER or FSM_STORAGE names Redis' in (reported[0].hint or ''), reported[0].hint
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        'ENABLED': True,
+        'TOKEN': '42:x',
+        'BROKER': 'django_aiogram.broker.kafka.KafkaBroker',
+        'KAFKA_BOOTSTRAP': 'localhost:9092',
+        'FSM_STORAGE': 'redis',
+    }
+)
+def test_the_fsm_storage_alone_is_enough_to_need_the_url():
+    """Two consumers, and either is sufficient — the broker is not the only one.
+
+    A Kafka queue with Redis-backed FSM state is a reasonable deployment, and it does need
+    `REDIS_URL`. A gate that looked only at `BROKER` would have taken this warning away.
+    """
+    reported = [problem for problem in check_settings() if str(problem.id) == 'django_aiogram.W002']
+
+    assert reported, 'Redis FSM storage with no URL produced no warning'
+
+
+@override_settings(TELEGRAM_BOT={'ENABLED': True, 'FSM_STORAGE': 'memory', 'REDIS_URL': 'redis://x'})
+def test_the_missing_token_hint_says_sending_rather_than_reaching():
+    """The hint is text the code emits, so it is API to whoever reads a failing build.
+
+    It said "processes that never reach Telegram", which claimed `ENABLED` gates every
+    connection — and the depth reads answer regardless of it. Pinned because the wording is
+    the whole value of a hint: it tells an operator which setting to touch.
+    """
+    reported = [problem for problem in check_settings() if str(problem.id) == 'django_aiogram.W001']
+
+    assert reported, 'an enabled bot with no token produced no warning'
+    hint = reported[0].hint or ''
+    assert 'never send to Telegram' in hint, hint
+    assert 'at all' not in hint, f'the hint claims ENABLED gates more than sending: {hint}'
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        'ENABLED': True,
+        'TOKEN': '42:x',
+        'BROKER': 'django_aiogram.broker.kafka.KafkaBroker',
+        'KAFKA_BOOTSTRAP': 'localhost:9092',
+        'FSM_STORAGE': StorageKind.REDIS,
+    }
+)
+def test_the_enum_this_package_publishes_counts_as_redis_storage():
+    """`FSM_STORAGE` accepts the enum, and `API.md` documents it as a way to write settings.
+
+    `str()` on it does not give its value: `StorageKind` mixes in `str`, and since 3.11
+    `str(StorageKind.REDIS)` is `'StorageKind.REDIS'`. So a gate that normalised the string saw
+    `'storagekind.redis'`, matched nothing, and suppressed `W002` for a deployment that goes on
+    to need `REDIS_URL` the moment it builds its storage.
+    """
+    reported = [problem for problem in check_settings() if str(problem.id) == 'django_aiogram.W002']
+
+    assert reported, 'the enum form of Redis FSM storage did not ask for a URL'

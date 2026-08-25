@@ -130,8 +130,8 @@ def test_draining_pops_atomically(redis_server):
 
 
 @override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop'})
-def test_send_redis_round_trips_through_a_decoded_connection(decoded_server):
-    TelegramBot().send_redis(chat_id=1, text='hi')
+def test_enqueue_round_trips_through_a_decoded_connection(decoded_server):
+    TelegramBot().enqueue(chat_id=1, text='hi')
 
     queued = unpack(loads(as_bytes(decoded_server.lpop('TELEGRAM_BOT_MESSAGE'))))
     assert queued.function == 'send_message'

@@ -80,7 +80,7 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `skipping drain` | WARNING | the same, for the drain alone: in-flight sends were left rather than waited for |
 | `scheduling a send on a loop nothing in this process runs` | WARNING | nothing polls this process and no loop thread exists, so the send is created and never stepped |
 | `rate limited by telegram` | WARNING | refused and backing off |
-| `a synchronous send was called from a running event loop` | WARNING | `send`, `send_redis` or `send_many` from async code: correct, but it writes on the loop's own thread. `tg_alternative` names the awaitable form. Said once per process |
+| `a synchronous send was called from a running event loop` | WARNING | `send`, `enqueue` or `send_many` from async code: correct, but it writes on the loop's own thread. `tg_alternative` names the awaitable form. Said once per process |
 | `an events_recorded receiver raised` | ERROR | one of your metrics receivers raised; the batch reached the database if the event log is on and the write succeeded, and usually the other receivers too — `send_robust` isolates them, but the row below is the case where it cannot. `tg_receiver` names it |
 | `publishing recorded events failed` | ERROR | the signal dispatch itself raised, not a receiver — Django's own failure logging cannot name a callable instance. The batch reached the database if the event log is on; some receivers may have missed it |
 | `delivery started` | INFO | the consumer is up |

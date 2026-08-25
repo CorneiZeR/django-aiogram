@@ -1,7 +1,8 @@
 # Upgrading
 
-What each major release changed, newest first. Start at the section for the
-version you are on and work down.
+What each major release changed, newest first — so an upgrade is read from the bottom. Find
+the lowest section that applies to the version you are on and work **up** the page, one release
+at a time: each covers a single hop and assumes the ones below it are done.
 
 # From 3.1 to 4.0
 
@@ -12,8 +13,10 @@ old one — nothing imports it after the steps below.
 
 Redis is no longer a hard dependency. Pick the transport you run and install it with the
 package: `pip install django-aiogram[redis]` for the queue 3.x used. A project that names a
-transport whose driver is not installed is refused by a system check at startup rather than
-by an `ImportError` on the first send.
+transport whose driver is not installed is refused by a system check at startup rather than by
+an `ImportError` on the first send — in the processes that send. A process with `ENABLED=0` is
+not asked for a driver, so a disabled one still reaches `E047` only if you enable it; if it
+reads a queue depth it needs the driver regardless, because those reads are not gated.
 
 ## Rename the app and the imports
 
@@ -54,6 +57,69 @@ django_redis_aiogram_event` is yours to run, and this package will never run it 
 
 Nothing is detected from what happens to be installed. Name the broker you want, and the
 absence of its driver is a startup complaint rather than a runtime surprise.
+
+## Rename what used to say Redis
+
+Five public names said Redis, in the four entries below, for two different reasons — and the
+table separates them.
+
+**Two were routing names.** `send_redis` and `asend_redis` said where a message went, and where
+it goes is a setting now — so they are gone, renamed rather than aliased, because an alias that
+outlives the release it was written for is a second name for the same thing for ever.
+
+**Three were client-access names** — `bot.redis_conn`, and the package's `get_redis` and
+`redis_conn`, which share a row below because they move in one import. Those *moved* rather than
+went: one transport's client is
+not the package's business to export from its front door, but the object is unchanged and still
+importable from the module that owns it.
+
+| 3.x | 4.0 | why |
+| --- | --- | --- |
+| `bot.send_redis(...)` | `bot.enqueue(...)` | the queue is a list, a stream, an AMQP queue or a Kafka topic, depending on `BROKER` |
+| `await bot.asend_redis(...)` | `await bot.aenqueue(...)` | the same, on the awaiting half |
+| `bot.redis_conn` | `from django_aiogram.redis import redis_conn` | a client that can carry any of four transports should not answer for one |
+| `from django_aiogram import get_redis, redis_conn` | `from django_aiogram.redis import get_redis, redis_conn` | the package stopped exporting one transport's client from its front door |
+
+The last two are moves rather than removals: the objects are the same, they are as lazy as they
+were, and there is still one connection behind them. Only the shortcut through the package is
+gone. `bot.send()` is untouched — it still delivers directly inside the worker and queues
+everywhere else, and `enqueue` is what it calls when it queues.
+
+Nothing is renamed in the settings: `REDIS_URL` and the rest still say Redis because they *are*
+Redis's, and a project that runs the list transport writes exactly what it wrote before.
+
+## Verifying the upgrade
+
+```shell
+pip show django-redis-aiogram   # nothing: the old distribution is gone, not shadowed
+python manage.py check
+```
+
+`check` is where this hop fails loudest, and deliberately so: a `BROKER` whose driver is not
+installed is refused here rather than left to raise `ModuleNotFoundError` inside the first
+send, in a producer, in production.
+
+Then, in a shell on a non-bot process:
+
+```python
+from django_aiogram import bot
+
+bot.enabled  # must be True for the send below to do anything
+bot.queue_depth()  # crosses the broker boundary, sends nothing
+bot.enqueue(chat_id=YOUR_ID, text='upgrade check')  # `enqueue` replaces `send_redis` in 4.0
+```
+
+Read the depth first. It is the only step that proves the transport is configured *and*
+reachable without putting a message on the queue, and it reaches the broker regardless of
+`ENABLED` — so it verifies the broker on the web tier you keep from sending, which is where you
+are most likely to be standing.
+
+The send is the opposite: `ENABLED=0` makes `enqueue` a no-op that still returns an id, so on a
+disabled process it proves nothing and the `message sent` line below never comes. Run it
+somewhere the flag is on, or set it for the length of the check.
+
+Then confirm the bot container logs `message sent`. If the depth answered and this does not,
+the queue is fine and the worker is not: see **[[Troubleshooting]]**.
 
 # From 3.0 to 3.1
 
@@ -279,7 +345,8 @@ bot.send(chat_id=chat_id, text=text)
 ```
 
 It queues from your app and calls Telegram directly inside the bot container.
-`send_redis` and `send_raw` still work.
+`send_redis` and `send_raw` still work — `send_redis` is the name at this hop; the 4.0 section
+above lists what it is called now.
 
 ## 6. Drain the 1.x queue, then drop the flag
 
@@ -304,7 +371,9 @@ soon as step 2 holds.
 
 ## 7. Re-silence checks if you had to
 
-Ids moved from `telegram_bot.EXXX` to `django_redis_aiogram.EXXX`.
+Ids moved from `telegram_bot.EXXX` to `django_redis_aiogram.EXXX` — and in 4.0 to
+`django_aiogram.EXXX`, which is the prefix to silence if you are reading this page on the way
+from 1.x to 4.0 rather than stopping at 2.0.
 
 ## Behavior that changed by itself
 
@@ -334,7 +403,7 @@ python manage.py test
 Then, in a shell on a non-bot process:
 
 ```python
-from django_redis_aiogram import bot
+from django_redis_aiogram import bot  # the name at this hop; it changes again at 4.0
 
 bot.enabled  # False where you disabled it
 bot.send(chat_id=YOUR_ID, text='upgrade check')

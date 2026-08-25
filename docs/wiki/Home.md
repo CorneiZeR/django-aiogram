@@ -4,9 +4,10 @@ Run [aiogram](https://docs.aiogram.dev/) in a container next to Django, write
 handlers as ordinary Django app code, and send Telegram messages from anywhere
 in the project.
 
-Only the bot container runs the polling loop. Elsewhere `send()` queues the
-message through Redis and returns; `send_raw()` skips the queue and talks to
-Telegram from the calling process.
+Only the bot container runs the polling loop. Elsewhere `send()` queues the message and
+returns — where the process is enabled; `ENABLED=0` makes it a no-op that still names the
+message. Which queue it is — a Redis list or stream, an AMQP queue, a Kafka topic — is what
+`BROKER` names. `send_raw()` skips the queue and talks to Telegram from the calling process.
 
 ```python
 from django_aiogram import bot
@@ -19,13 +20,14 @@ bot.send(chat_id=CHAT_ID, text='hello')
 * **[[Installation]]** — install, configure, run
 * **[[Settings]]** — every setting, with defaults
 * **[[Handlers]]** — writing routers and using FSM
-* **[[Sending-messages|Sending messages]]** — `send`, `asend`, `send_many`, `send_redis`, `send_raw`, keyboards, files
-* **[[Testing]]** — running your suite without Redis, asserting what was queued
+* **[[Sending-messages|Sending messages]]** — `send`, `asend`, `send_many`, `enqueue`, `send_raw`, keyboards, files
+* **[[Testing]]** — running your suite without a broker, asserting what was queued
 * **[[API]]** — the instance, its internals, and what stays public
 
 ## Going further
 
-* **[[Delivery]]** — how messages get from Redis to Telegram, and which mode to pick
+* **[[Delivery]]** — how a message gets from the queue to Telegram, what each transport
+  guarantees, and which mode to pick
 * **[[Webhook]]** — receiving updates over HTTP instead of polling for them
 * **[[Rate-limits|Rate limits]]** — staying inside Telegram's published limits
 * **[[Deployment]]** — docker-compose recipes, disabling the bot per process

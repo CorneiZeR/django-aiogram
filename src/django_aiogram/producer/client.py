@@ -17,7 +17,7 @@ from asyncio import AbstractEventLoop
 from collections.abc import Callable, Coroutine, Iterable, Iterator, Mapping
 from concurrent import futures
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from aiogram import Bot, Dispatcher, Router, exceptions
 from aiogram.client.default import DefaultBotProperties
@@ -49,9 +49,6 @@ from django_aiogram.redis import (
 from django_aiogram.wire.envelope import pack
 from django_aiogram.wire.payloads import describe
 from django_aiogram.wire.serializers import get_serializer
-
-if TYPE_CHECKING:
-    from redis import Redis
 
 logger = logging.getLogger('django_aiogram')
 
@@ -177,7 +174,7 @@ def queueing(function: str, messages: list[tuple[uuid.UUID, dict[str, Any]]]) ->
     The one step that cannot be shared between a synchronous producer and an
     asynchronous one is the ``await`` — the language will not allow it. Everything
     around it can be, and is: the serialization, the key, and both event rows,
-    including the rule that a message lost on the way to Redis records a drop
+    including the rule that a message lost on the way to the broker records a drop
     rather than letting silence imply it was queued. Resolving the serializer and
     the key sits outside that guard on purpose — a misconfigured ``SERIALIZER``
     fails identically for every send ever made, and the exception is where that
@@ -190,9 +187,10 @@ def queueing(function: str, messages: list[tuple[uuid.UUID, dict[str, Any]]]) ->
     The two ways a message is lost here are **not** the same, and the ``stage`` on
     the drop row is what tells them apart. ``serialising`` — spelled as the value is
     written, since a consumer filters on it — means the payload never
-    left this process, so re-sending it is safe. ``queueing`` means the write to
-    Redis raised, and a variadic ``RPUSH`` that raised may still have been applied —
-    the reply is what went missing — so re-sending may duplicate. A broadcast makes
+    left this process, so re-sending it is safe. ``queueing`` means the publish raised, and a
+    publish that raised may still have been applied — the reply is what went missing, and a
+    variadic ``RPUSH`` or a confirmed AMQP publish can both fail that way — so re-sending may
+    duplicate. A broadcast makes
     that distinction the only one available, because the ids go with the exception.
     """
     queued_at = time.time()
@@ -265,8 +263,8 @@ def _mention_asend(alternative: str) -> None:
     socket on the thread the loop is running on, which is worth knowing once and is
     not worth an exception.
 
-    From every synchronous route that writes to Redis, which is three of them —
-    :meth:`send`, :meth:`send_redis` and :meth:`send_many`. Naming only the first
+    From every synchronous route that publishes, which is three of them —
+    :meth:`send`, :meth:`enqueue` and :meth:`send_many`. Naming only the first
     left the two a web tier is most likely to reach for silent, and the fan-out is
     the one that holds the loop longest.
 
@@ -400,7 +398,13 @@ class TelegramBot:
 
     @property
     def enabled(self) -> bool:
-        """Whether this process should reach Telegram or Redis at all."""
+        """Whether this process should **send** — reach Telegram, or write to the broker.
+
+        Not "reach nothing": the depth reads reach the broker regardless of this flag,
+        deliberately, because a tier kept from sending is exactly the one an operator asks how
+        deep the queue is. `queue_depth` says so too, and `tests/test_enabled_flag.py` fails if either reader
+        grows a gate.
+        """
         return coerce_bool(conf['ENABLED'], f"{SETTINGS_NAME}['ENABLED']")
 
     @property
@@ -476,11 +480,6 @@ class TelegramBot:
     def router(self) -> Router:
         """Router holding every handler registered through the decorators."""
         return self._router
-
-    @property
-    def redis_conn(self) -> 'Redis':
-        """The connection every part of this package shares, opened on first use."""
-        return get_redis()
 
     @property
     def is_worker(self) -> bool:
@@ -756,21 +755,26 @@ class TelegramBot:
         identifier = resolve_correlation_id(correlation_id)
         if self.is_worker:
             return self.send_raw(function, correlation_id=identifier, **kwargs)
-        # named here as well as in `send_redis`, and before delegating, because the twin a
+        # named here as well as in `enqueue`, and before delegating, because the twin a
         # caller should hear about is the twin of the method they called: `send` pairs with
-        # `asend`, and `send_redis` — which this is about to call — pairs with `asend_redis`.
+        # `asend`, and `enqueue` — which this is about to call — pairs with `aenqueue`.
         # The latch means whichever entry point the caller used is the one that speaks.
-        # Behind `enabled`, because `send_redis` refuses before writing anything when the
+        # Behind `enabled`, because `enqueue` refuses before writing anything when the
         # bot is off — advice about the async twin of a call that does nothing is noise,
         # and it would burn the once-per-process latch for whoever does write later
         if self.enabled:
-            # validated here as well as in `send_redis`, and before the mention: the latch
+            # validated here as well as in `enqueue`, and before the mention: the latch
             # fires once per process, so a call that is about to raise `check_function`
             # would otherwise emit the line and take it from the first caller who could
             # have acted on it. Two membership tests on the happy path is the whole cost
             check_function(function)
+            # and the broker for the same reason, one failure mode further along: `enqueue`
+            # resolves it below, so a misconfigured `BROKER` used to raise *after* the latch
+            # was spent. Cheap to do twice -- the registry caches per process, so the call
+            # inside `enqueue` is a hit. `aenqueue` was fixed first and this is its twin
+            get_broker()
             _mention_asend('asend')
-        return self.send_redis(function, correlation_id=identifier, **kwargs)
+        return self.enqueue(function, correlation_id=identifier, **kwargs)
 
     async def asend(
         self,
@@ -783,8 +787,8 @@ class TelegramBot:
 
         The same routing as :meth:`send`, without the blocking socket write that
         one does on the calling thread — which under ASGI is the thread serving
-        requests, and on a first call includes a TCP connect bounded by
-        ``REDIS_TIMEOUT``.
+        requests, and on a first call includes a connect bounded by whatever
+        timeout the configured transport declares.
 
         In the bot container it still calls Telegram directly, and that path was
         never blocking: :meth:`send_raw` schedules onto the loop and returns.
@@ -794,7 +798,7 @@ class TelegramBot:
         identifier = resolve_correlation_id(correlation_id)
         if self.is_worker:
             return self.send_raw(function, correlation_id=identifier, **kwargs)
-        return await self.asend_redis(function, correlation_id=identifier, **kwargs)
+        return await self.aenqueue(function, correlation_id=identifier, **kwargs)
 
     def close(self, drain_timeout: float | None = None) -> None:
         """Finish what is in flight, then release everything this bot owns.
@@ -1263,14 +1267,21 @@ class TelegramBot:
             return identifier, False
         return identifier, True
 
-    def send_redis(
+    def enqueue(
         self,
         function: str = 'send_message',
         *,
         correlation_id: uuid.UUID | str | None = None,
         **kwargs: Any,
     ) -> uuid.UUID:
-        """Queue a message in Redis for the bot worker to deliver.
+        """Queue a message for the bot worker to deliver, whichever transport carries it.
+
+        Named for what happens rather than for where it lands, because where it lands is a
+        setting: the queue is a list, a stream, an AMQP queue or a Kafka topic depending on
+        ``BROKER``. `send` decides between this and delivering directly; this one always
+        queues — where the process is enabled. With ``ENABLED`` off it reaches neither the
+        broker nor Telegram and returns the id anyway, so a caller storing it beside its own
+        row gets the same value whether or not this deployment sends.
 
         Returns the correlation id the delivered row will carry too.
         """
@@ -1278,18 +1289,22 @@ class TelegramBot:
         if not accepted:
             return identifier
 
-        _mention_asend('asend_redis')
         # before the context manager, like the awaiting twin does: a `BROKER` that cannot be
         # resolved is a misconfiguration, and inside `queueing` it would be recorded as a
         # *queueing* drop — which the event log defines as a write that may still have been
         # applied, so re-sending may duplicate. Nothing was written, and the two producers
         # promise the same rows
         broker = get_broker()
+        # after the broker resolves, not before: the mention fires once per process, so a call
+        # that is about to raise on a misconfigured `BROKER` would otherwise spend it and leave
+        # the first caller who could have acted on the advice hearing nothing. Same reasoning as
+        # `check_function` in `send`, one failure mode further along
+        _mention_asend('aenqueue')
         with queueing(function, [(identifier, kwargs)]) as write:
             broker.publish(write.payloads)
         return identifier
 
-    async def asend_redis(
+    async def aenqueue(
         self,
         function: str = 'send_message',
         *,
@@ -1299,9 +1314,11 @@ class TelegramBot:
         """Queue a message without blocking the loop this coroutine runs on.
 
         The synchronous twin writes to a socket on the calling thread, which under
-        ASGI is the thread serving requests — including, on the first call, a TCP
-        connect bounded by ``REDIS_TIMEOUT``. Everything else about the message is
-        identical: same payload, same event rows, same key.
+        ASGI is the thread serving requests — including, on the first call, a connect
+        bounded by whatever timeout the transport named by ``BROKER`` declares. Everything
+        else about the message is identical: same payload, same event rows, the same
+        destination — a list, a stream, an AMQP queue or a Kafka topic — and the same
+        no-op when ``ENABLED`` is off, which returns the id without reaching the broker.
         """
         identifier, accepted = self._accept(function, correlation_id)
         if not accepted:
@@ -1315,8 +1332,8 @@ class TelegramBot:
     def _accept_bulk(self, function: str) -> bool:
         """Whether this process should write, decided once for the whole batch.
 
-        A disabled bot reaches neither Telegram nor Redis, and still returns an id
-        per message — the same contract :meth:`send_redis` has, so a caller can
+        A disabled bot reaches neither Telegram nor the broker, and still returns an id
+        per message — the same contract :meth:`enqueue` has, so a caller can
         store the ids beside its own rows whether or not this deployment sends.
 
         Validates first, for the same reason :meth:`_accept` does: `_chunks` is a
@@ -1441,8 +1458,13 @@ class TelegramBot:
     def queue_depth(self) -> int:
         """How many messages are waiting for a worker to take them.
 
-        One ``LLEN``. Named for what it measures rather than the command, because
-        the queue is a Redis list only until 4.0 makes the broker pluggable.
+        One read, asked of whichever transport ``BROKER`` names — the length of a list
+        or a stream, a queue's message count, a topic's lag. Named for what it measures
+        rather than for any one of those commands, which is what let the name survive
+        4.0 unchanged while everything under it became four implementations.
+
+        Answers regardless of `ENABLED`: that setting gates sending, and a web tier kept
+        from sending is exactly where someone asks how deep the queue is.
 
         Growing is not by itself a fault — producers can outpace delivery, and
         ``MAX_IN_FLIGHT`` holds intake back on purpose. See **Troubleshooting**.

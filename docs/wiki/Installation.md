@@ -20,8 +20,10 @@ says so with the install line for the one you named:
 
 A base `pip install django-aiogram` is a valid install — it imports, and every
 `manage.py` command runs — it just cannot carry a message anywhere yet. A process
-with `ENABLED` off is not asked for a driver at all, so a web container that only
-records the event log needs no extra.
+with `ENABLED` off is not asked for a driver, so a web container that only records the
+event log needs no extra. A process that reads the queue depth does need one even when
+disabled: those reads are not gated on `ENABLED`, and `manage.py check` cannot tell
+which processes make them.
 
 The redis floor is 6.2 because aiogram's `RedisStorage` asks for it, and
 `FSM_STORAGE: 'redis'` is the default. On redis-py below 5.0.1 the storage

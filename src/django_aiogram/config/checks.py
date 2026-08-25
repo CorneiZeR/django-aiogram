@@ -268,8 +268,11 @@ def _a_usable_broker(key: str) -> list[Problem]:
     the hint carries the install line for that extra.
 
     Two of those are gated on the bot being enabled, for the same reason `W002` is: a process
-    with `ENABLED` off reaches no transport, so asking it to install a driver it will never
-    call is an error nobody can act on except by installing it anyway. The name itself is
+    with `ENABLED` off sends nothing, so asking it to install a driver it will never call is an
+    error nobody can act on except by installing it anyway. The gate is a trade, not a proof --
+    a disabled process that reads `queue_depth` *does* reach the transport, and hears the
+    `ModuleNotFoundError` this rule exists to prevent. Documented rather than checked, because
+    firing here would warn every image build and migration container that never reads a depth. The name itself is
     judged either way — nothing legitimately names a non-broker, and a typo in the web tier is
     the same typo in the worker, where it would fail.
 
@@ -777,12 +780,75 @@ def _bot_is_enabled() -> bool:
         return True
 
 
-def _filled_in_when_enabled(key: str, *, hint: str) -> list[Problem]:
+def _redis_is_in_use() -> bool:
+    """Whether anything this configuration selects actually connects to Redis.
+
+    ``REDIS_URL`` was a hard requirement while Redis was the only transport, and `W002` asked
+    every enabled bot for it. It is one setting among several now, so on a RabbitMQ or Kafka
+    deployment with memory storage that warning is about a key nothing reads — and a warning
+    about an unused setting is how an operator learns to stop reading warnings.
+
+    Two consumers, and either is enough: a Redis broker, or the Redis FSM storage. ``SHIPPED``
+    answers for the broker rather than the class, so this stays true where the driver is not
+    installed and imports nothing to find out.
+
+    A ``BROKER`` outside that table is somebody's own, and nothing here can know what it
+    connects with. The answer is then no: a missing warning costs a moment's confusion at the
+    first send, and a wrong one costs the credibility of every other warning in the list.
+
+    ``FSM_STORAGE`` is compared as a member first, because ``str()`` on one does not give its
+    value: ``StorageKind`` mixes in ``str``, and since 3.11 ``str(StorageKind.REDIS)`` is
+    ``'StorageKind.REDIS'``. Normalising that reads ``'storagekind.redis'`` and matches nothing,
+    so a project passing the enum this package publishes — which is what `API.md` documents it
+    for — had its warning suppressed and then needed ``REDIS_URL`` at runtime anyway.
+    """
+    from django_aiogram.broker.registry import SHIPPED  # noqa: PLC0415 - only when the checks run
+
+    broker = str(conf.get('BROKER') or '').strip()
+    driver, _extra = SHIPPED.get(broker, ('', ''))
+    return driver == 'redis' or _redis_fsm_storage()
+
+
+def _redis_fsm_storage() -> bool:
+    """Whether ``FSM_STORAGE`` names the Redis store.
+
+    Compared as a member first, because ``str()`` on one does not give its value:
+    ``StorageKind`` mixes in ``str``, and since 3.11 ``str(StorageKind.REDIS)`` is
+    ``'StorageKind.REDIS'``. Normalising that reads ``'storagekind.redis'`` and matches
+    nothing, so a project passing the enum this package publishes — which `API.md` documents
+    it for — had its warning suppressed and then needed ``REDIS_URL`` at runtime anyway.
+    """
+    storage = conf.get('FSM_STORAGE')
+    if isinstance(storage, StorageKind):
+        return storage is StorageKind.REDIS
+    return str(storage or '').strip().lower() == StorageKind.REDIS.value
+
+
+def _filled_in_when_enabled(key: str, *, hint: str, only_if: Callable[[], bool] | None = None) -> list[Problem]:
     """Warn, never error, when an enabled bot has nothing to connect with.
 
     A project may legitimately boot without credentials — during migrations or
     image builds — so this must not be able to fail ``manage.py check``.
+
+    ``only_if`` narrows the rule to configurations that need the setting at all. `W001` needs
+    none: every deployment talks to Telegram. `W002` does, because two of the four transports
+    never open a Redis connection — the list and Streams are both Redis, RabbitMQ and Kafka
+    are neither.
+
+    **The gate on ``ENABLED`` leaves one hole, measured and kept.** ``Dispatcher`` is built with
+    :func:`build_storage` the first time anything touches it, and neither ``start_polling`` nor
+    ``feed_update`` reads ``ENABLED`` first — both are public, and `API.md` says 1.x code drives
+    them by hand. So a disabled process driving the dispatcher itself, with the Redis store named
+    and no URL, raises ``ImproperlyConfigured`` after a clean ``manage.py check``.
+
+    Warning regardless of the flag was tried and is worse: ``FSM_STORAGE`` defaults to ``redis``,
+    so — measured — settings of ``{'ENABLED': False}`` alone produce `W002`. That is every image
+    build, migration container and CI job, warned about a URL they exist not to need, which is
+    how an operator learns to stop reading the list. The hole needs a caller who disabled the bot
+    and then drove its dispatcher anyway; the noise needs nothing.
     """
+    if only_if is not None and not only_if():
+        return []
     if not _bot_is_enabled() or str(conf.get(key) or '').strip():
         return []
     return [Problem('is empty while the bot is enabled.', hint=hint)]
@@ -859,7 +925,7 @@ CHECKS: tuple[Check, ...] = (
         'TOKEN',
         partial(
             _filled_in_when_enabled,
-            hint='Set it, or set ENABLED to False in processes that never reach Telegram.',
+            hint='Set it, or set ENABLED to False in processes that never send to Telegram.',
         ),
     ),
     Check(
@@ -867,7 +933,11 @@ CHECKS: tuple[Check, ...] = (
         'REDIS_URL',
         partial(
             _filled_in_when_enabled,
-            hint='Set it, or set ENABLED to False in processes that never reach Redis.',
+            hint=(
+                'Set it: BROKER or FSM_STORAGE names Redis, so something here needs the URL. '
+                'Or set ENABLED to False in processes that never touch either.'
+            ),
+            only_if=_redis_is_in_use,
         ),
     ),
 )

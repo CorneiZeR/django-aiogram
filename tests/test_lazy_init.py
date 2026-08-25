@@ -17,8 +17,9 @@ from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 
 import django_aiogram
-from django_aiogram import TelegramBot, bot, conf, redis_conn
+from django_aiogram import TelegramBot, bot, conf
 from django_aiogram.config.settings import Settings, parse_bool
+from django_aiogram.redis import redis_conn
 
 #: seconds a nested interpreter gets before the test fails instead of hanging
 SUBPROCESS_TIMEOUT = 120
@@ -73,6 +74,12 @@ def test_bot_requires_token_only_when_used():
 
 
 def test_redis_requires_url_only_when_used():
+    """Imported from the Redis module now, because the package stopped exporting it.
+
+    `django_aiogram.redis_conn` was a package-level name for one transport's client, which
+    stopped making sense at four. It is the same object in the same place it always lived; only
+    the shortcut is gone, and the laziness this pins is unchanged.
+    """
     with pytest.raises(ImproperlyConfigured, match='REDIS_URL'):
         redis_conn.ping()
 

@@ -11,6 +11,24 @@ Entries land here as the work does; nothing below is released.
 
 ### Added
 
+- **The names that said Redis are gone.** `send_redis` is **`enqueue`** and `asend_redis` is
+  **`aenqueue`**: what they do is put a message on the queue, and which queue that is has been a
+  setting since `BROKER`. `bot.send()` is untouched — it delivers directly inside the worker and
+  queues everywhere else, and `enqueue` is what it calls when it queues.
+
+  Removed rather than aliased, which is the 4.0 rule everywhere: an alias that outlives the
+  release it was written for becomes a second name for the same thing for ever. `Upgrading.md`
+  lists each old name against what to call instead.
+
+  `bot.redis_conn` is gone too, and `get_redis` and `redis_conn` have left the package's
+  exports. Those two are a **move, not a removal** — same objects, same laziness, still one
+  connection — and `from django_aiogram.redis import get_redis, redis_conn` reaches them in the
+  module that owns them. A client that can carry four transports should not answer for one of
+  them, and a package that carries four should not export one's client from its front door.
+
+  The settings keep their names: `REDIS_URL` and its neighbours say Redis because they *are*
+  Redis's, and a project on the list transport writes exactly what it wrote before.
+
 - **`BROKER`** — which transport carries messages, by dotted path, defaulting to the Redis
   list so a project changes its imports and nothing else. Nothing is inferred from what
   happens to be installed: a name whose driver is missing is a system check with the
@@ -206,9 +224,12 @@ Entries land here as the work does; nothing below is released.
 
   Nothing guesses. `BROKER` names the transport, and a name whose driver is absent is
   `E047` at startup carrying that `pip install` line — with one exception that matters to a
-  web container: a process with `ENABLED` off reaches no transport, so it is not asked to
-  install one, the same way `W002` does not ask a disabled process for a `REDIS_URL`. A
-  `BROKER` naming something that is not a transport is still reported there.
+  web container: a process with `ENABLED` off sends nothing, so it is not asked to install a
+  driver, the same way `W002` does not ask a disabled process for a `REDIS_URL`. That gate is a
+  trade rather than a proof -- the depth reads are not gated on `ENABLED`, so a disabled process
+  that reads one does need the driver, and hears the `ModuleNotFoundError` the check exists to
+  prevent. Firing here instead would warn every image build that never reads a depth. A `BROKER`
+  naming something that is not a transport is still reported there.
 
   Ignore all of that and the send still says it in words. Measured on a base install with
   no driver:

@@ -25,16 +25,58 @@ def test_send_raw_is_a_noop_when_disabled():
 
 
 @override_settings(TELEGRAM_BOT={'ENABLED': False})
-def test_send_redis_is_a_noop_when_disabled(monkeypatch):
+def test_enqueue_is_a_noop_when_disabled(monkeypatch):
+    """A disabled process must not reach the broker to *queue*, not even to resolve it.
+
+    Scoped to queueing on purpose: the depth reads below reach it either way, which is what the
+    case after this one pins.
+
+    Patched at `get_broker`, which is the boundary `enqueue` actually crosses since 4.0 — it
+    stopped reaching for a Redis client of its own when the transports became pluggable, so a
+    fake on `get_redis` here would have sat on a path the method no longer takes and passed
+    whatever the early return did.
+
+    Asserted rather than inferred: an `ImproperlyConfigured` would also pass by accident if the
+    early return were removed and the settings happened to name a broker.
+    """
+
     def refuse():
-        message = 'a disabled process reached for Redis'
+        message = 'a disabled process reached for the broker'
         raise AssertionError(message)
 
-    # asserted rather than inferred: an ImproperlyConfigured would also pass by
-    # accident if the early return were removed and REDIS_URL happened to be set
+    monkeypatch.setattr('django_aiogram.producer.client.get_broker', refuse)
     monkeypatch.setattr('django_aiogram.producer.client.get_redis', refuse)
 
-    TelegramBot().send_redis(chat_id=1, text='hi')
+    TelegramBot().enqueue(chat_id=1, text='hi')
+
+
+@override_settings(TELEGRAM_BOT={'ENABLED': False})
+def test_the_depth_reads_answer_even_when_disabled(monkeypatch):
+    """`ENABLED` gates sending, not looking, and `API.md` says so in the `bot.enabled` row.
+
+    The distinction earns its keep on a web tier deliberately kept from sending: it is exactly
+    the process an operator asks how deep the queue is, and a monitor that went quiet there
+    would report nothing at the moment it is most wanted. `Upgrading.md` leans on it too — the
+    4.0 verification step reads the depth first, because it crosses the broker boundary without
+    putting a message on the queue.
+
+    Nothing pinned it until now, so a stray `if not self.enabled` in either reader would have
+    turned the documented exception into a silent zero.
+    """
+
+    class Answering:
+        def depth(self):
+            return 7
+
+        def inflight_depth(self):
+            return 3
+
+    monkeypatch.setattr('django_aiogram.producer.client.get_broker', Answering)
+
+    instance = TelegramBot()
+    assert instance.enabled is False
+    assert instance.queue_depth() == 7
+    assert instance.inflight_depth() == 3
 
 
 @override_settings(TELEGRAM_BOT={'ENABLED': False})

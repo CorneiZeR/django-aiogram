@@ -38,7 +38,7 @@ def test_a_message_queued_asynchronously_is_readable_synchronously(server, redis
     that differed would still round trip."""
     with override_settings(TELEGRAM_BOT=settings(redis_url)):
         bot = TelegramBot()
-        identifier = asyncio.run(bot.asend_redis(chat_id=7, text='hi'))
+        identifier = asyncio.run(bot.aenqueue(chat_id=7, text='hi'))
         asyncio.run(bot.aclose())
 
     queued = unpack(loads(as_bytes(server.lrange(QUEUE, 0, -1)[0])))
@@ -93,7 +93,7 @@ def test_closing_releases_the_connection_on_the_loop_that_owns_it(server, redis_
     with override_settings(TELEGRAM_BOT=settings(redis_url)):
 
         async def queue_then_close():
-            await TelegramBot().asend_redis(chat_id=1, text='hi')
+            await TelegramBot().aenqueue(chat_id=1, text='hi')
             during = len(server.client_list())
             await TelegramBot().aclose()
             return during
@@ -120,8 +120,8 @@ def test_the_async_client_survives_the_loop_being_recreated(server, redis_url):
     """
     with override_settings(TELEGRAM_BOT=settings(redis_url)):
         bot = TelegramBot()
-        first = asyncio.run(bot.asend_redis(chat_id=1, text='one'))
-        second = asyncio.run(bot.asend_redis(chat_id=2, text='two'))
+        first = asyncio.run(bot.aenqueue(chat_id=1, text='one'))
+        second = asyncio.run(bot.aenqueue(chat_id=2, text='two'))
         asyncio.run(bot.aclose())
 
     assert first != second

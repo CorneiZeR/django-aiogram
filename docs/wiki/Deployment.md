@@ -56,8 +56,9 @@ list of Telegram API calls, and whoever can write to it can send as your bot.
 Note what is **not** set: `back` and `celery_worker` leave `ENABLED` alone.
 They queue messages, and `ENABLED=0` would make those calls no-ops — the
 messages would vanish with a debug line and nothing else. The flag is for
-processes that must not reach Telegram or Redis at all: image builds, a
-migration container, CI. See below.
+processes that must not **send** — not to Telegram, not into the broker: image builds, a
+migration container, CI. Not "reach nothing at all": the depth reads answer either way, on
+purpose. See below.
 
 ## What ENABLED=0 turns off
 
@@ -65,19 +66,26 @@ migration container, CI. See below.
 - no system checks registered — **unless the event log is on**, which is enough on
   its own to register all of them, bot settings included
 - every send becomes a no-op that builds neither a bot nor a connection:
-  `send`, `send_redis`, `send_raw`, `send_many` and the `await` forms `asend`,
-  `asend_redis`, `asend_many`. Each still returns what it would have returned — the
+  `send`, `enqueue`, `send_raw`, `send_many` and the `await` forms `asend`,
+  `aenqueue`, `asend_many`. Each still returns what it would have returned — the
   correlation id for one message, and one id per chat from `send_many` and
   `asend_many` — so a caller storing ids beside its own rows behaves the same here
 - `start_tgbot` reports why and exits
 
 The queue readers are the exception, and worth knowing before a monitor calls one:
-`queue_depth()` and `inflight_depth()` are **not** no-ops here. They are reads, not
-sends, so a disabled process still needs `REDIS_URL` to answer them and raises
-`ImproperlyConfigured` without one.
+`queue_depth()` and `inflight_depth()` are **not** no-ops here. They are reads rather
+than sends, so a disabled process still needs whatever its transport connects with —
+`REDIS_URL` on the two Redis brokers, `RABBITMQ_URL`, `KAFKA_BOOTSTRAP` — and the
+driver behind it. Without the setting they raise `ImproperlyConfigured`; without the
+driver, `BrokerDependencyError`. `manage.py check` asks a disabled process for neither.
 
-A disabled process needs no token, and needs a reachable Redis only if something
-asks it for a queue depth.
+`inflight_depth()` has a second limit on two of the four: RabbitMQ and Kafka keep the
+count in the worker's own memory, because neither protocol exposes "taken but not
+settled", so anywhere else it answers zero — correctly, and uselessly. See
+**[[Delivery]]** for which transport keeps what.
+
+So a disabled process needs no token, and needs its broker reachable only if something
+asks it for a depth.
 
 `ENABLED` is parsed rather than tested for truthiness — `'false'`, `'no'`,
 `'off'` and `0` all disable the bot, and an unparseable value raises rather
@@ -141,9 +149,11 @@ in-flight list exists to survive.
 ## Serving under ASGI
 
 Nothing here is required. A Django process under ASGI can call `bot.send()` and
-it works — it simply writes to a socket on the thread serving requests, and on
-the first call that includes a connect bounded by `REDIS_TIMEOUT`. `bot.asend()`
-is the same message without that; see **[[Sending-messages|Sending messages]]**.
+it works — it simply writes to a socket on the thread serving requests, and on the
+first call that includes a connect bounded by the configured transport's own timeout.
+`bot.asend()` is the same message without blocking that thread: the connect and its
+timeout still happen, it just yields while they do. See
+**[[Sending-messages|Sending messages]]**.
 
 One thing is worth knowing rather than discovering. The async client belongs to
 the loop that created it, so each loop gets its own, and only that loop may close

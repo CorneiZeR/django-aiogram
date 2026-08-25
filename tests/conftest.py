@@ -17,7 +17,9 @@ PATCH_TARGETS = (
     # keeps it for the whole session, so later tests read entries the first one left behind
     'django_aiogram.broker.redis_streams.broker.get_redis',
     'django_aiogram.producer.client.get_redis',
-    'django_aiogram.get_redis',
+    # `django_aiogram.get_redis` is not here any more: 4.0 stopped exporting a name for one
+    # transport's client from a package that carries four, and the callers reach for
+    # `django_aiogram.redis.get_redis` — the first entry above — instead
     # the probe's decision moved out of the command in 3.1.0, so it can run without
     # django.setup(); the command is a wrapper and holds no connection of its own
     'django_aiogram.healthcheck.get_redis',

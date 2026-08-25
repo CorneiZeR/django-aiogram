@@ -170,8 +170,8 @@ def test_failing_handler_does_not_kill_the_consumer(redis_server):
 
 
 @override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop'})
-def test_send_redis_does_not_write_an_expiry_key(redis_server):
-    TelegramBot().send_redis(chat_id=1, text='hi')
+def test_enqueue_does_not_write_an_expiry_key(redis_server):
+    TelegramBot().enqueue(chat_id=1, text='hi')
     assert redis_server.llen('TELEGRAM_BOT_MESSAGE') == 1
     assert redis_server.get('TELEGRAM_BOT_EXP') is None
 

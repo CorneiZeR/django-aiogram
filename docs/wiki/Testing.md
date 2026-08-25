@@ -61,11 +61,17 @@ up. In 4.0 the producer hands a payload to a broker and the broker owns the conn
 that is where a fake belongs; patching `django_aiogram.redis.get_redis` alone leaves the real
 connection in place, and patching the producer no longer reaches the write at all.
 
-**That covers the synchronous sends only.** `asend`, `asend_redis`, `asend_many`,
-`aqueue_depth` and `ainflight_depth` go through `aget_redis`, which keeps one
-client per running loop — so a test that patched the synchronous name and then
-awaited one of these opened a real connection. Patch the builder underneath it and
-the registry still runs for real:
+**That covers the synchronous sends only.** On the Redis transports, and in a process
+that queues rather than delivers, `asend`, `aenqueue`, `asend_many`, `aqueue_depth` and
+`ainflight_depth` go through `aget_redis`, which keeps one client per running loop — so a
+test that patched the synchronous name and then awaited one of these opened a real
+connection. Patch the builder underneath it and the registry still runs for real:
+
+Both qualifications matter when a fixture is copied. Inside the worker, `asend` calls
+`send_raw` and reaches no broker at all, so a fake on `aget_redis` there watches a path the
+test never takes. And RabbitMQ and Kafka have no async client to patch: their drivers are
+synchronous, so the awaiting methods borrow a thread and use the same connection the
+synchronous ones do — which is the connection the section above patches.
 
 ```python
 import fakeredis
@@ -95,7 +101,7 @@ synchronous read of the queue.
 
 This is the queue path, which is what a web or Celery process takes. In the *worker*
 process `asend` calls Telegram directly through `send_raw` and never reaches
-`aget_redis`, so a test asserting on the queue there should call `asend_redis`
+`aget_redis`, so a test asserting on the queue there should call `aenqueue`
 explicitly rather than rely on the routing. This package's own `redis_server` fixture is exactly
 this, and patches `aget_redis`'s *builder* rather than `aget_redis` itself for the
 same reason the note above gives: patching the accessor leaves the thing under test
@@ -231,14 +237,14 @@ much as in production.
 ## Testing the worker itself
 
 You should not have to. If you want an end-to-end check, queue a message with
-`send_redis`, then run the consumer once against fakeredis:
+`enqueue`, then run the consumer once against fakeredis:
 
 ```python
 from django_aiogram import bot
 from django_aiogram.consumer.delivery import BlpopDelivery
 
 # with get_redis patched to fakeredis as above
-bot.send_redis(chat_id=42, text='hi')
+bot.enqueue(chat_id=42, text='hi')
 
 handled = []
 # the consumer also passes correlation_id and queued_at, which a handler

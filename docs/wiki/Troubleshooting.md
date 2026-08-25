@@ -28,7 +28,7 @@ redis-py only started applying a read deadline of its own in 8.0. On 5.x, 6.x
 and 7.x a stalled server blocks the caller until the process is killed, which is
 why the package sets the deadline itself rather than relying on the client.
 
-## Messages pile up in Redis
+## Messages pile up in the queue
 
 ```python
 from django_aiogram import bot
@@ -37,16 +37,33 @@ bot.queue_depth()  # messages waiting for a worker
 bot.inflight_depth()  # what this worker is part-way through sending
 ```
 
-Or from a shell, if that is where you are:
+Those two answer for whichever transport `BROKER` names. From a shell there is no
+one command, because each transport counts differently — for the Redis list:
 
 ```shell
 redis-cli -n <db> llen TELEGRAM_BOT_MESSAGE
 ```
 
-`TELEGRAM_BOT_MESSAGE` is the default `REDIS_MESSAGES_KEY`; if you set your own,
-it is that key here and in every path below — which is the reason to prefer the
-two calls above in anything you keep, an exporter especially. They read the keys
-this package owns, so a monitor does not encode a scheme that is ours to change.
+`TELEGRAM_BOT_MESSAGE` is the default `REDIS_MESSAGES_KEY`; if you set your own, it
+is that key here and in every Redis path below. On a stream it is `XLEN`, on AMQP the queue's
+message count, on Kafka the lag of the consumer group — which is the reason to prefer
+`queue_depth()` in anything you keep, an exporter especially. It asks the same question on every
+transport, and it reads a scheme that is ours to change.
+
+Expect the shell figure and `queue_depth()` to disagree on Kafka while sends are in flight, and
+do not go looking for a bug: raw group lag counts every record past the committed offset,
+including the ones this process has taken and not yet settled, and `queue_depth()` subtracts
+those. The gap is what the worker is holding, so it closes as the sends finish. Offsets settle a
+contiguous prefix there, so the gap can also outlast the sends that caused it — see
+**[[Delivery]]**.
+
+`inflight_depth()` is **not** the same everywhere, and the difference decides where you can ask
+it. The Redis list keeps its in-flight messages on the server under the worker's name and Redis
+Streams keeps them in the group's pending list, so either can be read from anywhere — a monitor
+in the web tier included. RabbitMQ and Kafka have nothing to ask: neither protocol exposes
+"taken but not settled", so the count is kept in the worker's own memory. Asked anywhere else it
+answers **zero**, correctly and uselessly. On those two, run it in the bot container or read the
+broker's own tooling.
 
 A growing list does not by itself mean the consumer is stopped: producers can
 simply be outpacing it, and `MAX_IN_FLIGHT` deliberately holds intake back while
@@ -117,7 +134,7 @@ Grepping one out of `docker inspect` should land here.
 | `the heartbeat is not a timestamp` | Redis list: something else writes to that key. Give the worker its own `REDIS_MESSAGES_KEY`, or its own database |
 | `could not read the consumer liveness: …` | `PING` answered and the next command did not: a failover in between, a replica that cannot serve the key, or `decode_responses` in a URL shared with a cache backend meeting bytes it cannot decode |
 | `could not read the queue length: …` | The same, one command later |
-| `N messages are queued, over the limit of N` | Work is backing up. `HEALTHCHECK_MAX_QUEUE` or `--max-queue` is what set that number; see **Messages pile up in Redis** above |
+| `N messages are queued, over the limit of N` | Work is backing up. `HEALTHCHECK_MAX_QUEUE` or `--max-queue` is what set that number; see **Messages pile up in the queue** above |
 
 Two lines are not refusals and do not change the exit code:
 
@@ -180,10 +197,12 @@ silently.
 
 ## The project will not start without a token
 
-It should. 2.0 does not build a bot or connect to Redis at import time. If it
-still fails, something in *your* code is touching `bot.bot`, `redis_conn` or
-`send_raw` at import time — those are the points that genuinely need
-credentials.
+It should. 2.0 does not build a bot, and no release since connects to the broker at import
+time. If it still fails, something in *your* code is touching `bot.bot`, `send_raw` or a depth
+read at import time — those are the points that genuinely need credentials. `bot.redis_conn` used
+to be on that list and is gone in 4.0. `django_aiogram.redis.redis_conn` is the same object, and
+importing it costs nothing — it is a proxy, and only *using* one, `redis_conn.ping()` say, opens
+the connection that needs credentials.
 
 Placeholder tokens are no longer necessary; drop them.
 
@@ -235,8 +254,9 @@ In order of how often it is the answer:
    rather than hammering the database, and records a `log.dropped` row for the
    gap once it gets through again.
 3. The process you are looking at is not the one that records. `outbound.queued`
-   is written by whichever process called `send_redis`; `outbound.sent` by the
-   bot container. Enabling the log in one and not the other gives you half a
+   is written by whichever process queued the message — through `enqueue` or
+   `aenqueue`, and `send`/`asend` outside the worker reach one of those —
+   `outbound.sent` by the bot container. Enabling the log in one and not the other gives you half a
    story, and that is not a bug.
 4. `EVENT_LOG_KINDS` is set and excludes what you are looking for. The list is
    **inclusive**: naming anything drops everything unnamed, including kinds a

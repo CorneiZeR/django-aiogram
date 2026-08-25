@@ -14,6 +14,7 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
+from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 from redis.exceptions import (
     ConnectionError,  # noqa: A004 - shadowing the builtin is the point: this is what redis-py raises
@@ -61,7 +62,7 @@ def test_the_loop_keeps_running_while_a_message_is_queued(redis_server, monkeypa
 
         client.rpush = slow_rpush
         try:
-            await TelegramBot().asend_redis(chat_id=1, text='hi')
+            await TelegramBot().aenqueue(chat_id=1, text='hi')
         finally:
             ticker.cancel()
 
@@ -87,13 +88,13 @@ def test_the_correlation_id_is_resolved_before_the_await(redis_server, monkeypat
     """
     given = uuid.UUID('22222222-2222-2222-2222-222222222222')
     handed = []
-    real = TelegramBot.asend_redis
+    real = TelegramBot.aenqueue
 
     async def spy(self, function='send_message', *, correlation_id=None, **kwargs):
         handed.append(correlation_id)
         return await real(self, function, correlation_id=correlation_id, **kwargs)
 
-    monkeypatch.setattr(TelegramBot, 'asend_redis', spy)
+    monkeypatch.setattr(TelegramBot, 'aenqueue', spy)
 
     async def inside_scope():
         with correlation_scope(given):
@@ -115,8 +116,8 @@ def test_both_paths_queue_the_same_shape(redis_server):
     envelope that only one path learned about is exactly what this catches.
     """
     bot = TelegramBot()
-    bot.send_redis(chat_id=7, text='hi')
-    asyncio.run(bot.asend_redis(chat_id=7, text='hi'))
+    bot.enqueue(chat_id=7, text='hi')
+    asyncio.run(bot.aenqueue(chat_id=7, text='hi'))
 
     first, second = (unpack(loads(as_bytes(raw))) for raw in redis_server.lrange(QUEUE, 0, -1))
 
@@ -193,7 +194,7 @@ def test_the_depths_read_the_keys_this_package_owns(redis_server):
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
-@pytest.mark.parametrize('producer', ['send_redis', 'asend_redis', 'send_many', 'asend_many'])
+@pytest.mark.parametrize('producer', ['enqueue', 'aenqueue', 'send_many', 'asend_many'])
 def test_the_producer_writes_the_key_the_depth_reads(redis_server, monkeypatch, producer):
     """One derivation of the queue key, not one per caller.
 
@@ -240,6 +241,34 @@ def test_the_ids_come_back_in_the_order_the_chats_were_given(redis_server, bulk)
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_broker_that_cannot_be_resolved_does_not_spend_the_mention(caplog, monkeypatch):
+    """The once-per-process line belongs to the first caller who can act on it.
+
+    `aenqueue` used to be named before the broker was resolved, so a call that then raised on a
+    misconfigured `BROKER` wrote nothing, said nothing, and left the latch set — and the first
+    caller who *could* have moved to the awaiting twin heard silence.
+    """
+    latch = threading.Event()
+    monkeypatch.setattr('django_aiogram.producer.client._asend_mentioned', latch)
+
+    def refuse():
+        msg = 'BROKER names something that cannot be imported'
+        raise ImproperlyConfigured(msg)
+
+    monkeypatch.setattr('django_aiogram.producer.client.get_broker', refuse)
+    instance = TelegramBot()
+
+    async def one_send():
+        with pytest.raises(ImproperlyConfigured):
+            instance.enqueue(chat_id=1, text='hi')
+
+    with caplog.at_level('WARNING', logger='django_aiogram'):
+        asyncio.run(one_send())
+
+    assert not latch.is_set(), 'a call that queued nothing spent the once-per-process mention'
+    assert not [r for r in caplog.records if MENTION in r.getMessage()], 'it also said it'
+
+
 def test_send_from_a_loop_mentions_asend_once(redis_server, caplog, monkeypatch):
     """Said once, and not a `DeprecationWarning`.
 
@@ -285,11 +314,11 @@ def test_send_off_a_loop_says_nothing(redis_server, caplog, monkeypatch):
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
-@pytest.mark.parametrize('producer', ['send', 'send_redis', 'send_many'])
+@pytest.mark.parametrize('producer', ['send', 'enqueue', 'send_many'])
 def test_a_refused_method_does_not_spend_the_mention(caplog, monkeypatch, producer):
     """The line is latched once per process, so whoever emits it takes it from everyone else.
 
-    `send()` named the twin before delegating, and `send_redis` validates the method after
+    `send()` named the twin before delegating, and `enqueue` validates the method after
     that — so a call that was about to raise `UnknownApiMethodError` emitted the advice and
     left the first caller who could have acted on it in silence.
 
@@ -328,7 +357,7 @@ def test_a_refused_method_does_not_spend_the_mention(caplog, monkeypatch, produc
 def test_a_disabled_send_from_a_loop_says_nothing(caplog, monkeypatch):
     """Nothing was written, so there is no better way to have written it.
 
-    `send()` named the async twin before delegating, and `send_redis` refuses a disabled
+    `send()` named the async twin before delegating, and `enqueue` refuses a disabled
     bot after that — so a process with the bot off was advised about a call that did
     nothing. Worse than noise: the mention is latched once per process, so the disabled
     path spent the one line the first real caller should have got.
@@ -357,16 +386,16 @@ def test_a_disabled_send_from_a_loop_says_nothing(caplog, monkeypatch):
 @override_settings(TELEGRAM_BOT=SETTINGS)
 @pytest.mark.parametrize(
     ('producer', 'alternative'),
-    # each names its *own* twin: the test used to expect `send_redis` to name `asend`,
+    # each names its *own* twin: the test used to expect `enqueue` to name `asend`,
     # which is the twin of the method the caller did not call
-    [('send', 'asend'), ('send_redis', 'asend_redis'), ('send_many', 'asend_many')],
+    [('send', 'asend'), ('enqueue', 'aenqueue'), ('send_many', 'asend_many')],
 )
 def test_every_synchronous_route_that_writes_names_its_own_twin(
     redis_server, caplog, monkeypatch, producer, alternative
 ):
     """The mention was on `send` alone, and that is two thirds of nothing.
 
-    A web tier that wants to be explicit calls `send_redis`; a fan-out calls
+    A web tier that wants to be explicit calls `enqueue`; a fan-out calls
     `send_many`, which holds the loop longest of the three because it serializes
     every payload between round trips. Both were silent, so the async methods this
     release adds went unmentioned to exactly the callers who needed them.
@@ -428,7 +457,7 @@ def test_the_bulk_pair_refuses_an_unknown_method_before_writing(redis_server, bu
 @override_settings(TELEGRAM_BOT={'RATE_LIMIT': None, 'ENABLED': False})
 @pytest.mark.parametrize('bulk', ['send_many', 'asend_many'])
 def test_a_disabled_process_queues_nothing_and_still_names_the_messages(redis_server, bulk, monkeypatch):
-    """`ENABLED=0` means this process reaches neither Telegram nor Redis.
+    """`ENABLED=0` means this process sends to neither Telegram nor the broker.
 
     The single-message path has always honoured that and still returned the id, so
     a caller can store ids beside its own rows whether or not this deployment
@@ -577,7 +606,7 @@ def test_closing_releases_this_loops_client(redis_server):
             return await original(*args, **kwargs)
 
         client.aclose = recording
-        await bot.asend_redis(chat_id=1, text='hi')
+        await bot.aenqueue(chat_id=1, text='hi')
         await bot.aclose()
         # and the next caller on this loop gets a fresh one, not the closed one
         assert await aget_redis() is not client
@@ -611,3 +640,35 @@ def test_each_async_accessor_names_itself_when_there_is_no_loop(accessor, expect
             coroutine.send(None)
     finally:
         coroutine.close()
+
+
+def test_send_from_a_loop_does_not_spend_the_mention_on_a_broken_broker(caplog, monkeypatch):
+    """The synchronous twin of the case above, which outlived it by three commits.
+
+    `aenqueue` was fixed to resolve the broker before naming its twin; `send` still named
+    `asend` and *then* delegated to `enqueue`, which is where the broker is resolved. So a
+    misconfigured `BROKER` spent the once-per-process advice on a call that queued nothing —
+    the same defect on the face most callers actually use, since `send` is what a view calls.
+
+    Asserted through `send` rather than `enqueue` because the two latch on different names:
+    `send` pairs with `asend`, and only this path can spend that one.
+    """
+    latch = threading.Event()
+    monkeypatch.setattr('django_aiogram.producer.client._asend_mentioned', latch)
+
+    def refuse():
+        msg = 'BROKER names something that cannot be imported'
+        raise ImproperlyConfigured(msg)
+
+    monkeypatch.setattr('django_aiogram.producer.client.get_broker', refuse)
+    instance = TelegramBot()
+
+    async def one_send():
+        with pytest.raises(ImproperlyConfigured):
+            instance.send(chat_id=1, text='hi')
+
+    with caplog.at_level('WARNING', logger='django_aiogram'):
+        asyncio.run(one_send())
+
+    assert not latch.is_set(), 'a send that queued nothing spent the once-per-process mention'
+    assert not [r for r in caplog.records if MENTION in r.getMessage()], 'it also said it'
