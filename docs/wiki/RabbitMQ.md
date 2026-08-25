@@ -55,10 +55,12 @@ wins on the face this package's traffic actually uses and on the rare one too.
 ## What it costs
 
 The dearest of the four, and the persistence is most of it: the same publish is 135 to 173
-microseconds without it, against 323 to 393 with. That buys a message on disk before the caller
-is told it was accepted. Against a Redis list publish on the same laptop — 120 to 147
-microseconds — it is a few multiples, and both numbers come from a container rather than a
-native server, which is the reason to quote the divisor rather than the multiple.
+microseconds without it, against 323 to 393 with. What that buys is the broker taking
+responsibility for a message marked for disk before the caller is told it was accepted — see
+the guarantee above for why that is not the same as an fsync barrier. Against a Redis list
+publish on the same laptop — 120 to 147 microseconds — it is a few multiples, and both numbers
+come from a container rather than a native server, which is the reason to quote the divisor
+rather than the multiple.
 
 `scripts/measurements/amqp_driver_choice.py` re-takes all of it.
 

@@ -24,14 +24,24 @@ transport. This page is the part that is this one's alone.
 
 ## What it guarantees
 
-**At-least-once, on Redis 6.2 and above.** `BLMOVE` takes the message and records it in one
-round trip, so there is no instant where it has left the queue and been written down nowhere.
-Below 6.2 there is no `BLMOVE`: the consumer falls back to plain pops, says so in the log, and
-the guarantee drops to **at-most-once** — a kill between the pop and the send loses that
-message. `REQUIRE_CRASH_SAFE` refuses to start there rather than running degraded quietly.
+**At-least-once wherever `BLMOVE` is available**, which is Redis 6.2 and above — but the
+condition is the command, not the version number, and that distinction has teeth. `BLMOVE` takes
+the message and records it in one round trip, so there is no instant where it has left the queue
+and been written down nowhere.
+
+Without it the consumer falls back to plain pops, says so in the log, and the guarantee drops to
+**at-most-once**: a kill between the pop and the send loses that message. `REQUIRE_CRASH_SAFE`
+refuses to start rather than running degraded quietly.
+
+The fallback is a runtime downgrade rather than a version check, so it can happen to a server
+that *was* 6.2+: a connection that lands on one without `LMOVE` after a reclaim already
+succeeded — a failover to an older replica, say — downgrades then and there. Watch the log for
+it rather than inferring safety from the version you deployed.
 
 Ordering is the list's: first in, first out, one consumer at a time per message, because a
-blocking pop is atomic. Several bot containers are safe.
+blocking pop is atomic. **Several bot containers are safe only if each resolves a different
+name** — same name, one in-flight list, and each reclaims what the others are still sending. See
+below.
 
 ## The in-flight list, and why the worker's name matters
 
