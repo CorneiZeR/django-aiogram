@@ -31,7 +31,7 @@ runs. What it cannot do is carry a message, and `manage.py check` says so — `E
 with the `pip install` line for whichever `BROKER` you named. A process with
 `ENABLED` off is not asked for a driver, because it sends nothing, so a web container
 that only records the event log needs no extra. One that reads `queue_depth()` does
-need it — those reads answer whether or not the process is enabled. A `BROKER` naming
+need it — those reads reach the broker regardless of `ENABLED`. A `BROKER` naming
 something that is not a transport is reported either way.
 
 ```python

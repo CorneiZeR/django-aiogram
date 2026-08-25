@@ -193,8 +193,9 @@ silently.
 It should. 2.0 does not build a bot, and no release since connects to the broker at import
 time. If it still fails, something in *your* code is touching `bot.bot`, `send_raw` or a depth
 read at import time — those are the points that genuinely need credentials. `bot.redis_conn` used
-to be on that list and is gone in 4.0; `django_aiogram.redis.redis_conn` is the same object and
-is just as eager.
+to be on that list and is gone in 4.0. `django_aiogram.redis.redis_conn` is the same object, and
+importing it costs nothing — it is a proxy, and only *using* one, `redis_conn.ping()` say, opens
+the connection that needs credentials.
 
 Placeholder tokens are no longer necessary; drop them.
 

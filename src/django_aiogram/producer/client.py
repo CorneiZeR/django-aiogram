@@ -400,9 +400,9 @@ class TelegramBot:
     def enabled(self) -> bool:
         """Whether this process should **send** — reach Telegram, or write to the broker.
 
-        Not "reach nothing": the depth reads answer whether or not this is true, deliberately,
-        because a tier kept from sending is exactly the one an operator asks how deep the queue
-        is. `queue_depth` says so too, and `tests/test_enabled_flag.py` fails if either reader
+        Not "reach nothing": the depth reads reach the broker regardless of this flag,
+        deliberately, because a tier kept from sending is exactly the one an operator asks how
+        deep the queue is. `queue_depth` says so too, and `tests/test_enabled_flag.py` fails if either reader
         grows a gate.
         """
         return coerce_bool(conf['ENABLED'], f"{SETTINGS_NAME}['ENABLED']")
@@ -1455,9 +1455,8 @@ class TelegramBot:
         rather than for any one of those commands, which is what let the name survive
         4.0 unchanged while everything under it became four implementations.
 
-        Answers whether or not this process is `ENABLED`: that setting gates sending,
-        and a web tier kept from sending is exactly where someone asks how deep the
-        queue is.
+        Answers regardless of `ENABLED`: that setting gates sending, and a web tier kept
+        from sending is exactly where someone asks how deep the queue is.
 
         Growing is not by itself a fault — producers can outpace delivery, and
         ``MAX_IN_FLIGHT`` holds intake back on purpose. See **Troubleshooting**.

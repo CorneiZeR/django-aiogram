@@ -67,7 +67,9 @@ table separates them.
 it goes is a setting now — so they are gone, renamed rather than aliased, because an alias that
 outlives the release it was written for is a second name for the same thing for ever.
 
-**Two were client-access names**, and those *moved* rather than went: one transport's client is
+**Three were client-access names** — `bot.redis_conn`, and the package's `get_redis` and
+`redis_conn`, which share a row below because they move in one import. Those *moved* rather than
+went: one transport's client is
 not the package's business to export from its front door, but the object is unchanged and still
 importable from the module that owns it.
 
@@ -108,7 +110,7 @@ bot.enqueue(chat_id=YOUR_ID, text='upgrade check')  # `enqueue` replaces `send_r
 ```
 
 Read the depth first. It is the only step that proves the transport is configured *and*
-reachable without putting a message on the queue, and it answers whether or not the process is
+reachable without putting a message on the queue, and it reaches the broker regardless of
 `ENABLED` — so it verifies the broker on the web tier you keep from sending, which is where you
 are most likely to be standing.
 

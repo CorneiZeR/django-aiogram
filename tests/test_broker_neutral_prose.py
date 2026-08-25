@@ -20,6 +20,7 @@ broken across a line break is one a plain search does not find. That is how seve
 survived earlier sweeps.
 """
 
+import ast
 import pathlib
 import re
 
@@ -99,9 +100,16 @@ def test_the_pickle_warning_says_who_can_execute_code():
     `ALLOW_PICKLE` turns "can write to the queue" into "can execute code in this container",
     and the module docstring is where a reader meets that. A refactor that trims it to
     "pickle is unsafe" loses the part that tells an operator what to go and secure.
-    """
-    prose = flattened('src/django_aiogram/wire/serializers.py')
 
-    assert re.search(r'write to the queue', prose), 'the warning no longer names who is trusted'
-    assert re.search(r'execute code', prose), 'the warning no longer names what they can do'
-    assert re.search(r'``BROKER``', prose), 'the warning no longer says the queue is a setting'
+    Read out of the **module docstring** rather than out of the file. Searching the whole text
+    made this pass for the wrong reason: delete the warning and the same phrases survive in the
+    comments and function docstrings below it, so the case guarded its own wording rather than
+    the paragraph a reader arrives at.
+    """
+    source = (ROOT / 'src/django_aiogram/wire/serializers.py').read_text(encoding='utf-8')
+    warning = re.sub(r'\s+', ' ', ast.get_docstring(ast.parse(source)) or '')
+
+    assert warning, 'the serializer module has no docstring to warn in'
+    assert 'write to the queue' in warning, 'the warning no longer names who is trusted'
+    assert 'execute code' in warning, 'the warning no longer names what they can do'
+    assert '``BROKER``' in warning, 'the warning no longer says the queue is a setting'
