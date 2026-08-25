@@ -36,9 +36,10 @@ the function if that matters.
 | `bot.rate_limiter` | the limiter for this token, shared with any other instance holding it | on first use |
 | `bot.is_worker` | whether this process is the one polling Telegram | read per access |
 
-These are public. 1.x code drives them directly — running the loop by hand,
-feeding the dispatcher, reusing the connection — and that keeps working;
-`tests/test_public_surface.py` fails if any of them disappears.
+These are public. 1.x code drives them directly — running the loop by hand, feeding the
+dispatcher — and that keeps working; `tests/test_public_surface.py` fails if any of them
+disappears. Reusing the connection through `bot.redis_conn` is the one that stopped: 4.0 removed
+it, and `django_aiogram.redis.redis_conn` is the same object in the module that owns it.
 
 ## Sending
 
@@ -67,7 +68,8 @@ identifier = bot.send(chat_id=chat_id, text='hello')
 Receipt.objects.create(order=order, telegram_correlation_id=identifier)
 ```
 
-Before 3.0 they returned `None`, so every existing call site still compiles.
+Before 3.0 they returned `None`, so gaining a return value broke no call site. The 4.0
+renames did — see **[[Upgrading]]** for each old name against what to call instead.
 
 ### From code already on an event loop
 

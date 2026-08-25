@@ -26,12 +26,22 @@ def test_send_raw_is_a_noop_when_disabled():
 
 @override_settings(TELEGRAM_BOT={'ENABLED': False})
 def test_enqueue_is_a_noop_when_disabled(monkeypatch):
+    """A disabled process must not reach the broker at all, not even to resolve it.
+
+    Patched at `get_broker`, which is the boundary `enqueue` actually crosses since 4.0 — it
+    stopped reaching for a Redis client of its own when the transports became pluggable, so a
+    fake on `get_redis` here would have sat on a path the method no longer takes and passed
+    whatever the early return did.
+
+    Asserted rather than inferred: an `ImproperlyConfigured` would also pass by accident if the
+    early return were removed and the settings happened to name a broker.
+    """
+
     def refuse():
-        message = 'a disabled process reached for Redis'
+        message = 'a disabled process reached for the broker'
         raise AssertionError(message)
 
-    # asserted rather than inferred: an ImproperlyConfigured would also pass by
-    # accident if the early return were removed and REDIS_URL happened to be set
+    monkeypatch.setattr('django_aiogram.producer.client.get_broker', refuse)
     monkeypatch.setattr('django_aiogram.producer.client.get_redis', refuse)
 
     TelegramBot().enqueue(chat_id=1, text='hi')

@@ -357,7 +357,7 @@ python manage.py test
 Then, in a shell on a non-bot process:
 
 ```python
-from django_redis_aiogram import bot
+from django_redis_aiogram import bot  # `django_aiogram` from 4.0 on — see the top of this page
 
 bot.enabled  # False where you disabled it
 bot.send(chat_id=YOUR_ID, text='upgrade check')

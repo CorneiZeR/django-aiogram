@@ -20,7 +20,7 @@ bot.send(chat_id=CHAT_ID, text='hello')
 * **[[Settings]]** — every setting, with defaults
 * **[[Handlers]]** — writing routers and using FSM
 * **[[Sending-messages|Sending messages]]** — `send`, `asend`, `send_many`, `enqueue`, `send_raw`, keyboards, files
-* **[[Testing]]** — running your suite without Redis, asserting what was queued
+* **[[Testing]]** — running your suite without a broker, asserting what was queued
 * **[[API]]** — the instance, its internals, and what stays public
 
 ## Going further

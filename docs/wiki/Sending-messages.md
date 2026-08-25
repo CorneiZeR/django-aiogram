@@ -7,7 +7,8 @@ bot.send(chat_id=CHAT_ID, text='hello')
 ```
 
 `send()` picks the route: inside the bot container it calls Telegram directly,
-anywhere else it queues the call through Redis. Callers do not have to know
+anywhere else it queues the call through whichever transport `BROKER` names. Callers do not
+have to know
 which process they are in.
 
 Any Telegram API method aiogram exposes works — pass its name first. The name
