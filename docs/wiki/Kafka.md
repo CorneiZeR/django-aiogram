@@ -89,8 +89,11 @@ waiting, and the bulk path is faster for it too.
   that member's session times out. A healthcheck could starve the consumer it was checking on.
 - `bot.aclose()` has nothing to close here. The driver is synchronous, so the awaiting half of
   the API borrows a thread and uses the same connection the synchronous half does.
-- The depth a probe reports is the group's lag rather than a queue length, which is the same
-  question answered by different arithmetic.
+- The depth a probe reports is the group's lag rather than a queue length — and `queue_depth()`
+  takes this process's unsettled messages off it, which raw lag from `kafka-consumer-groups`
+  does not. The two differ by what the worker is holding while sends are in flight, and because
+  offsets settle a contiguous prefix the gap can outlast the sends that opened it. Both numbers
+  are exact; they answer different questions.
 - `bot.inflight_depth()` answers from **this process's memory**. Kafka has nothing to ask: an
   offset is either committed or not, and "taken but not settled" exists only here. So it is a
   reading for the bot container; anywhere else it is zero, correctly and uselessly.
