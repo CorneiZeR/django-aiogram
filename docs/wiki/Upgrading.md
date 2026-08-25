@@ -13,8 +13,10 @@ old one — nothing imports it after the steps below.
 
 Redis is no longer a hard dependency. Pick the transport you run and install it with the
 package: `pip install django-aiogram[redis]` for the queue 3.x used. A project that names a
-transport whose driver is not installed is refused by a system check at startup rather than
-by an `ImportError` on the first send.
+transport whose driver is not installed is refused by a system check at startup rather than by
+an `ImportError` on the first send — in the processes that send. A process with `ENABLED=0` is
+not asked for a driver, so a disabled one still reaches `E047` only if you enable it; if it
+reads a queue depth it needs the driver regardless, because those reads are not gated.
 
 ## Rename the app and the imports
 
@@ -58,7 +60,8 @@ absence of its driver is a startup complaint rather than a runtime surprise.
 
 ## Rename what used to say Redis
 
-Four public names said Redis, for two different reasons, and the table separates them.
+Five public names said Redis, in the four entries below, for two different reasons — and the
+table separates them.
 
 **Two were routing names.** `send_redis` and `asend_redis` said where a message went, and where
 it goes is a setting now — so they are gone, renamed rather than aliased, because an alias that

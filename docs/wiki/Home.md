@@ -5,7 +5,8 @@ handlers as ordinary Django app code, and send Telegram messages from anywhere
 in the project.
 
 Only the bot container runs the polling loop. Elsewhere `send()` queues the message and
-returns; which queue that is — a Redis list or stream, an AMQP queue, a Kafka topic — is what
+returns — where the process is enabled; `ENABLED=0` makes it a no-op that still names the
+message. Which queue it is — a Redis list or stream, an AMQP queue, a Kafka topic — is what
 `BROKER` names. `send_raw()` skips the queue and talks to Telegram from the calling process.
 
 ```python

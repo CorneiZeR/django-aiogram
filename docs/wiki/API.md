@@ -124,8 +124,9 @@ loop that made it.
 These four are reads rather than sends, so `ENABLED=0` does not turn them into
 no-ops the way it does every send: they still connect, and without whatever the
 configured transport connects with — `REDIS_URL` for the two Redis brokers, the
-equivalent for the others — they raise `ImproperlyConfigured` rather than answering
-zero. A monitor that runs in a disabled process still needs that setting, and the
+equivalent for the others — they raise `ImproperlyConfigured` rather than
+answering zero, and `BrokerDependencyError` when it is the driver that is absent
+rather than the setting. A monitor that runs in a disabled process still needs that setting, and the
 driver: `manage.py check` does not ask a disabled process for either.
 
 `inflight_depth` defaults to this process's own worker identity; naming another is

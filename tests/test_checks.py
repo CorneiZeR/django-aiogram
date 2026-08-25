@@ -16,6 +16,7 @@ from django.test import override_settings
 
 from django_aiogram.config.checks import CHECKS, check_settings, worker_name_problems
 from django_aiogram.config.defaults import DEFAULTS
+from django_aiogram.config.enums import StorageKind
 from django_aiogram.config.settings import blpop_ceiling
 from django_aiogram.eventlog.dbrouter import TelegramEventLogRouter
 from django_aiogram.eventlog.events import worker_identity
@@ -1017,3 +1018,25 @@ def test_the_missing_token_hint_says_sending_rather_than_reaching():
     hint = reported[0].hint or ''
     assert 'never send to Telegram' in hint, hint
     assert 'at all' not in hint, f'the hint claims ENABLED gates more than sending: {hint}'
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        'ENABLED': True,
+        'TOKEN': '42:x',
+        'BROKER': 'django_aiogram.broker.kafka.KafkaBroker',
+        'KAFKA_BOOTSTRAP': 'localhost:9092',
+        'FSM_STORAGE': StorageKind.REDIS,
+    }
+)
+def test_the_enum_this_package_publishes_counts_as_redis_storage():
+    """`FSM_STORAGE` accepts the enum, and `API.md` documents it as a way to write settings.
+
+    `str()` on it does not give its value: `StorageKind` mixes in `str`, and since 3.11
+    `str(StorageKind.REDIS)` is `'StorageKind.REDIS'`. So a gate that normalised the string saw
+    `'storagekind.redis'`, matched nothing, and suppressed `W002` for a deployment that goes on
+    to need `REDIS_URL` the moment it builds its storage.
+    """
+    reported = [problem for problem in check_settings() if str(problem.id) == 'django_aiogram.W002']
+
+    assert reported, 'the enum form of Redis FSM storage did not ask for a URL'

@@ -795,6 +795,12 @@ def _redis_is_in_use() -> bool:
     A ``BROKER`` outside that table is somebody's own, and nothing here can know what it
     connects with. The answer is then no: a missing warning costs a moment's confusion at the
     first send, and a wrong one costs the credibility of every other warning in the list.
+
+    ``FSM_STORAGE`` is compared as a member first, because ``str()`` on one does not give its
+    value: ``StorageKind`` mixes in ``str``, and since 3.11 ``str(StorageKind.REDIS)`` is
+    ``'StorageKind.REDIS'``. Normalising that reads ``'storagekind.redis'`` and matches nothing,
+    so a project passing the enum this package publishes — which is what `API.md` documents it
+    for — had its warning suppressed and then needed ``REDIS_URL`` at runtime anyway.
     """
     from django_aiogram.broker.registry import SHIPPED  # noqa: PLC0415 - only when the checks run
 
@@ -802,7 +808,10 @@ def _redis_is_in_use() -> bool:
     driver, _extra = SHIPPED.get(broker, ('', ''))
     if driver == 'redis':
         return True
-    return str(conf.get('FSM_STORAGE') or '').strip().lower() == StorageKind.REDIS.value
+    storage = conf.get('FSM_STORAGE')
+    if isinstance(storage, StorageKind):
+        return storage is StorageKind.REDIS
+    return str(storage or '').strip().lower() == StorageKind.REDIS.value
 
 
 def _filled_in_when_enabled(key: str, *, hint: str, only_if: Callable[[], bool] | None = None) -> list[Problem]:

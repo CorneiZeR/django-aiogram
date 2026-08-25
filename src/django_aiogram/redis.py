@@ -141,8 +141,14 @@ def build_client() -> Redis:
     before the reply arrived would queue the message twice, and the consumer would
     send a real person two of them. The connection-drop case is already handled
     where it can be handled safely: the consumer logs and goes round its loop
-    again, and a failed ``enqueue`` records the drop and raises so the caller knows
-    nothing was queued.
+    again, and a failed ``enqueue`` records the drop and raises rather than returning as
+    though the message went.
+
+    What it cannot say is whether the message was queued. The sentence above is exactly why: a
+    reply lost after the server applied the write is indistinguishable from a write that never
+    landed. So the raise means *unknown*, not *no*, and a caller that retries on it may deliver
+    a duplicate — which is the trade this package makes everywhere, because losing a message is
+    worse than sending it twice.
     """
     from redis import Redis  # noqa: PLC0415 - the driver is an extra; see the note above
 
