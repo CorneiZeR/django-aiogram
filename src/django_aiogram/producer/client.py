@@ -1265,10 +1265,10 @@ class TelegramBot:
     ) -> uuid.UUID:
         """Queue a message for the bot worker to deliver, whichever transport carries it.
 
-        Named for what happens rather than for where it lands: this was ``send_redis`` when
-        Redis was the only answer, and the queue is now a list, a stream, an AMQP queue or a
-        Kafka topic depending on ``BROKER``. `send` decides between this and delivering
-        directly; this one always queues.
+        Named for what happens rather than for where it lands, because where it lands is a
+        setting: the queue is a list, a stream, an AMQP queue or a Kafka topic depending on
+        ``BROKER``. `send` decides between this and delivering directly; this one always
+        queues.
 
         Returns the correlation id the delivered row will carry too.
         """
@@ -1302,7 +1302,7 @@ class TelegramBot:
 
         The synchronous twin writes to a socket on the calling thread, which under
         ASGI is the thread serving requests — including, on the first call, a connect
-        bounded by whatever timeout the transport ``BROKER`` names declares. Everything
+        bounded by whatever timeout the transport named by ``BROKER`` declares. Everything
         else about the message is identical: same payload, same event rows, and the same
         destination, whether that is a list, a stream, an AMQP queue or a Kafka topic.
         """

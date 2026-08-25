@@ -141,8 +141,8 @@ def build_client() -> Redis:
     before the reply arrived would queue the message twice, and the consumer would
     send a real person two of them. The connection-drop case is already handled
     where it can be handled safely: the consumer logs and goes round its loop
-    again, and a failed ``send_redis`` records the drop and raises so the caller
-    knows nothing was queued.
+    again, and a failed ``enqueue`` records the drop and raises so the caller knows
+    nothing was queued.
     """
     from redis import Redis  # noqa: PLC0415 - the driver is an extra; see the note above
 
