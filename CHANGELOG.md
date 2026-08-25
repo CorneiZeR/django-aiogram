@@ -211,6 +211,15 @@ Entries land here as the work does; nothing below is released.
   there is a backlog. The
   broker's own `trim()` stops at the oldest unacknowledged entry.
 
+- **A page per transport in the wiki** — **Redis list**, **Redis Streams**, **RabbitMQ** and
+  **Kafka** — each stating what it guarantees, what it needs installed and running, what a
+  publish costs with the figure measured rather than remembered, and where its own machinery
+  shows through. **Delivery** is about the contract now and points at them for the rest, with a
+  table of the three differences that change an operator's job: crash safety, whether a worker
+  needs a name that survives its container, and whether recovery is a command, a clock, or the
+  broker's own doing. `Deployment` carries a compose recipe for each and `Troubleshooting` the
+  duplicate each one produces.
+
 ### Changed
 
 - **No transport driver is a dependency of this package any more.** `pip install
