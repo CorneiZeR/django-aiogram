@@ -61,11 +61,17 @@ up. In 4.0 the producer hands a payload to a broker and the broker owns the conn
 that is where a fake belongs; patching `django_aiogram.redis.get_redis` alone leaves the real
 connection in place, and patching the producer no longer reaches the write at all.
 
-**That covers the synchronous sends only.** `asend`, `aenqueue`, `asend_many`,
-`aqueue_depth` and `ainflight_depth` go through `aget_redis`, which keeps one
-client per running loop — so a test that patched the synchronous name and then
-awaited one of these opened a real connection. Patch the builder underneath it and
-the registry still runs for real:
+**That covers the synchronous sends only.** On the Redis transports, and in a process
+that queues rather than delivers, `asend`, `aenqueue`, `asend_many`, `aqueue_depth` and
+`ainflight_depth` go through `aget_redis`, which keeps one client per running loop — so a
+test that patched the synchronous name and then awaited one of these opened a real
+connection. Patch the builder underneath it and the registry still runs for real:
+
+Both qualifications matter when a fixture is copied. Inside the worker, `asend` calls
+`send_raw` and reaches no broker at all, so a fake on `aget_redis` there watches a path the
+test never takes. And RabbitMQ and Kafka have no async client to patch: their drivers are
+synchronous, so the awaiting methods borrow a thread and use the same connection the
+synchronous ones do — which is the connection the section above patches.
 
 ```python
 import fakeredis

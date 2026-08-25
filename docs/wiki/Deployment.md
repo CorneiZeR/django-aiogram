@@ -142,10 +142,11 @@ in-flight list exists to survive.
 ## Serving under ASGI
 
 Nothing here is required. A Django process under ASGI can call `bot.send()` and
-it works — it simply writes to a socket on the thread serving requests, and on
-the first call that includes a connect bounded by the configured transport's own
-timeout. `bot.asend()`
-is the same message without that; see **[[Sending-messages|Sending messages]]**.
+it works — it simply writes to a socket on the thread serving requests, and on the
+first call that includes a connect bounded by the configured transport's own timeout.
+`bot.asend()` is the same message without blocking that thread: the connect and its
+timeout still happen, it just yields while they do. See
+**[[Sending-messages|Sending messages]]**.
 
 One thing is worth knowing rather than discovering. The async client belongs to
 the loop that created it, so each loop gets its own, and only that loop may close
