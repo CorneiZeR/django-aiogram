@@ -104,7 +104,7 @@ the shutdown recipe.
 
 | | |
 | --- | --- |
-| `bot.queue_depth()` | messages waiting for a worker, one `LLEN` |
+| `bot.queue_depth()` | messages waiting for a worker; one read, of whichever transport `BROKER` names |
 | `bot.inflight_depth(worker=None)` | messages one worker is part-way through sending |
 | `await bot.aqueue_depth()` / `await bot.ainflight_depth(...)` | the same read, without holding the loop |
 

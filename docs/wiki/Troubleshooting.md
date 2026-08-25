@@ -28,7 +28,7 @@ redis-py only started applying a read deadline of its own in 8.0. On 5.x, 6.x
 and 7.x a stalled server blocks the caller until the process is killed, which is
 why the package sets the deadline itself rather than relying on the client.
 
-## Messages pile up in Redis
+## Messages pile up in the queue
 
 ```python
 from django_aiogram import bot
@@ -117,7 +117,7 @@ Grepping one out of `docker inspect` should land here.
 | `the heartbeat is not a timestamp` | Redis list: something else writes to that key. Give the worker its own `REDIS_MESSAGES_KEY`, or its own database |
 | `could not read the consumer liveness: …` | `PING` answered and the next command did not: a failover in between, a replica that cannot serve the key, or `decode_responses` in a URL shared with a cache backend meeting bytes it cannot decode |
 | `could not read the queue length: …` | The same, one command later |
-| `N messages are queued, over the limit of N` | Work is backing up. `HEALTHCHECK_MAX_QUEUE` or `--max-queue` is what set that number; see **Messages pile up in Redis** above |
+| `N messages are queued, over the limit of N` | Work is backing up. `HEALTHCHECK_MAX_QUEUE` or `--max-queue` is what set that number; see **Messages pile up in the queue** above |
 
 Two lines are not refusals and do not change the exit code:
 
@@ -180,10 +180,11 @@ silently.
 
 ## The project will not start without a token
 
-It should. 2.0 does not build a bot or connect to Redis at import time. If it
-still fails, something in *your* code is touching `bot.bot`, `redis_conn` or
-`send_raw` at import time — those are the points that genuinely need
-credentials.
+It should. 2.0 does not build a bot, and no release since connects to the broker at import
+time. If it still fails, something in *your* code is touching `bot.bot`, `send_raw` or a depth
+read at import time — those are the points that genuinely need credentials. `bot.redis_conn` used
+to be on that list and is gone in 4.0; `django_aiogram.redis.redis_conn` is the same object and
+is just as eager.
 
 Placeholder tokens are no longer necessary; drop them.
 

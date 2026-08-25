@@ -56,8 +56,9 @@ list of Telegram API calls, and whoever can write to it can send as your bot.
 Note what is **not** set: `back` and `celery_worker` leave `ENABLED` alone.
 They queue messages, and `ENABLED=0` would make those calls no-ops — the
 messages would vanish with a debug line and nothing else. The flag is for
-processes that must not reach Telegram or Redis at all: image builds, a
-migration container, CI. See below.
+processes that must not **send** — not to Telegram, not into the broker: image builds, a
+migration container, CI. Not "reach nothing at all": the depth reads answer either way, on
+purpose. See below.
 
 ## What ENABLED=0 turns off
 
