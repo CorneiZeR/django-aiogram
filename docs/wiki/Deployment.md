@@ -67,8 +67,9 @@ so nothing is keyed on a name.
     environment:
       DJANGO_AIOGRAM_ENABLED: 1
       DJANGO_AIOGRAM_BROKER: django_aiogram.broker.rabbitmq.RabbitMQBroker
-      # percent-encode the password: `pika` parses this with `URLParameters`, so an
-      # `@`, `/`, `:` or `#` in it splits the URL somewhere you did not mean
+      # the same password as below, percent-encoded: `pika` parses this with
+      # `URLParameters`, so an `@`, `/`, `:` or `#` in a generated password splits the
+      # URL somewhere nobody meant and the failure looks like a wrong credential
       DJANGO_AIOGRAM_RABBITMQ_URL: amqp://bot:${RABBITMQ_PASSWORD_URLENCODED}@rabbitmq:5672/
       DJANGO_AIOGRAM_RABBITMQ_QUEUE: telegram-bot
 
@@ -85,6 +86,17 @@ so nothing is keyed on a name.
       test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
       interval: 10s
 ```
+
+Two variables, one secret: the broker wants the password as it is, the URL wants it
+percent-encoded. Derive the second rather than typing it twice —
+
+```shell
+RABBITMQ_PASSWORD_URLENCODED=$(python3 -c \
+  'import os,urllib.parse; print(urllib.parse.quote(os.environ["RABBITMQ_PASSWORD"], safe=""))')
+```
+
+— because two hand-written values drift, and the drift shows up as an authentication failure
+that points at the credential rather than at the encoding.
 
 **Kafka.** Read **[[Kafka]]** before this one rather than after: ordering is per partition and a
 refusal replays a run of messages, and neither is something to discover in production.
