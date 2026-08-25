@@ -224,9 +224,12 @@ Entries land here as the work does; nothing below is released.
 
   Nothing guesses. `BROKER` names the transport, and a name whose driver is absent is
   `E047` at startup carrying that `pip install` line — with one exception that matters to a
-  web container: a process with `ENABLED` off reaches no transport, so it is not asked to
-  install one, the same way `W002` does not ask a disabled process for a `REDIS_URL`. A
-  `BROKER` naming something that is not a transport is still reported there.
+  web container: a process with `ENABLED` off sends nothing, so it is not asked to install a
+  driver, the same way `W002` does not ask a disabled process for a `REDIS_URL`. That gate is a
+  trade rather than a proof -- the depth reads are not gated on `ENABLED`, so a disabled process
+  that reads one does need the driver, and hears the `ModuleNotFoundError` the check exists to
+  prevent. Firing here instead would warn every image build that never reads a depth. A `BROKER`
+  naming something that is not a transport is still reported there.
 
   Ignore all of that and the send still says it in words. Measured on a base install with
   no driver:

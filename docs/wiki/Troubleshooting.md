@@ -37,16 +37,18 @@ bot.queue_depth()  # messages waiting for a worker
 bot.inflight_depth()  # what this worker is part-way through sending
 ```
 
-Or from a shell, if that is where you are:
+Those two answer for whichever transport `BROKER` names. From a shell there is no
+one command, because each transport counts differently — for the Redis list:
 
 ```shell
 redis-cli -n <db> llen TELEGRAM_BOT_MESSAGE
 ```
 
-`TELEGRAM_BOT_MESSAGE` is the default `REDIS_MESSAGES_KEY`; if you set your own,
-it is that key here and in every path below — which is the reason to prefer the
-two calls above in anything you keep, an exporter especially. They read the keys
-this package owns, so a monitor does not encode a scheme that is ours to change.
+`TELEGRAM_BOT_MESSAGE` is the default `REDIS_MESSAGES_KEY`; if you set your own, it
+is that key here and in every Redis path below. On a stream it is `XLEN`, on AMQP the
+queue's message count, on Kafka the lag of the consumer group — which is the reason to
+prefer the two calls above in anything you keep, an exporter especially. They answer
+the same question on every transport, and they read a scheme that is ours to change.
 
 A growing list does not by itself mean the consumer is stopped: producers can
 simply be outpacing it, and `MAX_IN_FLIGHT` deliberately holds intake back while

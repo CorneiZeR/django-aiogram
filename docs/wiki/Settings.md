@@ -34,7 +34,7 @@ Neither is required for the project to boot.
 
 | Setting | Default | Description |
 | ------- | ------- | ----------- |
-| `ENABLED` | `True` | Run the bot in this process at all |
+| `ENABLED` | `True` | Whether this process sends — to Telegram, or into the broker. The depth reads answer regardless |
 | `AUTODISCOVER` | `True` | Import `<app>.<MODULE_NAME>` on startup |
 | `MODULE_NAME` | `'tg_router'` | Module to look for in each installed app |
 

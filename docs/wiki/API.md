@@ -115,9 +115,11 @@ the four methods above; if you hold a client of your own, you own closing it on 
 loop that made it.
 
 These four are reads rather than sends, so `ENABLED=0` does not turn them into
-no-ops the way it does every send: they still connect, and without `REDIS_URL` they
-raise `ImproperlyConfigured` rather than answering zero. A monitor that runs in a
-disabled process needs the URL.
+no-ops the way it does every send: they still connect, and without whatever the
+configured transport connects with — `REDIS_URL` for the two Redis brokers, the
+equivalent for the others — they raise `ImproperlyConfigured` rather than answering
+zero. A monitor that runs in a disabled process still needs that setting, and the
+driver: `manage.py check` does not ask a disabled process for either.
 
 `inflight_depth` defaults to this process's own worker identity; naming another is
 how a monitor reads a list left behind by a worker that is gone. The key scheme

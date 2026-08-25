@@ -398,7 +398,13 @@ class TelegramBot:
 
     @property
     def enabled(self) -> bool:
-        """Whether this process should reach Telegram or the broker at all."""
+        """Whether this process should **send** — reach Telegram, or write to the broker.
+
+        Not "reach nothing": the depth reads answer whether or not this is true, deliberately,
+        because a tier kept from sending is exactly the one an operator asks how deep the queue
+        is. `queue_depth` says so too, and `tests/test_enabled_flag.py` fails if either reader
+        grows a gate.
+        """
         return coerce_bool(conf['ENABLED'], f"{SETTINGS_NAME}['ENABLED']")
 
     @property

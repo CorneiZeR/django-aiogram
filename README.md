@@ -29,8 +29,9 @@ The transport driver is an extra, so a deployment downloads only the one it uses
 A base `pip install django-aiogram` is a valid install: it imports, and `manage.py`
 runs. What it cannot do is carry a message, and `manage.py check` says so — `E047`,
 with the `pip install` line for whichever `BROKER` you named. A process with
-`ENABLED` off is not asked for a driver at all, since it reaches no transport, so a
-web container that only records the event log needs no extra. A `BROKER` naming
+`ENABLED` off is not asked for a driver, because it sends nothing, so a web container
+that only records the event log needs no extra. One that reads `queue_depth()` does
+need it — those reads answer whether or not the process is enabled. A `BROKER` naming
 something that is not a transport is reported either way.
 
 ```python

@@ -83,7 +83,9 @@ behind it must stay inside your own trust boundary, whichever of the four it is.
 The bot token is read from `TELEGRAM_BOT['TOKEN']` or the
 `DJANGO_AIOGRAM_TOKEN` environment variable. It is never logged.
 
-`ENABLED=0` means a process needs no token: it reaches neither Telegram nor
-Redis, and `manage.py check` stops asking for credentials. It does not take the
+`ENABLED=0` means a process needs no token: it sends to neither Telegram nor the
+broker, and `manage.py check` stops asking for credentials. A process that reads the
+queue depth still reaches the broker, so it still needs whatever that transport
+connects with. It does not take the
 token away from a process that is given one — keeping it out of an environment
 is the deployment's job, and the flag is what makes that possible.

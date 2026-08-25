@@ -1,0 +1,107 @@
+"""The surfaces that must not name one transport, pinned so a revert fails.
+
+4.0 made the queue a setting, and the prose describing it had to follow — but prose has no
+gate. Every claim in this file was true of a Redis-only package and false of this one, and
+each was found by a reviewer rather than by the suite, one file at a time, because nothing
+here could fail. So the class gets a test instead of another round of reading.
+
+Two rules make it worth having rather than merely strict:
+
+* it names *surfaces*, not files at large. A transport's own module is entitled to say Redis
+  as often as it likes, and `Delivery.md` compares the four by name on purpose. What is
+  pinned is the small set of places whose subject is the queue *in general* — the trust
+  boundary, the serializer's warning about who can execute code, the settings table.
+* it looks for Redis named as **the** queue, not for the word. "Redis with ``requirepass``,
+  RabbitMQ with a user that is not ``guest``, Kafka with SASL" is exactly right and must
+  keep passing; "the Redis behind it must stay inside your trust boundary" must not.
+
+The whitespace of each file is flattened before matching, because prose wraps and a phrase
+broken across a line break is one a plain search does not find. That is how several of these
+survived earlier sweeps.
+"""
+
+import pathlib
+import re
+
+import pytest
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+#: files whose subject is the queue itself rather than one implementation of it
+NEUTRAL_SURFACES = (
+    'SECURITY.md',
+    'README.md',
+    'src/django_aiogram/wire/serializers.py',
+    'src/django_aiogram/wire/envelope.py',
+    'src/django_aiogram/producer/client.py',
+    'docs/wiki/Sending-messages.md',
+    'docs/wiki/Installation.md',
+)
+
+#: `config/defaults.py` is deliberately absent: it is the file that *names* the default
+#: transport, so "defaulted to the Redis list" is the truth rather than a leftover, and a
+#: guard here would have to be argued away every time. Its own over-claim -- `ENABLED`
+#: described as gating everything -- is pinned by `test_enabled_flag.py`, which asserts the
+#: behaviour instead of the wording
+
+#: Redis presented as *the* queue rather than as one of the four. Each of these was a real
+#: sentence in one of the files above, and each was reported by review rather than by a test
+THE_ONLY_TRANSPORT = (
+    r'the Redis list',
+    r'Redis queue',
+    r'the Redis behind',
+    r'write to the Redis\b',
+    r'a Redis nothing',
+    r'through Redis\b',
+    r'(?:reach|reaches|reaching) Redis\b',
+    r'queues? the call through Redis',
+    r'bounded by ``?REDIS_TIMEOUT',
+    # the flag gates sending, and the depth reads answer either way. This spelling claimed
+    # otherwise in six files, and each was reported separately because nothing failed
+    r'(?:Telegram|the broker)[^.]{0,24}at all',
+)
+
+#: names 4.0 removed. A docstring or a page citing one sends a reader after something gone;
+#: `test_public_surface.py` pins their absence from the code, and this pins it from the prose
+REMOVED_NAMES = (r'\bsend_redis\b', r'\basend_redis\b', r'\bbot\.redis_conn\b')
+
+
+def flattened(relative: str) -> str:
+    """The file as one line, so a claim wrapped across a line break still matches."""
+    return re.sub(r'\s+', ' ', (ROOT / relative).read_text())
+
+
+@pytest.mark.parametrize('relative', NEUTRAL_SURFACES)
+@pytest.mark.parametrize('pattern', THE_ONLY_TRANSPORT)
+def test_the_surface_does_not_name_one_transport_as_the_queue(relative, pattern):
+    """A neutral surface may name Redis beside the others; it may not name it as the queue."""
+    found = re.search(pattern, flattened(relative), re.IGNORECASE)
+    assert found is None, (
+        f'{relative} says {found.group(0)!r}, which is true of one transport out of four; '
+        f'name what `BROKER` selects, or move the claim to that transport'
+    )
+
+
+@pytest.mark.parametrize('relative', NEUTRAL_SURFACES)
+@pytest.mark.parametrize('pattern', REMOVED_NAMES)
+def test_the_surface_does_not_cite_a_removed_name(relative, pattern):
+    """The rename table in `Upgrading.md` is where an old name belongs, and the only place."""
+    found = re.search(pattern, flattened(relative))
+    assert found is None, (
+        f'{relative} cites {found.group(0)!r}, removed in 4.0; see the rename table in '
+        f'docs/wiki/Upgrading.md for what to say instead'
+    )
+
+
+def test_the_pickle_warning_says_who_can_execute_code():
+    """The one claim in that docstring worth pinning by its content and not its wording.
+
+    `ALLOW_PICKLE` turns "can write to the queue" into "can execute code in this container",
+    and the module docstring is where a reader meets that. A refactor that trims it to
+    "pickle is unsafe" loses the part that tells an operator what to go and secure.
+    """
+    prose = flattened('src/django_aiogram/wire/serializers.py')
+
+    assert re.search(r'write to the queue', prose), 'the warning no longer names who is trusted'
+    assert re.search(r'execute code', prose), 'the warning no longer names what they can do'
+    assert re.search(r'``BROKER``', prose), 'the warning no longer says the queue is a setting'

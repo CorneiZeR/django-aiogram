@@ -26,7 +26,10 @@ def test_send_raw_is_a_noop_when_disabled():
 
 @override_settings(TELEGRAM_BOT={'ENABLED': False})
 def test_enqueue_is_a_noop_when_disabled(monkeypatch):
-    """A disabled process must not reach the broker at all, not even to resolve it.
+    """A disabled process must not reach the broker to *queue*, not even to resolve it.
+
+    Scoped to queueing on purpose: the depth reads below reach it either way, which is what the
+    case after this one pins.
 
     Patched at `get_broker`, which is the boundary `enqueue` actually crosses since 4.0 — it
     stopped reaching for a Redis client of its own when the transports became pluggable, so a

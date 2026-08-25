@@ -457,7 +457,7 @@ def test_the_bulk_pair_refuses_an_unknown_method_before_writing(redis_server, bu
 @override_settings(TELEGRAM_BOT={'RATE_LIMIT': None, 'ENABLED': False})
 @pytest.mark.parametrize('bulk', ['send_many', 'asend_many'])
 def test_a_disabled_process_queues_nothing_and_still_names_the_messages(redis_server, bulk, monkeypatch):
-    """`ENABLED=0` means this process reaches neither Telegram nor Redis.
+    """`ENABLED=0` means this process sends to neither Telegram nor the broker.
 
     The single-message path has always honoured that and still returned the id, so
     a caller can store ids beside its own rows whether or not this deployment

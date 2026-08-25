@@ -268,8 +268,11 @@ def _a_usable_broker(key: str) -> list[Problem]:
     the hint carries the install line for that extra.
 
     Two of those are gated on the bot being enabled, for the same reason `W002` is: a process
-    with `ENABLED` off reaches no transport, so asking it to install a driver it will never
-    call is an error nobody can act on except by installing it anyway. The name itself is
+    with `ENABLED` off sends nothing, so asking it to install a driver it will never call is an
+    error nobody can act on except by installing it anyway. The gate is a trade, not a proof --
+    a disabled process that reads `queue_depth` *does* reach the transport, and hears the
+    `ModuleNotFoundError` this rule exists to prevent. Documented rather than checked, because
+    firing here would warn every image build and migration container that never reads a depth. The name itself is
     judged either way — nothing legitimately names a non-broker, and a typo in the web tier is
     the same typo in the worker, where it would fail.
 
@@ -859,7 +862,7 @@ CHECKS: tuple[Check, ...] = (
         'TOKEN',
         partial(
             _filled_in_when_enabled,
-            hint='Set it, or set ENABLED to False in processes that never reach Telegram.',
+            hint='Set it, or set ENABLED to False in processes that never send to Telegram.',
         ),
     ),
     Check(
@@ -867,7 +870,7 @@ CHECKS: tuple[Check, ...] = (
         'REDIS_URL',
         partial(
             _filled_in_when_enabled,
-            hint='Set it, or set ENABLED to False in processes that never reach Redis.',
+            hint='Set it, or set ENABLED to False in processes that never touch the queue.',
         ),
     ),
 )
