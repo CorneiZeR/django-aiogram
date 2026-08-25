@@ -143,7 +143,8 @@ in-flight list exists to survive.
 
 Nothing here is required. A Django process under ASGI can call `bot.send()` and
 it works — it simply writes to a socket on the thread serving requests, and on
-the first call that includes a connect bounded by `REDIS_TIMEOUT`. `bot.asend()`
+the first call that includes a connect bounded by the configured transport's own
+timeout. `bot.asend()`
 is the same message without that; see **[[Sending-messages|Sending messages]]**.
 
 One thing is worth knowing rather than discovering. The async client belongs to

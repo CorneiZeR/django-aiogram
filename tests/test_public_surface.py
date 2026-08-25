@@ -2,9 +2,13 @@
 
 1.x `TelegramBot` was a dataclass, so its internals were part of how people used
 it: driving `loop` by hand, feeding `dispatcher`, reusing `redis_conn`. The lazy
-rewrite turned every one of those into a property. They all still exist — this
-file is what keeps them existing, because a refactor that drops one would
+rewrite turned every one of those into a property, and all but one still exist —
+this file is what keeps them existing, because a refactor that drops one would
 otherwise be caught only indirectly, if at all.
+
+`redis_conn` is the exception, removed in 4.0 and pinned here from the other side: the
+cases at the bottom fail if a removed name comes back. Both directions are the job, and
+this docstring went on saying "they all still exist" after one of them had stopped.
 
 The names are written out rather than derived from the code: a list generated
 from the class under test would agree with any change to it.

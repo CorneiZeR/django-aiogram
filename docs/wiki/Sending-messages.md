@@ -68,8 +68,8 @@ async def announce_from_async(chat_ids):
 
 `asend` is `send` for code already on an event loop. The synchronous one writes to
 a socket on the calling thread, which under ASGI is the thread serving requests —
-and on the first call that includes a TCP connect bounded by `REDIS_TIMEOUT`. The
-ids, the rows and the routing are identical.
+and on the first call that includes a connect bounded by whatever timeout the
+transport `BROKER` names declares. The ids, the rows and the routing are identical.
 
 `send_many` queues one message per chat, a chunk of them per round trip, and
 returns an id per message in the order the chats were given. `asend_many` is its
