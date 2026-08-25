@@ -112,3 +112,44 @@ def test_the_page_agrees_about_what_is_required(path):
             f'{page.name} says {row.group(1).strip()!r} for `{name}`, '
             f'which {path} declares as {"REQUIRED" if default is REQUIRED else default!r}'
         )
+
+
+SETTINGS_PAGE = WIKI / 'Settings.md'
+
+
+def declared_row(path: str) -> tuple[set[str], set[str]]:
+    """What `Settings.md`'s transport table says this broker takes, and what it requires.
+
+    The table is the page an operator reads to pick a transport, so it is the one place where
+    being wrong sends somebody to configure the wrong keys. Parsed rather than eyeballed: the
+    row is `| dotted.path | `A`, `B` | **`A`** |`, and the third cell names the required ones in
+    bold or says none.
+    """
+    row = re.search(rf'^\| `{re.escape(path)}` \| (.+?) \| (.+?) \|$', SETTINGS_PAGE.read_text(), re.MULTILINE)
+    assert row, f'Settings.md has no transport-table row for {path}'
+    return set(re.findall(r'`([A-Z_]+)`', row.group(1))), set(re.findall(r'\*\*`([A-Z_]+)`\*\*', row.group(2)))
+
+
+@pytest.mark.parametrize('path', sorted(PAGES))
+def test_the_settings_table_lists_what_the_broker_takes(path):
+    """Exactly what it declares — a missing name hides a setting, a stray one invents it."""
+    listed, _required = declared_row(path)
+
+    assert listed == set(options(path)), (
+        f'Settings.md lists {sorted(listed)} for {path}, which declares {sorted(options(path))}'
+    )
+
+
+@pytest.mark.parametrize('path', sorted(PAGES))
+def test_the_settings_table_agrees_about_what_is_required(path):
+    """The column somebody reads before their first run, so it must match the sentinel.
+
+    Named in bold or not at all: the row for a broker with no required settings says so in
+    words, and a `**`NAME`**` anywhere in that cell is a claim this checks against `OPTIONS`.
+    """
+    _listed, required = declared_row(path)
+    expected = {name for name, default in options(path).items() if default is REQUIRED}
+
+    assert required == expected, (
+        f'Settings.md marks {sorted(required)} required for {path}, which requires {sorted(expected)}'
+    )
