@@ -96,7 +96,7 @@ which carries outbound messages in both modes — see **[[Webhook]]**.
 | `DELIVERY` | `'blpop'` | The only consumer; `'keyspace'` was removed in 3.0 — see **[[Delivery]]** |
 | `BROKER` | `'django_aiogram.broker.redis_list.RedisListBroker'` | Which transport carries messages, by dotted path. Nothing is inferred from what happens to be installed: a name whose driver is missing is a system check with the `pip install` line, not an `ImportError` on the first send. Each broker declares its **own** settings — see the table below — and the other queue rows here belong to the package rather than to a transport. A broker with no sensible default for where a message goes marks that setting required and refuses at startup without it |
 | `REDIS_MESSAGES_KEY` | `'TELEGRAM_BOT_MESSAGE'` | List holding queued calls — the Redis list transport's own |
-| `WORKER_NAME` | hostname | Names this worker's in-flight list — see **[[Delivery]]** |
+| `WORKER_NAME` | hostname | Names this worker's in-flight list on the Redis list transport, and nothing on the other three — see **[[Redis-list]]** |
 | `BLPOP_TIMEOUT` | `5` | How often the consumer checks for shutdown; capped at `min(HEARTBEAT_INTERVAL, REDIS_TIMEOUT - 1)` |
 | `DRAIN_TIMEOUT` | `5` | Seconds `close()` gives in-flight sends to finish before canceling them |
 | `MAX_IN_FLIGHT` | `0` | Sends the consumer leaves in flight before it stops taking messages; `0` is no bound |

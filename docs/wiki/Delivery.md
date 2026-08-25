@@ -27,6 +27,14 @@ and what it needs from you differs enough to be worth a page each:
 
 The rest of this page is what the consumer does with any of them.
 
+`DELIVERY` is a separate and much smaller choice: it names the consumer *class*, and `'blpop'` is
+its only value. The `keyspace` consumer 1.x used — write a key with a TTL, react to its expiry
+event — was removed in 3.0, because it needed `CONFIG SET notify-keyspace-events`, which managed
+providers refuse, and nothing could be delivered before the TTL elapsed. Settings that still say
+`'keyspace'` fail `E009` rather than falling back quietly. The name has outlived its accuracy —
+that consumer now asks a broker rather than issuing `BLPOP` — and renaming it is a settings
+migration rather than a rename, so it waits.
+
 ## Running more than one worker
 
 The consumer takes each message once, and every transport is responsible for that
