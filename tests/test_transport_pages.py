@@ -50,6 +50,17 @@ def options(path: str) -> dict[str, object]:
     return dict(import_string(path).OPTIONS)
 
 
+def tabulated(text: str) -> set[str]:
+    """The settings this page gives a table row, which is the only mention that counts.
+
+    Searching the whole page was the first version and it could not fail properly: a setting
+    named anywhere in the prose satisfied "the page documents it" while its row was gone, and
+    a row is what a reader configures from. Shared with the case below rather than written
+    twice, so the two cannot drift into disagreeing about what counts as documented.
+    """
+    return set(re.findall(r'^\| `([A-Z_]+)` \|', text, re.MULTILINE))
+
+
 def test_every_shipped_broker_has_a_page():
     """A transport nobody can read about is a transport nobody should be offered."""
     assert sorted(PAGES) == sorted(SHIPPED), (
@@ -61,10 +72,9 @@ def test_every_shipped_broker_has_a_page():
 def test_the_page_names_every_setting_the_broker_declares(path):
     """A transport gaining an option must not leave its own page half true."""
     page = WIKI / PAGES[path]
-    text = page.read_text(encoding='utf-8')
-    missing = sorted(name for name in options(path) if f'`{name}`' not in text)
+    missing = sorted(set(options(path)) - tabulated(page.read_text(encoding='utf-8')))
 
-    assert missing == [], f'{page.name} does not name {missing}, which {path} declares'
+    assert missing == [], f'{page.name} gives no table row to {missing}, which {path} declares'
 
 
 @pytest.mark.parametrize('path', sorted(PAGES))
@@ -76,12 +86,10 @@ def test_the_page_names_nothing_the_broker_does_not_declare(path):
     mistake.
     """
     page = WIKI / PAGES[path]
-    text = page.read_text(encoding='utf-8')
     mine = set(options(path))
     others = {name for other in SHIPPED if other != path for name in options(other)}
-    # in a table cell, so a passing mention in prose is not what this is about
-    rows = set(re.findall(r'^\| `([A-Z_]+)` \|', text, re.MULTILINE))
-    strays = sorted(rows & (others - mine) - SHARED)
+    # a table cell, so a passing mention in prose is not what this is about
+    strays = sorted(tabulated(page.read_text(encoding='utf-8')) & (others - mine) - SHARED)
 
     assert strays == [], f'{page.name} tabulates {strays}, which {path} does not declare'
 
