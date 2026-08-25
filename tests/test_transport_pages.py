@@ -86,10 +86,10 @@ def test_the_page_names_nothing_the_broker_does_not_declare(path):
     mistake.
     """
     page = WIKI / PAGES[path]
-    mine = set(options(path))
-    others = {name for other in SHIPPED if other != path for name in options(other)}
-    # a table cell, so a passing mention in prose is not what this is about
-    strays = sorted(tabulated(page.read_text(encoding='utf-8')) & (others - mine) - SHARED)
+    # everything not this broker's and not the package's, rather than only a neighbour's:
+    # looking for a *known* stray let a typo through, and a row nobody declares is the worse
+    # of the two — a neighbour's setting is at least a real setting somewhere
+    strays = sorted(tabulated(page.read_text(encoding='utf-8')) - set(options(path)) - SHARED)
 
     assert strays == [], f'{page.name} tabulates {strays}, which {path} does not declare'
 
@@ -107,7 +107,9 @@ def test_the_page_agrees_about_what_is_required(path):
     for name, default in options(path).items():
         row = re.search(rf'^\| `{name}` \| (.+?) \|', text, re.MULTILINE)
         assert row, f'{page.name} has no table row for `{name}`'
-        says_required = 'required' in row.group(1).lower()
+        # the marker, not the word: a substring test reads "not required" as required, and
+        # would match the word anywhere in a description cell that happened to use it
+        says_required = re.search(r'\*\*required\*\*', row.group(1), re.IGNORECASE) is not None
         assert says_required == (default is REQUIRED), (
             f'{page.name} says {row.group(1).strip()!r} for `{name}`, '
             f'which {path} declares as {"REQUIRED" if default is REQUIRED else default!r}'

@@ -67,7 +67,9 @@ so nothing is keyed on a name.
     environment:
       DJANGO_AIOGRAM_ENABLED: 1
       DJANGO_AIOGRAM_BROKER: django_aiogram.broker.rabbitmq.RabbitMQBroker
-      DJANGO_AIOGRAM_RABBITMQ_URL: amqp://bot:${RABBITMQ_PASSWORD}@rabbitmq:5672/
+      # percent-encode the password: `pika` parses this with `URLParameters`, so an
+      # `@`, `/`, `:` or `#` in it splits the URL somewhere you did not mean
+      DJANGO_AIOGRAM_RABBITMQ_URL: amqp://bot:${RABBITMQ_PASSWORD_URLENCODED}@rabbitmq:5672/
       DJANGO_AIOGRAM_RABBITMQ_QUEUE: telegram-bot
 
   rabbitmq:

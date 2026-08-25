@@ -28,8 +28,14 @@ the group rather than by anything here, so `reclaim()` answers nothing, `manage.
 refuses, `I001` stays quiet, and a worker's name buys nothing.
 
 `enable.auto.commit` is **off**, and that is the whole reason this transport can promise
-anything: a committed offset means "this message has been sent", and letting the driver commit
-on a timer would mean it says so about messages still in flight.
+anything: a committed offset means "the consumer settled this message", and letting the driver
+commit on a timer would mean it says so about messages it is still holding.
+
+Settled is not the same as *delivered to Telegram*, and the difference belongs to the handler
+rather than to Kafka. `bot.send_raw` — what `manage.py start_tgbot` uses — takes `on_complete`
+and signals it when the send finishes, so there the commit does follow the send. A handler of
+your own that takes only `**kwargs` is settled the moment it returns, which may be before
+anything reached Telegram. See **[[Delivery]]**.
 
 Ordering is **per partition**, not per topic. Nothing here sets a key, so records are spread
 across partitions and two messages queued in order can be delivered out of it. A single
