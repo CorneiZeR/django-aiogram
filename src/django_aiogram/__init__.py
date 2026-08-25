@@ -1,4 +1,4 @@
-"""Run aiogram next to Django and send Telegram messages through a Redis queue.
+"""Run aiogram next to Django and send Telegram messages through the broker you configure.
 
 Importing this package is cheap on purpose: aiogram (and the pydantic stack
 underneath it) costs most of a second, and a migration container or a test run

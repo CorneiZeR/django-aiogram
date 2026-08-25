@@ -73,6 +73,16 @@ THREE_ONE_INTROSPECTION = ('queue_depth', 'inflight_depth')
 #: from `django_aiogram.redis`, which the case below pins
 MODULE_EXPORTS = ('TelegramBot', 'bot', 'conf', '__version__')
 
+#: what 4.0 took away, pinned by its absence. The tuples above are membership checks, and
+#: membership cannot fail when a name comes *back*: `hasattr` would find a restored
+#: `TelegramBot.send_redis`, `MODULE_EXPORTS` would still equal `__all__` for a lazy
+#: `get_redis` put back in `_EXPORTS`, and every case here would stay green while the
+#: Redis-named surface this release removed worked again. The equality case below covers
+#: `__all__` alone, which is why these are separate: a lazy export is reachable without
+#: being in it
+REMOVED_FROM_THE_PACKAGE = ('get_redis', 'redis_conn')
+REMOVED_FROM_THE_CLIENT = ('send_redis', 'asend_redis', 'redis_conn')
+
 #: 3.1.0 makes the metrics seam public, and with it the shape of what receivers get.
 #: Written out rather than read off the dataclass, which is the point: a field
 #: renamed here breaks every receiver a project wrote, and nothing else would say so
@@ -124,6 +134,20 @@ def test_the_package_exports_nothing_else():
     assert set(django_aiogram.__all__) == set(MODULE_EXPORTS), (
         f'the package exports {sorted(django_aiogram.__all__)}, pinned as {sorted(MODULE_EXPORTS)}'
     )
+
+
+@pytest.mark.parametrize('name', REMOVED_FROM_THE_PACKAGE)
+def test_the_package_no_longer_resolves_it(name):
+    """A lazy export is reachable without being in ``__all__``, so ask the module itself."""
+    assert not hasattr(django_aiogram, name), (
+        f'{name} resolves again on the package; 4.0 moved it to django_aiogram.redis'
+    )
+
+
+@pytest.mark.parametrize('name', REMOVED_FROM_THE_CLIENT)
+def test_the_client_no_longer_carries_it(name):
+    """Restoring one as an alias would leave two names for one thing, which is the drift 4.0 ended."""
+    assert not hasattr(TelegramBot, name), f'{name} is back on TelegramBot; see enqueue and aenqueue'
 
 
 @pytest.mark.parametrize('name', OBSERVER_DECORATORS)

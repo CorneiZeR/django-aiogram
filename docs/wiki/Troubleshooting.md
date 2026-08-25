@@ -235,8 +235,9 @@ In order of how often it is the answer:
    rather than hammering the database, and records a `log.dropped` row for the
    gap once it gets through again.
 3. The process you are looking at is not the one that records. `outbound.queued`
-   is written by whichever process called `enqueue`; `outbound.sent` by the
-   bot container. Enabling the log in one and not the other gives you half a
+   is written by whichever process queued the message — through `enqueue` or
+   `aenqueue`, and `send`/`asend` outside the worker reach one of those —
+   `outbound.sent` by the bot container. Enabling the log in one and not the other gives you half a
    story, and that is not a bug.
 4. `EVENT_LOG_KINDS` is set and excludes what you are looking for. The list is
    **inclusive**: naming anything drops everything unnamed, including kinds a
