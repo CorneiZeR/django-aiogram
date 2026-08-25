@@ -831,8 +831,9 @@ def _filled_in_when_enabled(key: str, *, hint: str, only_if: Callable[[], bool] 
     image builds — so this must not be able to fail ``manage.py check``.
 
     ``only_if`` narrows the rule to configurations that need the setting at all. `W001` needs
-    none: every deployment talks to Telegram. `W002` does, because since 4.0 three of the four
-    transports never open a Redis connection.
+    none: every deployment talks to Telegram. `W002` does, because two of the four transports
+    never open a Redis connection — the list and Streams are both Redis, RabbitMQ and Kafka
+    are neither.
 
     **The gate on ``ENABLED`` leaves one hole, measured and kept.** ``Dispatcher`` is built with
     :func:`build_storage` the first time anything touches it, and neither ``start_polling`` nor

@@ -768,6 +768,11 @@ class TelegramBot:
             # would otherwise emit the line and take it from the first caller who could
             # have acted on it. Two membership tests on the happy path is the whole cost
             check_function(function)
+            # and the broker for the same reason, one failure mode further along: `enqueue`
+            # resolves it below, so a misconfigured `BROKER` used to raise *after* the latch
+            # was spent. Cheap to do twice -- the registry caches per process, so the call
+            # inside `enqueue` is a hit. `aenqueue` was fixed first and this is its twin
+            get_broker()
             _mention_asend('asend')
         return self.enqueue(function, correlation_id=identifier, **kwargs)
 
@@ -1274,7 +1279,9 @@ class TelegramBot:
         Named for what happens rather than for where it lands, because where it lands is a
         setting: the queue is a list, a stream, an AMQP queue or a Kafka topic depending on
         ``BROKER``. `send` decides between this and delivering directly; this one always
-        queues.
+        queues — where the process is enabled. With ``ENABLED`` off it reaches neither the
+        broker nor Telegram and returns the id anyway, so a caller storing it beside its own
+        row gets the same value whether or not this deployment sends.
 
         Returns the correlation id the delivered row will carry too.
         """
@@ -1309,8 +1316,9 @@ class TelegramBot:
         The synchronous twin writes to a socket on the calling thread, which under
         ASGI is the thread serving requests — including, on the first call, a connect
         bounded by whatever timeout the transport named by ``BROKER`` declares. Everything
-        else about the message is identical: same payload, same event rows, and the same
-        destination, whether that is a list, a stream, an AMQP queue or a Kafka topic.
+        else about the message is identical: same payload, same event rows, the same
+        destination — a list, a stream, an AMQP queue or a Kafka topic — and the same
+        no-op when ``ENABLED`` is off, which returns the id without reaching the broker.
         """
         identifier, accepted = self._accept(function, correlation_id)
         if not accepted:

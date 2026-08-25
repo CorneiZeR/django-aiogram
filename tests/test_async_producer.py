@@ -640,3 +640,35 @@ def test_each_async_accessor_names_itself_when_there_is_no_loop(accessor, expect
             coroutine.send(None)
     finally:
         coroutine.close()
+
+
+def test_send_from_a_loop_does_not_spend_the_mention_on_a_broken_broker(caplog, monkeypatch):
+    """The synchronous twin of the case above, which outlived it by three commits.
+
+    `aenqueue` was fixed to resolve the broker before naming its twin; `send` still named
+    `asend` and *then* delegated to `enqueue`, which is where the broker is resolved. So a
+    misconfigured `BROKER` spent the once-per-process advice on a call that queued nothing —
+    the same defect on the face most callers actually use, since `send` is what a view calls.
+
+    Asserted through `send` rather than `enqueue` because the two latch on different names:
+    `send` pairs with `asend`, and only this path can spend that one.
+    """
+    latch = threading.Event()
+    monkeypatch.setattr('django_aiogram.producer.client._asend_mentioned', latch)
+
+    def refuse():
+        msg = 'BROKER names something that cannot be imported'
+        raise ImproperlyConfigured(msg)
+
+    monkeypatch.setattr('django_aiogram.producer.client.get_broker', refuse)
+    instance = TelegramBot()
+
+    async def one_send():
+        with pytest.raises(ImproperlyConfigured):
+            instance.send(chat_id=1, text='hi')
+
+    with caplog.at_level('WARNING', logger='django_aiogram'):
+        asyncio.run(one_send())
+
+    assert not latch.is_set(), 'a send that queued nothing spent the once-per-process mention'
+    assert not [r for r in caplog.records if MENTION in r.getMessage()], 'it also said it'
