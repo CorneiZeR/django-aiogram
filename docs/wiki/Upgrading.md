@@ -329,7 +329,8 @@ bot.send(chat_id=chat_id, text=text)
 ```
 
 It queues from your app and calls Telegram directly inside the bot container.
-`enqueue` and `send_raw` still work.
+`send_redis` and `send_raw` still work — `send_redis` is the name at this hop; the 4.0 section
+above lists what it is called now.
 
 ## 6. Drain the 1.x queue, then drop the flag
 
@@ -337,7 +338,7 @@ If you needed `'ALLOW_PICKLE': True` for the upgrade window, the order in which
 you close it again matters — a 1.x producer keeps writing pickled payloads:
 
 1. upgrade or stop **every** producer: web, celery, anything calling
-   `enqueue`
+   `send_redis`
 2. wait for the queue **and** every in-flight list to reach zero:
    `LLEN <REDIS_MESSAGES_KEY>` and `LLEN` on each
    `<REDIS_MESSAGES_KEY>:processing*` key — on Redis 6.2+ a message being sent

@@ -776,8 +776,8 @@ class TelegramBot:
 
         The same routing as :meth:`send`, without the blocking socket write that
         one does on the calling thread — which under ASGI is the thread serving
-        requests, and on a first call includes a TCP connect bounded by
-        ``REDIS_TIMEOUT``.
+        requests, and on a first call includes a connect bounded by whatever
+        timeout the configured transport declares.
 
         In the bot container it still calls Telegram directly, and that path was
         never blocking: :meth:`send_raw` schedules onto the loop and returns.
@@ -1301,9 +1301,10 @@ class TelegramBot:
         """Queue a message without blocking the loop this coroutine runs on.
 
         The synchronous twin writes to a socket on the calling thread, which under
-        ASGI is the thread serving requests — including, on the first call, a TCP
-        connect bounded by ``REDIS_TIMEOUT``. Everything else about the message is
-        identical: same payload, same event rows, same key.
+        ASGI is the thread serving requests — including, on the first call, a connect
+        bounded by whatever timeout the transport ``BROKER`` names declares. Everything
+        else about the message is identical: same payload, same event rows, and the same
+        destination, whether that is a list, a stream, an AMQP queue or a Kafka topic.
         """
         identifier, accepted = self._accept(function, correlation_id)
         if not accepted:
