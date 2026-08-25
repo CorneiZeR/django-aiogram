@@ -26,6 +26,12 @@ services:
     # and reclaims what the others are still sending. Give each replica its own
     # WORKER_NAME to run more than one. On the other three transports this line is
     # optional and nothing strands without it
+    #
+    # `deploy.replicas` on THIS service is a data-loss bug on the Redis list: every
+    # replica resolves to this hostname, shares one in-flight list, and reclaims what
+    # the others are still sending — the same message goes to a real person twice. To
+    # run more than one worker, declare a service per worker with its own name, or
+    # move to a transport that needs no identity
     hostname: telegram-bot-1
     env_file: .env
     environment:
@@ -41,7 +47,9 @@ That is the default transport. The shape does not change for the other three —
 container, everything else queueing — only the service it depends on and the settings that
 name it.
 
-**Redis Streams** needs no new service: the same server, a different data structure.
+**Redis Streams** needs no new service: the same server, a different data structure — provided
+that server is **7.0 or newer**, which the list does not require. Below it the transport refuses
+on first use rather than reporting a queue depth it cannot compute; see **[[Redis-Streams]]**.
 
 ```yaml
     environment:

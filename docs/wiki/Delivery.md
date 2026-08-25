@@ -20,8 +20,8 @@ and what it needs from you differs enough to be worth a page each:
 
 | Transport | Crash safety | Needs a worker name | Recovery is |
 | --- | --- | --- | --- |
-| **[[Redis-list|Redis list]]** | at-least-once on Redis 6.2+, at-most-once below | **yes** — the in-flight list is keyed on it | a command you run |
-| **[[Redis-Streams|Redis Streams]]** | at-least-once, unconditionally | no | a clock: idle entries are claimed |
+| **[[Redis-list]]** | at-least-once on Redis 6.2+, at-most-once below | **yes** — the in-flight list is keyed on it | a command you run |
+| **[[Redis-Streams]]** | at-least-once, and **Redis 7.0+ or it refuses to run** | no | a clock: idle entries are claimed |
 | **[[RabbitMQ]]** | at-least-once, the broker's doing | no | automatic: a dropped channel requeues |
 | **[[Kafka]]** | at-least-once, the group's doing | no | automatic: an uncommitted offset replays |
 

@@ -227,7 +227,7 @@ produces:
 | **[[Redis-list]]** | a worker killed mid-send, reclaimed on the next start. And two workers sharing a `WORKER_NAME` share one in-flight list, so each reclaims what the other is still sending — give every worker its own name |
 | **[[Redis-Streams]]** | an entry idle longer than the liveness TTL is claimed by another consumer, so a worker slow enough to look dead has its message taken |
 | **[[RabbitMQ]]** | a dropped channel requeues everything it held unacknowledged |
-| **[[Kafka]]** | **a run rather than a message.** One refusal rewinds its partition, so that record and every later one in it are delivered again; a kill replays from the last committed offset, which with `MAX_IN_FLIGHT` above two is more than the messages that were in flight |
+| **[[Kafka]]** | **a run rather than a message.** One refusal rewinds its partition, so that record and every later one in it are delivered again; a kill replays from the last committed offset, which is at least what was in flight and can be more — records that had already finished stay behind a commit gap and come back with it |
 
 The Kafka row is the one to read before assuming a bug. Nothing there is per-message, so a
 handler that is not idempotent on its own business key will send innocent messages twice.

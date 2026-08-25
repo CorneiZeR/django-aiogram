@@ -71,8 +71,17 @@ addressed to the queue it is in. So the switch has an order, and getting it wron
 was in flight.
 
 1. Stop the producers, or set `ENABLED=0` in them. They are what keeps the old queue filling.
-2. Let the bot container finish the old queue. `bot.queue_depth()` and `bot.inflight_depth()`
-   both have to reach zero — a message being sent is in the second, not the first.
+2. Let the bot container finish the old queue, and **stop the workers before you believe the
+   numbers**. `bot.queue_depth()` answers for the whole queue, but `bot.inflight_depth()`
+   answers for the process that asks it: zero from a shell proves that *shell* holds nothing.
+   On the Redis list every worker has its own list, so with more than one worker running there
+   is no single reading that means "nothing is in flight anywhere".
+
+   So: stop every worker first, then check. `manage.py tgbot_healthcheck --stranded` reports
+   what sits under each worker name on the Redis list, and `bot.inflight_depth('<name>')` asks
+   about one of them by name. On RabbitMQ and Kafka nothing is left behind by a stopped worker —
+   the broker requeues, the group replays — so stopping them *is* the drain, and what returns to
+   the old queue has to be finished by a worker still on the old transport.
 3. Change `BROKER` and the settings the new transport declares, in **every** process. A producer
    left on the old transport writes to a queue nothing reads any more, and it will not complain:
    both configurations are valid, they are simply not the same queue.

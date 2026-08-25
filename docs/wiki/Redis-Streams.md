@@ -14,6 +14,16 @@ TELEGRAM_BOT = {
 
 `pip install django-aiogram[redis]` — the same extra, because it is the same driver.
 
+**Redis 7.0 or newer, and this is the one prerequisite that differs from the list.** `depth()`
+reads the group's `lag` from `XINFO GROUPS`, a field that arrived in 7.0; measured on 6.2 it is
+absent altogether, and Redis has no command that counts a range, so the alternative would be an
+`XRANGE` scan of everything past `last-delivered-id` — and a depth that drives
+`HEALTHCHECK_MAX_QUEUE` must not be an estimate. So the transport refuses an older server with
+`StreamServerTooOldError` on first use rather than reporting a number it cannot stand behind.
+
+The capability is probed rather than read off a version string, one round trip, because a fork
+may report any version it likes and what matters is whether the field is there.
+
 | Setting | Default | What it is |
 | --- | --- | --- |
 | `REDIS_URL` | — | where the server is |

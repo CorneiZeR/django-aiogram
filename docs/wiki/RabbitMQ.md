@@ -27,9 +27,13 @@ TELEGRAM_BOT = {
 There is no in-flight list, `reclaim()` has nothing to do and says so by answering nothing at
 all, `manage.py tgbot_reclaim` refuses, and `I001` stays quiet. A worker's name buys nothing.
 
-A publish is **persistent and mandatory**: the message is written to disk before the broker
-answers, and a message no queue will take raises rather than vanishing into an exchange. Both
-are why the numbers below are what they are.
+A publish is **persistent, mandatory and confirmed**: it is marked for disk, a message no queue
+will take raises rather than vanishing into an exchange, and the broker has answered before the
+call returns. What the confirm promises is that the broker has taken responsibility — for a
+persistent message on a durable queue that normally means it is on disk, but the protocol allows
+the confirm once the message has been handled, so it is not a strict fsync barrier. Most of the
+cost below is that disk work all the same: the same publish is 135 to 173 microseconds with
+persistence off.
 
 A refusal is a real nack — `basic_nack` with requeue — rather than a documented no-op, so a
 message this worker will not take goes back for another to try.
