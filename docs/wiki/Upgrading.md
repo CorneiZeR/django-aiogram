@@ -93,14 +93,19 @@ Then, in a shell on a non-bot process:
 ```python
 from django_aiogram import bot
 
+bot.enabled  # must be True for the send below to do anything
 bot.queue_depth()  # crosses the broker boundary, sends nothing
 bot.enqueue(chat_id=YOUR_ID, text='upgrade check')  # `enqueue` replaces `send_redis` in 4.0
 ```
 
 Read the depth first. It is the only step that proves the transport is configured *and*
 reachable without putting a message on the queue, and it answers whether or not the process is
-`ENABLED` — so it works on the web tier you keep from sending, which is where you are most
-likely to be standing.
+`ENABLED` — so it verifies the broker on the web tier you keep from sending, which is where you
+are most likely to be standing.
+
+The send is the opposite: `ENABLED=0` makes `enqueue` a no-op that still returns an id, so on a
+disabled process it proves nothing and the `message sent` line below never comes. Run it
+somewhere the flag is on, or set it for the length of the check.
 
 Then confirm the bot container logs `message sent`. If the depth answered and this does not,
 the queue is fine and the worker is not: see **[[Troubleshooting]]**.

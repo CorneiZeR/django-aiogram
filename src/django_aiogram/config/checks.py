@@ -780,12 +780,43 @@ def _bot_is_enabled() -> bool:
         return True
 
 
-def _filled_in_when_enabled(key: str, *, hint: str) -> list[Problem]:
+def _redis_is_in_use() -> bool:
+    """Whether anything this configuration selects actually connects to Redis.
+
+    ``REDIS_URL`` was a hard requirement while Redis was the only transport, and `W002` asked
+    every enabled bot for it. It is one setting among several now, so on a RabbitMQ or Kafka
+    deployment with memory storage that warning is about a key nothing reads — and a warning
+    about an unused setting is how an operator learns to stop reading warnings.
+
+    Two consumers, and either is enough: a Redis broker, or the Redis FSM storage. ``SHIPPED``
+    answers for the broker rather than the class, so this stays true where the driver is not
+    installed and imports nothing to find out.
+
+    A ``BROKER`` outside that table is somebody's own, and nothing here can know what it
+    connects with. The answer is then no: a missing warning costs a moment's confusion at the
+    first send, and a wrong one costs the credibility of every other warning in the list.
+    """
+    from django_aiogram.broker.registry import SHIPPED  # noqa: PLC0415 - only when the checks run
+
+    broker = str(conf.get('BROKER') or '').strip()
+    driver, _extra = SHIPPED.get(broker, ('', ''))
+    if driver == 'redis':
+        return True
+    return str(conf.get('FSM_STORAGE') or '').strip().lower() == StorageKind.REDIS.value
+
+
+def _filled_in_when_enabled(key: str, *, hint: str, only_if: Callable[[], bool] | None = None) -> list[Problem]:
     """Warn, never error, when an enabled bot has nothing to connect with.
 
     A project may legitimately boot without credentials — during migrations or
     image builds — so this must not be able to fail ``manage.py check``.
+
+    ``only_if`` narrows the rule to configurations that need the setting at all. `W001` needs
+    none: every deployment talks to Telegram. `W002` does, because since 4.0 three of the four
+    transports never open a Redis connection.
     """
+    if only_if is not None and not only_if():
+        return []
     if not _bot_is_enabled() or str(conf.get(key) or '').strip():
         return []
     return [Problem('is empty while the bot is enabled.', hint=hint)]
@@ -870,7 +901,11 @@ CHECKS: tuple[Check, ...] = (
         'REDIS_URL',
         partial(
             _filled_in_when_enabled,
-            hint='Set it, or set ENABLED to False in processes that never touch the queue.',
+            hint=(
+                'Set it: BROKER or FSM_STORAGE names Redis, so something here needs the URL. '
+                'Or set ENABLED to False in processes that never touch either.'
+            ),
+            only_if=_redis_is_in_use,
         ),
     ),
 )

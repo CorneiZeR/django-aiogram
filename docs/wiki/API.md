@@ -92,12 +92,19 @@ serializes each chunk between its awaits, and that part is ordinary CPU work on
 the loop's thread. A fan-out large enough to matter belongs in a task, not in a
 request.
 
-Each loop gets its own client, because `redis.asyncio` connections are loop-affine.
-`await bot.aclose()` closes the one belonging to the loop that calls it, and it is
-worth calling from a lifespan shutdown if your server has one — it is the only
-path that closes the connection on the loop it belongs to, which is the only loop
-that may close it. Without it the connection stays open until the client is
-collected, and Python may say so with a `ResourceWarning`. **[[Deployment]]** has
+**On the Redis transports**, each loop gets its own client, because `redis.asyncio`
+connections are loop-affine. `await bot.aclose()` closes the one belonging to the loop
+that calls it, and it is worth calling from a lifespan shutdown if your server has one —
+it is the only path that closes the connection on the loop it belongs to, which is the
+only loop that may close it. Without it the connection stays open until the client is
+collected, and Python may say so with a `ResourceWarning`.
+
+RabbitMQ and Kafka have no such client: their drivers are synchronous, so the awaiting
+half borrows a thread and publishes through the same connection the synchronous half
+uses. `aclose()` is a no-op there — it closes a Redis client those deployments never
+open — and the connection it did not close belongs to the process rather than to any
+loop. Nothing about the async API changes; what changes is that there is nothing for a
+lifespan shutdown to release. **[[Deployment]]** has
 the shutdown recipe.
 
 ### Queue introspection
