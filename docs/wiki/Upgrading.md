@@ -58,6 +58,33 @@ django_redis_aiogram_event` is yours to run, and this package will never run it 
 Nothing is detected from what happens to be installed. Name the broker you want, and the
 absence of its driver is a startup complaint rather than a runtime surprise.
 
+A 3.x project that changes nothing here keeps the transport it had: `BROKER` defaults to the
+Redis list, and `REDIS_URL`, `REDIS_MESSAGES_KEY`, `REDIS_TIMEOUT` and `BLPOP_TIMEOUT` mean
+exactly what they meant. **[[Settings]]** lists what each transport declares, and there is a page
+each — **[[Redis-list|Redis list]]**, **[[Redis-Streams|Redis Streams]]**, **[[RabbitMQ]]**,
+**[[Kafka]]** — for what one guarantees and what it needs running.
+
+### Switching transport is a drain, not a setting
+
+Nothing moves messages from one transport to another, and nothing can: a queued message is
+addressed to the queue it is in. So the switch has an order, and getting it wrong loses whatever
+was in flight.
+
+1. Stop the producers, or set `ENABLED=0` in them. They are what keeps the old queue filling.
+2. Let the bot container finish the old queue. `bot.queue_depth()` and `bot.inflight_depth()`
+   both have to reach zero — a message being sent is in the second, not the first.
+3. Change `BROKER` and the settings the new transport declares, in **every** process. A producer
+   left on the old transport writes to a queue nothing reads any more, and it will not complain:
+   both configurations are valid, they are simply not the same queue.
+4. Start the bot container first, then the producers. The reverse order queues messages nobody
+   is reading yet, which is harmless but indistinguishable from a broken deployment while you
+   watch it.
+
+Step 3 is the one worth checking twice. `manage.py check` refuses a `BROKER` whose driver is
+missing and a required setting that is empty, so a half-configured process usually fails at
+startup rather than silently — but a process still naming the *old* transport is a correct
+configuration, and nothing can tell it apart from one that meant it.
+
 ## Rename what used to say Redis
 
 Five public names said Redis, in the four entries below, for two different reasons — and the
