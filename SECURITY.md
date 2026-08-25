@@ -62,8 +62,8 @@ TELEGRAM_BOT = {
 
 Setting `'SERIALIZER': 'pickle'` is not enough on its own: the reader still
 refuses pickled payloads, so writing them means `'ALLOW_PICKLE': True` as well.
-Only do so if you must queue objects JSON cannot represent, and only with a
-Redis nothing untrusted can write to.
+Only do so if you must queue objects JSON cannot represent, and only where nothing untrusted
+can write to the queue `BROKER` names — the list or stream, the AMQP queue, the Kafka topic.
 
 Decoding a JSON payload will only instantiate `aiogram.types` members that
 subclass `TelegramObject`; a payload cannot name an arbitrary import path. Of
@@ -75,8 +75,8 @@ rebuilt — any other input-file type is rejected rather than resolved.
 A queued `FSInputFile` names a filesystem path, and the bot uploads that file
 to whatever chat the payload says. Anyone able to write to the queue can
 therefore read any file the bot container can — not just make Telegram calls.
-This is inherent to supporting file sends through the queue; it is another
-reason the Redis behind it must stay inside your own trust boundary.
+This is inherent to supporting file sends through the queue; it is another reason the broker
+behind it must stay inside your own trust boundary, whichever of the four it is.
 
 ## Tokens
 

@@ -1,7 +1,8 @@
 # Upgrading
 
-What each major release changed, newest first. Start at the section for the
-version you are on and work down.
+What each major release changed, newest first — so an upgrade is read from the bottom. Find
+the lowest section that applies to the version you are on and work **up** the page, one release
+at a time: each covers a single hop and assumes the ones below it are done.
 
 # From 3.1 to 4.0
 
@@ -357,7 +358,7 @@ python manage.py test
 Then, in a shell on a non-bot process:
 
 ```python
-from django_redis_aiogram import bot  # `django_aiogram` from 4.0 on — see the top of this page
+from django_redis_aiogram import bot  # the name at this hop; it changes again at 4.0
 
 bot.enabled  # False where you disabled it
 bot.send(chat_id=YOUR_ID, text='upgrade check')
