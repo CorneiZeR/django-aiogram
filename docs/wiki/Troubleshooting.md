@@ -46,9 +46,17 @@ redis-cli -n <db> llen TELEGRAM_BOT_MESSAGE
 
 `TELEGRAM_BOT_MESSAGE` is the default `REDIS_MESSAGES_KEY`; if you set your own, it
 is that key here and in every Redis path below. On a stream it is `XLEN`, on AMQP the
-queue's message count, on Kafka the lag of the consumer group — which is the reason to
-prefer the two calls above in anything you keep, an exporter especially. They answer
-the same question on every transport, and they read a scheme that is ours to change.
+queue's message count, on Kafka the lag of the consumer group — which is the reason to prefer
+`queue_depth()` in anything you keep, an exporter especially. It asks the same question on every
+transport, and it reads a scheme that is ours to change.
+
+`inflight_depth()` is **not** the same everywhere, and the difference decides where you can ask
+it. The Redis list keeps its in-flight messages on the server under the worker's name and Redis
+Streams keeps them in the group's pending list, so either can be read from anywhere — a monitor
+in the web tier included. RabbitMQ and Kafka have nothing to ask: neither protocol exposes
+"taken but not settled", so the count is kept in the worker's own memory. Asked anywhere else it
+answers **zero**, correctly and uselessly. On those two, run it in the bot container or read the
+broker's own tooling.
 
 A growing list does not by itself mean the consumer is stopped: producers can
 simply be outpacing it, and `MAX_IN_FLIGHT` deliberately holds intake back while

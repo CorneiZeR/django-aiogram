@@ -58,9 +58,15 @@ absence of its driver is a startup complaint rather than a runtime surprise.
 
 ## Rename what used to say Redis
 
-Four public names said where a message went. Where it goes is a setting now, so they are gone —
-removed rather than aliased, because an alias that outlives the release it was written for is a
-second name for the same thing for ever.
+Four public names said Redis, for two different reasons, and the table separates them.
+
+**Two were routing names.** `send_redis` and `asend_redis` said where a message went, and where
+it goes is a setting now — so they are gone, renamed rather than aliased, because an alias that
+outlives the release it was written for is a second name for the same thing for ever.
+
+**Two were client-access names**, and those *moved* rather than went: one transport's client is
+not the package's business to export from its front door, but the object is unchanged and still
+importable from the module that owns it.
 
 | 3.x | 4.0 | why |
 | --- | --- | --- |
