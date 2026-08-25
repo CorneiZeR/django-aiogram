@@ -45,10 +45,17 @@ redis-cli -n <db> llen TELEGRAM_BOT_MESSAGE
 ```
 
 `TELEGRAM_BOT_MESSAGE` is the default `REDIS_MESSAGES_KEY`; if you set your own, it
-is that key here and in every Redis path below. On a stream it is `XLEN`, on AMQP the
-queue's message count, on Kafka the lag of the consumer group — which is the reason to prefer
+is that key here and in every Redis path below. On a stream it is `XLEN`, on AMQP the queue's
+message count, on Kafka the lag of the consumer group — which is the reason to prefer
 `queue_depth()` in anything you keep, an exporter especially. It asks the same question on every
 transport, and it reads a scheme that is ours to change.
+
+Expect the shell figure and `queue_depth()` to disagree on Kafka while sends are in flight, and
+do not go looking for a bug: raw group lag counts every record past the committed offset,
+including the ones this process has taken and not yet settled, and `queue_depth()` subtracts
+those. The gap is what the worker is holding, so it closes as the sends finish. Offsets settle a
+contiguous prefix there, so the gap can also outlast the sends that caused it — see
+**[[Delivery]]**.
 
 `inflight_depth()` is **not** the same everywhere, and the difference decides where you can ask
 it. The Redis list keeps its in-flight messages on the server under the worker's name and Redis
