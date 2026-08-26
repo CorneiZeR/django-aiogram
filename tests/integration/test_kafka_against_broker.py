@@ -183,6 +183,7 @@ def test_producing_to_a_topic_that_cannot_be_created_is_refused(kafka_bootstrap)
             KafkaBroker().publish([payload(1)])
 
         assert refused.value.topic == bad, refused.value.topic
+        assert 'Invalid topic' in refused.value.reason, refused.value.reason
         assert 'Invalid topic' in str(refused.value), str(refused.value)
 
 

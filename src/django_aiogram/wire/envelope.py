@@ -47,7 +47,13 @@ class UnknownEnvelopeVersionError(DjangoRedisAiogramError, ValueError):
     """A payload was written by a newer version than this consumer understands."""
 
     def __init__(self, version: object) -> None:
-        """Name the version found and the newest one this consumer can read."""
+        """Name the version found and the newest one this consumer can read.
+
+        The version is kept: this is the one refusal whose message says the payload will make
+        sense later, so a caller counting how far ahead the writer is -- to decide whether the
+        upgrade is one release or three -- needs the number rather than the sentence.
+        """
+        self.version = version
         super().__init__(
             f'Queued payload declares envelope version {version!r}, but this consumer '
             f'reads up to {ENVELOPE_VERSION}. Upgrade the bot container first.',

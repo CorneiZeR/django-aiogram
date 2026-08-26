@@ -36,7 +36,13 @@ class LoopThreadNotStartedError(LoopUnavailableError):
     """The thread this process gives the loop did not start in time."""
 
     def __init__(self, timeout: float) -> None:
-        """Name the deadline, which is the only number worth acting on."""
+        """Name the deadline, which is the only number worth acting on.
+
+        Kept as an attribute for that reason: the webhook view answers a non-2xx from the class
+        alone, but a caller that wants to say *when* to come back has to read this number, and
+        reading it out of the sentence is not something a caller should be asked to do.
+        """
+        self.timeout = timeout
         super().__init__(
             f'the event loop thread did not start within {timeout}s, and driving '
             'the loop from this thread instead would put two threads on one loop. '
@@ -52,7 +58,13 @@ class UnknownApiMethodError(DjangoRedisAiogramError, ValueError):
     """A queued payload named something that is not a Telegram API method."""
 
     def __init__(self, function: str, method_count: int) -> None:
-        """Name the rejected method and how many the Bot API actually has."""
+        """Name the rejected method and how many the Bot API actually has.
+
+        The method is kept, because it is what was refused and it arrives from a queue as often
+        as from a caller. The count is not: it is ``len(API_METHODS)`` of the installed aiogram,
+        which anyone holding this exception can read for themselves.
+        """
+        self.function = function
         super().__init__(
             f'{function!r} is not a Telegram API method. Queued payloads may only '
             f'name one of the {method_count} methods aiogram exposes for the '

@@ -140,6 +140,11 @@ def test_a_publish_that_cannot_be_routed_raises(broker, broker_channel, amqp_url
         with pytest.raises(QueueRefusedError) as refused:
             broker.publish([payload(2)])
 
+        assert refused.value.queue == AMQP_QUEUE, refused.value.queue
+        # the pair, not just the queue: a caller deciding whether to retry reads what the
+        # broker said, and reading it out of the sentence is what this attribute replaced
+        assert refused.value.reason, 'the refusal carries no reason from the broker'
+        assert refused.value.reason in str(refused.value), 'the reason left the message'
         assert AMQP_QUEUE in str(refused.value), str(refused.value)
 
 
