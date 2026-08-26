@@ -91,13 +91,20 @@ Two variables, one secret: the broker wants the password as it is, the URL wants
 percent-encoded. Derive the second rather than typing it twice —
 
 ```shell
-# into `.env` beside the compose file, because that is where Compose reads its
-# interpolation values from. A plain assignment sets a shell variable, and Compose
-# interpolates from the *process* environment — so it would substitute an empty
-# password and the failure would look like a wrong credential
+# writes into `.env` beside the compose file, because that is where Compose reads
+# interpolation values from — a plain shell assignment is not visible to it, and the
+# substitution would be an empty password whose failure looks like a wrong credential.
+#
+# reads the password from `.env` as well, rather than from this shell: that is where it
+# already is, and a Python process does not inherit it from there
 python3 - >> .env <<'PY'
-import os, urllib.parse
-print('RABBITMQ_PASSWORD_URLENCODED=' + urllib.parse.quote(os.environ['RABBITMQ_PASSWORD'], safe=''))
+import pathlib, re, urllib.parse
+
+env = pathlib.Path('.env').read_text()
+found = re.search(r'^RABBITMQ_PASSWORD=(.*)$', env, re.MULTILINE)
+if not found:
+    raise SystemExit('set RABBITMQ_PASSWORD in .env first')
+print('RABBITMQ_PASSWORD_URLENCODED=' + urllib.parse.quote(found.group(1).strip(), safe=''))
 PY
 ```
 

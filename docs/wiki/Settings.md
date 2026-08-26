@@ -122,12 +122,13 @@ transport you are not using is reported by `W003` as a key nothing reads, which 
 #### Redis list
 
 The default transport's four, listed together here because the other three are. They also appear
-in the package table above, where they have been since Redis was the only transport; splitting
-that table into what the package owns and what a transport does is its own change.
+above, spread across the tables they landed in when Redis was the only transport — `REDIS_URL`
+under **Credentials**, the other three under **Queue** — and splitting those into what the
+package owns and what a transport does is its own change.
 
 | Setting | Default | Description |
 | ------- | ------- | ----------- |
-| `REDIS_URL` | `''` | Where the server is. Shared with the Streams transport and with the FSM storage, which is why it sits in the package table too |
+| `REDIS_URL` | `''` | Where the server is. Shared with the Streams transport and with the FSM storage, which is why it also sits under **Credentials** above |
 | `REDIS_MESSAGES_KEY` | `'TELEGRAM_BOT_MESSAGE'` | The list, and the prefix the in-flight and heartbeat keys derive from |
 | `REDIS_TIMEOUT` | `10` | The deadline on any single call. `E030` refuses anything below 2, because the pop has to sit a second inside it |
 | `BLPOP_TIMEOUT` | `5` | How often the blocking pop is interrupted to check for shutdown, capped at `min(HEARTBEAT_INTERVAL, REDIS_TIMEOUT - 1)` — `W004` says so and names the bound that binds |
