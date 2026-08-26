@@ -238,10 +238,14 @@ Entries land here as the work does; nothing below is released.
   Closed by two paths now, because neither covers the other. `bot.close()` releases it after the
   consumer thread is joined, which is deterministic and can still report what it failed to flush.
   An `atexit` hook, armed the first time a broker is built, covers every process that closes
-  nothing — the same shape the event log's writer has used all along. Both run on the main
-  thread, which is safe because each transport's `close()` already restricts what it touches from
-  a foreign one: pika asks the owning thread through `add_callback_threadsafe`, and librdkafka
-  flushes the process producer and closes only the calling thread's consumer.
+  nothing — the same shape the event log's writer has used all along.
+
+  Neither path can promise which thread it runs on. `atexit` runs during interpreter shutdown, on
+  the main thread; `bot.close()` runs wherever it is called from, and nothing restricts that. So
+  neither is guaranteed to be the thread that opened a given connection, which is why each
+  transport's `close()` already restricts what it touches from a foreign one: pika asks the owning
+  thread through `add_callback_threadsafe`, and librdkafka flushes the process producer and closes
+  only the calling thread's consumer.
 
 ### Changed
 

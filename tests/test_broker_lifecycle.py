@@ -14,10 +14,12 @@ full queue and a healthy-looking worker.
 
 Two mechanisms, because one is not enough. `bot.close()` releases it deterministically, which
 covers the commands. `atexit` covers everything else, in the same shape `EventRecorder` has used
-for its writer all along — and both are safe from the main thread because each transport's
-`close()` already restricts what it touches: pika asks the owning thread through
-`add_callback_threadsafe`, librdkafka flushes the process producer and closes only this
-thread's consumer.
+for its writer all along.
+
+Neither promises a thread — `atexit` runs on the main one at interpreter shutdown, `bot.close()`
+wherever its caller is — so each transport's `close()` already restricts what it touches from a
+thread that did not open it: pika asks the owner through `add_callback_threadsafe`, librdkafka
+flushes the process producer and closes only the calling thread's consumer.
 """
 
 import atexit

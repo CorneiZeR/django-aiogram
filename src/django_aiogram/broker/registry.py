@@ -102,10 +102,13 @@ def get_broker() -> Broker:
                 # nothing for that long. `EventRecorder` has armed an `atexit` for its writer
                 # all along; this is the same trade in the same shape.
                 #
-                # Safe from the main thread because each transport's `close()` already knows
-                # what it may touch from a foreign one: pika's asks the owning thread through
+                # This hook runs during interpreter shutdown, on the main thread, which is not
+                # the thread that opened a consumer's connection -- and `bot.close()`, the other
+                # path here, runs wherever a caller happens to be. Neither can promise the
+                # owning thread, which is why each transport's `close()` already restricts what
+                # it touches from a foreign one: pika's asks the owner through
                 # `add_callback_threadsafe`, and librdkafka's flushes the process producer and
-                # closes only this thread's consumer.
+                # closes only the calling thread's consumer.
                 atexit.register(close_broker)
                 _exit_hook_armed = True
     return _broker

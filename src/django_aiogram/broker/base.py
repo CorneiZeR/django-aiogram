@@ -271,8 +271,11 @@ class Broker(ABC):
 
         Called once, at shutdown, by two paths: `bot.close()`, which the long-running commands
         reach after joining the consumer, and an `atexit` hook the registry arms the first time
-        a broker is built — for the processes that only queue and never close anything. So this
-        runs on the **main** thread as often as not, and an implementation may only touch what
-        is safe to touch from a foreign one.
+        a broker is built — for the processes that only queue and never close anything.
+
+        **Neither promises a thread.** `atexit` runs on the main one during interpreter
+        shutdown; `bot.close()` runs wherever its caller is. So an implementation may only touch
+        what is safe to touch from a thread that did not open it — its own client, the process's
+        shared one — and must ask the owner for anything else.
         """
         return
