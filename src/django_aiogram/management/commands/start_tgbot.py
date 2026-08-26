@@ -105,7 +105,8 @@ class Command(BaseCommand):
         # Still before a thread exists, for the reason it always was: reading a broken setting
         # raises, and raised from the `finally` below it would skip `close()`, `collect()` and
         # `recorder.stop()`, stranding the drain's own messages
-        # asked of the registry rather than through `delivery.broker`: `DELIVERY` is a
+        #
+        # Asked of the registry rather than through `delivery.broker`: `DELIVERY` is a
         # documented extension point and `Testing.md` shows people writing their own, so
         # reaching into one for an attribute would make `.broker` a contract nobody declared.
         # The broker is process-global anyway -- the same instance the delivery holds
@@ -155,11 +156,11 @@ class Command(BaseCommand):
             shutting_down.set()
             delivery.stop()
             for thread in threads:
-                # derived from the bound that actually governs the thread: every
-                # call it makes is capped by REDIS_TIMEOUT, and its blocking pop
-                # by one less than that. BLPOP_TIMEOUT + 1 was six seconds against
-                # a worst case of ten, so a consumer that outlived the join went on
-                # to acknowledge a message close() had already refused
+                # derived from the bound that actually governs the thread, which is
+                # the transport's own call ceiling -- see where join_timeout is read.
+                # BLPOP_TIMEOUT + 1 was six seconds against a worst case of ten, so a
+                # consumer that outlived the join went on to acknowledge a message
+                # close() had already refused
                 thread.join(timeout=join_timeout)
                 if thread.is_alive():
                     logger.warning(

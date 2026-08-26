@@ -337,7 +337,6 @@ def test_no_warning_when_the_flag_agrees_with_the_setting():
     assert 'polled' in events
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'REDIS_TIMEOUT': 10})
 @override_settings(
     TELEGRAM_BOT={
         'TOKEN': '42:x',
