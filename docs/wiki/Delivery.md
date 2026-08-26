@@ -198,6 +198,12 @@ A handler that raises is logged the same way. Neither stops the worker.
 
 ## Shutting down
 
-`SIGTERM` — what `docker stop` sends — unwinds polling, stops the consumer,
-closes the aiogram session and the FSM storage. Messages already in the list
-stay there for the next start.
+`SIGTERM` — what `docker stop` sends — unwinds polling, stops the consumer, closes the aiogram
+session and the FSM storage, and then releases the transport: the queue's own connection, which
+on Kafka means flushing the producer and leaving the consumer group. Messages already queued stay
+there for the next start.
+
+A process that never calls `bot.close()` — a web tier that only queues — releases it at exit
+instead, through a hook armed the first time it builds a broker. Neither path is a substitute for
+the other: the first runs while the process is still healthy and can report what it could not
+flush, and the second is what covers a process with no shutdown code of its own.

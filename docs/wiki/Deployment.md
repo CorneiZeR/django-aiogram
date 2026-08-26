@@ -253,7 +253,9 @@ or park it:
 
 `SIGTERM` unwinds cleanly: polling stops, the consumer thread is joined, then
 `close()` drains the sends still in flight and shuts the aiogram session, the FSM
-storage and the loop; last, the messages that drain delivered are acknowledged. The
+storage, the loop and the transport — on Kafka that last one flushes the producer and leaves the
+consumer group, which is what keeps a restart from waiting out the session timeout before
+anything is delivered again. Last, the messages that drain delivered are acknowledged. The
 acknowledgement comes last because the drain is what finishes those sends, and the loop
 that would otherwise have acknowledged them stopped at the join — without this step a
 graceful stop would leave them to be sent again. Give the container enough grace period

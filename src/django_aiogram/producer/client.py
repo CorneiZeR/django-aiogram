@@ -29,7 +29,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 
 from django_aiogram.api import check_function
-from django_aiogram.broker.registry import get_broker
+from django_aiogram.broker.registry import close_broker, get_broker
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import EventKind, StorageKind
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
@@ -854,6 +854,12 @@ class TelegramBot:
                         loop.close()
             self._loop = None
         finally:
+            # the transport too, and here rather than only at exit: `start_tgbot` joins the
+            # consumer thread before calling this, so by now nothing is taking from the broker
+            # and a flush cannot race a read. The `atexit` hook stays armed for the processes
+            # that never call `close` -- a web tier that only queues -- and `close_broker` is
+            # idempotent, so being reached twice costs nothing
+            close_broker()
             # a closed bot can be built again, so neither of these may stick, and they are
             # cleared in the mirror order: `_closing` first, so nothing sees
             # closing-without-draining on the way out either
