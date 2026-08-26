@@ -14,6 +14,7 @@ registry ``redis.asyncio`` needs, and for the same reason.
 
 import itertools
 import threading
+import weakref
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
@@ -45,8 +46,15 @@ _channels = itertools.count(1)
 _generation = threading.local()
 #: every connection this process opened, so `close_connections` can reach the ones it did not
 #: open itself — a test switching settings runs on the thread it is testing from, and a
-#: consumer thread's connection would otherwise outlive the settings that built it
-_opened: list[Any] = []
+#: consumer thread's connection would otherwise outlive the settings that built it.
+#
+#: **Weak, because the owner is a thread and a thread can end.** A strong list was pruned only
+#: by a close that went through this module, so a worker thread that exited without closing left
+#: its connection referenced for the life of the process, holding its socket with it — bounded
+#: only by how often `close_connections` runs, which in a long-lived server is "at shutdown".
+#: Measured: a `BlockingConnection` built on a pool worker is collected as soon as that worker
+#: is gone, so weak references are enough here and nothing else has to notice the thread ending
+_opened: 'weakref.WeakSet[Any]' = weakref.WeakSet()
 _lock = threading.Lock()
 
 
@@ -108,7 +116,7 @@ def channel_for_thread(url: str, queue: str, prefetch: int, blocked_timeout: flo
     _local.identity, _local.connection, _local.channel = identity, connection, channel
     _local.generation = _generation.count
     with _lock:
-        _opened.append(connection)
+        _opened.add(connection)
     return channel
 
 
@@ -118,7 +126,7 @@ def _drop_this_threads_connection() -> None:
     if connection is None:
         return
     with _lock:
-        _opened[:] = [held for held in _opened if held is not connection]
+        _opened.discard(connection)
     with suppress(Exception):
         connection.close()
     for attribute in ('identity', 'connection', 'channel', 'generation'):
@@ -157,8 +165,12 @@ def close_connections(**_kwargs: object) -> None:
     """
     mine = getattr(_local, 'connection', None)
     with _lock:
+        # listed inside the lock and left the set outside it: a `WeakSet` may drop an entry
+        # during iteration when the last strong reference goes, and a set that changes size
+        # while it is being walked raises rather than skipping
         others = [connection for connection in _opened if connection is not mine]
-        _opened[:] = [connection for connection in _opened if connection is mine and mine is not None]
+        for connection in others:
+            _opened.discard(connection)
     for connection in others:
         with suppress(Exception):
             connection.add_callback_threadsafe(connection.close)

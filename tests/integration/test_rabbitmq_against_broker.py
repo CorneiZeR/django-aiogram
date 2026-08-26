@@ -12,7 +12,9 @@ what a killed worker does to it, so that is what this arranges.
 """
 
 import asyncio
+import gc
 import threading
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -438,8 +440,43 @@ def test_a_connection_whose_setup_fails_is_closed(broker, amqp_url, monkeypatch)
 
     assert opened, 'the setup was never reached, so this proves nothing'
     assert not opened[0].is_open, 'the abandoned connection was left open'
-    assert client._opened == [], f'it was recorded anyway: {client._opened}'
+    assert not client._opened, f'it was recorded anyway: {list(client._opened)}'
     assert real is not None  # the patched method is restored by monkeypatch
+
+
+def test_a_connection_whose_thread_is_gone_is_not_held(broker, amqp_url, broker_channel):
+    """The registry has to be able to reach a foreign connection, and must not be why it lives.
+
+    `_opened` exists because pika allows another thread exactly one operation on a
+    `BlockingConnection` — `add_callback_threadsafe` — so `close_connections` can ask a
+    connection it did not open to close itself, and asking needs a reference.
+
+    A **strong** reference made that job into a leak. The list was pruned only by a close that
+    went through this module, so a worker thread that ended without closing left its connection
+    referenced for the life of the process, with its socket. The growth was bounded by how often
+    `close_connections` runs — at shutdown and on a settings change — which in a server with a
+    pool of worker threads is not often.
+
+    Arranged with a pool of one, shut down. After that there is no thread and no thread-local
+    slot, so anything still holding the connection is this module and nothing else.
+    """
+    from django_aiogram.broker.rabbitmq import client
+
+    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+        pool = ThreadPoolExecutor(max_workers=1)
+        pool.submit(broker.publish, [payload(21)]).result()
+
+        # a weak reference and never a strong one: holding the connection to assert about it
+        # would be the very reference this case is looking for
+        assert len(client._opened) == 1, f'the publish opened {len(client._opened)} connections on that thread'
+        ref = weakref.ref(next(iter(client._opened)))
+        assert ref() is not None
+
+        pool.shutdown(wait=True)
+        gc.collect()
+
+        assert ref() is None, 'the connection outlived the thread that owned it'
+        assert not client._opened, f'the registry is still holding it: {list(client._opened)}'
 
 
 def test_the_in_flight_count_forgets_a_lost_channel(broker, amqp_url):
