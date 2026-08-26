@@ -25,6 +25,11 @@ and what it needs from you differs enough to be worth a page each:
 | **[[RabbitMQ]]** | at-least-once, the broker's doing | no | automatic: a dropped channel requeues |
 | **[[Kafka]]** | at-least-once, the group's doing | no | automatic: an uncommitted offset replays |
 
+A payload's size is the transport's business too, and the ceilings are not comparable: Kafka's
+default is around a megabyte while the Redis and AMQP ones are orders larger. This package
+configures none of them, so each page names the setting that governs its own — and the reason it
+matters at all is `BufferedInputFile`, which queues a file's *bytes*.
+
 The rest of this page is what the consumer does with any of them.
 
 `DELIVERY` is a separate and much smaller choice: it names the consumer *class*, and `'blpop'` is
@@ -46,9 +51,11 @@ containers is safe, though a single one handles a lot: the limits in
 ## Crash safety
 
 A message taken and not yet sent has to survive the worker being killed, and each
-transport records that its own way. The guarantee is the same — **at-least-once**,
-so a crash can cause a duplicate send — and what an operator has to do about it is
-not.
+transport records that its own way. The guarantee is **at-least-once** — so a crash can cause a
+duplicate send — everywhere except one case: a Redis list on a server without `BLMOVE`, where
+the consumer falls back to plain pops and the guarantee drops to at-most-once. That is the row
+the table above marks, and `REQUIRE_CRASH_SAFE` refuses to start there. What an operator has to
+do about the guarantee differs by transport even where the guarantee does not.
 
 **Redis list.** On Redis 6.2+ the message is moved to `<queue>:processing:<worker>`
 while it is being sent and removed once the send has actually finished. A worker

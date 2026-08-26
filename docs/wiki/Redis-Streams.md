@@ -79,5 +79,7 @@ RabbitMQ. `scripts/measurements` re-takes all three.
   already has entries starts at the beginning rather than skipping what nobody has read.
 - `bot.inflight_depth()` reads the group's pending list off the server, so any process can ask
   it. Like the list and unlike the other two, the answer does not depend on which process asks.
+- **What a payload may weigh** is `proto-max-bulk-len`, exactly as on the list — same server,
+  same limit — with the same caution about `BufferedInputFile` putting file bytes in the entry.
 - `decode_responses` on a shared `REDIS_URL` is the same trap it is on the list, and `E043`
   refuses the same combination.

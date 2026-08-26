@@ -86,6 +86,13 @@ waiting, and the bulk path is faster for it too.
 
 ## Where it shows through
 
+- **What a payload may weigh is smallest here, by a wide margin, and it is the one to check
+  before sending files.** Two settings have to agree: `message.max.bytes` on the broker and the
+  producer's own, and the driver's default is around a megabyte where the Redis and AMQP limits
+  are orders larger. This package sets neither, so an oversized publish is refused by the driver
+  rather than truncated — but a `BufferedInputFile` carries the file's bytes in the payload, so
+  a photo is where a deployment meets this. Raise both settings together, or queue
+  `FSInputFile`/`URLInputFile`, which send a reference.
 - One producer per process, because librdkafka's is thread-safe and keeps its own I/O thread. One
   consumer per **thread**, because its consumer is not — and because a second consumer would be a
   second group member taking a share of the partitions.

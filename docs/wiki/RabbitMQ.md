@@ -74,6 +74,9 @@ rather than the multiple.
   mean a second way of talking to the broker for a number the contract defines as this worker's.
   So the reading is only meaningful inside the bot container; from a web process it is zero, and
   correctly so. `queue_depth()` has no such limitation.
+- **What a payload may weigh** is `max_message_size` in the broker's configuration, which this
+  package does not set. Large by default and larger than Kafka's, so the limit you meet first on
+  this transport is usually the disk the persistence writes to rather than the size itself.
 - The connection registry outlives the threads that owned its entries, which is a known
   rough edge rather than a designed one — a thread that exits without closing leaves its entry
   behind.

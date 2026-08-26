@@ -212,7 +212,7 @@ Entries land here as the work does; nothing below is released.
   broker's own `trim()` stops at the oldest unacknowledged entry.
 
 - **A page per transport in the wiki** — **Redis list**, **Redis Streams**, **RabbitMQ** and
-  **Kafka** — each stating what it guarantees, what it needs installed and running, what a
+  **Kafka** — each stating what it guarantees, which services must be installed and running, what a
   publish costs with the figure measured rather than remembered, and where its own machinery
   shows through. **Delivery** is about the contract now and points at them for the rest, with a
   table of the three differences that change an operator's job: crash safety, whether a worker

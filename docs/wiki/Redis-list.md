@@ -93,6 +93,11 @@ here more than anywhere: an unbounded list turns draining a backlog into quadrat
 - `bot.inflight_depth()` reads that list off the server, so any process can ask it — and naming
   another worker is how a monitor sees what a dead one left. Only two of the four transports can
   answer that from outside the worker; this is one.
+- **What a payload may weigh** is `proto-max-bulk-len` on the server, and this package sets
+  nothing: whatever your Redis allows is what a message may be. Generous by default, and the
+  reason it can matter at all is `BufferedInputFile` — queueing one puts the file's bytes in the
+  payload, so a document sent that way is a queue entry of that size. Prefer `FSInputFile` or
+  `URLInputFile` where you can; both queue a reference rather than the contents.
 - `decode_responses` in a `REDIS_URL` shared with a cache backend meets bytes it cannot decode.
   `E043` refuses that combination when pickle is allowed, because the failure lands inside
   redis-py before any code here runs.
