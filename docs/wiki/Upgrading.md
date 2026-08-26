@@ -102,6 +102,18 @@ missing and a required setting that is empty, so a half-configured process usual
 startup rather than silently — but a process still naming the *old* transport is a correct
 configuration, and nothing can tell it apart from one that meant it.
 
+### The shutdown budget follows it too
+
+`stop_grace_period` is computed from a table on **[[Deployment]]**, and its first row used to be
+`REDIS_TIMEOUT + 1` for every deployment. It is the timeout of the transport you chose now —
+`RABBITMQ_TIMEOUT` or `KAFKA_TIMEOUT` where those apply — because that is the bound the consumer
+thread actually sits inside, and a join shorter than it lets a consumer outlive the shutdown that
+joined it.
+
+Nothing to change if you keep the defaults: all four default their own timeout to ten, so the
+total is the 21 seconds it was. It matters the moment you raise one, and the setting to raise
+alongside it is the grace period, not `REDIS_TIMEOUT`.
+
 ## Rename what used to say Redis
 
 Five public names said Redis, in the four entries below, for two different reasons — and the

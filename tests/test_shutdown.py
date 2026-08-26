@@ -78,12 +78,15 @@ def running_loop(instance):
 def test_the_join_bound_is_read_before_the_threads_it_bounds(monkeypatch):
     """A setting read inside `finally` takes the whole teardown with it when it refuses.
 
-    `read_timeout()` raises `ValueError` on a non-numeric `REDIS_TIMEOUT`, and in polling
-    mode nothing else in the process reads that setting — so the *first* call could be the
-    `thread.join(timeout=read_timeout() + 1)` inside the teardown. From there the exception
-    skipped `bot.close()`, `delivery.collect()` and `recorder.stop()`, and without
-    `collect()` every message the drain had finished stays in the in-flight list for the
-    next start to send again: a graceful stop duplicating what only a kill should.
+    The bound is `get_broker().call_ceiling + 1` since 4.0 — the transport's own deadline
+    rather than `REDIS_TIMEOUT`, which bounded a thread on three transports that never read
+    it. That widened the ways this read can refuse rather than narrowing them: a non-numeric
+    setting still raises, and Kafka's ceiling additionally rejects a value librdkafka would
+    not take. So the *first* call must not be the `thread.join(...)` inside the teardown,
+    because from there the exception skipped `bot.close()`, `delivery.collect()` and
+    `recorder.stop()` — and without `collect()` every message the drain had finished stays in
+    the in-flight list for the next start to send again: a graceful stop duplicating what only
+    a kill should.
 
     Asserted on the *order*, which is the whole claim: the bound is read before any thread
     exists. A call count cannot separate the two designs — a consumer thread that has
@@ -122,13 +125,13 @@ def test_the_join_bound_is_read_before_the_threads_it_bounds(monkeypatch):
         ),
     )
 
-    real = command_module.read_timeout
+    real = command_module.get_broker
 
     def note_the_read():
         order.append('bound')
         return real()
 
-    monkeypatch.setattr(command_module, 'read_timeout', note_the_read)
+    monkeypatch.setattr(command_module, 'get_broker', note_the_read)
     release = threading.Event()
     monkeypatch.setattr(StartCommand, 'idle_event', release)
     # released from another thread, not pre-set: the consumer starts from a `call_soon`

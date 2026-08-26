@@ -11,7 +11,22 @@ from django.core.management import CommandError, call_command
 from django.test import override_settings
 
 from django_aiogram import bot
+from django_aiogram.broker.redis_list import RedisListBroker
 from django_aiogram.management.commands.start_tgbot import Command
+
+
+class DeliberateCeilingBroker(RedisListBroker):
+    """A transport whose own deadline is nothing like `REDIS_TIMEOUT`.
+
+    Named by dotted path from `BROKER`, so it has to live at module scope. Subclasses the list
+    broker rather than `Broker` because that needs no driver the unit legs might not install —
+    the point is only that `call_ceiling` answers something `REDIS_TIMEOUT` never would.
+    """
+
+    @property
+    def call_ceiling(self) -> float:
+        """Distinctive on purpose: 37 is not the default of any setting in this package."""
+        return 37.0
 
 
 class RecordingDelivery:
@@ -322,14 +337,26 @@ def test_no_warning_when_the_flag_agrees_with_the_setting():
     assert 'polled' in events
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'REDIS_TIMEOUT': 10})
-def test_the_consumer_join_is_derived_from_the_read_deadline(monkeypatch):
-    """`BLPOP_TIMEOUT + 1` was six seconds against a worst case of ten.
+@override_settings(
+    TELEGRAM_BOT={
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost:6379/0',
+        'REDIS_TIMEOUT': 10,
+        'BROKER': 'tests.test_start_command.DeliberateCeilingBroker',
+    }
+)
+def test_the_consumer_join_is_derived_from_the_transports_own_deadline(monkeypatch):
+    """The join has to bound the thread it joins, so it comes from that transport's deadline.
 
-    Every call the consumer makes is bounded by `REDIS_TIMEOUT`, and its blocking
-    pop by one less than that — so the old deadline could expire while the thread
-    was still inside a legitimate call, and the consumer that came back would
+    `BLPOP_TIMEOUT + 1` was six seconds against a worst case of ten, and the fix for that read
+    `REDIS_TIMEOUT` — which three of the four transports never read. A consumer could then be
+    inside a call the join had already given up on, and the worker that came back would
     acknowledge a message `close()` had already refused.
+
+    The broker here answers **37** where `REDIS_TIMEOUT` is 10, which is the whole reason this
+    case can fail: every shipped transport defaults its own timeout to 10, so an assertion made
+    on the defaults passes under either design and proves nothing. That is how the defect
+    survived — the arithmetic was wrong and every number it produced was right.
     """
     joined = []
 
@@ -347,7 +374,7 @@ def test_the_consumer_join_is_derived_from_the_read_deadline(monkeypatch):
 
     call_command('start_tgbot')
 
-    assert joined == [11], f'joined with {joined}, expected the read deadline plus one'
+    assert joined == [38], f'joined with {joined}, expected the transport ceiling of 37 plus one'
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})

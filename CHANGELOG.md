@@ -222,6 +222,19 @@ Entries land here as the work does; nothing below is released.
 
 ### Fixed
 
+- **The shutdown join is bounded by the transport being joined, not by `REDIS_TIMEOUT`.** That
+  setting bounded the consumer thread on all four transports, three of which never read it — so
+  the join could give up while the thread was still inside a legitimate call, and a worker that
+  outlives its join goes on to acknowledge a message `close()` has already refused, which is
+  3.1.0's B3 arriving through a different door. Measured at `KAFKA_TIMEOUT = 45`: the join now
+  waits 46 seconds where it used to wait 11.
+
+  `Broker.call_ceiling` is the seam's answer to how long one call into a transport may take,
+  abstract so a new one cannot forget it. The published grace arithmetic in **Deployment** follows
+  it; on the default transport with default settings the number is unchanged, which is exactly why
+  this was invisible — every shipped transport defaults its own timeout to 10, so the wrong
+  arithmetic produced the right answer everywhere anybody looked.
+
 - **The transport is closed at shutdown, which it never was.** `Broker.close()` documented
   itself as "called once, at shutdown" and the only path to it was the `setting_changed`
   receiver — a signal that fires in a test suite and never in a deployment. `bot.close()` tore

@@ -257,6 +257,27 @@ class Broker(ABC):
         """
 
     @property
+    @abstractmethod
+    def call_ceiling(self) -> float:
+        """The longest a single call into this transport may take, in seconds.
+
+        Abstract, and answered from the transport's own setting — ``REDIS_TIMEOUT``,
+        ``RABBITMQ_TIMEOUT``, ``KAFKA_TIMEOUT`` — because two things outside this class are
+        derived from it and both were wrong while `REDIS_TIMEOUT` stood in for all four:
+
+        * the deadline `start_tgbot` gives its `join`. Shorter than a call the consumer thread
+          can still be inside, and a worker that outlives the join goes on to acknowledge a
+          message `close()` has already refused, which is 3.1.0's B3 in a new place. Longer,
+          and a `docker stop` spends grace the rest of the shutdown budgeted for.
+        * the cap the consumer applies to `take`, so a blocking read returns before the
+          deadline that would otherwise fire underneath it.
+
+        A number rather than a setting name, because a caller needs the arithmetic and not the
+        key: `checks.py` compares it against `BLPOP_TIMEOUT` and `HEARTBEAT_INTERVAL`, and
+        naming the key there would put a Redis string in a message a Kafka deployment reads.
+        """
+
+    @property
     def needs_identity(self) -> bool:
         """Whether this broker needs a stable name for each worker.
 

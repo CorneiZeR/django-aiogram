@@ -17,13 +17,13 @@ from typing import Any
 from django.core.management import BaseCommand, CommandError
 
 from django_aiogram import bot
+from django_aiogram.broker.registry import get_broker
 from django_aiogram.config.enums import UpdateMode
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 from django_aiogram.consumer.delivery import Delivery, get_delivery
 from django_aiogram.consumer.webhook import MODES, current_mode
 from django_aiogram.eventlog.events import worker_identity
 from django_aiogram.eventlog.recorder import recorder
-from django_aiogram.redis import read_timeout
 
 logger = logging.getLogger('django_aiogram')
 
@@ -95,10 +95,22 @@ class Command(BaseCommand):
 
         delivery = get_delivery(handler=bot.send_raw)
         self._preflight(delivery)
-        # before a thread exists, because `read_timeout()` refuses a non-numeric
-        # `REDIS_TIMEOUT` — and raised from the `finally` below it would skip `close()`,
-        # `collect()` and `recorder.stop()`, stranding the drain's own messages
-        join_timeout = read_timeout() + 1
+        # the transport's own deadline, not `REDIS_TIMEOUT`: this bounds the thread being
+        # joined below, and reading it from one transport's setting meant a consumer could be
+        # inside a call the join had already given up on. Measured: at `KAFKA_TIMEOUT = 45`
+        # the old arithmetic gave the join 11 seconds for a call that may take 45, and a
+        # worker outliving its join acknowledges a message `close()` has already refused --
+        # 3.1.0's B3 arriving through a different door.
+        #
+        # Still before a thread exists, for the reason it always was: reading a broken setting
+        # raises, and raised from the `finally` below it would skip `close()`, `collect()` and
+        # `recorder.stop()`, stranding the drain's own messages
+        #
+        # Asked of the registry rather than through `delivery.broker`: `DELIVERY` is a
+        # documented extension point and `Testing.md` shows people writing their own, so
+        # reaching into one for an attribute would make `.broker` a contract nobody declared.
+        # The broker is process-global anyway -- the same instance the delivery holds
+        join_timeout = get_broker().call_ceiling + 1
         threads: list[threading.Thread] = []
 
         # Both modes: starting the consumer before the loop runs would let a
@@ -144,11 +156,11 @@ class Command(BaseCommand):
             shutting_down.set()
             delivery.stop()
             for thread in threads:
-                # derived from the bound that actually governs the thread: every
-                # call it makes is capped by REDIS_TIMEOUT, and its blocking pop
-                # by one less than that. BLPOP_TIMEOUT + 1 was six seconds against
-                # a worst case of ten, so a consumer that outlived the join went on
-                # to acknowledge a message close() had already refused
+                # derived from the bound that actually governs the thread, which is
+                # the transport's own call ceiling -- see where join_timeout is read.
+                # BLPOP_TIMEOUT + 1 was six seconds against a worst case of ten, so a
+                # consumer that outlived the join went on to acknowledge a message
+                # close() had already refused
                 thread.join(timeout=join_timeout)
                 if thread.is_alive():
                     logger.warning(

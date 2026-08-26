@@ -226,6 +226,15 @@ class RedisListBroker(Broker):
         return Liveness(reported=True, age=max(0.0, time.time() - written))
 
     @property
+    def call_ceiling(self) -> float:
+        """``REDIS_TIMEOUT``, the deadline every call this transport makes carries.
+
+        The socket deadline rather than ``BLPOP_TIMEOUT``: the pop is asked to wait for less
+        than this on purpose, so the longest a call can take is the deadline, not the wait.
+        """
+        return float(max(1, int(str(self.option('REDIS_TIMEOUT')))))
+
+    @property
     def crash_safe(self) -> bool:
         """False on a Redis without ``LMOVE``, where the pop and the send are two steps."""
         return self._reliable

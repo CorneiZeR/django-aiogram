@@ -515,6 +515,16 @@ class KafkaBroker(Broker):
         return self.inflight_depth()
 
     @property
+    def call_ceiling(self) -> float:
+        """``KAFKA_TIMEOUT``, validated the way every other reader of it is.
+
+        Through `_timeout()` rather than `option` directly, so a value librdkafka would refuse
+        is reported here as well — a ceiling read from a setting nobody can use is a number
+        the join deadline would then be derived from.
+        """
+        return self._timeout()
+
+    @property
     def crash_safe(self) -> bool:
         """True, and the group is what makes it true.
 
