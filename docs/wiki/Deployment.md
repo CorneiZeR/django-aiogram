@@ -270,7 +270,7 @@ container, which is what this table is about:
 
 | wait | bounded by | default |
 | --- | --- | --- |
-| joining the consumer thread | `REDIS_TIMEOUT` + 1 | 11s |
+| joining the consumer thread | the transport's own deadline + 1 — `REDIS_TIMEOUT`, `RABBITMQ_TIMEOUT` or `KAFKA_TIMEOUT` | 11s |
 | draining in-flight sends | `DRAIN_TIMEOUT` | 5s |
 | flushing the event log | `recorder.STOP_TIMEOUT` | 5s |
 
@@ -283,7 +283,7 @@ updates in flight, then up to five seconds joining the loop thread, then
 web tier calls `bot.close()` on shutdown, size its grace period on that. Raise `DRAIN_TIMEOUT` if
 your sends spend long in the rate limiter — before 3.1.0 it was hardcoded at five
 seconds and no grace period could buy more. Watch the other direction too:
-raising `REDIS_TIMEOUT` raises the join, and a grace period shorter than the sum
+raising the transport's timeout raises the join, and a grace period shorter than the sum
 means Docker sends `SIGKILL` partway through, which is exactly the crash the
 in-flight list exists to survive.
 
