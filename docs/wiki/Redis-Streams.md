@@ -68,7 +68,8 @@ which is the honest shape: with no per-worker state there is no per-worker answe
 An `XADD` took 116 to 124 microseconds on the same laptop and container as the list's 120 to
 147 — that is, at or just inside it. Both are one round trip to the same server, and the claim
 that survives repetition is the ordering rather than the ratio: Streams ≤ list < Kafka <
-RabbitMQ. `scripts/measurements` re-takes all three.
+RabbitMQ. Three scripts cover the four, since one baseline measures both Redis transports:
+`scripts/measurements` re-takes them.
 
 ## Where it shows through
 

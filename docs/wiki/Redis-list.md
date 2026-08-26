@@ -1,7 +1,8 @@
 # Redis list
 
-The transport 3.x had, and the default in 4.0 so that an upgrading project changes its imports
-and nothing else. A Redis list holds the queue: `RPUSH` to publish, a blocking pop to take.
+This is the transport 3.x used, and it stays the default in 4.0 so that an upgrading project
+changes its imports and nothing else. A Redis list holds the queue: `RPUSH` to publish, a
+blocking pop to take.
 
 ```python
 TELEGRAM_BOT = {

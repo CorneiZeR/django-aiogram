@@ -219,8 +219,9 @@ one `getUpdates` consumer per bot.
 
 Each message goes to one worker on every transport — an atomic pop, a consumer group handing
 an entry to one member, a broker delivering once — but that is ownership, not exactly-once.
-Delivery is at-least-once by design, so the question is which duplicates *this* transport
-produces:
+Delivery is at-least-once wherever the transport can recover a message it handed out — every
+one here except a Redis list without `LMOVE`, which is at-most-once and loses rather than
+duplicates. So the question is which duplicates *this* transport produces:
 
 | Transport | Where a duplicate comes from |
 | --- | --- |

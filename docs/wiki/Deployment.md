@@ -91,12 +91,20 @@ Two variables, one secret: the broker wants the password as it is, the URL wants
 percent-encoded. Derive the second rather than typing it twice —
 
 ```shell
-RABBITMQ_PASSWORD_URLENCODED=$(python3 -c \
-  'import os,urllib.parse; print(urllib.parse.quote(os.environ["RABBITMQ_PASSWORD"], safe=""))')
+# into `.env` beside the compose file, because that is where Compose reads its
+# interpolation values from. A plain assignment sets a shell variable, and Compose
+# interpolates from the *process* environment — so it would substitute an empty
+# password and the failure would look like a wrong credential
+python3 - >> .env <<'PY'
+import os, urllib.parse
+print('RABBITMQ_PASSWORD_URLENCODED=' + urllib.parse.quote(os.environ['RABBITMQ_PASSWORD'], safe=''))
+PY
 ```
 
 — because two hand-written values drift, and the drift shows up as an authentication failure
-that points at the credential rather than at the encoding.
+that points at the credential rather than at the encoding. `env_file: .env` is a different
+mechanism and does not help here: it hands variables to the *container*, while `${...}` in the
+compose file is substituted before that, from Compose's own environment and `.env`.
 
 **Kafka.** Read **[[Kafka]]** before this one rather than after: ordering is per partition and a
 refusal replays a run of messages, and neither is something to discover in production.

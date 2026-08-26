@@ -62,10 +62,17 @@ def tabulated(text: str) -> set[str]:
 
 
 def test_every_shipped_broker_has_a_page():
-    """A transport nobody can read about is a transport nobody should be offered."""
+    """A transport nobody can read about is a transport nobody should be offered.
+
+    Both halves: a broker with no entry in the mapping, and an entry pointing at a file that
+    is not there. Comparing the two key sets alone passed with the page deleted, which made
+    this the one case in the file that could not fail for the reason it names.
+    """
     assert sorted(PAGES) == sorted(SHIPPED), (
         f'pages are mapped for {sorted(PAGES)}, brokers shipped are {sorted(SHIPPED)}'
     )
+    absent = sorted(name for name in PAGES.values() if not (WIKI / name).is_file())
+    assert absent == [], f'mapped but missing from docs/wiki: {absent}'
 
 
 @pytest.mark.parametrize('path', sorted(PAGES))
