@@ -95,7 +95,8 @@ class UnknownInputFileKindError(SerializationError):
     """A payload named an input file kind this version cannot rebuild."""
 
     def __init__(self, kind: object) -> None:
-        """Name the refused kind."""
+        """Name the refused kind, and keep it: it came off the queue, not from the caller."""
+        self.kind = kind
         super().__init__(f'Unknown input file type {kind!r}.')
 
 
@@ -103,7 +104,8 @@ class UnknownModelError(SerializationError):
     """A payload named a class that is not an aiogram type."""
 
     def __init__(self, name: str) -> None:
-        """Name the refused class."""
+        """Name the refused class, and keep it: it came off the queue, not from the caller."""
+        self.name = name
         super().__init__(f'{name!r} is not an aiogram type.')
 
 

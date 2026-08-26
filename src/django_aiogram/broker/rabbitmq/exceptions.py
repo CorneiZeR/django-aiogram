@@ -21,8 +21,15 @@ class QueueRefusedError(BrokerError):
     """
 
     def __init__(self, queue: str, reason: str) -> None:
-        """Name the queue and what the broker said, since neither is guessable from a trace."""
+        """Name the queue and what the broker said, since neither is guessable from a trace.
+
+        Both kept as attributes as well as formatted into the message, the same pair
+        :class:`~django_aiogram.broker.kafka.exceptions.ProduceRefusedError` keeps: a caller
+        deciding whether to retry is asking the same question on either transport, and on this
+        one it had to match on English to answer it.
+        """
         self.queue = queue
+        self.reason = reason
         super().__init__(
             f'RabbitMQ refused a message for queue {queue!r}: {reason}. The queue may not '
             f'exist, or the broker may be out of resources — a publish here is confirmed, so '

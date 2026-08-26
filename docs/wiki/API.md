@@ -294,14 +294,29 @@ nor the ORM so a metrics module can import it at settings time. See
 from django_aiogram.exceptions import DjangoRedisAiogramError
 ```
 
-| | Raised when |
-| --- | --- |
-| `DjangoRedisAiogramError` | base of everything this package raises |
-| `SerializationError` | a payload cannot be encoded, or cannot be decoded |
-| `UnknownApiMethodError` | a call names something that is not a Telegram API method |
-| `LoopUnavailableError` | there is no event loop this call can use; also a `RuntimeError` |
-| `ShuttingDownError` | the bot is closing, so the send was refused rather than queued for a loop that will not run it — a webhook view answers 503 on this, and Telegram redelivers |
-| `LoopThreadNotStartedError` | the loop exists but nothing is turning it, so a hand-off would never be stepped |
+| | Raised when | Carries |
+| --- | --- | --- |
+| `DjangoRedisAiogramError` | base of everything this package raises | |
+| `SerializationError` | a payload cannot be encoded, or cannot be decoded | |
+| `UnknownApiMethodError` | a call names something that is not a Telegram API method | `function` |
+| `LoopUnavailableError` | there is no event loop this call can use; also a `RuntimeError` | |
+| `ShuttingDownError` | the bot is closing, so the send was refused rather than queued for a loop that will not run it — a webhook view answers 503 on this, and Telegram redelivers | |
+| `LoopThreadNotStartedError` | the loop exists but nothing is turning it, so a hand-off would never be stepped | `timeout` |
+| `MalformedEnvelopeError` | a queued payload is not a shape any version of this package wrote | |
+| `UnknownEnvelopeVersionError` | a queued payload was written by a newer version than this consumer reads | `version` |
+| `UnknownInputFileKindError` | a queued payload names an input file kind this version cannot rebuild | `kind` |
+| `UnknownModelError` | a queued payload names a class that is not an aiogram type | `name` |
+
+The **Carries** column is the part a caller may act on. Everything is in the message as well,
+but an attribute is a decision a program can make: which method was refused, how long the loop
+was waited for, how far ahead the writer of a payload is. Nothing else is kept — a value the
+caller already has, or one it can read out of its own settings, stays in the sentence.
+
+The transports refuse a publish in the same shape as each other, and each carries the pair.
+`QueueRefusedError` from RabbitMQ carries `queue` and `reason`. `ProduceRefusedError` from Kafka
+carries `topic` and `reason`. The reason is what the broker or the driver said rather than a
+sentence this package composed, and both classes are `BrokerError`, importable from the
+transport's own `exceptions` module.
 
 Catching `DjangoRedisAiogramError` catches all of them. The two you are likely
 to name keep the bases they had before the family existed —

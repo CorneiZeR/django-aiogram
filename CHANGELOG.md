@@ -222,6 +222,19 @@ Entries land here as the work does; nothing below is released.
 
 ### Fixed
 
+- **A refusal keeps what a caller would branch on.** `ProduceRefusedError` kept the topic and
+  what librdkafka said; `QueueRefusedError` kept the queue and formatted the reason into its
+  message, so the same retry decision on RabbitMQ meant matching on English. Both carry
+  `reason` now, and the sweep for the rest of the class kept five more values, on five more
+  refusals: `function` on `UnknownApiMethodError`, `timeout` on `LoopThreadNotStartedError`,
+  `version` on `UnknownEnvelopeVersionError`, and `kind` and `name` on the two serializer
+  refusals that read a queued payload.
+
+  Six are deliberately *not* kept, and the reason is the same in each case: the value is one the
+  holder of the exception can already answer for — its own settings, its own object's type, or a
+  count of the installed aiogram's method table. `API.md` publishes what each documented refusal
+  carries, and the suite holds the page to it in both directions.
+
 - **The shutdown join is bounded by the transport being joined, not by `REDIS_TIMEOUT`.** That
   setting bounded the consumer thread on all four transports, three of which never read it — so
   the join could give up while the thread was still inside a legitimate call, and a worker that
