@@ -135,7 +135,8 @@ contiguous prefix.
 
 `REQUIRE_CRASH_SAFE` refuses to start where the transport cannot promise at-least-once, rather
 than running degraded and saying so only in a log line. Only one transport can be in that
-position — a Redis older than 6.2, which has no `LMOVE` — and the check happens before the
+position — a Redis list whose server does not answer `LMOVE`, which is 6.2 and below but also a
+6.2+ connection failed over to one that does not — and the check happens before the
 consumer thread starts, because a failure inside it would kill the thread and leave the process
 polling updates with nothing draining the queue.
 
@@ -153,7 +154,7 @@ and logged, not redelivered forever.
 means the consumer settles the message — however this transport settles one — and `False` means
 it does not, leaving it for a later delivery. Withholding the acknowledgement only saves the
 message where the transport recorded it as taken *before* handing it over. Every transport here
-does, with one exception: a Redis older than 6.2 has already popped the message, so there
+does, with one exception: a Redis without `LMOVE` has already popped the message, so there
 `False` and `True` come to the same thing and it is gone.
 
 `False` comes back for four reasons, in two kinds. Three leave the message for
@@ -170,12 +171,12 @@ handlers are asked to be idempotent for exactly this.
 
 The fourth is not a refusal at all: a handler that accepted `on_complete` *signals* completion
 through it, and the consumer settles the message on its next turn. That is what makes
-at-least-once true — where the message is still recoverable. On a Redis older than 6.2 it is
+at-least-once true — where the message is still recoverable. On a Redis without `LMOVE` it is
 already gone when the handler is called, so deferring the acknowledgement defers nothing and
 that server stays at-most-once.
 
 All three refusals rest on the message still being recoverable, as the paragraph above says: on
-a Redis older than 6.2 it was already popped, so none of them recovers it and `False` only means
+a Redis without `LMOVE` it was already popped, so none of them recovers it and `False` only means
 this consumer will not delete it twice. Everything
 else — undecodable bytes, a method that is not Telegram API, a handler that
 raised before it scheduled anything — returns `True`, because redelivering it

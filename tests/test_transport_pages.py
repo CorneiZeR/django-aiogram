@@ -57,8 +57,13 @@ def tabulated(text: str) -> set[str]:
     named anywhere in the prose satisfied "the page documents it" while its row was gone, and
     a row is what a reader configures from. Shared with the case below rather than written
     twice, so the two cannot drift into disagreeing about what counts as documented.
+
+    Whatever is in the backticks, rather than ``[A-Z_]+``: the narrower pattern skipped a name
+    carrying a digit, so a ``KAFKA_TOPIC2`` row was invisible to the stray check that exists to
+    catch exactly that. Safe to widen because the first cell of every table on these pages is a
+    setting name, verified across all four.
     """
-    return set(re.findall(r'^\| `([A-Z_]+)` \|', text, re.MULTILINE))
+    return set(re.findall(r'^\| `([^`]+)` \|', text, re.MULTILINE))
 
 
 def test_every_shipped_broker_has_a_page():
