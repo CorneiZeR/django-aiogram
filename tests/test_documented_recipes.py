@@ -18,9 +18,13 @@ import pytest
 from aiogram import Bot, Dispatcher, F, Router, types
 from aiogram.client.session.base import BaseSession
 from django.test import override_settings
+from django.utils.module_loading import import_string
 
 from django_aiogram import bot
+from django_aiogram.broker.registry import SHIPPED
+from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.consumer.delivery import BlpopDelivery
+from django_aiogram.eventlog import recorder
 from django_aiogram.wire.envelope import unpack
 from django_aiogram.wire.serializers import loads
 
@@ -533,3 +537,78 @@ def test_every_line_the_probe_prints_is_catalogued(fragment):
 
     assert fragment in source, 'the probe no longer says this; the page and this list still do'
     assert fragment in page, 'Troubleshooting does not catalogue a line the probe prints'
+
+
+#: the grace table's rows, in the order shutdown performs them, each with what the code that
+#: answers for it is. Written here rather than derived from the page: the point of the case is
+#: that the two agree, and a mapping read off the page would agree with any page
+GRACE_ROWS = ('joining the consumer thread', 'draining in-flight sends', 'flushing the event log')
+
+
+def grace_table(page):
+    """The grace table as `{wait: (bounded by, default)}`, asserted to be the table meant.
+
+    Whitespace-tolerant on purpose — a reflowed cell is not a changed claim — and it refuses an
+    empty parse rather than returning one, because a table this test cannot find is the failure
+    it would otherwise report as agreement.
+    """
+    rows = {}
+    for line in page.splitlines():
+        cells = [cell.strip() for cell in line.strip().strip('|').split('|')]
+        if len(cells) == 3 and cells[0] in GRACE_ROWS:
+            rows[cells[0]] = (cells[1], cells[2])
+    assert set(rows) == set(GRACE_ROWS), f'the grace table is not on the page as expected: {sorted(rows)}'
+    return rows
+
+
+def test_the_grace_table_names_a_timeout_every_shipped_transport_declares():
+    """The page derives a `stop_grace_period` from a table, and its first row named one setting.
+
+    `REDIS_TIMEOUT + 1` was that row for four transports, three of which never read it — so a
+    RabbitMQ deployment budgeted its shutdown from a setting it does not have, and raising the
+    one it does have moved the join without moving the number the reader was told to add up.
+
+    Held against `OPTIONS` rather than against the source of `call_ceiling`: what a reader needs
+    is the name of a setting they can set, and `OPTIONS` is where a transport says which those
+    are. Both directions, so a fifth transport cannot arrive un-named and a retired one cannot
+    linger in the cell.
+    """
+    page = (pathlib.Path(__file__).resolve().parent.parent / 'docs' / 'wiki' / 'Deployment.md').read_text(
+        encoding='utf-8'
+    )
+    named = set(re.findall(r'`([A-Z][A-Z_]+_TIMEOUT)`', grace_table(page)['joining the consumer thread'][0]))
+
+    assert named, 'the row bounding the join names no setting at all'
+    for path in SHIPPED:
+        declared = named & set(import_string(path).OPTIONS)
+        assert len(declared) == 1, f'{path} declares {sorted(declared)} of the settings the row names'
+    covered = {setting for path in SHIPPED for setting in named & set(import_string(path).OPTIONS)}
+    assert covered == named, f'the row names {sorted(named - covered)}, which no shipped transport declares'
+
+
+@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})
+def test_the_grace_table_adds_up_to_the_period_the_page_sells():
+    """Three waits and a total, all four of which the reader copies into a compose file.
+
+    Every number was prose nothing checked, and the first row stayed *right* at the defaults for
+    the same reason it was wrong: all four transports default their own timeout to ten, so the
+    Redis arithmetic printed the correct total everywhere anybody looked. Read from the code
+    here, so the next change to any of the three has to move the page with it.
+    """
+    page = (pathlib.Path(__file__).resolve().parent.parent / 'docs' / 'wiki' / 'Deployment.md').read_text(
+        encoding='utf-8'
+    )
+    rows = grace_table(page)
+    # the default transport, because the table's own defaults column is about a project that
+    # sets nothing -- and `+ 1` is the command's, not this test's arithmetic to choose
+    join = import_string(str(DEFAULTS['BROKER']))().call_ceiling + 1
+    stated = {wait: float(rows[wait][1].rstrip('s')) for wait in GRACE_ROWS}
+
+    assert stated['joining the consumer thread'] == join, 'the join row is not the deadline the command derives'
+    assert stated['draining in-flight sends'] == float(str(DEFAULTS['DRAIN_TIMEOUT']))
+    assert stated['flushing the event log'] == recorder.STOP_TIMEOUT
+    total = re.search(r'So (\d+) seconds at the defaults', page)
+    assert total, 'the page no longer states the total the three rows add up to'
+    assert float(total.group(1)) == sum(stated.values()), (
+        f'the page totals {total.group(1)}s where its own rows add up to {sum(stated.values())}s'
+    )
