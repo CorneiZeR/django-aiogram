@@ -123,3 +123,27 @@ def test_closing_with_no_broker_built_does_nothing(fresh_registry):
     fresh_registry.close_broker()
 
     assert fresh_registry._broker is None
+
+
+def test_a_transport_that_fails_to_close_does_not_wedge_the_bot(fresh_registry, monkeypatch):
+    """The flags gate sending, so leaving them set retires the bot for the life of the process.
+
+    `close_broker` propagates on purpose — a caller should hear that a queue could not be
+    released — and an exception escaping a `finally` skips whatever follows it in the same
+    block. Closing came first there, so a Kafka flush that raised took the resets with it and
+    every later send was refused, with the failure long since logged and forgotten.
+    """
+
+    class Stubborn:
+        def close(self):
+            msg = 'the broker could not be released'
+            raise RuntimeError(msg)
+
+    monkeypatch.setattr(fresh_registry, '_broker', Stubborn())
+    instance = TelegramBot()
+
+    with pytest.raises(RuntimeError, match='could not be released'):
+        instance.close()
+
+    assert instance._closing is False, 'a failed close left the bot refusing every later send'
+    assert instance._draining is False, 'and draining, which refuses them differently'

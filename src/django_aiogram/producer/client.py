@@ -859,12 +859,18 @@ class TelegramBot:
             # and a flush cannot race a read. The `atexit` hook stays armed for the processes
             # that never call `close` -- a web tier that only queues -- and `close_broker` is
             # idempotent, so being reached twice costs nothing
-            close_broker()
-            # a closed bot can be built again, so neither of these may stick, and they are
-            # cleared in the mirror order: `_closing` first, so nothing sees
-            # closing-without-draining on the way out either
-            self._closing = False
-            self._draining = False
+            # nested, so a transport that raises on the way out cannot leave the flags set.
+            # `close_broker` propagates on purpose -- a caller should hear that a queue could
+            # not be released -- and an exception escaping a `finally` skips whatever follows
+            # it in the same block, which here is the pair below that must never stick
+            try:
+                close_broker()
+            finally:
+                # a closed bot can be built again, so neither of these may stick, and they are
+                # cleared in the mirror order: `_closing` first, so nothing sees
+                # closing-without-draining on the way out either
+                self._closing = False
+                self._draining = False
 
     def send_raw(
         self,
