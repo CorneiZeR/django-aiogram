@@ -220,8 +220,10 @@ driver, `BrokerDependencyError`. `manage.py check` asks a disabled process for n
 
 `inflight_depth()` has a second limit on two of the four: RabbitMQ and Kafka keep the
 count in the worker's own memory, because neither protocol exposes "taken but not
-settled", so anywhere else it answers zero — correctly, and uselessly. See
-**[[Delivery]]** for which transport keeps what.
+settled", so anywhere else it answers zero — correctly, and uselessly. Naming another
+worker there raises `WorkerDepthUnavailableError` rather than answering, since the work
+belongs to a channel or a group member and not to a name. See **[[Delivery]]** for which
+transport keeps what.
 
 So a disabled process needs no token, and needs its broker reachable only if something
 asks it for a depth.

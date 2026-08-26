@@ -33,6 +33,7 @@ import django_aiogram
 #: this module fail for a reason that is not the one it is about
 ARGUMENTS = {
     'BrokerDependencyError': {'broker': 'pkg.mod.Broker', 'module': 'pika', 'extra': 'rabbitmq'},
+    'WorkerDepthUnavailableError': {'broker': 'KafkaBroker', 'worker': 'bot-7'},
     'ProduceRefusedError': {'topic': 'telegram-outbound', 'reason': 'Unknown topic or partition'},
     'QueueRefusedError': {'queue': 'telegram-outbound', 'reason': 'NO_ROUTE'},
     'StreamServerTooOldError': {},
@@ -162,7 +163,11 @@ def published(name, section):
     """
     for line in section.splitlines():
         if line.startswith('|') and f'`{name}`' in line:
-            return set(re.findall(r'`([a-z_]+)`', line))
+            # the last cell, not the whole row: the middle one says when the refusal is raised
+            # and is entitled to name the method that raises it, which read as an attribute and
+            # made this case fail on a row that was perfectly correct
+            cells = [cell.strip() for cell in line.strip().strip('|').split('|')]
+            return set(re.findall(r'`([a-z_]+)`', cells[-1]))
     prose = re.sub(r'\s+', ' ', '\n'.join(line for line in section.splitlines() if not line.startswith('|')))
     for sentence in prose.split('. '):
         if f'`{name}`' in sentence:

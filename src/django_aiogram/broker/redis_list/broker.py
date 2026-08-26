@@ -196,19 +196,25 @@ class RedisListBroker(Broker):
         """One ``LLEN`` on the queue."""
         return int(get_redis().llen(self._queue()) or 0)
 
-    def inflight_depth(self) -> int:
-        """One ``LLEN`` on this worker's in-flight list."""
-        return int(get_redis().llen(self._inflight()) or 0)
+    def inflight_depth(self, worker: str | None = None) -> int:
+        """One ``LLEN`` on an in-flight list -- this worker's, or the one named.
+
+        Answering for somebody else is what this transport is *for*: the list is per worker and
+        survives the process that owned it, so a monitor asking what a container that never came
+        back was holding is asking a question the key can answer. `tgbot_reclaim` addresses the
+        same key by the same name.
+        """
+        return int(get_redis().llen(self._inflight(worker)) or 0)
 
     async def adepth(self) -> int:
         """Count the same way, on the client belonging to the loop the caller is on."""
         client = await aget_redis()
         return int(await client.llen(self._queue()) or 0)
 
-    async def ainflight_depth(self) -> int:
-        """Count the same way, for this worker's in-flight list."""
+    async def ainflight_depth(self, worker: str | None = None) -> int:
+        """Count the same way, for this worker's in-flight list or the one named."""
         client = await aget_redis()
-        return int(await client.llen(self._inflight()) or 0)
+        return int(await client.llen(self._inflight(worker)) or 0)
 
     def alive(self) -> None:
         """Write the key the healthcheck reads, with a TTL a stalled loop cannot renew."""

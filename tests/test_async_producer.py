@@ -370,7 +370,7 @@ def test_a_disabled_send_from_a_loop_says_nothing(caplog, monkeypatch):
 
     # the silence is only worth having if nothing was written: a regression that wrote and
     # suppressed the line would satisfy every other assertion here
-    monkeypatch.setattr('django_aiogram.producer.client.get_redis', refuse)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', refuse)
     instance = TelegramBot()
 
     async def one_send():
@@ -440,8 +440,8 @@ def test_the_bulk_pair_refuses_an_unknown_method_before_writing(redis_server, bu
     def refuse(*args, **kwargs):
         raise AssertionError('a refused method asked for a Redis client')
 
-    monkeypatch.setattr('django_aiogram.producer.client.get_redis', refuse)
-    monkeypatch.setattr('django_aiogram.producer.client.aget_redis', refuse)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', refuse)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.aget_redis', refuse)
     bot = TelegramBot()
 
     def broadcast():
@@ -476,7 +476,7 @@ def test_a_disabled_process_queues_nothing_and_still_names_the_messages(redis_se
         message = 'a disabled process asked for a Redis client'
         raise AssertionError(message)
 
-    monkeypatch.setattr('django_aiogram.producer.client.get_redis', refuse)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', refuse)
     monkeypatch.setattr('django_aiogram.redis.build_async_client', refuse)
 
     bot = TelegramBot()

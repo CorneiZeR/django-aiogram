@@ -79,7 +79,9 @@ was in flight.
 
    So: stop every worker first, then check. `manage.py tgbot_healthcheck --stranded` reports
    what sits under each worker name on the Redis list, and `bot.inflight_depth('<name>')` asks
-   about one of them by name. On RabbitMQ and Kafka nothing is left behind by a stopped worker —
+   about one of them by name — a question only the two Redis transports can answer, since the
+   other two raise `WorkerDepthUnavailableError` rather than a misleading zero. On RabbitMQ and
+   Kafka nothing is left behind by a stopped worker —
    the broker requeues, the group replays — so stopping them *is* the drain, and what returns to
    the old queue has to be finished by a worker still on the old transport.
 

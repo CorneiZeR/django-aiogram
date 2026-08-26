@@ -214,8 +214,21 @@ class Broker(ABC):
         """How many messages are waiting for a consumer to take them."""
 
     @abstractmethod
-    def inflight_depth(self) -> int:
-        """How many this worker has taken and not yet settled."""
+    def inflight_depth(self, worker: str | None = None) -> int:
+        """How many this worker has taken and not yet settled.
+
+        ``worker`` names somebody else, which is how a monitor reads what a worker that is
+        gone was still holding. Only a transport that records unsettled work under a *name*
+        can answer that -- the Redis list keeps a key per worker, a stream group records the
+        consumer each entry went to -- and the two that do not must raise
+        :class:`~django_aiogram.broker.exceptions.WorkerDepthUnavailableError` rather than
+        return a number.
+
+        Refusing rather than answering zero, because zero is what stops somebody looking. The
+        argument reached a Redis client directly before this existed, so on a RabbitMQ or Kafka
+        deployment the call either raised about a missing ``REDIS_URL`` or -- worse -- answered
+        from an unrelated Redis the project happened to run for caching.
+        """
 
     @abstractmethod
     async def adepth(self) -> int:
@@ -227,8 +240,11 @@ class Broker(ABC):
         """
 
     @abstractmethod
-    async def ainflight_depth(self) -> int:
-        """How many this worker holds, read without blocking the loop."""
+    async def ainflight_depth(self, worker: str | None = None) -> int:
+        """How many this worker holds, read without blocking the loop.
+
+        ``worker`` means what it means on :meth:`inflight_depth`, including the refusal.
+        """
 
     def alive(self) -> None:
         """Say the consumer is still turning, if this transport needs telling.

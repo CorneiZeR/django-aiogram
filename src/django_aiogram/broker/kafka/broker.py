@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 from django.core.exceptions import ImproperlyConfigured
 
 from django_aiogram.broker.base import REQUIRED, Broker
+from django_aiogram.broker.exceptions import WorkerDepthUnavailableError
 from django_aiogram.broker.kafka.client import (
     close_clients,
     consumer_for_thread,
@@ -497,12 +498,17 @@ class KafkaBroker(Broker):
         # of the queue when it is taken, and this is what makes the pair add up the same way
         return max(0, waiting - self.inflight_depth())
 
-    def inflight_depth(self) -> int:
+    def inflight_depth(self, worker: str | None = None) -> int:
         """How many this worker has taken and not settled, counted here.
 
         Kafka has nothing to ask: an offset is either committed or not, and "taken but not
-        settled" exists only in this process. Which is what the contract asks for.
+        settled" exists only in this process. Which is what the contract asks for -- and why a
+        *named* worker is refused rather than answered. Another member's uncommitted offsets
+        live in that member's memory, and the group knows it by a member id the coordinator
+        assigned, not by a name this package chose.
         """
+        if worker is not None:
+            raise WorkerDepthUnavailableError(type(self).__name__, worker)
         with self._lock:
             return sum(len(offsets) for offsets in self._unsettled.values())
 
@@ -510,9 +516,9 @@ class KafkaBroker(Broker):
         """Read the same count off the loop's thread; see :meth:`apublish`."""
         return await asyncio.to_thread(self.depth)
 
-    async def ainflight_depth(self) -> int:
+    async def ainflight_depth(self, worker: str | None = None) -> int:
         """Answer from this process, so no thread and no round trip."""
-        return self.inflight_depth()
+        return self.inflight_depth(worker)
 
     @property
     def call_ceiling(self) -> float:

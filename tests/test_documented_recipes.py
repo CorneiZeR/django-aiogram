@@ -42,7 +42,12 @@ def a_message(text):
 
 @override_settings(TELEGRAM_BOT={'REDIS_URL': 'redis://localhost:6379/0'})
 def test_the_fakeredis_queue_assertion(monkeypatch):
-    """Patching client.get_redis is what the page tells the reader to patch."""
+    """The page tells the reader to patch the broker's client, which is where the write happens.
+
+    It said `client.get_redis` until 4.0, and the case was updated with the page while this
+    sentence was not — so it named a target the body did not use, and as of the in-flight work
+    going through the seam the producer has no such name at all.
+    """
     server = fakeredis.FakeRedis()
     monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', lambda: server)
 
