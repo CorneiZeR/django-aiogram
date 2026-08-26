@@ -14,6 +14,7 @@ fixture yet is skipped loudly rather than silently passing.
 import asyncio
 import os
 import time
+from collections import Counter
 
 import pytest
 from django.test import override_settings
@@ -404,3 +405,47 @@ def test_liveness_answers_without_a_consumer_running(broker: Broker):
 
     assert isinstance(liveness.reported, bool)
     assert liveness.age is None or liveness.age >= 0
+
+
+def test_every_transport_has_a_kill_case_and_the_map_names_it():
+    """The map in `tests/integration/conftest.py` is documentation, so it can rot.
+
+    Each transport's kill case is named for its own mechanism — a reclaim on the Redis list, a
+    group claim on Streams, a dropped channel on RabbitMQ, an uncommitted offset on Kafka — so
+    there is no naming convention a reader can grep for, and the coverage is invisible from
+    outside. That is what the map exists to fix, and this is what keeps the map true.
+
+    Both directions. A renamed case must not leave the map pointing at nothing, and a new
+    transport must not arrive without one: the entry is due on the day the broker lands, the
+    same rule this file already holds itself to.
+    """
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parent
+    doc = (root / 'integration' / 'conftest.py').read_text(encoding='utf-8')
+    mapping = doc[doc.index('kill case') : doc.index('"""', doc.index('kill case'))]
+
+    named = Counter(re.findall(r'`(test_[a-z_]+)`', mapping))
+    assert named, 'the kill-case map has no case names in it at all'
+
+    # counted, not merely looked up: RabbitMQ and Kafka name their kill case identically, so
+    # a set membership test passed with one of the two renamed away -- the name was still
+    # defined, in the other transport's module. The map mentions it twice, so the suite has to
+    # define it twice
+    defined = Counter()
+    for module in (root / 'integration').glob('test_*.py'):
+        defined.update(re.findall(r'^def (test_[a-z_]+)', module.read_text(encoding='utf-8'), re.MULTILINE))
+    short = sorted(
+        f'{name} (map wants {want}, suite has {defined[name]})' for name, want in named.items() if defined[name] < want
+    )
+    assert short == [], f'the kill-case map is ahead of the suite: {short}'
+
+    # every shipped transport, by the last word of its dotted path — `RedisListBroker` is
+    # "redis list" in the map, so the check is on the words rather than on the class name
+    for path in SHIPPED:
+        kind = path.rsplit('.', 2)[-2].replace('_', ' ')
+        assert kind in mapping.lower(), (
+            f'no kill case is named for {kind!r} ({path}); add one and list it, '
+            f'rather than leaving a transport whose crash behaviour nobody checked'
+        )

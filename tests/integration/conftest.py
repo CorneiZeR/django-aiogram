@@ -1,9 +1,28 @@
-"""Fixtures for the suite that needs a real Redis.
+"""Fixtures for the suite that needs a real server — Redis, RabbitMQ or Kafka.
 
 fakeredis agrees with everything, which is exactly why it cannot answer the
 questions that broke 1.x deployments: whether `LMOVE` exists, what a server
 without it says when asked, and whether FSM state written by one process is
-readable by the next.
+readable by the next. RabbitMQ and Kafka have no double at all.
+
+**Every transport has a kill case, and they are named for its own mechanism rather than
+uniformly** — which makes the coverage hard to see from outside, so here it is:
+
+* Redis list — `test_a_message_left_in_flight_is_reclaimed`, with
+  `test_a_worker_does_not_reclaim_another_workers_message` for the identity half, because this
+  is the transport where a name decides who may take the work back.
+* Redis Streams — `test_nothing_is_lost_when_a_consumer_never_comes_back` and
+  `test_a_dead_consumers_work_is_reclaimed_under_any_name`; the second is the point, since the
+  pending list belongs to the group rather than to a worker.
+* RabbitMQ — `test_a_message_a_killed_worker_held_comes_back`, paired with
+  `test_an_acknowledged_message_does_not_come_back_after_a_reconnect` so the two differ only in
+  the acknowledgement.
+* Kafka — `test_a_message_a_killed_worker_held_comes_back`, where the redelivery is the group's
+  doing rather than a reclaim.
+
+The CI legs that run them are named per transport, so a red check says which mechanism broke.
+Measured against Valkey 8.1.9 as well, which answers `redis_version:7.2.4` for compatibility —
+the fork the legs exist to check.
 """
 
 import os
