@@ -29,7 +29,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 
 from django_aiogram.api import check_function
-from django_aiogram.broker.registry import get_broker
+from django_aiogram.broker.registry import close_broker, get_broker
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import EventKind, StorageKind
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
@@ -826,6 +826,15 @@ class TelegramBot:
         # and the close and the callback has already run
         self._draining = True
         self._closing = True
+        # set only once the teardown has actually finished, and read in the `finally` to decide
+        # whether the transport may be released. The transport is process-global, so releasing
+        # it while this bot is half torn down closes a queue a live consumer may still be
+        # taking from -- on Kafka the rebuild then joins the group a second time while the
+        # first member still holds the partitions, which is the stall this change exists to fix.
+        #
+        # One flag rather than two: it is false on the skipped-teardown path *and* on every
+        # exception out of the block below, which are the same question asked twice
+        torn_down = False
         try:
             # inside the try, so a join that raises still reaches the finally below: with
             # both flags left set the bot could never send again. Before the teardown
@@ -853,12 +862,29 @@ class TelegramBot:
                     if not loop.is_closed():
                         loop.close()
             self._loop = None
+            torn_down = True
         finally:
-            # a closed bot can be built again, so neither of these may stick, and they are
-            # cleared in the mirror order: `_closing` first, so nothing sees
-            # closing-without-draining on the way out either
-            self._closing = False
-            self._draining = False
+            # the transport too, and here rather than only at exit: `start_tgbot` joins the
+            # consumer thread before calling this, so by now nothing is taking from the broker
+            # and a flush cannot race a read. The `atexit` hook stays armed for the processes
+            # that never call `close` -- a web tier that only queues -- and `close_broker` is
+            # idempotent, so being reached twice costs nothing.
+            #
+            # Only once the teardown finished: a skipped one expects to be called again, and a
+            # failed one leaves this bot half apart, so in both cases the queue has to survive
+            # -- `atexit` still releases it if nobody manages a clean close. Nested, so a
+            # transport that raises on the way out cannot leave the flags set: `close_broker`
+            # propagates on purpose, and an exception escaping a `finally` skips whatever
+            # follows it in the same block, which here is the pair below that must never stick
+            try:
+                if torn_down:
+                    close_broker()
+            finally:
+                # a closed bot can be built again, so neither of these may stick, and they are
+                # cleared in the mirror order: `_closing` first, so nothing sees
+                # closing-without-draining on the way out either
+                self._closing = False
+                self._draining = False
 
     def send_raw(
         self,

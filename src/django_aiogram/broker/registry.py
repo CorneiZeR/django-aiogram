@@ -5,6 +5,7 @@ installed: two drivers present would make the choice ambiguous, and one present 
 a typo in the setting look like a working configuration.
 """
 
+import atexit
 import threading
 from typing import TYPE_CHECKING
 
@@ -34,6 +35,9 @@ SHIPPED: dict[str, tuple[str, str]] = {
 
 _lock = threading.Lock()
 _broker: Broker | None = None
+#: registered once per process rather than per build, so a settings change that replaces the
+#: broker does not stack another callback. `close_broker` is idempotent either way
+_exit_hook_armed = False
 
 
 def broker_class() -> type[Broker]:
@@ -80,7 +84,7 @@ def get_broker() -> Broker:
     Cached like the Redis client was, and for the same reason: a transport holds a
     connection, and building one per send is what the 3.x accessor existed to avoid.
     """
-    global _broker  # noqa: PLW0603 - one per process, like the connection it holds
+    global _broker, _exit_hook_armed  # noqa: PLW0603 - one per process, like the connection it holds
     if _broker is not None:
         return _broker
     with _lock:
@@ -88,6 +92,25 @@ def get_broker() -> Broker:
             cls = broker_class()
             cls.verify()
             _broker = cls()
+            if not _exit_hook_armed:
+                # `Broker.close()` says it is "called once, at shutdown", and until this line
+                # nothing called it there: the only path to `close_broker` was the
+                # `setting_changed` receiver below, which fires in a test suite and never in a
+                # deployment. So the Kafka producer was never flushed and its consumer never
+                # left its group -- a member that disappears without saying so holds its
+                # partitions until the session times out, which is a bot restart that delivers
+                # nothing for that long. `EventRecorder` has armed an `atexit` for its writer
+                # all along; this is the same trade in the same shape.
+                #
+                # This hook runs during interpreter shutdown, on the main thread, which is not
+                # the thread that opened a consumer's connection -- and `bot.close()`, the other
+                # path here, runs wherever a caller happens to be. Neither can promise the
+                # owning thread, which is why each transport's `close()` already restricts what
+                # it touches from a foreign one: pika's asks the owner through
+                # `add_callback_threadsafe`, and librdkafka's flushes the process producer and
+                # closes only the calling thread's consumer.
+                atexit.register(close_broker)
+                _exit_hook_armed = True
     return _broker
 
 

@@ -220,6 +220,33 @@ Entries land here as the work does; nothing below is released.
   broker's own doing. `Deployment` carries a compose recipe for each and `Troubleshooting` the
   duplicate each one produces.
 
+### Fixed
+
+- **The transport is closed at shutdown, which it never was.** `Broker.close()` documented
+  itself as "called once, at shutdown" and the only path to it was the `setting_changed`
+  receiver — a signal that fires in a test suite and never in a deployment. `bot.close()` tore
+  down the loop, the aiogram session and the FSM storage and left the queue's connection alone,
+  so neither long-running command reached it, and a web process that only queues had no
+  shutdown path at all.
+
+  Worst on Kafka, in two ways. The producer was never flushed, so the warning it raises about
+  messages accepted locally and never delivered could only fire in tests. And the consumer never
+  left its group: a member that disappears without saying so holds its partitions until the
+  session times out, so a restarted bot container delivered **nothing** for that long, with a
+  full queue and a worker that looked healthy.
+
+  Closed by two paths now, because neither covers the other. `bot.close()` releases it after the
+  consumer thread is joined, which is deterministic and can still report what it failed to flush.
+  An `atexit` hook, armed the first time a broker is built, covers every process that closes
+  nothing — the same shape the event log's writer has used all along.
+
+  Neither path can promise which thread it runs on. `atexit` runs during interpreter shutdown, on
+  the main thread; `bot.close()` runs wherever it is called from, and nothing restricts that. So
+  neither is guaranteed to be the thread that opened a given connection, which is why each
+  transport's `close()` already restricts what it touches from a foreign one: pika asks the owning
+  thread through `add_callback_threadsafe`, and librdkafka flushes the process producer and closes
+  only the calling thread's consumer.
+
 ### Changed
 
 - **No transport driver is a dependency of this package any more.** `pip install
