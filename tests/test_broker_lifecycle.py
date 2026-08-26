@@ -180,3 +180,28 @@ def test_a_skipped_teardown_leaves_the_transport_alone(fresh_registry, monkeypat
         'the skip was not the path taken, so this case proves nothing'
     )
     assert instance._closing is False, 'and the retry it asks for must still be possible'
+
+
+def test_a_teardown_that_raises_leaves_the_transport_alone(fresh_registry, monkeypatch):
+    """The same rule as a skipped teardown, reached by an exception instead of an early return.
+
+    A bot whose drain or session close raised is half apart and its caller may retry, and the
+    transport is process-global — so releasing it here closes a queue a live consumer may still
+    be reading. `atexit` still gets it if nobody ever manages a clean close, which is the point
+    of having both paths.
+    """
+    broker = Closeable()
+    monkeypatch.setattr(fresh_registry, '_broker', broker)
+    instance = TelegramBot()
+
+    def explode(_timeout):
+        msg = 'the runner would not stop'
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(instance, '_stop_runner', explode)
+
+    with pytest.raises(RuntimeError, match='would not stop'):
+        instance.close()
+
+    assert broker.closed == 0, 'a failed teardown released the queue anyway'
+    assert instance._closing is False, 'and the retry it implies must still be possible'

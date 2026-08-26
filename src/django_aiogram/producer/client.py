@@ -826,11 +826,15 @@ class TelegramBot:
         # and the close and the callback has already run
         self._draining = True
         self._closing = True
-        # the skipped-teardown path below leaves the bot intact for a retry, and the transport
-        # is process-global: releasing it there would close a queue the polling loop is still
-        # taking from, and on Kafka the rebuild would join the group a second time while the
-        # first member still holds the partitions -- the failure this whole change exists to fix
-        retryable = False
+        # set only once the teardown has actually finished, and read in the `finally` to decide
+        # whether the transport may be released. The transport is process-global, so releasing
+        # it while this bot is half torn down closes a queue a live consumer may still be
+        # taking from -- on Kafka the rebuild then joins the group a second time while the
+        # first member still holds the partitions, which is the stall this change exists to fix.
+        #
+        # One flag rather than two: it is false on the skipped-teardown path *and* on every
+        # exception out of the block below, which are the same question asked twice
+        torn_down = False
         try:
             # inside the try, so a join that raises still reaches the finally below: with
             # both flags left set the bot could never send again. Before the teardown
@@ -843,7 +847,6 @@ class TelegramBot:
                     # run_until_complete and loop.close() both raise on a running
                     # loop; leaving everything in place keeps close() retryable
                     logger.warning('skipping close: stop polling, or the loop thread, before closing the bot')
-                    retryable = True
                     return
                 # a send from another thread may be driving this loop; the lock
                 # keeps the teardown from interleaving with it
@@ -859,6 +862,7 @@ class TelegramBot:
                     if not loop.is_closed():
                         loop.close()
             self._loop = None
+            torn_down = True
         finally:
             # the transport too, and here rather than only at exit: `start_tgbot` joins the
             # consumer thread before calling this, so by now nothing is taking from the broker
@@ -866,13 +870,14 @@ class TelegramBot:
             # that never call `close` -- a web tier that only queues -- and `close_broker` is
             # idempotent, so being reached twice costs nothing.
             #
-            # Not on the retryable path: that one closed nothing and expects to be called
-            # again, so the queue has to survive it. Nested, so a transport that raises on the
-            # way out cannot leave the flags set -- `close_broker` propagates on purpose, and
-            # an exception escaping a `finally` skips whatever follows it in the same block,
-            # which here is the pair below that must never stick
+            # Only once the teardown finished: a skipped one expects to be called again, and a
+            # failed one leaves this bot half apart, so in both cases the queue has to survive
+            # -- `atexit` still releases it if nobody manages a clean close. Nested, so a
+            # transport that raises on the way out cannot leave the flags set: `close_broker`
+            # propagates on purpose, and an exception escaping a `finally` skips whatever
+            # follows it in the same block, which here is the pair below that must never stick
             try:
-                if not retryable:
+                if torn_down:
                     close_broker()
             finally:
                 # a closed bot can be built again, so neither of these may stick, and they are
