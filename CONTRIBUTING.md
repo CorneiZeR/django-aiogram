@@ -56,6 +56,70 @@ runs `FLUSHDB` before and after every test.
 It covers what fakeredis cannot: whether `LMOVE` exists and the consumer picks
 the crash-safe path, whether a reclaim takes back only its own worker's message,
 a mixed pickle/JSON backlog draining, and FSM state surviving a restart.
+
+**RabbitMQ and Kafka have no double at all**, so their modules are skipped
+entirely without a server. Each takes one variable, and the two of them are
+independent — a leg with only RabbitMQ running is a useful leg:
+
+```shell
+docker run -d --name drai-rabbit -p 5673:5672 rabbitmq:4
+until docker exec drai-rabbit rabbitmq-diagnostics -q ping >/dev/null 2>&1; do sleep 0.5; done
+DJANGO_AIOGRAM_TEST_AMQP_URL=amqp://guest:guest@localhost:5673/ python -m pytest -m integration
+```
+
+The AMQP fixture **deletes the queue it uses** around every test, so give it a
+throwaway broker or a vhost of its own.
+
+Kafka is the awkward one to start, because a client on the host has to be given
+an address it can actually reach. The image's own default advertises
+`localhost:9092` from *inside* the container, which a host client connects to and
+then retries into a refusal loop rather than failing — so a second listener is
+declared for the host and advertised as such:
+
+```shell
+docker run -d --name drai-kafka -p 9093:9093 \
+  -e KAFKA_NODE_ID=1 \
+  -e KAFKA_PROCESS_ROLES=broker,controller \
+  -e KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092,HOST://0.0.0.0:9093,CONTROLLER://0.0.0.0:9094 \
+  -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092,HOST://127.0.0.1:9093 \
+  -e KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT \
+  -e KAFKA_CONTROLLER_QUORUM_VOTERS=1@localhost:9094 \
+  -e KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER \
+  -e KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT \
+  -e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1 \
+  -e KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1 \
+  -e KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1 \
+  apache/kafka:4.0.0
+DJANGO_AIOGRAM_TEST_KAFKA_BOOTSTRAP=127.0.0.1:9093 python -m pytest -m integration
+```
+
+Run as written against `apache/kafka:4.0.0`, and the metadata request answered on
+the first attempt. It has no readiness probe of its own worth using from the
+shell — the Kafka leg in CI waits by making the metadata request an ordinary
+client makes, which is what the suite does anyway on its first connection.
+
+Two cases need the broker *stopped*, which no client can arrange: a publish is
+confirmed rather than fsynced, so whether it survives the server going away is
+only answerable by taking the server away. Those name the container:
+
+```shell
+DJANGO_AIOGRAM_TEST_AMQP_URL=amqp://guest:guest@localhost:5673/ \
+DJANGO_AIOGRAM_TEST_AMQP_CONTAINER=drai-rabbit \
+  python -m pytest -m integration tests/integration/test_rabbitmq_against_broker.py
+
+DJANGO_AIOGRAM_TEST_KAFKA_BOOTSTRAP=127.0.0.1:9093 \
+DJANGO_AIOGRAM_TEST_KAFKA_CONTAINER=drai-kafka \
+  python -m pytest -m integration tests/integration/test_kafka_against_broker.py
+```
+
+Both variables on the same invocation, because a container name without a server
+to reach is nothing: the URL says where the broker is, the name says which
+container to stop.
+
+Unset, the cases skip — naming one is opting in to having it restarted. A name
+that docker does not report as running is a failure rather than a skip: it is a
+configured expectation that cannot be met, and the case it would otherwise pass
+over is the only one that answers the question.
 `scripts/smoke_install.sh` is the other half — it builds the wheel and the sdist,
 checks what each of them carries, installs the wheel into a throwaway project and
 checks that Django boots with no credentials at all.
