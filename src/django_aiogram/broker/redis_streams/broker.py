@@ -613,6 +613,11 @@ class RedisStreamsBroker(Broker):
         return Liveness(reported=True, age=max(0.0, min(idles) / 1000))
 
     @property
+    def call_ceiling(self) -> float:
+        """``REDIS_TIMEOUT``, as on the list: the same server and the same socket deadline."""
+        return float(max(1, int(str(self.option('REDIS_TIMEOUT')))))
+
+    @property
     def crash_safe(self) -> bool:
         """True, and answered by the mechanism rather than probed for.
 

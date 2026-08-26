@@ -309,6 +309,11 @@ class RabbitMQBroker(Broker):
         return len(self._unsettled)
 
     @property
+    def call_ceiling(self) -> float:
+        """``RABBITMQ_TIMEOUT``, which bounds a publish, a get and the confirm it waits for."""
+        return float(str(self.option('RABBITMQ_TIMEOUT') or 10))
+
+    @property
     def crash_safe(self) -> bool:
         """True, and the broker is what makes it true rather than anything here.
 
