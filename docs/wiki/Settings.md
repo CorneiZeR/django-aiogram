@@ -96,7 +96,7 @@ which carries outbound messages in both modes — see **[[Webhook]]**.
 | `DELIVERY` | `'blpop'` | The only consumer; `'keyspace'` was removed in 3.0 — see **[[Delivery]]** |
 | `BROKER` | `'django_aiogram.broker.redis_list.RedisListBroker'` | Which transport carries messages, by dotted path. Nothing is inferred from what happens to be installed: a name whose driver is missing is a system check with the `pip install` line, not an `ImportError` on the first send. Each broker declares its **own** settings — see the table below — and the other queue rows here belong to the package rather than to a transport. A broker with no sensible default for where a message goes marks that setting required and refuses at startup without it |
 | `REDIS_MESSAGES_KEY` | `'TELEGRAM_BOT_MESSAGE'` | List holding queued calls — the Redis list transport's own |
-| `WORKER_NAME` | hostname | Names this worker's in-flight list — see **[[Delivery]]** |
+| `WORKER_NAME` | hostname | Names this worker's in-flight list on the Redis list transport, and nothing on the other three — see **[[Redis-list]]** |
 | `BLPOP_TIMEOUT` | `5` | How often the consumer checks for shutdown; capped at `min(HEARTBEAT_INTERVAL, REDIS_TIMEOUT - 1)` |
 | `DRAIN_TIMEOUT` | `5` | Seconds `close()` gives in-flight sends to finish before canceling them |
 | `MAX_IN_FLIGHT` | `0` | Sends the consumer leaves in flight before it stops taking messages; `0` is no bound |
@@ -118,6 +118,20 @@ transport you are not using is reported by `W003` as a key nothing reads, which 
 | `django_aiogram.broker.redis_streams.RedisStreamsBroker` | `REDIS_URL`, `REDIS_STREAM_KEY`, `REDIS_STREAM_GROUP`, `REDIS_TIMEOUT`, `BLPOP_TIMEOUT` | **`REDIS_STREAM_KEY`** |
 | `django_aiogram.broker.rabbitmq.RabbitMQBroker` | `RABBITMQ_URL`, `RABBITMQ_QUEUE`, `RABBITMQ_PREFETCH`, `RABBITMQ_TIMEOUT` | **`RABBITMQ_URL`**, **`RABBITMQ_QUEUE`** |
 | `django_aiogram.broker.kafka.KafkaBroker` | `KAFKA_BOOTSTRAP`, `KAFKA_TOPIC`, `KAFKA_GROUP`, `KAFKA_TIMEOUT` | **`KAFKA_BOOTSTRAP`**, **`KAFKA_TOPIC`** |
+
+#### Redis list
+
+The Redis list declares four settings, gathered here because the other three transports have
+their own sections. They also appear above, spread across the tables they landed in when Redis
+was the only transport — `REDIS_URL` under **Credentials**, the other three under **Queue** — and
+splitting those into what the package owns and what a transport does is its own change.
+
+| Setting | Default | Description |
+| ------- | ------- | ----------- |
+| `REDIS_URL` | `''` | Where the server is. Shared with the Streams transport and with the FSM storage, which is why it also sits under **Credentials** above |
+| `REDIS_MESSAGES_KEY` | `'TELEGRAM_BOT_MESSAGE'` | The list, and the prefix the in-flight and heartbeat keys derive from |
+| `REDIS_TIMEOUT` | `10` | The deadline on any single call. `E030` refuses anything below 2, because the pop has to sit a second inside it |
+| `BLPOP_TIMEOUT` | `5` | How often the blocking pop is interrupted to check for shutdown, capped at `min(HEARTBEAT_INTERVAL, REDIS_TIMEOUT - 1)` — `W004` says so and names the bound that binds |
 
 #### Redis Streams
 

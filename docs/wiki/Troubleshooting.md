@@ -217,11 +217,21 @@ often left over from then.
 Check whether two bot containers are polling the same token — Telegram allows
 one `getUpdates` consumer per bot.
 
-The queue pop is atomic, so each message goes to one worker — that is ownership,
-not exactly-once. Two other sources of duplicates: a worker killed mid-send has
-its message reclaimed and sent again, and two workers sharing a `WORKER_NAME`
-share an in-flight list, so one can reclaim a message the other is still
-sending. Give each its own name.
+Each message goes to one worker on every transport — an atomic pop, a consumer group handing
+an entry to one member, a broker delivering once — but that is ownership, not exactly-once.
+Delivery is at-least-once wherever the transport can recover a message it handed out — every
+one here except a Redis list without `LMOVE`, which is at-most-once and loses rather than
+duplicates. So the question is which duplicates *this* transport produces:
+
+| Transport | Where a duplicate comes from |
+| --- | --- |
+| **[[Redis-list]]** | a worker killed mid-send, reclaimed by the next start **that resolves the same name** — the in-flight list is keyed on it, so a replacement with a fresh hostname strands the message instead. And two workers sharing a `WORKER_NAME` share one list, so each reclaims what the other is still sending — give every worker its own name, and one it keeps |
+| **[[Redis-Streams]]** | an entry idle longer than the liveness TTL is claimed by another consumer, so a worker slow enough to look dead has its message taken |
+| **[[RabbitMQ]]** | a dropped channel requeues everything it held unacknowledged |
+| **[[Kafka]]** | **a run rather than a message.** One refusal rewinds its partition, so that record and every later one in it are delivered again; a kill replays from the last committed offset, which is at least what was in flight and can be more — records that had already finished stay behind a commit gap and come back with it |
+
+The Kafka row is the one to read before assuming a bug. Nothing there is per-message, so a
+handler that is not idempotent on its own business key will send innocent messages twice.
 
 ## The bot ignores ENABLED
 

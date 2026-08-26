@@ -92,9 +92,13 @@ the same pull request as the code they describe and published from `master`.
 | [Settings](https://github.com/CorneiZeR/django-aiogram/wiki/Settings) | every setting, with defaults and check ids |
 | [Handlers](https://github.com/CorneiZeR/django-aiogram/wiki/Handlers) | routers, filters, FSM, the async ORM |
 | [Sending messages](https://github.com/CorneiZeR/django-aiogram/wiki/Sending-messages) | routes, keyboards, files, errors |
-| [Testing](https://github.com/CorneiZeR/django-aiogram/wiki/Testing) | your suite without Redis, asserting what was queued |
+| [Testing](https://github.com/CorneiZeR/django-aiogram/wiki/Testing) | your suite without a broker, asserting what was queued |
 | [API](https://github.com/CorneiZeR/django-aiogram/wiki/API) | the instance, its internals, and what stays public |
 | [Delivery](https://github.com/CorneiZeR/django-aiogram/wiki/Delivery) | how queued messages reach Telegram |
+| [Redis list](https://github.com/CorneiZeR/django-aiogram/wiki/Redis-list) | the default transport: what it guarantees, and why the worker's name matters |
+| [Redis Streams](https://github.com/CorneiZeR/django-aiogram/wiki/Redis-Streams) | the same server, a consumer group, and no worker identity to keep |
+| [RabbitMQ](https://github.com/CorneiZeR/django-aiogram/wiki/RabbitMQ) | a broker that tracks its own consumers, and one thread per connection |
+| [Kafka](https://github.com/CorneiZeR/django-aiogram/wiki/Kafka) | offsets settle a prefix, ordering is per partition, a refusal rewinds |
 | [Webhook](https://github.com/CorneiZeR/django-aiogram/wiki/Webhook) | receiving updates over HTTP instead of polling |
 | [Rate limits](https://github.com/CorneiZeR/django-aiogram/wiki/Rate-limits) | staying inside Telegram's published limits |
 | [Deployment](https://github.com/CorneiZeR/django-aiogram/wiki/Deployment) | compose recipes, healthchecks, per-process opt-out |

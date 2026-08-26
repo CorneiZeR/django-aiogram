@@ -58,6 +58,50 @@ django_redis_aiogram_event` is yours to run, and this package will never run it 
 Nothing is detected from what happens to be installed. Name the broker you want, and the
 absence of its driver is a startup complaint rather than a runtime surprise.
 
+A 3.x project that changes nothing here keeps the transport it had: `BROKER` defaults to the
+Redis list, and `REDIS_URL`, `REDIS_MESSAGES_KEY`, `REDIS_TIMEOUT` and `BLPOP_TIMEOUT` mean
+exactly what they meant. **[[Settings]]** lists what each transport declares, and there is a page
+each — **[[Redis-list|Redis list]]**, **[[Redis-Streams|Redis Streams]]**, **[[RabbitMQ]]**,
+**[[Kafka]]** — for what one guarantees and what it needs running.
+
+### Switching transport is a drain, not a setting
+
+Nothing moves messages from one transport to another, and nothing can: a queued message is
+addressed to the queue it is in. So the switch has an order, and getting it wrong loses whatever
+was in flight.
+
+1. Stop the producers, or set `ENABLED=0` in them. They are what keeps the old queue filling.
+2. Let the bot container finish the old queue, and **stop the workers before you believe the
+   numbers**. `bot.queue_depth()` answers for the whole queue, but `bot.inflight_depth()`
+   answers for the process that asks it: zero from a shell proves that *shell* holds nothing.
+   On the Redis list every worker has its own list, so with more than one worker running there
+   is no single reading that means "nothing is in flight anywhere".
+
+   So: stop every worker first, then check. `manage.py tgbot_healthcheck --stranded` reports
+   what sits under each worker name on the Redis list, and `bot.inflight_depth('<name>')` asks
+   about one of them by name. On RabbitMQ and Kafka nothing is left behind by a stopped worker —
+   the broker requeues, the group replays — so stopping them *is* the drain, and what returns to
+   the old queue has to be finished by a worker still on the old transport.
+
+3. **Recover anything stranded, before the next step makes it unreachable.** A count from
+   `--stranded` identifies messages; it does not move them. `manage.py tgbot_reclaim --worker
+   <name>` puts them back at the front of the queue, and it needs a worker still configured for
+   the **old** transport to take them — so run it, start one worker, and let the queue and its
+   in-flight list reach zero before going on. Once step 4 has moved every process, that list is
+   a key nothing reads: the messages are still in Redis and nothing this package runs will look
+   at them again.
+4. Change `BROKER` and the settings the new transport declares, in **every** process. A producer
+   left on the old transport writes to a queue nothing reads any more, and it will not complain:
+   both configurations are valid, they are simply not the same queue.
+5. Start the bot container first, then the producers. The reverse order queues messages nobody
+   is reading yet, which is harmless but indistinguishable from a broken deployment while you
+   watch it.
+
+Step 4 is the one worth checking twice. `manage.py check` refuses a `BROKER` whose driver is
+missing and a required setting that is empty, so a half-configured process usually fails at
+startup rather than silently — but a process still naming the *old* transport is a correct
+configuration, and nothing can tell it apart from one that meant it.
+
 ## Rename what used to say Redis
 
 Five public names said Redis, in the four entries below, for two different reasons — and the

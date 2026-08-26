@@ -19,11 +19,19 @@ services:
     image: ${IMAGE}
     command: python manage.py start_tgbot
     restart: always
-    # not decoration: the in-flight list is keyed on this name, and without it
-    # Docker invents a new one for each container it creates — see Delivery.
-    # One name is one worker: scale this service and every replica resolves to
-    # this hostname, shares one in-flight list, and reclaims what the others are
-    # still sending. Give each replica its own WORKER_NAME to run more than one
+    # the Redis list's requirement, and only its: that transport keys the in-flight
+    # list on this name, and without `hostname:` Docker invents a new one for each
+    # container it creates — see Redis-list. One name is one worker: scale this
+    # service and every replica resolves to this hostname, shares one in-flight list
+    # and reclaims what the others are still sending. Give each replica its own
+    # WORKER_NAME to run more than one. On the other three transports this line is
+    # optional and nothing strands without it
+    #
+    # `deploy.replicas` on THIS service is a data-loss bug on the Redis list: every
+    # replica resolves to this hostname, shares one in-flight list, and reclaims what
+    # the others are still sending — the same message goes to a real person twice. To
+    # run more than one worker, declare a service per worker with its own name, or
+    # move to a transport that needs no identity
     hostname: telegram-bot-1
     env_file: .env
     environment:
@@ -34,6 +42,137 @@ services:
     image: redis:7-alpine
     restart: always
 ```
+
+That is the default transport. The shape does not change for the other three — one bot
+container, everything else queueing — only the service it depends on and the settings that
+name it.
+
+**Redis Streams** needs no new service: the same server, a different data structure — provided
+that server is **7.0 or newer**, which the list does not require. Below it the transport refuses
+on first use rather than reporting a queue depth it cannot compute; see **[[Redis-Streams]]**.
+
+```yaml
+    environment:
+      DJANGO_AIOGRAM_BROKER: django_aiogram.broker.redis_streams.RedisStreamsBroker
+      DJANGO_AIOGRAM_REDIS_STREAM_KEY: telegram-bot
+```
+
+**RabbitMQ.** `hostname:` becomes optional — the broker requeues what a dropped channel held,
+so nothing is keyed on a name.
+
+```yaml
+  telegram_bot:
+    # …as above, and
+    # `service_healthy`, not the bare list: `depends_on` alone waits for the container
+    # to start, and RabbitMQ answers connections a while before it will accept a publish
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      DJANGO_AIOGRAM_ENABLED: 1
+      DJANGO_AIOGRAM_BROKER: django_aiogram.broker.rabbitmq.RabbitMQBroker
+      # the same password as below, percent-encoded: `pika` parses this with
+      # `URLParameters`, so an `@`, `/`, `:` or `#` in a generated password splits the
+      # URL somewhere nobody meant and the failure looks like a wrong credential
+      DJANGO_AIOGRAM_RABBITMQ_URL: amqp://bot:${RABBITMQ_PASSWORD_URLENCODED}@rabbitmq:5672/
+      DJANGO_AIOGRAM_RABBITMQ_QUEUE: telegram-bot
+
+  rabbitmq:
+    image: rabbitmq:4
+    restart: always
+    # a user that is not `guest`: the default account is refused from anywhere but
+    # localhost, and a queue anything untrusted can write to is a queue that chooses
+    # which Telegram call the bot makes — see SECURITY.md
+    environment:
+      RABBITMQ_DEFAULT_USER: bot
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 10s
+```
+
+Two variables, one secret: the broker wants the password as it is, the URL wants it
+percent-encoded. Derive the second rather than typing it twice —
+
+Both go in `.env` beside the compose file, because that is where Compose reads interpolation
+values from — a shell variable is not visible to it, and the substitution would be an empty
+password whose failure looks like a wrong credential.
+
+**Single-quote the raw value there.** Compose interpolates `.env` values, so a password
+containing `$` becomes a different password before RabbitMQ ever sees it, while the encoded copy
+still stands for the original — an authentication failure with both halves looking correct.
+Measured on Compose v5.3.1:
+
+| in `.env` | what the container gets |
+| --- | --- |
+| `RABBITMQ_PASSWORD='p$X-s'` | `p$X-s` — preserved |
+| `RABBITMQ_PASSWORD="p$X-s"` | `pzz-s` — `$X` expanded |
+| `RABBITMQ_PASSWORD=p$X-s` | `pzz-s` — the same |
+
+A password containing a **single quote** cannot go in `.env` at all: Compose refuses the file
+with `unexpected character "'" in variable name`, and there is no escape for it. Generate one
+without, rather than looking for the quoting that works.
+
+Encode the value by handing it to this and pasting the result:
+
+```shell
+python3 -c 'import getpass, urllib.parse
+print(urllib.parse.quote(getpass.getpass("password: "), safe=""))'
+```
+
+It **prompts** rather than taking the password from anywhere. Five earlier versions of this
+recipe were cleverer and each was wrong differently: a shell variable Compose cannot see,
+`os.environ` the script does not inherit, a `.env` parser that URL-encoded the quotes Compose
+would have stripped, and then an argument — which put the secret in shell history and in `ps`.
+Prompting has no argv, no history, no file to parse and no quoting rules to agree with, and it
+encodes exactly the characters you type.
+
+— because two hand-written values drift, and the drift shows up as an authentication failure
+that points at the credential rather than at the encoding. `env_file: .env` is a different
+mechanism and does not help here: it hands variables to the *container*, while `${...}` in the
+compose file is substituted before that, from Compose's own environment and `.env`.
+
+**Kafka.** Read **[[Kafka]]** before this one rather than after: ordering is per partition and a
+refusal replays a run of messages, and neither is something to discover in production.
+
+```yaml
+  telegram_bot:
+    # …as above, and
+    # no `service_healthy` here: the image ships no healthcheck, so this waits only for
+    # the container to start. A publish before the broker is ready raises after
+    # `KAFKA_TIMEOUT` rather than blocking — which matters for the *producers*, since the
+    # bot container consumes. `restart: always` covers the bot; a web tier that queues on
+    # boot wants a retry of its own
+    depends_on: [kafka]
+    environment:
+      DJANGO_AIOGRAM_ENABLED: 1
+      DJANGO_AIOGRAM_BROKER: django_aiogram.broker.kafka.KafkaBroker
+      DJANGO_AIOGRAM_KAFKA_BOOTSTRAP: kafka:9092
+      DJANGO_AIOGRAM_KAFKA_TOPIC: telegram-bot
+
+  kafka:
+    image: apache/kafka:4.0.0
+    restart: always
+    # the advertised listener is the whole configuration: with the image's default the
+    # broker answers `localhost:9092`, which is itself from inside the container, and a
+    # client elsewhere retries into a refusal loop rather than failing
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9094
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+```
+
+A single-broker Kafka with replication factor 1 is a development recipe. It is here because the
+listener configuration is the part everybody loses an afternoon to, not because one broker is a
+production answer.
 
 ## Upgrading to 3.0: order matters, once
 
@@ -185,6 +324,9 @@ than clean.
 ```shell
 pip install 'django-aiogram[hiredis]'
 ```
+
+Only on the two Redis transports; the other drivers do their own parsing and this extra does
+nothing for them.
 
 redis-py parses replies in Python unless `hiredis` is present, and then in C. Nothing
 in this package needs it and nothing changes if it is absent — it is an extra rather

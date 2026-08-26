@@ -7,6 +7,12 @@
 * [[Sending-messages|Sending messages]]
 * [[Testing]]
 
+**Transports**
+* [[Redis-list|Redis list]]
+* [[Redis-Streams|Redis Streams]]
+* [[RabbitMQ]]
+* [[Kafka]]
+
 **Running it**
 * [[Delivery]]
 * [[Webhook]]
