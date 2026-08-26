@@ -105,6 +105,15 @@ jobs:
     # fakeredis agrees with everything, so it cannot answer whether LMOVE exists,
     # whether CONFIG SET is refused, or whether FSM state survives a restart
     #
+    # RENAMING A LEG BREAKS THE MERGE UNTIL BRANCH PROTECTION IS UPDATED TOO. `master`
+    # requires its status checks by *name*, so a leg that changes name leaves the old name
+    # required and unreportable — and the merge is refused with "the base branch policy
+    # prohibits the merge", which says nothing about why. It cost one refused merge here.
+    # After editing this matrix:
+    #
+    #   gh api repos/OWNER/REPO/branches/master/protection/required_status_checks \
+    #     --jq '.checks[].context'        # compare against `gh pr checks <pr>`
+    #
     # WALL CLOCK, measured on run 32950644613 rather than estimated: `integration (kafka)`
     # is the only outlier at 154s; every other job in the workflow sits between 60 and 81s,
     # nearly all of it container start and `pip install` rather than tests. Splitting this
