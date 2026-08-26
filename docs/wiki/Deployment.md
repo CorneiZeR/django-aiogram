@@ -63,7 +63,11 @@ so nothing is keyed on a name.
 ```yaml
   telegram_bot:
     # …as above, and
-    depends_on: [rabbitmq]
+    # `service_healthy`, not the bare list: `depends_on` alone waits for the container
+    # to start, and RabbitMQ answers connections a while before it will accept a publish
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
     environment:
       DJANGO_AIOGRAM_ENABLED: 1
       DJANGO_AIOGRAM_BROKER: django_aiogram.broker.rabbitmq.RabbitMQBroker
@@ -96,15 +100,16 @@ password whose failure looks like a wrong credential. Encode the value by handin
 pasting the result:
 
 ```shell
-python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' \
-  'the password, exactly as RABBITMQ_DEFAULT_PASS gets it'
+python3 -c 'import getpass, urllib.parse
+print(urllib.parse.quote(getpass.getpass("password: "), safe=""))'
 ```
 
-It takes the password as an argument on purpose. Four earlier versions of this recipe tried to
-be cleverer — reading the shell, reading `.env`, stripping what looked like quoting — and each
-disagreed with Compose in a different way, most recently by URL-encoding the quotes around a
-value Compose would have stripped. This encodes exactly the characters you give it and has no
-opinion about where they came from.
+It **prompts** rather than taking the password from anywhere. Five earlier versions of this
+recipe were cleverer and each was wrong differently: a shell variable Compose cannot see,
+`os.environ` the script does not inherit, a `.env` parser that URL-encoded the quotes Compose
+would have stripped, and then an argument — which put the secret in shell history and in `ps`.
+Prompting has no argv, no history, no file to parse and no quoting rules to agree with, and it
+encodes exactly the characters you type.
 
 — because two hand-written values drift, and the drift shows up as an authentication failure
 that points at the credential rather than at the encoding. `env_file: .env` is a different
@@ -117,6 +122,11 @@ refusal replays a run of messages, and neither is something to discover in produ
 ```yaml
   telegram_bot:
     # …as above, and
+    # no `service_healthy` here: the image ships no healthcheck, so this waits only for
+    # the container to start. A publish before the broker is ready raises after
+    # `KAFKA_TIMEOUT` rather than blocking — which matters for the *producers*, since the
+    # bot container consumes. `restart: always` covers the bot; a web tier that queues on
+    # boot wants a retry of its own
     depends_on: [kafka]
     environment:
       DJANGO_AIOGRAM_ENABLED: 1

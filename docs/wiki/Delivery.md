@@ -144,8 +144,8 @@ contiguous prefix.
 
 `REQUIRE_CRASH_SAFE` refuses to start where the transport cannot promise at-least-once, rather
 than running degraded and saying so only in a log line. Only one transport can be in that
-position — a Redis list whose server does not answer `LMOVE`, which is 6.2 and below but also a
-6.2+ connection failed over to one that does not — and the check happens before the
+position — a Redis list whose server does not answer `LMOVE`, which is anything before 6.2 but
+also a 6.2+ connection failed over to one without it — and the check happens before the
 consumer thread starts, because a failure inside it would kill the thread and leave the process
 polling updates with nothing draining the queue.
 
