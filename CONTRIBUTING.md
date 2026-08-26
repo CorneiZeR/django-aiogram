@@ -103,12 +103,21 @@ confirmed rather than fsynced, so whether it survives the server going away is
 only answerable by taking the server away. Those name the container:
 
 ```shell
-DJANGO_AIOGRAM_TEST_AMQP_CONTAINER=drai-rabbit
-DJANGO_AIOGRAM_TEST_KAFKA_CONTAINER=drai-kafka
+DJANGO_AIOGRAM_TEST_AMQP_URL=amqp://guest:guest@localhost:5673/ \
+DJANGO_AIOGRAM_TEST_AMQP_CONTAINER=drai-rabbit \
+  python -m pytest -m integration tests/integration/test_rabbitmq_against_broker.py
+
+DJANGO_AIOGRAM_TEST_KAFKA_BOOTSTRAP=127.0.0.1:9093 \
+DJANGO_AIOGRAM_TEST_KAFKA_CONTAINER=drai-kafka \
+  python -m pytest -m integration tests/integration/test_kafka_against_broker.py
 ```
 
-Unset, they skip — naming one is opting in to having it restarted. A name that
-docker does not report as running is a failure rather than a skip: it is a
+Both variables on the same invocation, because a container name without a server
+to reach is nothing: the URL says where the broker is, the name says which
+container to stop.
+
+Unset, the cases skip — naming one is opting in to having it restarted. A name
+that docker does not report as running is a failure rather than a skip: it is a
 configured expectation that cannot be met, and the case it would otherwise pass
 over is the only one that answers the question.
 `scripts/smoke_install.sh` is the other half — it builds the wheel and the sdist,
