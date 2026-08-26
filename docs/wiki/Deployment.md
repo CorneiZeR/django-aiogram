@@ -90,23 +90,21 @@ so nothing is keyed on a name.
 Two variables, one secret: the broker wants the password as it is, the URL wants it
 percent-encoded. Derive the second rather than typing it twice —
 
-```shell
-# writes into `.env` beside the compose file, because that is where Compose reads
-# interpolation values from — a plain shell assignment is not visible to it, and the
-# substitution would be an empty password whose failure looks like a wrong credential.
-#
-# reads the password from `.env` as well, rather than from this shell: that is where it
-# already is, and a Python process does not inherit it from there
-python3 - >> .env <<'PY'
-import pathlib, re, urllib.parse
+Both go in `.env` beside the compose file, because that is where Compose reads interpolation
+values from — a shell variable is not visible to it, and the substitution would be an empty
+password whose failure looks like a wrong credential. Encode the value by handing it to this and
+pasting the result:
 
-env = pathlib.Path('.env').read_text()
-found = re.search(r'^RABBITMQ_PASSWORD=(.*)$', env, re.MULTILINE)
-if not found:
-    raise SystemExit('set RABBITMQ_PASSWORD in .env first')
-print('RABBITMQ_PASSWORD_URLENCODED=' + urllib.parse.quote(found.group(1).strip(), safe=''))
-PY
+```shell
+python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' \
+  'the password, exactly as RABBITMQ_DEFAULT_PASS gets it'
 ```
+
+It takes the password as an argument on purpose. Four earlier versions of this recipe tried to
+be cleverer — reading the shell, reading `.env`, stripping what looked like quoting — and each
+disagreed with Compose in a different way, most recently by URL-encoding the quotes around a
+value Compose would have stripped. This encodes exactly the characters you give it and has no
+opinion about where they came from.
 
 — because two hand-written values drift, and the drift shows up as an authentication failure
 that points at the credential rather than at the encoding. `env_file: .env` is a different

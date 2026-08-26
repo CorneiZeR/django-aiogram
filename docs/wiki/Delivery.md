@@ -50,12 +50,21 @@ containers is safe, though a single one handles a lot: the limits in
 
 ## Crash safety
 
-A message taken and not yet sent has to survive the worker being killed, and each
-transport records that its own way. The guarantee is **at-least-once** — so a crash can cause a
-duplicate send — everywhere except one case: a Redis list on a server without `BLMOVE`, where
-the consumer falls back to plain pops and the guarantee drops to at-most-once. That is the row
-the table above marks, and `REQUIRE_CRASH_SAFE` refuses to start there. What an operator has to
-do about the guarantee differs by transport even where the guarantee does not.
+A message taken and not yet sent has to survive the worker being killed, and each transport
+records that its own way. The guarantee is **at-least-once** — so a crash can cause a duplicate
+send — with two exceptions, one per layer.
+
+The transport's: a Redis list on a server without `BLMOVE` falls back to plain pops and drops to
+at-most-once. That is the row the table above marks, and `REQUIRE_CRASH_SAFE` refuses to start
+there.
+
+The handler's: a handler that does not take `on_complete` is settled the moment it returns, so
+whatever it does after that is outside the guarantee on **every** transport. `bot.send_raw` takes
+it and `manage.py start_tgbot` uses it, so a normal worker is covered; see below for the contract
+and why a handler of your own keeps the older behaviour.
+
+What an operator has to do about the guarantee differs by transport even where the guarantee
+does not.
 
 **Redis list.** On Redis 6.2+ the message is moved to `<queue>:processing:<worker>`
 while it is being sent and removed once the send has actually finished. A worker
