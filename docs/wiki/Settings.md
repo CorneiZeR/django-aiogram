@@ -121,10 +121,10 @@ transport you are not using is reported by `W003` as a key nothing reads, which 
 
 #### Redis list
 
-The default transport's four, listed together here because the other three are. They also appear
-above, spread across the tables they landed in when Redis was the only transport — `REDIS_URL`
-under **Credentials**, the other three under **Queue** — and splitting those into what the
-package owns and what a transport does is its own change.
+The Redis list declares four settings, gathered here because the other three transports have
+their own sections. They also appear above, spread across the tables they landed in when Redis
+was the only transport — `REDIS_URL` under **Credentials**, the other three under **Queue** — and
+splitting those into what the package owns and what a transport does is its own change.
 
 | Setting | Default | Description |
 | ------- | ------- | ----------- |

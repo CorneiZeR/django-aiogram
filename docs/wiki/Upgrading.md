@@ -82,14 +82,22 @@ was in flight.
    about one of them by name. On RabbitMQ and Kafka nothing is left behind by a stopped worker —
    the broker requeues, the group replays — so stopping them *is* the drain, and what returns to
    the old queue has to be finished by a worker still on the old transport.
-3. Change `BROKER` and the settings the new transport declares, in **every** process. A producer
+
+3. **Recover anything stranded, before the next step makes it unreachable.** A count from
+   `--stranded` identifies messages; it does not move them. `manage.py tgbot_reclaim --worker
+   <name>` puts them back at the front of the queue, and it needs a worker still configured for
+   the **old** transport to take them — so run it, start one worker, and let the queue and its
+   in-flight list reach zero before going on. Once step 4 has moved every process, that list is
+   a key nothing reads: the messages are still in Redis and nothing this package runs will look
+   at them again.
+4. Change `BROKER` and the settings the new transport declares, in **every** process. A producer
    left on the old transport writes to a queue nothing reads any more, and it will not complain:
    both configurations are valid, they are simply not the same queue.
-4. Start the bot container first, then the producers. The reverse order queues messages nobody
+5. Start the bot container first, then the producers. The reverse order queues messages nobody
    is reading yet, which is harmless but indistinguishable from a broken deployment while you
    watch it.
 
-Step 3 is the one worth checking twice. `manage.py check` refuses a `BROKER` whose driver is
+Step 4 is the one worth checking twice. `manage.py check` refuses a `BROKER` whose driver is
 missing and a required setting that is empty, so a half-configured process usually fails at
 startup rather than silently — but a process still naming the *old* transport is a correct
 configuration, and nothing can tell it apart from one that meant it.
