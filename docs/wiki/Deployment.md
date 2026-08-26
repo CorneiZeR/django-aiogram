@@ -96,8 +96,24 @@ percent-encoded. Derive the second rather than typing it twice —
 
 Both go in `.env` beside the compose file, because that is where Compose reads interpolation
 values from — a shell variable is not visible to it, and the substitution would be an empty
-password whose failure looks like a wrong credential. Encode the value by handing it to this and
-pasting the result:
+password whose failure looks like a wrong credential.
+
+**Single-quote the raw value there.** Compose interpolates `.env` values, so a password
+containing `$` becomes a different password before RabbitMQ ever sees it, while the encoded copy
+still stands for the original — an authentication failure with both halves looking correct.
+Measured on Compose v5.3.1:
+
+| in `.env` | what the container gets |
+| --- | --- |
+| `RABBITMQ_PASSWORD='p$X-s'` | `p$X-s` — preserved |
+| `RABBITMQ_PASSWORD="p$X-s"` | `pzz-s` — `$X` expanded |
+| `RABBITMQ_PASSWORD=p$X-s` | `pzz-s` — the same |
+
+A password containing a **single quote** cannot go in `.env` at all: Compose refuses the file
+with `unexpected character "'" in variable name`, and there is no escape for it. Generate one
+without, rather than looking for the quoting that works.
+
+Encode the value by handing it to this and pasting the result:
 
 ```shell
 python3 -c 'import getpass, urllib.parse
