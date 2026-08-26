@@ -105,6 +105,19 @@ jobs:
     # fakeredis agrees with everything, so it cannot answer whether LMOVE exists,
     # whether CONFIG SET is refused, or whether FSM state survives a restart
     #
+    # WALL CLOCK, measured on run 32950644613 rather than estimated: `integration (kafka)`
+    # is the only outlier at 154s; every other job in the workflow sits between 60 and 81s,
+    # nearly all of it container start and `pip install` rather than tests. Splitting this
+    # job by transport takes the workflow from 22 checks to 27. They run in parallel up to
+    # the account's concurrency limit, so the cost is roughly one extra job's duration on
+    # the tail rather than five, and the slowest job is still Kafka.
+    #
+    # Kept rather than trimmed, and the trim candidate is named so the next person does not
+    # have to guess: `redis streams, floors` goes first. That dimension pins the *library*,
+    # and the two transports drive it through the same client — while `valkey` pins the
+    # *server*, where Streams and the list use different commands and a fork is exactly
+    # where they might diverge.
+    #
     # the transport is in the name, not only the dependency set: the list and Streams
     # used to share a leg, so a Streams failure read as `integration (latest)` and the
     # log was the only place that said which contract had broken
