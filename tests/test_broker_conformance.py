@@ -28,12 +28,17 @@ from django_aiogram.wire.serializers import JsonSerializer
 #: every transport's required settings, because each case carries its own `override_settings`
 #: and that replaces the whole dict — keys a fixture added on the way in are gone by the time
 #: the body runs. Empty when a server is not configured, which is what the skips are for
+#: a real Redis, when one is configured. Without it the two Redis transports face `fakeredis`,
+#: which is what lets this suite run offline — and is also why it could not answer for them: a
+#: double that agrees with everything cannot say whether the contract holds against a server.
+#: The CI leg with a Redis service sets this, so the contract is checked both ways
+REDIS_URL = os.environ.get('DJANGO_AIOGRAM_TEST_REDIS_URL', '')
 AMQP_URL = os.environ.get('DJANGO_AIOGRAM_TEST_AMQP_URL', '')
 AMQP_QUEUE = 'conformance'
 KAFKA_BOOTSTRAP = os.environ.get('DJANGO_AIOGRAM_TEST_KAFKA_BOOTSTRAP', '')
 SETTINGS = {
     'TOKEN': '42:x',
-    'REDIS_URL': 'redis://localhost:6379/0',
+    'REDIS_URL': REDIS_URL or 'redis://localhost:6379/0',
     'RATE_LIMIT': None,
     'REDIS_STREAM_KEY': 'TELEGRAM_BOT_STREAM',
     'RABBITMQ_URL': AMQP_URL,
@@ -65,14 +70,13 @@ def payload(chat_id: int) -> bytes:
 
 
 @pytest.fixture(params=sorted(SHIPPED), ids=lambda path: path.rsplit('.', 1)[-1])
-def broker(request, redis_server):
+def broker(request):
     """One instance of each shipped transport, ready to publish and take.
 
-    `redis_server` for the Redis ones; a transport that needs something else grows its own
-    branch here, and the assertions below do not change — which is the whole point.
+    A branch per transport for what it needs to *run*, and the assertions below do not change —
+    which is the whole point. `redis_server` is requested lazily rather than taken as an
+    argument, because the Redis branch does not want it when a real server is configured.
     """
-    from django.utils.module_loading import import_string
-
     path = request.param
     if 'rabbitmq' in path:
         yield from _against_rabbitmq(path)
@@ -82,10 +86,72 @@ def broker(request, redis_server):
         return
     if 'redis' not in path:
         pytest.skip(f'no fixture yet for {path}: add one rather than skipping the contract')
-    with override_settings(TELEGRAM_BOT=SETTINGS):
-        broker = import_string(path)()
-        broker.conformance_path = path
-        yield broker
+    yield from _against_redis(request, path)
+
+
+def _against_redis(request, path):
+    """The contract against a real Redis where one is configured, `fakeredis` otherwise.
+
+    Both, deliberately. `fakeredis` is what lets this suite run with no server at all, and it
+    is also the reason the two Redis transports were the ones whose contract nobody had
+    checked: a double answers every question the way the code expects, so it cannot report a
+    disagreement. The CI leg that has a Redis service sets ``DJANGO_AIOGRAM_TEST_REDIS_URL``,
+    and there this asks the server.
+
+    The URL goes into ``SETTINGS`` rather than into an override here, because every case carries
+    its own ``override_settings`` and that replaces the whole dict — a key a fixture added on the
+    way in is gone by the time the body runs. Learnt by doing it the other way and watching
+    eighteen cases dial ``localhost:6379``.
+
+    The database is flushed around each case, exactly as the integration suite's `server`
+    fixture does — **it erases the whole selected database**, so point that variable at a
+    throwaway.
+    """
+    from django.utils.module_loading import import_string
+
+    if not REDIS_URL:
+        request.getfixturevalue('redis_server')
+        with override_settings(TELEGRAM_BOT=SETTINGS):
+            broker = import_string(path)()
+            broker.conformance_path = path
+            yield broker
+        return
+
+    from redis import Redis
+
+    from django_aiogram.redis import reset_redis
+
+    client = Redis.from_url(REDIS_URL)
+    if 'streams' in path and not _reports_lag(client):
+        pytest.skip(f'{REDIS_URL} has no XINFO GROUPS lag: Redis Streams needs 7.0')
+    client.flushdb()
+    reset_redis()
+    try:
+        with override_settings(TELEGRAM_BOT=SETTINGS):
+            broker = import_string(path)()
+            broker.conformance_path = path
+            yield broker
+    finally:
+        client.flushdb()
+        reset_redis()
+        client.close()
+
+
+def _reports_lag(client) -> bool:
+    """Whether this server can answer a Streams depth, which is the 7.0 question.
+
+    Asked of the server rather than of its version string, for the reason the broker asks it
+    that way: a fork reports whatever version it likes and what matters is the field.
+    """
+    key = 'conformance-lag-probe'
+    try:
+        client.xadd(key, {'x': '1'})
+        client.xgroup_create(key, 'probe', id='0')
+        return any('lag' in dict(group) for group in client.xinfo_groups(key))
+    except Exception:
+        return False
+    finally:
+        client.delete(key)
 
 
 def _against_kafka(path):

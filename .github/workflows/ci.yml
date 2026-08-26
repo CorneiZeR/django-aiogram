@@ -104,7 +104,11 @@ jobs:
   integration:
     # fakeredis agrees with everything, so it cannot answer whether LMOVE exists,
     # whether CONFIG SET is refused, or whether FSM state survives a restart
-    name: integration (${{ matrix.deps }})
+    #
+    # the transport is in the name, not only the dependency set: the list and Streams
+    # used to share a leg, so a Streams failure read as `integration (latest)` and the
+    # log was the only place that said which contract had broken
+    name: integration (${{ matrix.transport }}, ${{ matrix.deps }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -113,17 +117,57 @@ jobs:
         # the latest is what let a broken redis floor ship: the unit suite uses
         # fakeredis, which has the aclose() that redis-py 5.0 lacked
         include:
-          - deps: latest
+          - transport: redis list
+            suite: tests/integration/test_delivery_against_redis.py
+            deps: latest
             pins: ''
             image: redis:7
-          - deps: floors
+          - transport: redis list
+            suite: tests/integration/test_delivery_against_redis.py
+            deps: floors
             pins: "'django==5.2.0' 'aiogram==3.30.0' 'redis==6.2.0'"
             image: redis:7
           # the fork most managed providers actually run. It answers the same
           # protocol, which is an assumption worth testing rather than assuming
-          - deps: valkey
+          - transport: redis list
+            suite: tests/integration/test_delivery_against_redis.py
+            deps: valkey
             pins: ''
             image: valkey/valkey:8
+          - transport: redis streams
+            suite: tests/integration/test_streams_against_redis.py
+            deps: latest
+            pins: ''
+            image: redis:7
+          - transport: redis streams
+            suite: tests/integration/test_streams_against_redis.py
+            deps: floors
+            pins: "'django==5.2.0' 'aiogram==3.30.0' 'redis==6.2.0'"
+            image: redis:7
+          - transport: redis streams
+            suite: tests/integration/test_streams_against_redis.py
+            deps: valkey
+            pins: ''
+            image: valkey/valkey:8
+          # the only server that can run the Streams refusal, and until now nothing did:
+          # below 7.0 `XINFO GROUPS` has no `lag` field, so the transport raises rather than
+          # guessing a depth a healthcheck would act on. Every other case in that module
+          # skips here, which is the point — measured against 6.2.24, where the refusal is
+          # the one case that runs
+          - transport: redis streams
+            suite: tests/integration/test_streams_against_redis.py
+            deps: old server
+            pins: ''
+            image: redis:6.2
+          # the rest of the integration suite belongs to neither transport: the async
+          # producer and FSM-across-restart cases are about the client and the storage
+          - transport: redis shared
+            suite: >-
+              tests/integration/test_async_producer_against_redis.py
+              tests/integration/test_fsm_across_restart.py
+            deps: latest
+            pins: ''
+            image: redis:7
     services:
       redis:
         image: ${{ matrix.image }}
@@ -143,7 +187,13 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - run: pip install -e '.[redis]' --group dev ${{ matrix.pins }}
-      - run: python -m pytest -q -m integration tests/integration
+      - run: python -m pytest -q -m integration ${{ matrix.suite }}
+        env:
+          DJANGO_AIOGRAM_TEST_REDIS_URL: redis://localhost:6379/0
+      # the contract against a real server, which it had never faced: the fixture
+      # falls back to fakeredis without this variable, and a double cannot report a
+      # disagreement. The RabbitMQ and Kafka legs already run it against theirs
+      - run: python -m pytest -q tests/test_broker_conformance.py
         env:
           DJANGO_AIOGRAM_TEST_REDIS_URL: redis://localhost:6379/0
 
