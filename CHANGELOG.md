@@ -222,6 +222,15 @@ Entries land here as the work does; nothing below is released.
 
 ### Fixed
 
+- **A RabbitMQ connection is no longer held after the thread that owned it ends.** The client
+  keeps a registry of every connection this process opened, because pika allows another thread
+  exactly one operation on a `BlockingConnection` — `add_callback_threadsafe` — so a shutdown can
+  only *ask* a foreign connection to close, and asking needs a reference. That reference was
+  strong and pruned only by a close that went through the client, so a worker thread that exited
+  without closing left its connection, and its socket, for the life of the process. The registry
+  is a `WeakSet` now: measured, a connection built on a pool worker is collected as soon as that
+  worker is gone.
+
 - **A refusal keeps what a caller would branch on.** `ProduceRefusedError` kept the topic and
   what librdkafka said; `QueueRefusedError` kept the queue and formatted the reason into its
   message, so the same retry decision on RabbitMQ meant matching on English. Both carry
