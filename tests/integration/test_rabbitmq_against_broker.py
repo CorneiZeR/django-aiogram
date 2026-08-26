@@ -494,3 +494,64 @@ def test_two_threads_never_share_a_channel_number(amqp_url):
 
     assert 0 not in seen, f'a thread reported no channel at all: {seen}'
     assert len(set(seen)) == len(seen), f'two threads share a channel number: {seen}'
+
+
+@pytest.fixture
+def clean_queue(amqp_url):
+    """Delete the queue before and after, each time on a connection made for the purpose.
+
+    Not `broker_channel`, which every other case here uses: that fixture holds one channel for
+    the length of the test, and a case that restarts the broker leaves it pointing at a
+    connection that no longer exists — so the tidying up would raise instead of tidying.
+    """
+    import pika
+
+    def wipe():
+        connection = pika.BlockingConnection(pika.URLParameters(amqp_url))
+        connection.channel().queue_delete(queue=AMQP_QUEUE)
+        connection.close()
+
+    wipe()
+    try:
+        yield
+    finally:
+        close_connections()
+        wipe()
+
+
+def test_a_confirmed_publish_survives_the_broker_going_away(amqp_url, amqp_container, restart_container, clean_queue):
+    """The confirm is not an fsync barrier, so what it promises has to be tested by taking the
+    broker away.
+
+    `RabbitMQ.md` says the publish is persistent, mandatory and confirmed, and that the confirm
+    means the broker has taken responsibility rather than that the bytes are on a disk. Nothing
+    tested it, and the two one-line regressions that would break it — a publish without
+    `delivery_mode=Persistent`, a queue declared non-durable — are both invisible to every other
+    case here, because a message that never leaves memory is indistinguishable from a durable one
+    until the memory goes.
+
+    **Arranged with nothing consuming**, which is the whole point. With a consumer attached a
+    confirm can follow the consume-and-acknowledge rather than the store, so a passing round trip
+    would prove nothing about a restart — and a restart with no consumer is the case an operator
+    actually has.
+    """
+
+    def answering():
+        import pika
+
+        connection = pika.BlockingConnection(pika.URLParameters(amqp_url))
+        connection.close()
+        return True
+
+    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+        RabbitMQBroker().publish([payload(11)])
+        # before the restart, not after: this is what the process holds, and a connection to a
+        # broker that has gone is not a connection this package should be asked to notice
+        close_connections()
+
+        restart_container(amqp_container, answering)
+
+        taken = RabbitMQBroker().take(30)
+
+        assert taken is not None, 'a confirmed publish did not survive the broker restarting'
+        assert taken.payload == payload(11), 'something came back, but not the message published'

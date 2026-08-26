@@ -56,6 +56,33 @@ runs `FLUSHDB` before and after every test.
 It covers what fakeredis cannot: whether `LMOVE` exists and the consumer picks
 the crash-safe path, whether a reclaim takes back only its own worker's message,
 a mixed pickle/JSON backlog draining, and FSM state surviving a restart.
+
+**RabbitMQ and Kafka have no double at all**, so their modules are skipped
+entirely without a server. Each takes one variable, and the two of them are
+independent — a leg with only RabbitMQ running is a useful leg:
+
+```shell
+docker run -d --name drai-rabbit -p 5673:5672 rabbitmq:4
+DJANGO_AIOGRAM_TEST_AMQP_URL=amqp://guest:guest@localhost:5673/ python -m pytest -m integration
+DJANGO_AIOGRAM_TEST_KAFKA_BOOTSTRAP=localhost:9093 python -m pytest -m integration
+```
+
+The AMQP fixture **deletes the queue it uses** around every test, so give it a
+throwaway broker or a vhost of its own.
+
+Two cases need the broker *stopped*, which no client can arrange: a publish is
+confirmed rather than fsynced, so whether it survives the server going away is
+only answerable by taking the server away. Those name the container:
+
+```shell
+DJANGO_AIOGRAM_TEST_AMQP_CONTAINER=drai-rabbit
+DJANGO_AIOGRAM_TEST_KAFKA_CONTAINER=drai-kafka
+```
+
+Unset, they skip — naming one is opting in to having it restarted. A name that
+docker does not report as running is a failure rather than a skip: it is a
+configured expectation that cannot be met, and the case it would otherwise pass
+over is the only one that answers the question.
 `scripts/smoke_install.sh` is the other half — it builds the wheel and the sdist,
 checks what each of them carries, installs the wheel into a throwaway project and
 checks that Django boots with no credentials at all.

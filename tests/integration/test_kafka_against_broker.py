@@ -519,3 +519,41 @@ def test_a_release_does_not_strand_the_messages_taken_before_it(broker, kafka_bo
         seen = [taken.payload for taken in (replacement.take_nowait() for _ in range(2)) if taken]
 
         assert seen == [payload(2)], f'the acknowledged message was not committed: {seen}'
+
+
+def test_a_produced_record_survives_the_broker_going_away(
+    kafka_bootstrap, kafka_topic, kafka_container, restart_container
+):
+    """The log outlives the broker process, and a group that settled nothing starts at the front.
+
+    Nothing is consuming while the broker goes away, so no offset has been committed — the record
+    has to come back from the log rather than from anybody's memory, and it has to come back from
+    the *beginning* of it, which is the half a fresh group decides.
+
+    **What this does not pin is `acks`**, and that is worth stating because it is the obvious
+    reading of the case. Measured on this single-node cluster: with `acks=0` the record still
+    survives `docker restart`, because the restart is a graceful stop that flushes and the log
+    file is on the host either way. Losing an acknowledged record needs a cluster where
+    replication can be behind, which one broker cannot arrange. So the falsification this case
+    really has is the offset half — `auto.offset.reset` set to `latest` fails it in 68 seconds,
+    measured — and the producer's acknowledgement level is left to `Kafka.md` and to the issue
+    that asks for it to be stated rather than inherited from the driver.
+    """
+    from confluent_kafka.admin import AdminClient
+
+    def answering():
+        return kafka_topic in AdminClient({'bootstrap.servers': kafka_bootstrap}).list_topics(timeout=5).topics
+
+    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+        KafkaBroker().publish([payload(12)])
+        close_clients()
+
+        restart_container(kafka_container, answering)
+
+        # longer than the RabbitMQ case on purpose: a restarted broker has an election and a
+        # group to rejoin before it can hand a partition to anybody, and the measured cost of
+        # that is seconds rather than milliseconds
+        taken = KafkaBroker().take(60)
+
+        assert taken is not None, 'an acknowledged produce did not survive the broker restarting'
+        assert taken.payload == payload(12), 'something came back, but not the record produced'

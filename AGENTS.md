@@ -82,7 +82,11 @@ bash scripts/smoke_install.sh
 
 The first needs a real server; run it when you touch delivery, serialization,
 FSM persistence or connection cleanup. It flushes the database it is pointed at,
-so point it at a throwaway one.
+so point it at a throwaway one. RabbitMQ and Kafka have their own variables and
+their own modules — `DJANGO_AIOGRAM_TEST_AMQP_URL`,
+`DJANGO_AIOGRAM_TEST_KAFKA_BOOTSTRAP`, and `..._AMQP_CONTAINER` /
+`..._KAFKA_CONTAINER` for the two cases that restart the broker. `CONTRIBUTING.md`
+has the commands.
 
 The second builds and installs the wheel; run it when you touch packaging,
 Django startup or the public surface — it type-checks a consumer file against

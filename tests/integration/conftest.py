@@ -20,12 +20,22 @@ uniformly** — which makes the coverage hard to see from outside, so here it is
 * Kafka — `test_a_message_a_killed_worker_held_comes_back`, where the redelivery is the group's
   doing rather than a reclaim.
 
+**Two cases need the broker *stopped*, and they are the only ones that do** —
+`test_a_confirmed_publish_survives_the_broker_going_away` on RabbitMQ and
+`test_a_produced_record_survives_the_broker_going_away` on Kafka. A confirm is not an fsync
+barrier and an acknowledged produce is not a flushed one, so what either promises across a
+restart cannot be arranged from a client. Hence `DJANGO_AIOGRAM_TEST_AMQP_CONTAINER` and
+`DJANGO_AIOGRAM_TEST_KAFKA_CONTAINER`, and hence both skip until one is named: restarting a
+container is not something a test suite should decide to do to a machine it was not pointed at.
+
 The CI legs that run them are named per transport, so a red check says which mechanism broke.
 Measured against Valkey 8.1.9 as well, which answers `redis_version:7.2.4` for compatibility —
 the fork the legs exist to check.
 """
 
 import os
+import shutil
+import subprocess
 import time
 
 import pytest
@@ -43,6 +53,13 @@ AMQP_URL = os.environ.get('DJANGO_AIOGRAM_TEST_AMQP_URL', '')
 #: message when it is settled — an offset moves — so an empty queue cannot be arranged by
 #: tidying up, and a group that has committed carries its position with its name
 KAFKA_BOOTSTRAP = os.environ.get('DJANGO_AIOGRAM_TEST_KAFKA_BOOTSTRAP', '')
+#: the container each server runs in, for the two cases that need it *stopped*. Durability
+#: across a restart cannot be arranged from a client: a confirm says the broker took
+#: responsibility, and whether it kept it is only answerable by taking the broker away. Named
+#: rather than discovered, because a fixture that went looking for "the RabbitMQ container" on a
+#: developer's machine could find one belonging to something else and restart that instead
+AMQP_CONTAINER = os.environ.get('DJANGO_AIOGRAM_TEST_AMQP_CONTAINER', '')
+KAFKA_CONTAINER = os.environ.get('DJANGO_AIOGRAM_TEST_KAFKA_CONTAINER', '')
 
 
 @pytest.fixture(scope='session')
@@ -64,6 +81,80 @@ def kafka_bootstrap():
     if not KAFKA_BOOTSTRAP:
         pytest.skip('set DJANGO_AIOGRAM_TEST_KAFKA_BOOTSTRAP to run the Kafka suite')
     return KAFKA_BOOTSTRAP
+
+
+@pytest.fixture
+def amqp_container(amqp_url):
+    if not AMQP_CONTAINER:
+        pytest.skip('set DJANGO_AIOGRAM_TEST_AMQP_CONTAINER to run the cases that restart the broker')
+    return _restartable(AMQP_CONTAINER)
+
+
+@pytest.fixture
+def kafka_container(kafka_bootstrap):
+    if not KAFKA_CONTAINER:
+        pytest.skip('set DJANGO_AIOGRAM_TEST_KAFKA_CONTAINER to run the cases that restart the broker')
+    return _restartable(KAFKA_CONTAINER)
+
+
+def _restartable(name):
+    """The container, having proved that this machine can restart it.
+
+    Skipped rather than failed when docker is absent or the container is not running: naming one
+    is opting in, and a machine that cannot honour the opt-in has not broken anything. A wrong
+    *name*, though, is a failure — it is a configured expectation that cannot be met, and the
+    case it silently skipped is the only one that answers the question.
+    """
+    docker = shutil.which('docker')
+    if docker is None:
+        pytest.skip('docker is not on PATH, so no container can be restarted')
+    # resolved rather than named: an absolute path is what makes this a call to the docker on
+    # this machine rather than to whatever a PATH entry answers with by then
+    listed = subprocess.run(  # noqa: S603 - a resolved absolute path and a name from this suite's own environment
+        [docker, 'ps', '--filter', f'name=^{name}$', '--format', '{{.Names}}'],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if listed.returncode != 0:
+        pytest.skip(f'docker ps failed, so no container can be restarted: {listed.stderr.strip()}')
+    assert listed.stdout.split() == [name], (
+        f'{name!r} is configured as the container to restart and docker does not report it running'
+    )
+    return name
+
+
+@pytest.fixture
+def restart_container():
+    """Restart a container and wait until the server inside it answers again.
+
+    The wait is the whole fixture. `docker restart` returns when the process has been started,
+    not when the broker is accepting connections, and a take issued into that window fails for a
+    reason that has nothing to do with what the case is asking. So the caller passes a probe --
+    one that returns falsey while the server is not ready -- and this holds until it agrees.
+
+    Bounded and then failed, never skipped: a server that never comes back is a real answer.
+    """
+
+    def restart(name, ready, timeout=120.0):
+        docker = shutil.which('docker')
+        assert docker is not None, 'docker left PATH between naming the container and restarting it'
+        done = subprocess.run(  # noqa: S603 - as above: a resolved path, and a name the fixture already verified
+            [docker, 'restart', name], capture_output=True, text=True, timeout=timeout, check=False
+        )
+        assert done.returncode == 0, f'could not restart {name!r}: {done.stderr.strip()}'
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                if ready():
+                    return
+            except Exception:  # noqa: S110 - the server not answering yet is the expected state here
+                pass
+            time.sleep(0.5)
+        pytest.fail(f'{name!r} restarted but the server did not answer within {timeout}s')
+
+    return restart
 
 
 @pytest.fixture
