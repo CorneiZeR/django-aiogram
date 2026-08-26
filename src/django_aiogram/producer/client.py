@@ -826,6 +826,11 @@ class TelegramBot:
         # and the close and the callback has already run
         self._draining = True
         self._closing = True
+        # the skipped-teardown path below leaves the bot intact for a retry, and the transport
+        # is process-global: releasing it there would close a queue the polling loop is still
+        # taking from, and on Kafka the rebuild would join the group a second time while the
+        # first member still holds the partitions -- the failure this whole change exists to fix
+        retryable = False
         try:
             # inside the try, so a join that raises still reaches the finally below: with
             # both flags left set the bot could never send again. Before the teardown
@@ -838,6 +843,7 @@ class TelegramBot:
                     # run_until_complete and loop.close() both raise on a running
                     # loop; leaving everything in place keeps close() retryable
                     logger.warning('skipping close: stop polling, or the loop thread, before closing the bot')
+                    retryable = True
                     return
                 # a send from another thread may be driving this loop; the lock
                 # keeps the teardown from interleaving with it
@@ -858,13 +864,16 @@ class TelegramBot:
             # consumer thread before calling this, so by now nothing is taking from the broker
             # and a flush cannot race a read. The `atexit` hook stays armed for the processes
             # that never call `close` -- a web tier that only queues -- and `close_broker` is
-            # idempotent, so being reached twice costs nothing
-            # nested, so a transport that raises on the way out cannot leave the flags set.
-            # `close_broker` propagates on purpose -- a caller should hear that a queue could
-            # not be released -- and an exception escaping a `finally` skips whatever follows
-            # it in the same block, which here is the pair below that must never stick
+            # idempotent, so being reached twice costs nothing.
+            #
+            # Not on the retryable path: that one closed nothing and expects to be called
+            # again, so the queue has to survive it. Nested, so a transport that raises on the
+            # way out cannot leave the flags set -- `close_broker` propagates on purpose, and
+            # an exception escaping a `finally` skips whatever follows it in the same block,
+            # which here is the pair below that must never stick
             try:
-                close_broker()
+                if not retryable:
+                    close_broker()
             finally:
                 # a closed bot can be built again, so neither of these may stick, and they are
                 # cleared in the mirror order: `_closing` first, so nothing sees

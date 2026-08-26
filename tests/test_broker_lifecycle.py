@@ -147,3 +147,34 @@ def test_a_transport_that_fails_to_close_does_not_wedge_the_bot(fresh_registry, 
 
     assert instance._closing is False, 'a failed close left the bot refusing every later send'
     assert instance._draining is False, 'and draining, which refuses them differently'
+
+
+def test_a_skipped_teardown_leaves_the_transport_alone(fresh_registry, monkeypatch, caplog):
+    """`close()` refuses a running loop and expects to be called again, so nothing may be released.
+
+    The transport is process-global and the loop that is still running is the one polling, so
+    closing it here takes the queue out from under a live consumer. On Kafka the rebuild joins
+    the group a second time while the first member still holds the partitions — which is the
+    stall this whole change exists to remove, reintroduced by the fix for it.
+    """
+
+    class Running:
+        def is_running(self):
+            return True
+
+        def is_closed(self):
+            return False
+
+    broker = Closeable()
+    monkeypatch.setattr(fresh_registry, '_broker', broker)
+    instance = TelegramBot()
+    monkeypatch.setattr(instance, '_loop', Running())
+
+    with caplog.at_level('WARNING', logger='django_aiogram'):
+        instance.close()
+
+    assert broker.closed == 0, 'a skipped teardown released the queue a live consumer is reading'
+    assert any('skipping close' in record.getMessage() for record in caplog.records), (
+        'the skip was not the path taken, so this case proves nothing'
+    )
+    assert instance._closing is False, 'and the retry it asks for must still be possible'
