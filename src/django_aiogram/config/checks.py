@@ -9,7 +9,6 @@ setting is gone: a project silencing ``E013`` must not silently start silencing
 whatever came after it.
 """
 
-import keyword
 import math
 import os
 import re
@@ -49,12 +48,14 @@ def _reads_as_a_dotted_path(path: str) -> bool:
     character, so `pkg.mod\u00b2.Consumer` satisfied it while `'mod\u00b2'.isidentifier()` is
     False. The rule accepted a path no import could ever resolve.
 
-    Keywords are refused for the same reason -- `'class'.isidentifier()` is True and no module is
-    named that -- so `import_string` would fail on it, which is the thing this rule exists to
-    catch before a deployment does.
+    Keywords are **not** refused, though `'class'.isidentifier()` being True makes them look like
+    the same case. Measured: a file called `class.py` imports perfectly well --
+    `importlib.import_module('pkg.class')` returns the module and `import_string('pkg.class.C')`
+    returns the class -- because only the `import` *statement* goes through Python's grammar, and
+    nothing here does. Refusing that would refuse a path the project can use.
     """
     segments = path.split('.')
-    return len(segments) > 1 and all(segment.isidentifier() and not keyword.iskeyword(segment) for segment in segments)
+    return len(segments) > 1 and all(segment.isidentifier() for segment in segments)
 
 
 #: what a project reading `DELIVERY` from a 3.x settings file has in it, against the path that

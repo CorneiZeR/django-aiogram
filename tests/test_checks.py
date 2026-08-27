@@ -1053,10 +1053,8 @@ def test_the_enum_this_package_publishes_counts_as_redis_storage():
         # `\w` with a `str` pattern matches any Unicode word character, so the first version of
         # this rule accepted a segment `str.isidentifier()` refuses -- a path no import resolves
         ('pkg.mod\u00b2.Consumer', 'not a dotted path'),
-        # `'class'.isidentifier()` is True, and no module is named that
-        ('pkg.class.Consumer', 'not a dotted path'),
     ],
-    ids=['empty', '3.x blpop', '3.x keyspace', 'not a path', 'bare name', 'not an identifier', 'a keyword'],
+    ids=['empty', '3.x blpop', '3.x keyspace', 'not a path', 'bare name', 'not an identifier'],
 )
 def test_e009_reports_what_a_string_can_be_wrong_about(value, says):
     """`DELIVERY` is a dotted path since 4.0, so it can be wrong in the ways a path can be.
@@ -1110,7 +1108,10 @@ def test_e009_accepts_a_path_it_cannot_resolve_and_says_where_it_will_be(monkeyp
         msg = 'mined'
         raise ImportError(msg)
 
-    monkeypatch.setattr('django.utils.module_loading.import_string', record)
+    # `checks.py` binds `import_string` at module import, so patching it where it is *defined*
+    # leaves the name this module calls pointing at the real one -- the mine would sit beside the
+    # road. Measured: with the wrong target, a rule restored to resolving passed this case
+    monkeypatch.setattr('django_aiogram.config.checks.import_string', record)
     monkeypatch.setattr('django_aiogram.consumer.delivery.delivery_class', record)
 
     reported = [message for message in check_settings() if message.id == 'django_aiogram.E009']
@@ -1136,3 +1137,27 @@ def test_the_two_lists_of_3x_delivery_names_agree():
     assert rules.THREE_X_DELIVERIES == consumer.THREE_X_DELIVERIES, (
         f'checks: {rules.THREE_X_DELIVERIES}; consumer: {consumer.THREE_X_DELIVERIES}'
     )
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'DELIVERY': 'myapp.class.Consumer',
+    }
+)
+def test_e009_accepts_a_path_whose_segment_is_a_python_keyword():
+    """`'class'.isidentifier()` is True, and that is the whole answer.
+
+    It looks like the superscript case above and is its opposite: measured, a file called
+    `class.py` imports perfectly well — `importlib.import_module('pkg.class')` returns the module
+    and `import_string('pkg.class.Consumer')` returns the class — because only the `import`
+    *statement* goes through Python's grammar, and neither of those does.
+
+    So a rule refusing it would refuse a path the project can use, which is worse than the gap it
+    would close. It was refused for one round of this pull request, and this case is what stops
+    that returning.
+    """
+    reported = [message for message in check_settings() if message.id == 'django_aiogram.E009']
+
+    assert reported == [], f'a keyword segment is importable, and was refused: {reported}'
