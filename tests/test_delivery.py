@@ -615,11 +615,38 @@ def documented_consumer():
     return namespace['BatchedDelivery']
 
 
+def test_the_page_counts_its_own_rules():
+    """The page says how many rules a subclass must follow, and then lists them.
+
+    A number in prose beside a list is a claim that goes stale the moment the list grows -- which
+    is exactly what happened when `read_timeout` became the fifth, and it was review that noticed
+    rather than the suite. Four places repeat the count, so the count is read from the list here
+    and every one of them is held to it.
+    """
+    stated = re.search(r'^(\w+) rules, and each is a defect', DELIVERY_PAGE, re.MULTILINE)
+    assert stated, 'the page no longer states how many rules it lists'
+    words = {'Three': 3, 'Four': 4, 'Five': 5, 'Six': 6, 'Seven': 7}
+    listed = len(re.findall(r'^\* \*\*', DELIVERY_PAGE.split(stated.group(0))[1], re.MULTILINE))
+
+    assert words[stated.group(1)] == listed, f'the page says {stated.group(1).lower()}, and lists {listed}'
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    repeated = [
+        root / 'docs' / 'wiki' / 'Upgrading.md',
+        root / 'src' / 'django_aiogram' / 'consumer' / 'delivery.py',
+        root / 'CHANGELOG.md',
+        pathlib.Path(__file__),
+    ]
+    for elsewhere in repeated:
+        text = elsewhere.read_text(encoding='utf-8')
+        assert f'{stated.group(1).lower()} rules' in text, f'{elsewhere.name} states a different count'
+
+
 @override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1})
 def test_the_documented_consumer_delivers(redis_server):
     """Run the page's own class against a queue with a message in it.
 
-    The four rules the page states are each a defect this package has had, so the case drives the
+    The five rules the page states are each a defect this package has had, so the case drives the
     ones that can be seen from outside: the message is delivered, it leaves the in-flight list,
     and `stop()` ends the loop.
     """

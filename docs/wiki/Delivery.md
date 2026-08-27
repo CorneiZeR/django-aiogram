@@ -71,7 +71,7 @@ class BatchedDelivery(Delivery):
         self.collect()  # again: a send that finished during the last read is still unsettled
 ```
 
-Four rules, and each is a defect this package has already had:
+Five rules, and each is a defect this package has already had:
 
 * **`run()` must return when `stop()` is called.** `self.stopping` is the flag;
   `start_tgbot` joins the thread with a deadline taken from the transport's own timeout, and a

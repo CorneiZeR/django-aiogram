@@ -318,7 +318,7 @@ Entries land here as the work does; nothing below is released.
   your own blocks for ever, raises inside the read, or lets the heartbeat expire under a consumer
   that is fine. `Delivery` itself and any subclass that leaves `run()` abstract are refused by
   name rather than by `TypeError`. **Delivery** documents what `run()` must
-  do, with the four rules that are each a defect this package has already had, and the page's own
+  do, with the five rules that are each a defect this package has already had, and the page's own
   example is executed by the suite.
 
   `DeliveryKind` is **gone**: an enum of one member is not a choice. `E009` refuses `'blpop'` and

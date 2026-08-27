@@ -9,7 +9,7 @@ managed Redis providers usually refuse, and it could not deliver before the TTL 
 Since 4.0 ``DELIVERY`` is a **dotted path**, so a project can name a :class:`Delivery` of its
 own; until then it accepted the single string ``'blpop'``, the name of a Redis command that three
 of the four transports never issue. What a subclass must do is on the **Delivery** page, with the
-four rules that are each a defect this module has already had.
+five rules that are each a defect this module has already had.
 
 It consumes crash-safely where the server allows it: a message is moved to a
 processing list while it is being sent and removed once the send has actually
