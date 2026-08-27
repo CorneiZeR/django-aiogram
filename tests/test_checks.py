@@ -1050,8 +1050,13 @@ def test_the_enum_this_package_publishes_counts_as_redis_storage():
         ('keyspace', 'removed in 3.0'),
         ('smoke-signals', 'not a dotted path'),
         ('BlpopDelivery', 'not a dotted path'),
+        # `\w` with a `str` pattern matches any Unicode word character, so the first version of
+        # this rule accepted a segment `str.isidentifier()` refuses -- a path no import resolves
+        ('pkg.mod\u00b2.Consumer', 'not a dotted path'),
+        # `'class'.isidentifier()` is True, and no module is named that
+        ('pkg.class.Consumer', 'not a dotted path'),
     ],
-    ids=['empty', '3.x blpop', '3.x keyspace', 'not a path', 'bare name'],
+    ids=['empty', '3.x blpop', '3.x keyspace', 'not a path', 'bare name', 'not an identifier', 'a keyword'],
 )
 def test_e009_reports_what_a_string_can_be_wrong_about(value, says):
     """`DELIVERY` is a dotted path since 4.0, so it can be wrong in the ways a path can be.

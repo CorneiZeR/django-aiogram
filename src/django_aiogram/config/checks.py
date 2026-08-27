@@ -9,6 +9,7 @@ setting is gone: a project silencing ``E013`` must not silently start silencing
 whatever came after it.
 """
 
+import keyword
 import math
 import os
 import re
@@ -39,9 +40,22 @@ MODE_CHOICES = choices(UpdateMode)
 SERIALIZER_CHOICES = choices(SerializerKind)
 PAYLOAD_CHOICES = choices(PayloadDetail)
 
-#: a dotted path, loosely: at least one dot, and every segment an identifier. Loose on purpose --
-#: this rule decides whether the *string* could name something, not whether it does
-_DOTTED_PATH = re.compile(r'[A-Za-z_]\w*(\.[A-Za-z_]\w*)+')
+
+def _reads_as_a_dotted_path(path: str) -> bool:
+    r"""Whether the string could name something importable at all.
+
+    `str.isidentifier` rather than a `\w`-based pattern, which was the first version and was
+    wrong in a way worth recording: with a `str` pattern, Python's `\\w` matches any Unicode word
+    character, so `pkg.mod\u00b2.Consumer` satisfied it while `'mod\u00b2'.isidentifier()` is
+    False. The rule accepted a path no import could ever resolve.
+
+    Keywords are refused for the same reason -- `'class'.isidentifier()` is True and no module is
+    named that -- so `import_string` would fail on it, which is the thing this rule exists to
+    catch before a deployment does.
+    """
+    segments = path.split('.')
+    return len(segments) > 1 and all(segment.isidentifier() and not keyword.iskeyword(segment) for segment in segments)
+
 
 #: what a project reading `DELIVERY` from a 3.x settings file has in it, against the path that
 #: does the same thing. Imported from the consumer would cost aiogram at check time -- see
@@ -859,7 +873,7 @@ def _a_usable_delivery(key: str) -> list[Problem]:
         replacement = THREE_X_DELIVERIES[path]
         instead = f'Write {replacement!r}.' if replacement else 'That consumer was removed in 3.0.'
         return [Problem(f'is {path!r}, which 4.0 replaced with a dotted path. {instead}', hint=_DELIVERY_HINT)]
-    if not _DOTTED_PATH.fullmatch(path):
+    if not _reads_as_a_dotted_path(path):
         return [Problem(f'is {path!r}, which is not a dotted path.', hint=_DELIVERY_HINT)]
     return []
 
