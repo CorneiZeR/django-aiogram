@@ -224,12 +224,14 @@ class Broker(ABC):
         implementation says so, and so does its page -- the contract allows it rather than
         having it slip through.
 
-        ``worker`` names somebody else, which is how a monitor reads what a worker that is
-        gone was still holding. Only a transport that records unsettled work under a *name*
-        can answer that -- the Redis list keeps a key per worker, a stream group records the
-        consumer each entry went to -- and the two that do not must raise
-        :class:`~django_aiogram.broker.exceptions.WorkerDepthUnavailableError` rather than
-        return a number.
+        ``None`` is the caller. A ``worker`` is a question *by name*, which is how a monitor
+        reads what a worker that is gone was still holding -- and only a transport that records
+        unsettled work under a name can answer it: the Redis list keeps a key per worker, a
+        stream group records the consumer each entry went to. The two that do not must raise
+        :class:`~django_aiogram.broker.exceptions.WorkerDepthUnavailableError` for **any** name,
+        the caller's own included. There is nothing for it to match there, and answering it from
+        the caller's own count would make the reply depend on whether a string happened to equal
+        `worker_identity()` -- which on Kafka is not even how the group knows this member.
 
         Refusing rather than answering zero, because zero is what stops somebody looking. The
         argument reached a Redis client directly before this existed, so on a RabbitMQ or Kafka

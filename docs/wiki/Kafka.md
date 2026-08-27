@@ -109,7 +109,8 @@ waiting, and the bulk path is faster for it too.
   are exact; they answer different questions.
 - `bot.inflight_depth()` answers from **this process's memory**. Kafka has nothing to ask: an
   offset is either committed or not, and "taken but not settled" exists only here. So it is a
-  reading for the bot container; anywhere else it is zero, correctly and uselessly. Naming
-  *another* worker raises `WorkerDepthUnavailableError`: the group knows its members by an id the
-  coordinator assigned, not by a name this package chose — and what a dead member held is already
+  reading for the bot container; anywhere else it is zero, correctly and uselessly. Passing a
+  **name at all** raises `WorkerDepthUnavailableError`, this process's own name included: the
+  group knows its members by an id the coordinator assigned, not by a name this package chose, so
+  there is nothing for a name to match — and what a dead member held is already
   replayed to whoever takes its partitions, so the number worth reading is `queue_depth()`.

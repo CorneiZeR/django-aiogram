@@ -66,9 +66,10 @@ answers **zero**, correctly and uselessly. On those two, run it in the bot conta
 broker's own tooling.
 
 The same split decides whether you may **name** a worker. `inflight_depth('some-worker')` reads
-another worker's in-flight work on the Redis pair; on RabbitMQ and Kafka it raises
-`WorkerDepthUnavailableError`, because the unsettled work there belongs to a channel or a group
-member rather than to a name this package chose. That refusal is deliberately not a zero: on those
+that worker's in-flight work on the Redis pair; on RabbitMQ and Kafka **any** name raises
+`WorkerDepthUnavailableError` — the calling worker's own included — because the unsettled work
+there belongs to a channel or a group member rather than to a name this package chose, so there is
+nothing for a name to match. That refusal is deliberately not a zero: on those
 two transports what a dead worker held is already back in `queue_depth()` — the broker returns an
 unacknowledged message when the channel drops, the group replays an uncommitted offset — so the
 number to look at is the queue's, and there is nothing to reclaim by hand.

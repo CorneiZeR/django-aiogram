@@ -37,6 +37,7 @@ from django_aiogram import TelegramBot
 from django_aiogram.broker.exceptions import WorkerDepthUnavailableError
 from django_aiogram.broker.redis_list import RedisListBroker
 from django_aiogram.broker.redis_streams import RedisStreamsBroker
+from django_aiogram.eventlog.events import worker_identity
 
 SETTINGS = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'}
 STREAMS = {**SETTINGS, 'BROKER': 'django_aiogram.broker.redis_streams.RedisStreamsBroker', 'REDIS_STREAM_KEY': 'tg'}
@@ -93,6 +94,12 @@ def test_a_transport_that_cannot_answer_refuses_rather_than_saying_zero(path):
         assert broker.inflight_depth() == 0, 'this process holds nothing, and can still say so'
         with pytest.raises(WorkerDepthUnavailableError) as refused:
             broker.inflight_depth('a-worker-that-died')
+
+        # its *own* name too, and that is the part worth pinning: answering it from the count
+        # this process keeps would make the reply depend on whether a string happened to equal
+        # `worker_identity()`, which on neither transport is how the broker knows this member
+        with pytest.raises(WorkerDepthUnavailableError):
+            broker.inflight_depth(worker_identity())
 
     assert refused.value.worker == 'a-worker-that-died'
     assert refused.value.broker == path.rsplit('.', 1)[1], 'the transport names itself by its class'
