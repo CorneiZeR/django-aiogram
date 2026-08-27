@@ -1082,7 +1082,7 @@ def test_e009_reports_what_a_string_can_be_wrong_about(value, says):
         'DELIVERY': 'myproject.consumers.NotHereYet',
     }
 )
-def test_e009_accepts_a_path_it_cannot_resolve_and_says_where_it_will_be():
+def test_e009_accepts_a_path_it_cannot_resolve_and_says_where_it_will_be(monkeypatch):
     """The rule stops at the shape, and the hint says so, because resolving costs aiogram.
 
     Importing the consumer module pulls `wire.serializers`, which encodes aiogram models and so
@@ -1093,8 +1093,29 @@ def test_e009_accepts_a_path_it_cannot_resolve_and_says_where_it_will_be():
     resolves it before starting a thread. What this case pins is that the reader is *told* that:
     a hint naming only the shape would send somebody hunting for a rule that cannot exist.
     """
+
+    # an empty report is not evidence on its own: a rule that resolved the path and swallowed the
+    # `ImportError` would satisfy it too, and that is exactly the regression this case exists to
+    # prevent -- the aiogram import coming back into `manage.py check`. So both routes to a
+    # resolution are *recorded*, and the assertion below means "did not try".
+    #
+    # Recorded rather than raised, and that distinction was measured: the first version of this
+    # guard raised `AssertionError`, and a rule that wrapped its resolution in `except Exception`
+    # -- which is exactly how a swallowing regression looks -- ate the guard and the case passed.
+    # A flag cannot be swallowed
+    attempts = []
+
+    def record(*args: object, **kwargs: object) -> None:
+        attempts.append(args)
+        msg = 'mined'
+        raise ImportError(msg)
+
+    monkeypatch.setattr('django.utils.module_loading.import_string', record)
+    monkeypatch.setattr('django_aiogram.consumer.delivery.delivery_class', record)
+
     reported = [message for message in check_settings() if message.id == 'django_aiogram.E009']
 
+    assert attempts == [], 'the check resolved the path, which is what costs aiogram at check time'
     assert reported == [], f'the shape is fine, so nothing should be reported: {reported}'
     registered = [check for check in CHECKS if check.key == 'DELIVERY']
     # the id as well as the key: a rule renamed to E0xx while still watching DELIVERY would
