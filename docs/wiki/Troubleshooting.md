@@ -34,7 +34,7 @@ why the package sets the deadline itself rather than relying on the client.
 from django_aiogram import bot
 
 bot.queue_depth()  # messages waiting for a worker
-bot.inflight_depth()  # what this worker is part-way through sending
+bot.inflight_depth()  # what this worker is part-way through sending — on Redis Streams, the group
 ```
 
 Those two answer for whichever transport `BROKER` names. From a shell there is no

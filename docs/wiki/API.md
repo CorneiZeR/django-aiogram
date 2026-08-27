@@ -129,8 +129,14 @@ answering zero, and `BrokerDependencyError` when it is the driver that is absent
 rather than the setting. A monitor that runs in a disabled process still needs that setting, and the
 driver: `manage.py check` does not ask a disabled process for either.
 
-`inflight_depth` defaults to this process's own worker identity; naming another is
-how a monitor reads what a worker that is gone was still holding. The key scheme
+`inflight_depth` with no argument answers for the calling process on three of the four
+transports; naming another is how a monitor reads what a worker that is gone was still holding.
+
+**Redis Streams is the exception, and deliberately.** Unnamed, it answers for the whole consumer
+group rather than for this consumer, because a stream's pending list belongs to the group: after a
+crash the unsettled work is whoever's picks it up, so "how much is unsettled" is the question with
+an answer. Name a consumer to narrow it to that one's share. A monitor reading the unnamed number
+there is reading the group's backlog, which is usually what it wants — but it is not one worker's. The key scheme
 behind them is this package's business — an exporter should not have to reproduce
 `<REDIS_MESSAGES_KEY>:processing:<worker>` by hand.
 

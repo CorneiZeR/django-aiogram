@@ -217,6 +217,13 @@ class Broker(ABC):
     def inflight_depth(self, worker: str | None = None) -> int:
         """How many this worker has taken and not yet settled.
 
+        "This worker" on three of the four. A transport whose unsettled work belongs to a
+        *group* rather than to a member may answer for the group, and Redis Streams does: a
+        pending entry after a crash is whoever picks it up, so the group's total is the number
+        with a meaning while one consumer's is an accident of who happened to read it. Its own
+        implementation says so, and so does its page -- the contract allows it rather than
+        having it slip through.
+
         ``worker`` names somebody else, which is how a monitor reads what a worker that is
         gone was still holding. Only a transport that records unsettled work under a *name*
         can answer that -- the Redis list keeps a key per worker, a stream group records the
