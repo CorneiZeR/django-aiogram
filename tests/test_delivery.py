@@ -1,4 +1,5 @@
 import asyncio
+import itertools
 import pathlib
 import re
 import threading
@@ -11,7 +12,7 @@ from django.test import override_settings
 
 from django_aiogram import TelegramBot
 from django_aiogram.broker.redis_list import RedisListBroker
-from django_aiogram.consumer.delivery import BlpopDelivery, get_delivery
+from django_aiogram.consumer.delivery import BlpopDelivery, Delivery, get_delivery
 from django_aiogram.eventlog.events import new_correlation_id
 from django_aiogram.producer.client import Outbound
 from django_aiogram.redis import processing_key
@@ -44,8 +45,13 @@ class NotADelivery:
         ('keyspace', 'removed in 3.0'),
         ('tests.test_delivery.NoSuchName', 'cannot be imported'),
         ('tests.test_delivery.NotADelivery', 'not a Delivery subclass'),
+        # the base class is the name a reader has just met on the page, so it is the refusal
+        # they are most likely to earn -- and building it raises `TypeError: Can't instantiate
+        # abstract class`, which names the class and never the setting
+        ('django_aiogram.consumer.delivery.Delivery', 'which is abstract'),
+        ('tests.test_delivery.HalfWritten', 'which is abstract'),
     ],
-    ids=['empty', '3.x blpop', '3.x keyspace', 'absent', 'not a delivery'],
+    ids=['empty', '3.x blpop', '3.x keyspace', 'absent', 'not a delivery', 'the base class', 'run left abstract'],
 )
 def test_get_delivery_refuses_what_it_cannot_build(value, says):
     """Four ways a path can be wrong, and the 3.x word that is none of them.
@@ -655,8 +661,8 @@ def test_the_documented_consumer_settles_a_send_that_finished_during_the_last_re
     Arranged without timing: the handler waits for this test to say when the send finished, and
     the test says so *after* the consumer is back inside its blocking read.
     """
-    finished = threading.Event()
     dispatched = threading.Event()
+    reading_again = threading.Event()
     completions = []
 
     def handler(function, *, on_complete=None, **payload):
@@ -666,20 +672,53 @@ def test_the_documented_consumer_settles_a_send_that_finished_during_the_last_re
 
     consumer = documented_consumer()(handler=handler)
     consumer.broker.publish([JsonSerializer().dumps({'function': 'send_message', 'chat_id': 9})])
+
+    # the completion has to arrive while the consumer is inside a read it has already committed
+    # to, or the loop's own `collect()` at the top of the next turn settles it and this case
+    # passes with the final one deleted. So entry into the second read is *observed* rather than
+    # assumed -- the proxy signals on the way in, before delegating
+    real_take = consumer.broker.take
+    reads = itertools.count(1)
+
+    def announcing_take(timeout):
+        if next(reads) >= 2:
+            reading_again.set()
+        return real_take(timeout)
+
+    consumer.broker = _ProxyBroker(consumer.broker, announcing_take)
     thread = consumer.start_thread()
     try:
         assert dispatched.wait(timeout=5), 'the consumer never dispatched the message'
         assert consumer.broker.inflight_depth() == 1, 'a deferred send should still be in flight'
+        assert reading_again.wait(timeout=5), 'the consumer never reached a second read'
 
-        completions[0]()  # the send finished, and the consumer is inside its next blocking read
-        finished.set()
+        completions[0]()  # the send finishes with the consumer already inside that read
         consumer.stop()
     finally:
         thread.join(timeout=10)
 
-    assert finished.is_set()
     assert not thread.is_alive(), 'stop() did not end the documented loop'
     assert consumer.broker.inflight_depth() == 0, (
         'the completion that arrived during the last read was never collected, so a graceful '
         'stop left the message to be delivered again'
     )
+
+
+class _ProxyBroker:
+    """The process broker with one method replaced, for a case that has to see a call happen.
+
+    Everything else is delegated rather than reimplemented: the consumer under test reaches for
+    `alive`, `ack`, `crash_safe` and `inflight_depth` too, and a double that answered those itself
+    would be a second consumer contract to keep true.
+    """
+
+    def __init__(self, wrapped, take):
+        self._wrapped = wrapped
+        self.take = take
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
+
+
+class HalfWritten(Delivery):
+    """A subclass that inherits the contract and does not implement it."""

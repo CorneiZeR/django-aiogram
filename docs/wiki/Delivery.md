@@ -63,7 +63,7 @@ class BatchedDelivery(Delivery):
         while not self.stopping:
             self.heartbeat()
             self.collect()  # settle what finished while we blocked
-            taken = self.broker.take(timeout=5)  # or take_nowait, in a loop of your own
+            taken = self.broker.take(self.read_timeout)  # never a number of your own: see below
             if taken is None:
                 continue
             if self.dispatch(taken.payload, taken.handle):
@@ -86,6 +86,12 @@ Four rules, and each is a defect this package has already had:
 * **Do the transport's I/O on your own thread only.** The broker instance is process-global and
   each transport restricts what a foreign thread may touch; `heartbeat()`, `take()` and
   `acknowledge()` all belong to the thread `run()` is on.
+* **Ask `self.read_timeout` how long a blocking read may wait.** It is `BLPOP_TIMEOUT` capped by
+  what the transport and the heartbeat allow, and a number of your own gets it wrong in one of
+  three ways: `0` blocks for ever and swallows `stop()`; longer than the transport's timeout turns
+  an idle round into an error raised inside the read; longer than `HEARTBEAT_INTERVAL` lets the
+  heartbeat expire under a consumer that is doing fine. `W004` reports on the same helper, so a
+  check cannot describe a cap your consumer does not use.
 
 `E009` checks the shape of the path at `manage.py check` and nothing more: resolving it would
 import the consumer module, which imports the serializer, which imports aiogram — 883ms and

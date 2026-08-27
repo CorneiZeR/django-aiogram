@@ -156,6 +156,21 @@ class Delivery(ABC):
         self._stop.set()
 
     @property
+    def read_timeout(self) -> int:
+        """How long a blocking take may ask for, in seconds.
+
+        ``BLPOP_TIMEOUT`` capped by what the transport and the heartbeat allow: a read asked to
+        wait longer than the socket deadline raises inside the read instead of returning, and one
+        that outlasts ``HEARTBEAT_INTERVAL`` lets the heartbeat expire under a consumer that is
+        doing fine. `W004` reports on the same helper, so a check cannot describe a cap the
+        consumer does not use.
+
+        Public for the reason :attr:`stopping` is: a subclass that has to redo this arithmetic
+        will get it wrong, and the page that documents writing one would have to teach it.
+        """
+        return max(1, min(int(conf['BLPOP_TIMEOUT']), blpop_ceiling().seconds))
+
+    @property
     def stopping(self) -> bool:
         """Whether :meth:`stop` has been called, which is what ``run`` loops until.
 
@@ -532,14 +547,11 @@ class BlpopDelivery(Delivery):
 
     def run(self) -> None:
         """Block on the queue until :meth:`stop` is called."""
-        # 0 means "block for ever" in Redis, which would swallow stop(); the
-        # heartbeat would expire under a consumer that is doing fine; and a pop asked
-        # to wait longer than the socket will turns an idle round into an error.
-        # `blpop_ceiling()` weighs the last two and this line applies the first against
-        # them, which is why `bound_by` never names `BLPOP_TIMEOUT`. `W004` reports on the
-        # same helper — one place, so the check cannot describe a cap the consumer does
-        # not use
-        timeout = max(1, min(int(conf['BLPOP_TIMEOUT']), blpop_ceiling().seconds))
+        # read once and reused below: `read_timeout` is a property over `blpop_ceiling()`,
+        # which the subclass a project writes needs as much as this one does -- see the
+        # property for what the three terms are and why `bound_by` never names
+        # `BLPOP_TIMEOUT`
+        timeout = self.read_timeout
         reclaimed = self.reclaim()
         logger.info(
             'delivery started',
@@ -613,6 +625,12 @@ def delivery_class() -> type[Delivery]:
         raise DeliveryNotConfiguredError(path, f'which cannot be imported: {error}') from error
     if not (isinstance(resolved, type) and issubclass(resolved, Delivery)):
         raise DeliveryNotConfiguredError(path, 'which is not a Delivery subclass.')
+    if inspect.isabstract(resolved):
+        # `Delivery` itself, or a subclass that left `run` abstract. Building one raises
+        # `TypeError: Can't instantiate abstract class`, which names the class and not the
+        # setting -- and this is the one refusal a reader is most likely to earn, since the base
+        # class is the name they have just read on the page
+        raise DeliveryNotConfiguredError(path, 'which is abstract: implement run() or name a subclass that does.')
     return resolved
 
 

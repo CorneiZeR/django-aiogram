@@ -1091,7 +1091,10 @@ def test_e009_accepts_a_path_it_cannot_resolve_and_says_where_it_will_be():
     reported = [message for message in check_settings() if message.id == 'django_aiogram.E009']
 
     assert reported == [], f'the shape is fine, so nothing should be reported: {reported}'
-    assert any(check.key == 'DELIVERY' for check in CHECKS), 'E009 no longer looks at DELIVERY'
+    registered = [check for check in CHECKS if check.key == 'DELIVERY']
+    # the id as well as the key: a rule renamed to E0xx while still watching DELIVERY would
+    # satisfy "some check looks at it", and every message this suite matches on says E009
+    assert [check.code for check in registered] == ['E009'], f'DELIVERY is watched by {registered}'
 
 
 def test_the_two_lists_of_3x_delivery_names_agree():
