@@ -646,7 +646,7 @@ def test_the_page_counts_its_own_rules():
 def test_the_documented_consumer_delivers(redis_server):
     """Run the page's own class against a queue with a message in it.
 
-    The five rules the page states are each a defect this package has had, so the case drives the
+    The six rules the page states are each a defect this package has had, so the case drives the
     ones that can be seen from outside: the message is delivered, it leaves the in-flight list,
     and `stop()` ends the loop.
     """
@@ -729,6 +729,43 @@ def test_the_documented_consumer_settles_a_send_that_finished_during_the_last_re
         'the completion that arrived during the last read was never collected, so a graceful '
         'stop left the message to be delivered again'
     )
+
+
+@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1, 'MAX_IN_FLIGHT': 1})
+def test_the_documented_consumer_keeps_max_in_flight(redis_server):
+    """`MAX_IN_FLIGHT` is enforced by *not taking*, so a loop that skips the gate breaks it.
+
+    Two messages, a handler that defers both completions, and a bound of one: the second message
+    must stay in the queue until the first is settled. The shipped consumer holds at the same
+    point, and a custom one that forgets to takes as many messages as the queue has.
+    """
+    dispatched = threading.Event()
+    completions = []
+
+    def handler(function, *, on_complete=None, **payload):
+        completions.append(on_complete)
+        dispatched.set()
+
+    consumer = documented_consumer()(handler=handler)
+    payloads = [JsonSerializer().dumps({'function': 'send_message', 'chat_id': index}) for index in (1, 2)]
+    consumer.broker.publish(payloads)
+    thread = consumer.start_thread()
+    try:
+        assert dispatched.wait(timeout=5), 'the consumer never dispatched the first message'
+        # the gate holds before the second take, so the queue keeps the second message rather
+        # than the consumer holding two unsettled sends
+        for _ in range(50):
+            if consumer.broker.depth() == 1 and consumer.broker.inflight_depth() == 1:
+                break
+            time.sleep(0.02)
+
+        assert len(completions) == 1, f'{len(completions)} sends were started under MAX_IN_FLIGHT=1'
+        assert consumer.broker.depth() == 1, 'the second message was taken while one was in flight'
+    finally:
+        for complete in completions:
+            complete()
+        consumer.stop()
+        thread.join(timeout=10)
 
 
 class _ProxyBroker:

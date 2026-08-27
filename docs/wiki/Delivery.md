@@ -63,6 +63,9 @@ class BatchedDelivery(Delivery):
         while not self.stopping:
             self.heartbeat()
             self.collect()  # settle what finished while we blocked
+            self.hold_for_capacity()  # MAX_IN_FLIGHT, if the project set one
+            if self.stopping:  # the gate above releases on shutdown as well as on capacity
+                break
             taken = self.broker.take(self.read_timeout)  # never a number of your own: see below
             if taken is None:
                 continue
@@ -71,7 +74,7 @@ class BatchedDelivery(Delivery):
         self.collect()  # again: a send that finished during the last read is still unsettled
 ```
 
-Five rules, and each is a defect this package has already had:
+Six rules, and each is a defect this package has already had:
 
 * **`run()` must return when `stop()` is called.** `self.stopping` is the flag;
   `start_tgbot` joins the thread with a deadline taken from the transport's own timeout, and a
@@ -86,6 +89,11 @@ Five rules, and each is a defect this package has already had:
 * **Do the transport's I/O on your own thread only.** The broker instance is process-global and
   each transport restricts what a foreign thread may touch; `heartbeat()`, `take()` and
   `acknowledge()` all belong to the thread `run()` is on.
+* **Call `hold_for_capacity()` before taking, and check `stopping` again after it.**
+  `MAX_IN_FLIGHT` bounds how many sends may be outstanding, and it is enforced by *not taking* —
+  so a loop that skips the gate exceeds the bound the moment a handler defers its completion. The
+  gate releases on shutdown as well as on capacity, which is why the check after it is not
+  redundant: without it the loop takes one more message it has no intention of sending.
 * **Ask `self.read_timeout` how long a blocking read may wait.** It is `BLPOP_TIMEOUT` capped by
   what the transport and the heartbeat allow, and a number of your own gets it wrong in one of
   three ways: `0` blocks for ever and swallows `stop()`; longer than the transport's timeout turns

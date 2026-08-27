@@ -115,7 +115,7 @@ rather than reporting that a Redis command is not a dotted path.
 `DeliveryKind` is gone with it: an enum of one member is not a choice. If you imported it to spell
 the value, write the path.
 
-**[[Delivery]]** has what a subclass must do, and the five rules that are each a defect this
+**[[Delivery]]** has what a subclass must do, and the six rules that are each a defect this
 package has already had.
 
 ### The shutdown budget follows it too

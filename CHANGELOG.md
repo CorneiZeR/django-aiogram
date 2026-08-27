@@ -318,7 +318,7 @@ Entries land here as the work does; nothing below is released.
   your own blocks for ever, raises inside the read, or lets the heartbeat expire under a consumer
   that is fine. `Delivery` itself and any subclass that leaves `run()` abstract are refused by
   name rather than by `TypeError`. **Delivery** documents what `run()` must
-  do, with the five rules that are each a defect this package has already had, and the page's own
+  do, with the six rules that are each a defect this package has already had, and the page's own
   example is executed by the suite.
 
   `DeliveryKind` is **gone**: an enum of one member is not a choice. `E009` refuses `'blpop'` and
@@ -384,8 +384,9 @@ Entries land here as the work does; nothing below is released.
 
   Two moved paths are ones a project wrote down itself. `DATABASE_ROUTERS` becomes
   `django_aiogram.eventlog.dbrouter.TelegramEventLogRouter`, and the webhook view in your
-  `urls.py` becomes `django_aiogram.consumer.webhook.telegram_webhook`. `DELIVERY` and
-  `SERIALIZER` are unaffected — they hold short names, not paths.
+  `urls.py` becomes `django_aiogram.consumer.webhook.telegram_webhook`. `SERIALIZER` is
+  unaffected — it holds a short name, not a path. **`DELIVERY` is a path now**, and the entry
+  above says what to write; a 3.x value of `'blpop'` is refused by name rather than relocated.
 
   | was | is |
   | --- | --- |

@@ -9,7 +9,7 @@ managed Redis providers usually refuse, and it could not deliver before the TTL 
 Since 4.0 ``DELIVERY`` is a **dotted path**, so a project can name a :class:`Delivery` of its
 own; until then it accepted the single string ``'blpop'``, the name of a Redis command that three
 of the four transports never issue. What a subclass must do is on the **Delivery** page, with the
-five rules that are each a defect this module has already had.
+six rules that are each a defect this module has already had.
 
 It consumes crash-safely where the server allows it: a message is moved to a
 processing list while it is being sent and removed once the send has actually
@@ -167,6 +167,14 @@ class Delivery(ABC):
 
         Public for the reason :attr:`stopping` is: a subclass that has to redo this arithmetic
         will get it wrong, and the page that documents writing one would have to teach it.
+
+        **The transport term is `REDIS_TIMEOUT` on all four transports today**, which is issue
+        #41 and not this property's to fix: the same helper feeds `W004`, so moving the term here
+        alone would leave a check describing a cap the consumer does not use -- and moving both
+        changes what that check prints, which is why it was split off. On a deployment whose own
+        timeout is *lower* than the Redis one, the cap is looser than the transport allows and a
+        read can outlast `Broker.call_ceiling`; the join in `start_tgbot` is derived from that
+        ceiling, so the consumer can outlive it. Measured and written down in #41.
         """
         return max(1, min(int(conf['BLPOP_TIMEOUT']), blpop_ceiling().seconds))
 
