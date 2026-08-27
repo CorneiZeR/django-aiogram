@@ -68,6 +68,7 @@ class BatchedDelivery(Delivery):
                 continue
             if self.dispatch(taken.payload, taken.handle):
                 self.acknowledge(taken.handle)
+        self.collect()  # again: a send that finished during the last read is still unsettled
 ```
 
 Four rules, and each is a defect this package has already had:
@@ -78,8 +79,10 @@ Four rules, and each is a defect this package has already had:
 * **Acknowledge only what `dispatch` says is done.** `dispatch` returns `False` when the send is
   still in flight — a handler taking `on_complete` settles the message itself, later, from the
   producer's thread. Acknowledging on `False` is the at-most-once bug 3.1.0 removed.
-* **Call `collect()` every turn.** Sends that finished while the last read was blocking report
-  themselves into a queue only the consumer thread drains. Skip it and every stop redelivers.
+* **Call `collect()` every turn, and once more after the loop.** Sends that finished while the
+  read was blocking report themselves into a queue only the consumer thread drains, so a
+  completion that arrives during the *last* read is settled by nothing unless `run()` drains on
+  its way out. Skip either and a graceful stop redelivers what it had already sent.
 * **Do the transport's I/O on your own thread only.** The broker instance is process-global and
   each transport restricts what a foreign thread may touch; `heartbeat()`, `take()` and
   `acknowledge()` all belong to the thread `run()` is on.

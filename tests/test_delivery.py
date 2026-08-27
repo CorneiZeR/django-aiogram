@@ -640,3 +640,46 @@ def test_the_documented_consumer_delivers(redis_server):
     assert payload['text'] == 'hi'
     assert consumer.broker.inflight_depth() == 0, 'the delivered message was left in flight'
     assert not thread.is_alive(), 'stop() did not end the documented loop'
+
+
+@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1})
+def test_the_documented_consumer_settles_a_send_that_finished_during_the_last_read(redis_server):
+    """The rule the page states about the *final* `collect()`, driven rather than described.
+
+    A handler that takes `on_complete` settles its own message later, from whichever thread
+    finished the send, by putting the completion in a queue only the consumer thread drains. So a
+    completion that arrives while the last `take()` is blocking is settled by nothing unless
+    `run()` drains on its way out — and the message a graceful stop had already sent comes back on
+    the next start.
+
+    Arranged without timing: the handler waits for this test to say when the send finished, and
+    the test says so *after* the consumer is back inside its blocking read.
+    """
+    finished = threading.Event()
+    dispatched = threading.Event()
+    completions = []
+
+    def handler(function, *, on_complete=None, **payload):
+        dispatched.set()
+        # a real handler hands this to whatever finishes the send; here the test is that thread
+        completions.append(on_complete)
+
+    consumer = documented_consumer()(handler=handler)
+    consumer.broker.publish([JsonSerializer().dumps({'function': 'send_message', 'chat_id': 9})])
+    thread = consumer.start_thread()
+    try:
+        assert dispatched.wait(timeout=5), 'the consumer never dispatched the message'
+        assert consumer.broker.inflight_depth() == 1, 'a deferred send should still be in flight'
+
+        completions[0]()  # the send finished, and the consumer is inside its next blocking read
+        finished.set()
+        consumer.stop()
+    finally:
+        thread.join(timeout=10)
+
+    assert finished.is_set()
+    assert not thread.is_alive(), 'stop() did not end the documented loop'
+    assert consumer.broker.inflight_depth() == 0, (
+        'the completion that arrived during the last read was never collected, so a graceful '
+        'stop left the message to be delivered again'
+    )
