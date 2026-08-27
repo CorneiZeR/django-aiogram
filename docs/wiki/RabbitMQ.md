@@ -69,9 +69,10 @@ rather than the multiple.
 - `RABBITMQ_PREFETCH` and `MAX_IN_FLIGHT` bound the same thing from two ends: the broker's
   window on unacknowledged deliveries, and this consumer's on outstanding sends. Setting only
   the second leaves the broker willing to hand over more than the worker will hold.
-- `bot.inflight_depth()` answers from **this process's memory**, because AMQP has no
-  unacknowledged count to ask for — the management HTTP API has one, and reaching for it would
-  mean a second way of talking to the broker for a number the contract defines as this worker's.
+- `bot.inflight_depth()` answers from **this process's memory**. The broker does track
+  unacknowledged deliveries — per *channel*, and a client sees its own — but asking about another
+  channel's means the management HTTP API, which is a second way of talking to the broker for a
+  number the contract defines as this worker's.
   So the reading is only meaningful inside the bot container; from a web process it is zero, and
   correctly so. Passing a **name at all** raises `WorkerDepthUnavailableError` rather than
   answering, this worker's own name included: the broker knows those deliveries as a channel's,

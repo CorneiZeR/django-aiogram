@@ -19,11 +19,15 @@ class BrokerNotConfiguredError(BrokerError):
 class WorkerDepthUnavailableError(BrokerError):
     """A transport that cannot say what a *named* worker holds.
 
-    ``inflight_depth()`` answers for the caller on every transport. Answering for somebody else
-    needs the unsettled work to be recorded under a name the server can be asked about, and only
-    the Redis transports do that: the list keeps a per-worker key, and a stream group records the
-    consumer each entry went to. RabbitMQ tracks unacknowledged deliveries per *channel* and Kafka
-    tracks uncommitted offsets per *member*, and neither is a name this package chose or can query.
+    ``inflight_depth()`` with no argument answers for the caller on three of the four -- Redis
+    Streams answers for the whole consumer group, deliberately, because a stream's pending list
+    belongs to the group.
+
+    Answering *by name* needs the unsettled work recorded under a name the server can be asked
+    about, and only the Redis transports do that: the list keeps a per-worker key, and a stream
+    group records the consumer each entry went to. RabbitMQ tracks unacknowledged deliveries per
+    *channel* and a client sees its own; Kafka tracks uncommitted offsets in the process holding
+    them. Neither is a name this package chose, so neither can be asked about one.
 
     A refusal rather than a zero, because zero is the answer that stops anybody looking. And the
     question is usually asked about a worker that has died, which on these two transports has an

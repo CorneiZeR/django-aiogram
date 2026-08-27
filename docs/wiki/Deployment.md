@@ -218,12 +218,17 @@ than sends, so a disabled process still needs whatever its transport connects wi
 driver behind it. Without the setting they raise `ImproperlyConfigured`; without the
 driver, `BrokerDependencyError`. `manage.py check` asks a disabled process for neither.
 
-`inflight_depth()` has a second limit on two of the four: RabbitMQ and Kafka keep the
-count in the worker's own memory, because neither protocol exposes "taken but not
-settled", so anywhere else it answers zero — correctly, and uselessly. Passing a **name at all**
-there raises `WorkerDepthUnavailableError` — the caller's own included, since the work belongs
-to a channel or a group member and not to a name, so there is nothing for a name to match. The
-unnamed call is the one that answers. See **[[Delivery]]** for which
+`inflight_depth()` has a second limit on two of the four: on RabbitMQ and Kafka the
+count is **process-local**, so anywhere else it answers zero — correctly, and uselessly.
+The reasons differ. RabbitMQ does track unacknowledged deliveries, but per *channel*, and a
+client sees its own; asking about another's means the management HTTP API, which is a second
+way of talking to the broker for a number the contract defines as this worker's. Kafka has
+nothing to ask at all: an offset is either committed or not, and "taken but not settled"
+exists only in the process holding it.
+
+Neither maps that work to a **name** this package chose, so passing a name there raises
+`WorkerDepthUnavailableError` — the caller's own included, since there is nothing for a name to
+match. The unnamed call is the one that answers. See **[[Delivery]]** for which
 transport keeps what.
 
 So a disabled process needs no token, and needs its broker reachable only if something

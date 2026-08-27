@@ -294,10 +294,10 @@ class RabbitMQBroker(Broker):
     def inflight_depth(self, worker: str | None = None) -> int:
         """How many this worker holds, counted here because AMQP will not say.
 
-        There is no unacknowledged count in the protocol — the management HTTP API has one,
-        and reaching for it would mean a second way of talking to the broker for a number the
-        contract defines as *this worker's*. So the broker counts what it handed out and has
-        not settled, which is that number exactly.
+        The broker tracks unacknowledged deliveries per *channel*, and a client sees its own;
+        asking about another channel's means the management HTTP API, which would be a second
+        way of talking to the broker for a number the contract defines as *this worker's*. So
+        this counts what it handed out and has not settled, which is that number exactly.
 
         Which is also why a *named* worker is refused: what this process holds is a list of
         delivery tags on its own channel, and another worker's are on a channel this one cannot

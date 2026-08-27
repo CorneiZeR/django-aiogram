@@ -60,8 +60,10 @@ contiguous prefix there, so the gap can also outlast the sends that caused it �
 `inflight_depth()` is **not** the same everywhere, and the difference decides where you can ask
 it. The Redis list keeps its in-flight messages on the server under the worker's name and Redis
 Streams keeps them in the group's pending list, so either can be read from anywhere — a monitor
-in the web tier included. RabbitMQ and Kafka have nothing to ask: neither protocol exposes
-"taken but not settled", so the count is kept in the worker's own memory. Asked anywhere else it
+in the web tier included. On RabbitMQ and Kafka the count is process-local instead, for
+two different reasons: AMQP tracks unacknowledged deliveries per channel and a client sees its
+own, so another's is a management-API question rather than a protocol one, while Kafka has
+nothing to ask at all — an offset is either committed or not. Asked anywhere else it
 answers **zero**, correctly and uselessly. On those two, run it in the bot container or read the
 broker's own tooling.
 
