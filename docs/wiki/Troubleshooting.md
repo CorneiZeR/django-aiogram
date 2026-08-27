@@ -34,7 +34,7 @@ why the package sets the deadline itself rather than relying on the client.
 from django_aiogram import bot
 
 bot.queue_depth()  # messages waiting for a worker
-bot.inflight_depth()  # what this worker is part-way through sending
+bot.inflight_depth()  # what this worker is part-way through sending — on Redis Streams, the group
 ```
 
 Those two answer for whichever transport `BROKER` names. From a shell there is no
@@ -60,10 +60,21 @@ contiguous prefix there, so the gap can also outlast the sends that caused it �
 `inflight_depth()` is **not** the same everywhere, and the difference decides where you can ask
 it. The Redis list keeps its in-flight messages on the server under the worker's name and Redis
 Streams keeps them in the group's pending list, so either can be read from anywhere — a monitor
-in the web tier included. RabbitMQ and Kafka have nothing to ask: neither protocol exposes
-"taken but not settled", so the count is kept in the worker's own memory. Asked anywhere else it
+in the web tier included. On RabbitMQ and Kafka the count is process-local instead, for
+two different reasons: AMQP tracks unacknowledged deliveries per channel and a client sees its
+own, so another's is a management-API question rather than a protocol one, while Kafka has
+nothing to ask at all — an offset is either committed or not. Asked anywhere else it
 answers **zero**, correctly and uselessly. On those two, run it in the bot container or read the
 broker's own tooling.
+
+The same split decides whether you may **name** a worker. `inflight_depth('some-worker')` reads
+that worker's in-flight work on the Redis pair; on RabbitMQ and Kafka **any** name raises
+`WorkerDepthUnavailableError` — the calling worker's own included — because the unsettled work
+there belongs to a channel or a group member rather than to a name this package chose, so there is
+nothing for a name to match. That refusal is deliberately not a zero: on those
+two transports what a dead worker held is already back in `queue_depth()` — the broker returns an
+unacknowledged message when the channel drops, the group replays an uncommitted offset — so the
+number to look at is the queue's, and there is nothing to reclaim by hand.
 
 A growing list does not by itself mean the consumer is stopped: producers can
 simply be outpacing it, and `MAX_IN_FLIGHT` deliberately holds intake back while

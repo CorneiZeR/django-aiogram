@@ -69,11 +69,16 @@ rather than the multiple.
 - `RABBITMQ_PREFETCH` and `MAX_IN_FLIGHT` bound the same thing from two ends: the broker's
   window on unacknowledged deliveries, and this consumer's on outstanding sends. Setting only
   the second leaves the broker willing to hand over more than the worker will hold.
-- `bot.inflight_depth()` answers from **this process's memory**, because AMQP has no
-  unacknowledged count to ask for — the management HTTP API has one, and reaching for it would
-  mean a second way of talking to the broker for a number the contract defines as this worker's.
+- `bot.inflight_depth()` answers from **this process's memory**. The broker does track
+  unacknowledged deliveries — per *channel*, and a client sees its own — but asking about another
+  channel's means the management HTTP API, which is a second way of talking to the broker for a
+  number the contract defines as this worker's.
   So the reading is only meaningful inside the bot container; from a web process it is zero, and
-  correctly so. `queue_depth()` has no such limitation.
+  correctly so. Passing a **name at all** raises `WorkerDepthUnavailableError` rather than
+  answering, this worker's own name included: the broker knows those deliveries as a channel's,
+  not as a name's, so there is nothing for a name to match — and a zero there would read as
+  "nothing is stranded". Nothing is, in fact — an unacknowledged message comes back
+  when the channel drops, so it is already in `queue_depth()`, which has no such limitation.
 - **What a payload may weigh** is `max_message_size` in the broker's configuration, which this
   package does not set. Large by default and larger than Kafka's, so the limit you meet first on
   this transport is usually the disk the persistence writes to rather than the size itself.

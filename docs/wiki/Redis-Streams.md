@@ -80,6 +80,9 @@ RabbitMQ. Three scripts cover the four, since one baseline measures both Redis t
   already has entries starts at the beginning rather than skipping what nobody has read.
 - `bot.inflight_depth()` reads the group's pending list off the server, so any process can ask
   it. Like the list and unlike the other two, the answer does not depend on which process asks.
+  Naming a consumer narrows it to that consumer's share, and costs no extra round trip: the
+  per-consumer breakdown rides along in the `XPENDING` summary this already fetches. A name the
+  group never met is `0` — that is a true answer about a worker that stranded nothing.
 - **What a payload may weigh** is `proto-max-bulk-len`, exactly as on the list — same server,
   same limit — with the same caution about `BufferedInputFile` putting file bytes in the entry.
 - `decode_responses` on a shared `REDIS_URL` is the same trap it is on the list, and `E043`

@@ -39,13 +39,7 @@ from django_aiogram.eventlog.instrumentation import install_instrumentation, ins
 from django_aiogram.eventlog.recorder import Event, as_identifier, recorder
 from django_aiogram.exceptions import LoopThreadNotStartedError, ShuttingDownError
 from django_aiogram.producer.throttling import RateLimiter, get_rate_limiter
-from django_aiogram.redis import (
-    aclose_redis,
-    aget_redis,
-    connection_kwargs,
-    get_redis,
-    processing_key,
-)
+from django_aiogram.redis import aclose_redis, connection_kwargs
 from django_aiogram.wire.envelope import pack
 from django_aiogram.wire.payloads import describe
 from django_aiogram.wire.serializers import get_serializer
@@ -1509,19 +1503,11 @@ class TelegramBot:
         those keys follow is this package's business, not an exporter's to
         reproduce.
         """
-        if worker is None:
-            return get_broker().inflight_depth()
-        # as above: naming another worker's list is a Redis-list question
-        return int(get_redis().llen(processing_key(worker)) or 0)
+        return get_broker().inflight_depth(worker)
 
     async def ainflight_depth(self, worker: str | None = None) -> int:
         """:meth:`inflight_depth` without blocking the loop this coroutine runs on."""
-        if worker is None:
-            return await get_broker().ainflight_depth()
-        # a *named* worker is a per-worker list, which is one transport's arrangement rather
-        # than every transport's — the identity work takes this over
-        client = await aget_redis()
-        return int(await client.llen(processing_key(worker)) or 0)
+        return await get_broker().ainflight_depth(worker)
 
     def message(self, *args: Any, **kwargs: Any) -> CallbackType:
         """Return a decorator registering a handler for the 'message' observer."""

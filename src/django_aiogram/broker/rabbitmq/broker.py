@@ -19,6 +19,7 @@ from collections.abc import Sequence as Seq
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from django_aiogram.broker.base import REQUIRED, Broker
+from django_aiogram.broker.exceptions import WorkerDepthUnavailableError
 from django_aiogram.broker.models import Taken
 from django_aiogram.broker.rabbitmq.client import (
     channel_for_thread,
@@ -290,23 +291,29 @@ class RabbitMQBroker(Broker):
         declared = self._channel().queue_declare(queue=self._queue(), durable=True, passive=True)
         return int(declared.method.message_count)
 
-    def inflight_depth(self) -> int:
+    def inflight_depth(self, worker: str | None = None) -> int:
         """How many this worker holds, counted here because AMQP will not say.
 
-        There is no unacknowledged count in the protocol — the management HTTP API has one,
-        and reaching for it would mean a second way of talking to the broker for a number the
-        contract defines as *this worker's*. So the broker counts what it handed out and has
-        not settled, which is that number exactly.
+        The broker tracks unacknowledged deliveries per *channel*, and a client sees its own;
+        asking about another channel's means the management HTTP API, which would be a second
+        way of talking to the broker for a number the contract defines as *this worker's*. So
+        this counts what it handed out and has not settled, which is that number exactly.
+
+        Which is also why a *named* worker is refused: what this process holds is a list of
+        delivery tags on its own channel, and another worker's are on a channel this one cannot
+        see or ask about. The broker knows them as a channel rather than as a name.
         """
+        if worker is not None:
+            raise WorkerDepthUnavailableError(type(self).__name__, worker)
         return len(self._unsettled)
 
     async def adepth(self) -> int:
         """Read the same count off the loop's thread; see :meth:`apublish`."""
         return await asyncio.to_thread(self.depth)
 
-    async def ainflight_depth(self) -> int:
+    async def ainflight_depth(self, worker: str | None = None) -> int:
         """Answer from this process, so no thread and no round trip."""
-        return len(self._unsettled)
+        return self.inflight_depth(worker)
 
     @property
     def call_ceiling(self) -> float:

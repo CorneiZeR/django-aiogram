@@ -474,20 +474,31 @@ class RedisStreamsBroker(Broker):
                 return 0
             raise
 
-    def inflight_depth(self) -> int:
-        """Count the group's pending entries, which is every consumer's in-flight work.
+    def inflight_depth(self, worker: str | None = None) -> int:
+        """Count the group's pending entries, or one named consumer's share of them.
 
-        The group's, not this consumer's, and deliberately: the number exists to answer
-        "how much is unsettled", and after a crash the answer belongs to whoever picks it
-        up. The list could only report its own because that was all it could see.
+        Unnamed, this is the group's and deliberately so: the number exists to answer "how
+        much is unsettled", and after a crash the answer belongs to whoever picks it up. The
+        list could only report its own because that was all it could see.
+
+        Named, it is that consumer's, taken from the same reply. ``XPENDING key group`` --
+        the summary form, one round trip -- carries a per-consumer breakdown alongside the
+        total, so this costs nothing extra and never scans: measured against a real server,
+        two consumers holding two and one came back as
+        ``{'pending': 3, ..., 'consumers': [{'name': b'worker-one', 'pending': 2}, ...]}``.
+
+        A consumer the group has never seen is ``0`` rather than a refusal: an operator
+        sweeping worker names is asking whether anything is stranded, and "nothing" is a true
+        answer for a name that never held any.
         """
         try:
-            return self._count(get_redis().xpending(self._key(), self._group()))
+            summary = get_redis().xpending(self._key(), self._group())
         except Exception as error:
             # as `depth`: an observation, so nothing is created to make it answerable
             if self._absent(error):
                 return 0
             raise
+        return self._count(summary) if worker is None else self._for_consumer(summary, worker)
 
     async def adepth(self) -> int:
         """Read the same count on the client belonging to the loop the caller is on."""
@@ -499,15 +510,35 @@ class RedisStreamsBroker(Broker):
                 return 0
             raise
 
-    async def ainflight_depth(self) -> int:
-        """Count the group's pending entries without blocking the loop."""
+    async def ainflight_depth(self, worker: str | None = None) -> int:
+        """Count the group's pending entries, or one consumer's, without blocking the loop."""
         client = await aget_redis()
         try:
-            return self._count(await client.xpending(self._key(), self._group()))
+            summary = await client.xpending(self._key(), self._group())
         except Exception as error:
             if self._absent(error):
                 return 0
             raise
+        return self._count(summary) if worker is None else self._for_consumer(summary, worker)
+
+    @staticmethod
+    def _for_consumer(pending: object, worker: str) -> int:
+        """Pull one consumer's count out of an ``XPENDING`` summary.
+
+        Compared as bytes and as text, because the names come back encoded on a client that
+        decodes nothing -- which is this transport's own client, since a queued payload is
+        bytes -- and decoded on one a project configured otherwise.
+        """
+        if not isinstance(pending, dict):
+            return 0
+        wanted = worker.encode()
+        for consumer in pending.get('consumers', pending.get(b'consumers', ())) or ():
+            if not isinstance(consumer, dict):
+                continue
+            name = consumer.get('name', consumer.get(b'name'))
+            if name in (wanted, worker):
+                return int(consumer.get('pending', consumer.get(b'pending', 0)) or 0)
+        return 0
 
     def _lag(self, groups: object) -> int:
         """Pull this group's ``lag`` out of ``XINFO GROUPS``, or refuse to guess.

@@ -214,8 +214,30 @@ class Broker(ABC):
         """How many messages are waiting for a consumer to take them."""
 
     @abstractmethod
-    def inflight_depth(self) -> int:
-        """How many this worker has taken and not yet settled."""
+    def inflight_depth(self, worker: str | None = None) -> int:
+        """How many this worker has taken and not yet settled.
+
+        "This worker" on three of the four. A transport whose unsettled work belongs to a
+        *group* rather than to a member may answer for the group, and Redis Streams does: a
+        pending entry after a crash is whoever picks it up, so the group's total is the number
+        with a meaning while one consumer's is an accident of who happened to read it. Its own
+        implementation says so, and so does its page -- the contract allows it rather than
+        having it slip through.
+
+        ``None`` is the caller. A ``worker`` is a question *by name*, which is how a monitor
+        reads what a worker that is gone was still holding -- and only a transport that records
+        unsettled work under a name can answer it: the Redis list keeps a key per worker, a
+        stream group records the consumer each entry went to. The two that do not must raise
+        :class:`~django_aiogram.broker.exceptions.WorkerDepthUnavailableError` for **any** name,
+        the caller's own included. There is nothing for it to match there, and answering it from
+        the caller's own count would make the reply depend on whether a string happened to equal
+        `worker_identity()` -- which on Kafka is not even how the group knows this member.
+
+        Refusing rather than answering zero, because zero is what stops somebody looking. The
+        argument reached a Redis client directly before this existed, so on a RabbitMQ or Kafka
+        deployment the call either raised about a missing ``REDIS_URL`` or -- worse -- answered
+        from an unrelated Redis the project happened to run for caching.
+        """
 
     @abstractmethod
     async def adepth(self) -> int:
@@ -227,8 +249,11 @@ class Broker(ABC):
         """
 
     @abstractmethod
-    async def ainflight_depth(self) -> int:
-        """How many this worker holds, read without blocking the loop."""
+    async def ainflight_depth(self, worker: str | None = None) -> int:
+        """How many this worker holds, read without blocking the loop.
+
+        ``worker`` means what it means on :meth:`inflight_depth`, including the refusal.
+        """
 
     def alive(self) -> None:
         """Say the consumer is still turning, if this transport needs telling.

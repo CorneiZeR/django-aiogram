@@ -16,7 +16,10 @@ PATCH_TARGETS = (
     # knowing: a broker module imported lazily *during* a test binds that test's fake and
     # keeps it for the whole session, so later tests read entries the first one left behind
     'django_aiogram.broker.redis_streams.broker.get_redis',
-    'django_aiogram.producer.client.get_redis',
+    # `producer.client.get_redis` is gone from this tuple because it is gone from the module:
+    # the producer's last reach for a Redis client was `inflight_depth(worker)`, which is the
+    # broker's question now. A patch target that no longer exists fails loudly rather than
+    # silently, which is how this entry was found
     # `django_aiogram.get_redis` is not here any more: 4.0 stopped exporting a name for one
     # transport's client from a package that carries four, and the callers reach for
     # `django_aiogram.redis.get_redis` — the first entry above — instead

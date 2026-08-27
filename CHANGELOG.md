@@ -222,6 +222,25 @@ Entries land here as the work does; nothing below is released.
 
 ### Fixed
 
+- **Naming a worker in `inflight_depth` asks the transport, not Redis.** The unnamed call went
+  through the broker seam; naming somebody else reached a Redis client directly, whatever `BROKER`
+  said. On a RabbitMQ or Kafka deployment that either raised about a missing `REDIS_URL` or —
+  worse — answered `0` from an unrelated Redis the project happened to run for caching, which is
+  the one answer that stops a monitor looking.
+
+  The seam takes the name now, and the four transports answer as they can. The Redis list reads
+  the key it already keeps per worker; Redis Streams narrows to one consumer's share of the
+  group's pending list, from the per-consumer breakdown that rides along in the `XPENDING`
+  summary it already fetches, so a name costs no extra round trip. RabbitMQ and Kafka raise the
+  new **`WorkerDepthUnavailableError`**, carrying the transport and the worker asked about:
+  unsettled work there belongs to a channel or a group member rather than to a name, and what a
+  dead worker held is already back in `queue_depth()` — the broker requeues, the group replays.
+
+  With that, `producer/client.py` imports nothing from the Redis module for the depth reads at
+  all. A test suite that patched `django_aiogram.producer.client.get_redis` should patch the
+  broker's client instead — `django_aiogram.broker.redis_list.broker.get_redis` — which is what
+  **Testing** already tells the reader to do for sends.
+
 - **A RabbitMQ connection is no longer held after the thread that owned it ends.** The client
   keeps a registry of every connection this process opened, because pika allows another thread
   exactly one operation on a `BlockingConnection` — `add_callback_threadsafe` — so a shutdown can

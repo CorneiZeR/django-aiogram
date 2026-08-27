@@ -129,10 +129,24 @@ answering zero, and `BrokerDependencyError` when it is the driver that is absent
 rather than the setting. A monitor that runs in a disabled process still needs that setting, and the
 driver: `manage.py check` does not ask a disabled process for either.
 
-`inflight_depth` defaults to this process's own worker identity; naming another is
-how a monitor reads a list left behind by a worker that is gone. The key scheme
+`inflight_depth` with no argument answers for the calling process on three of the four
+transports; naming another is how a monitor reads what a worker that is gone was still holding.
+
+**Redis Streams is the exception, and deliberately.** Unnamed, it answers for the whole consumer
+group rather than for this consumer, because a stream's pending list belongs to the group: after a
+crash the unsettled work is whoever's picks it up, so "how much is unsettled" is the question with
+an answer. Name a consumer to narrow it to that one's share. A monitor reading the unnamed number
+there is reading the group's backlog, which is usually what it wants — but it is not one worker's. The key scheme
 behind them is this package's business — an exporter should not have to reproduce
 `<REDIS_MESSAGES_KEY>:processing:<worker>` by hand.
+
+**Naming one is answerable on the Redis transports only.** The list keeps a key per worker and a
+stream group records the consumer each entry went to, so either can be asked about a name.
+RabbitMQ knows unacknowledged deliveries as a *channel*'s and Kafka knows uncommitted offsets as a
+*member*'s, so both raise `WorkerDepthUnavailableError` rather than return a number — zero being
+the answer that would stop somebody looking. On those two, what a dead worker held is already back
+in `queue_depth()`: the broker returns an unacknowledged message when the channel drops and the
+group replays an uncommitted offset, with nothing to reclaim by hand.
 
 Each returns an `int` — a length at the moment it was read, not a correlation id
 and not a reservation. A depth read and then acted on is already out of date, so
@@ -303,6 +317,7 @@ from django_aiogram.exceptions import DjangoRedisAiogramError
 | `ShuttingDownError` | the bot is closing, so the send was refused rather than queued for a loop that will not run it — a webhook view answers 503 on this, and Telegram redelivers | |
 | `LoopThreadNotStartedError` | the loop exists but nothing is turning it, so a hand-off would never be stepped | `timeout` |
 | `MalformedEnvelopeError` | a queued payload is not a shape any version of this package wrote | |
+| `WorkerDepthUnavailableError` | `inflight_depth` was asked about a *named* worker on a transport that knows unsettled work by channel or by group member rather than by name | `broker`, `worker` |
 | `UnknownEnvelopeVersionError` | a queued payload was written by a newer version than this consumer reads | `version` |
 | `UnknownInputFileKindError` | a queued payload names an input file kind this version cannot rebuild | `kind` |
 | `UnknownModelError` | a queued payload names a class that is not an aiogram type | `name` |

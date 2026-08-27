@@ -60,7 +60,7 @@ def test_disabled_send_is_a_noop(monkeypatch):
         msg = 'a disabled send reached for Redis'
         raise AssertionError(msg)
 
-    monkeypatch.setattr('django_aiogram.producer.client.get_redis', forbidden)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', forbidden)
 
     instance = TelegramBot()
     instance.send(chat_id=1, text='hi')

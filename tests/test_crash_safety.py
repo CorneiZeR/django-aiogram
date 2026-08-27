@@ -149,7 +149,6 @@ def old_redis_server(redis_server, monkeypatch):
     for target in (
         'django_aiogram.redis.get_redis',
         'django_aiogram.broker.redis_list.broker.get_redis',
-        'django_aiogram.producer.client.get_redis',
     ):
         monkeypatch.setattr(target, lambda wrapped=wrapped: wrapped)
     return redis_server
