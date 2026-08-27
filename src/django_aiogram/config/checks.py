@@ -840,9 +840,11 @@ def _a_usable_delivery(key: str) -> list[Problem]:
     """Refuse a consumer that cannot be built, before the thread that would build it starts.
 
     ``DELIVERY`` became a dotted path in 4.0, so it can be wrong in the ways a path can be wrong
-    rather than in the one way a choice list allowed. Four findings, each saying what to write:
-    the setting is empty; it holds a 3.x word, named against the path that replaced it; the path
-    will not import; or it imports something that is not a `Delivery`.
+    rather than in the one way a choice list allowed. What this reports, each saying what to
+    write: the setting is empty; it holds a 3.x word, named against the path that replaced it; or
+    it is not a dotted path at all. Whether the path *imports*, and imports a `Delivery`, is the
+    paragraph below -- and no count is given here on purpose, since the list is what a reader
+    needs and a number beside it is a second thing to keep true.
 
     Judged whether or not the bot is enabled, unlike the driver half of `E047`: nothing
     legitimately names a non-delivery, and a typo in the web tier is the same typo in the worker

@@ -54,7 +54,7 @@ class NotADelivery:
     ids=['empty', '3.x blpop', '3.x keyspace', 'absent', 'not a delivery', 'the base class', 'run left abstract'],
 )
 def test_get_delivery_refuses_what_it_cannot_build(value, says):
-    """Four ways a path can be wrong, and the 3.x word that is none of them.
+    """Every way `DELIVERY` can name something that cannot be built, and the 3.x words too.
 
     Still a `ValueError` — `DeliveryNotConfiguredError` is one — so a project that wrote
     `except ValueError` around building a consumer in 3.x keeps working.

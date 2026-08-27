@@ -59,9 +59,10 @@ class DeliveryNotConfiguredError(DjangoRedisAiogramError, ValueError):
     wrote ``except ValueError`` around building a consumer keeps working, and gets a named
     class if it wants one.
 
-    One class for three findings rather than three classes, because the caller's move is the
-    same in each -- fix the setting -- and the message is what differs. `E009` reports them all
-    before a consumer is built, so this is the runtime backstop rather than the usual path.
+    One class rather than one per way of being wrong, because the caller's move is the same in
+    each -- fix the setting -- and only the message differs. `E009` reports what it can before a
+    consumer is built, so this is the runtime backstop rather than the usual path: it is what
+    `start_tgbot` raises for a path that reads correctly and does not resolve.
     """
 
     def __init__(self, path: object, detail: str) -> None:
