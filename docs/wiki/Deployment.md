@@ -366,6 +366,16 @@ refresh is not a failure, but a dead thread stops looking alive on its own. The
 key is per worker, named like the in-flight list, so each container answers for
 itself.
 
+**What the probe does not see: the database.** It reads the transport and nothing else, on
+purpose — it has to answer in milliseconds and without `django.setup()`. So a bot whose
+*inbound* half is broken can pass it, and one class of that is worth knowing about because it
+happened: a database restart used to leave every handler raising `InterfaceError` while the
+consumer went on sending and the probe went on passing. Since 4.0 every update is bracketed with
+`close_old_connections()`, which is what Django does around a request and what a bot worker never
+had, so that particular failure recovers by itself on the next update. A handler that raises for
+its own reasons still will, and the probe will still pass: aiogram logs it and the update stays
+unhandled, so watch your handler logs rather than the exit code for that.
+
 ```yaml
   telegram_bot:
     command: python manage.py start_tgbot

@@ -34,6 +34,7 @@ from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import EventKind, StorageKind
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 from django_aiogram.context import current_correlation_id
+from django_aiogram.db import DatabaseConnectionMiddleware
 from django_aiogram.eventlog.events import new_correlation_id
 from django_aiogram.eventlog.instrumentation import install_instrumentation, instrumented
 from django_aiogram.eventlog.recorder import Event, as_identifier, recorder
@@ -458,15 +459,27 @@ class TelegramBot:
 
     @property
     def dispatcher(self) -> Dispatcher:
-        """The aiogram ``Dispatcher``, holding the configured FSM storage."""
+        """The aiogram ``Dispatcher``: the FSM storage, the connection reset, the event log.
+
+        Built here and only here, so polling and webhook get the same middleware chain -- one
+        update middleware sees every update exactly once, whichever way updates arrive.
+
+        The order of the two registrations is the contract, not a detail.
+        :class:`~django_aiogram.db.DatabaseConnectionMiddleware` goes on first and so runs
+        outermost, which is what makes the connection reset the first thing that happens to an
+        update and the last: a recording middleware that wrote its row through a dead connection
+        would be the same outage one frame further in.
+
+        And it is unconditional, where `install_instrumentation` returns before building anything
+        if nothing reads events. The event log is optional; a live database connection is not.
+        """
         if self._dispatcher is None:
             # two concurrent first requests would otherwise build one each, and
             # the router would attach to whichever was discarded
             with self._build_guard:
                 if self._dispatcher is None:
                     self._dispatcher = Dispatcher(storage=build_storage())
-                    # one place: polling and webhook both feed this dispatcher,
-                    # so one update middleware sees every update exactly once
+                    self._dispatcher.update.outer_middleware.register(DatabaseConnectionMiddleware())
                     install_instrumentation(self._dispatcher)
         return self._dispatcher
 
