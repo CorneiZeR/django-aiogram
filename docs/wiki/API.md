@@ -238,10 +238,9 @@ Every choice a setting offers exists as an enum member, so a project can import
 the value instead of spelling the string:
 
 ```python
-from django_aiogram.config.enums import DeliveryKind, StorageKind, UpdateMode
+from django_aiogram.config.enums import StorageKind, UpdateMode
 
 TELEGRAM_BOT = {
-    'DELIVERY': DeliveryKind.BLPOP,
     'FSM_STORAGE': StorageKind.REDIS,
     'MODE': UpdateMode.POLLING,
 }
@@ -249,7 +248,6 @@ TELEGRAM_BOT = {
 
 | | Members |
 | --- | --- |
-| `DeliveryKind` | `BLPOP` |
 | `SerializerKind` | `JSON`, `PICKLE` |
 | `StorageKind` | `REDIS`, `MEMORY` |
 | `UpdateMode` | `POLLING`, `WEBHOOK` |
@@ -258,8 +256,11 @@ TELEGRAM_BOT = {
 | `EventKind` | what an event log row can be: `outbound.*`, `inbound.*`, `fsm.transition`, `queue.*`, `log.dropped` |
 
 They are `(str, Enum)`, so a member compares equal to its string and works
-anywhere the string does. `choices(DeliveryKind)` gives the plain-string set,
+anywhere the string does. `choices(SerializerKind)` gives the plain-string set,
 which is what the system checks validate against.
+
+`DeliveryKind` is gone in 4.0: it had one member, `BLPOP`, and `DELIVERY` takes a dotted path
+now — see **[[Delivery]]**.
 
 The values are **frozen**: queued payloads and stored settings carry them, so a
 member may be renamed but never revalued.
@@ -318,6 +319,7 @@ from django_aiogram.exceptions import DjangoRedisAiogramError
 | `LoopThreadNotStartedError` | the loop exists but nothing is turning it, so a hand-off would never be stepped | `timeout` |
 | `MalformedEnvelopeError` | a queued payload is not a shape any version of this package wrote | |
 | `WorkerDepthUnavailableError` | `inflight_depth` was asked about a *named* worker on a transport that knows unsettled work by channel or by group member rather than by name | `broker`, `worker` |
+| `DeliveryNotConfiguredError` | `DELIVERY` names nothing, names a 3.x word, or names something that is not a `Delivery` — also a `ValueError`, which is what 3.x raised | `path` |
 | `UnknownEnvelopeVersionError` | a queued payload was written by a newer version than this consumer reads | `version` |
 | `UnknownInputFileKindError` | a queued payload names an input file kind this version cannot rebuild | `kind` |
 | `UnknownModelError` | a queued payload names a class that is not an aiogram type | `name` |

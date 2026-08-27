@@ -11,13 +11,6 @@ from enum import Enum, unique
 
 
 @unique
-class DeliveryKind(str, Enum):
-    """How the consumer learns that a message is waiting."""
-
-    BLPOP = 'blpop'
-
-
-@unique
 class SerializerKind(str, Enum):
     """Which encoding writes and reads the queue."""
 

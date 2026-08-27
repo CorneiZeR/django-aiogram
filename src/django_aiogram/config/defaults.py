@@ -19,7 +19,9 @@ DEFAULTS: dict[str, Any] = {
     'AUTODISCOVER': True,
     'MODULE_NAME': 'tg_router',
     # blpop; the keyspace consumer 1.x used was removed in 3.0
-    'DELIVERY': 'blpop',
+    # a dotted path, as `BROKER` is: the shipped consumer by default, and a project's own
+    # `Delivery` subclass when it names one
+    'DELIVERY': 'django_aiogram.consumer.delivery.BlpopDelivery',
     # which transport carries messages, by dotted path and never by looking at what happens
     # to be installed. Defaulted to the Redis list so a 3.x project changes its imports and
     # nothing else; a project on another transport names it here and installs that extra

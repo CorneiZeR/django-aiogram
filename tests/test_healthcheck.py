@@ -29,7 +29,6 @@ SETTINGS = {
     'TOKEN': '42:x',
     'REDIS_URL': 'redis://localhost:6379/0',
     'WORKER_NAME': WORKER,
-    'DELIVERY': 'blpop',
     'BLPOP_TIMEOUT': 1,
 }
 #: what the fakes below raise with, named up here so each raise stays one line

@@ -26,7 +26,6 @@ from django.utils.module_loading import import_string
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import (
     KNOWN_RATE_LIMIT_KEYS,
-    DeliveryKind,
     PayloadDetail,
     SerializerKind,
     StorageKind,
@@ -36,10 +35,24 @@ from django_aiogram.config.enums import (
 from django_aiogram.config.settings import SETTINGS_NAME, blpop_ceiling, coerce_bool, conf
 from django_aiogram.eventlog.events import known_kinds
 
-DELIVERY_CHOICES = choices(DeliveryKind)
 MODE_CHOICES = choices(UpdateMode)
 SERIALIZER_CHOICES = choices(SerializerKind)
 PAYLOAD_CHOICES = choices(PayloadDetail)
+
+#: a dotted path, loosely: at least one dot, and every segment an identifier. Loose on purpose --
+#: this rule decides whether the *string* could name something, not whether it does
+_DOTTED_PATH = re.compile(r'[A-Za-z_]\w*(\.[A-Za-z_]\w*)+')
+
+#: what a project reading `DELIVERY` from a 3.x settings file has in it, against the path that
+#: does the same thing. Imported from the consumer would cost aiogram at check time -- see
+#: `_a_usable_delivery` -- so the two copies are pinned against each other by the suite instead
+THREE_X_DELIVERIES = {'blpop': 'django_aiogram.consumer.delivery.BlpopDelivery', 'keyspace': ''}
+
+_DELIVERY_HINT = (
+    'DELIVERY takes a dotted path to a Delivery subclass -- the shipped one is '
+    "'django_aiogram.consumer.delivery.BlpopDelivery'. Whether the path imports, and imports a "
+    'Delivery, is settled when start_tgbot builds it; see the Delivery page.'
+)
 
 _STORAGE_CHOICES = choices(StorageKind)
 #: what Docker generates when a container is started without `hostname:`
@@ -809,6 +822,48 @@ def _redis_is_in_use() -> bool:
     return driver == 'redis' or _redis_fsm_storage()
 
 
+def _a_usable_delivery(key: str) -> list[Problem]:
+    """Refuse a consumer that cannot be built, before the thread that would build it starts.
+
+    ``DELIVERY`` became a dotted path in 4.0, so it can be wrong in the ways a path can be wrong
+    rather than in the one way a choice list allowed. Four findings, each saying what to write:
+    the setting is empty; it holds a 3.x word, named against the path that replaced it; the path
+    will not import; or it imports something that is not a `Delivery`.
+
+    Judged whether or not the bot is enabled, unlike the driver half of `E047`: nothing
+    legitimately names a non-delivery, and a typo in the web tier is the same typo in the worker
+    -- where it would take the consumer down at startup with the queue filling behind it.
+
+    **This rule does not resolve the path**, and that is a measured decision rather than a
+    weaker one taken for convenience. Importing the consumer module costs aiogram and pydantic --
+    not through anything the consumer chose, but through `wire.serializers`, which encodes
+    aiogram models and so imports their types at module level. Measured on a bare settings
+    module: 883ms and 135 MiB, on every `migrate`, `runserver` and `shell` that runs the checks.
+    `E018` exists because that cost was once paid here; putting it back to catch a typo would
+    trade the same seconds for a smaller class of typo.
+
+    So this rule answers what a string can answer -- empty, a 3.x word, or something that is not
+    a dotted path at all -- and `start_tgbot` answers the rest before it starts a thread:
+    `get_delivery` resolves the path in `handle()`, so a path that does not import, or imports
+    something that is not a `Delivery`, ends the command loudly with the queue untouched. The
+    hint says so, because a reader who typed a plausible path deserves to know where it *will*
+    be checked.
+    """
+    value = conf.get(key)
+    path = str(value or '').strip()
+    if not path:
+        # E005 owns "required and empty" for the keys that have no default; this one has one,
+        # so an empty value is a project having cleared it
+        return [Problem('is empty, so no consumer is chosen.', hint=_DELIVERY_HINT)]
+    if path in THREE_X_DELIVERIES:
+        replacement = THREE_X_DELIVERIES[path]
+        instead = f'Write {replacement!r}.' if replacement else 'That consumer was removed in 3.0.'
+        return [Problem(f'is {path!r}, which 4.0 replaced with a dotted path. {instead}', hint=_DELIVERY_HINT)]
+    if not _DOTTED_PATH.fullmatch(path):
+        return [Problem(f'is {path!r}, which is not a dotted path.', hint=_DELIVERY_HINT)]
+    return []
+
+
 def _redis_fsm_storage() -> bool:
     """Whether ``FSM_STORAGE`` names the Redis store.
 
@@ -864,7 +919,7 @@ CHECKS: tuple[Check, ...] = (
     Check('E006', 'MODULE_NAME', _a_string),
     Check('E007', 'REDIS_MESSAGES_KEY', _a_string),
     Check('E021', 'WORKER_NAME', _a_string),
-    Check('E009', 'DELIVERY', partial(_a_string, allowed=DELIVERY_CHOICES)),
+    Check('E009', 'DELIVERY', _a_usable_delivery),
     Check('E010', 'SERIALIZER', partial(_a_string, allowed=SERIALIZER_CHOICES)),
     Check('E011', 'FSM_STORAGE', _a_string),
     Check('E012', 'MAX_RETRIES', partial(_an_integer, minimum=1)),

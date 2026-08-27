@@ -303,6 +303,26 @@ Entries land here as the work does; nothing below is released.
 
 ### Changed
 
+- **`DELIVERY` is a dotted path, and a consumer you write goes in it.** It accepted exactly one
+  string until now — `'blpop'`, the name of a Redis command that three of the four transports
+  never issue, since the consumer asks the broker and the broker reaches for `basic_get`, a
+  stream read or a poll. So the setting documented one transport's mechanism while offering no
+  choice at all. It resolves a path the way `BROKER` does; the default is
+  `'django_aiogram.consumer.delivery.BlpopDelivery'`, so a project that changes nothing keeps the
+  consumer it had.
+
+  `Delivery.stopping` is public with it, because a subclass that has to read `self._stop` to know
+  when to return is not being offered an extension point. **Delivery** documents what `run()` must
+  do, with the four rules that are each a defect this package has already had, and the page's own
+  example is executed by the suite.
+
+  `DeliveryKind` is **gone**: an enum of one member is not a choice. `E009` refuses `'blpop'` and
+  `'keyspace'` by name and says what to write instead, rather than reporting that a Redis command
+  is not a dotted path — and it stops at the *shape*, because resolving the path would import the
+  consumer, which imports the serializer, which imports aiogram: 883ms and 135 MiB on every
+  `manage.py check`, measured. `start_tgbot` settles the rest before it starts a thread, and
+  `DeliveryNotConfiguredError` names the setting and the value when it cannot.
+
 - **No transport driver is a dependency of this package any more.** `pip install
   django-aiogram` brings Django and aiogram; the driver comes with the transport you name.
   For the default that is **`pip install "django-aiogram[redis]"`** — an existing project

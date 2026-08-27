@@ -25,7 +25,7 @@ pytestmark = pytest.mark.integration
 QUEUE = 'TELEGRAM_BOT_MESSAGE'
 WORKER = 'integration'
 PROCESSING = f'{QUEUE}:processing:{WORKER}'
-SETTINGS = {'DELIVERY': 'blpop', 'BLPOP_TIMEOUT': 1, 'WORKER_NAME': WORKER}
+SETTINGS = {'BLPOP_TIMEOUT': 1, 'WORKER_NAME': WORKER}
 
 
 def payload(chat_id, serializer=JsonSerializer):
@@ -288,7 +288,6 @@ def test_an_idle_consumer_survives_more_rounds_than_the_deadline(server, redis_u
     has to stay clean.
     """
     settings = {
-        'DELIVERY': 'blpop',
         'WORKER_NAME': WORKER,
         'REDIS_URL': redis_url,
         'BLPOP_TIMEOUT': 2,

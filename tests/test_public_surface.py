@@ -25,7 +25,7 @@ import django_aiogram
 from django_aiogram import TelegramBot
 from django_aiogram import redis as redis_module
 from django_aiogram.config.checks import check_settings
-from django_aiogram.config.enums import DeliveryKind, SerializerKind, StorageKind, UpdateMode
+from django_aiogram.config.enums import SerializerKind, StorageKind, UpdateMode
 
 #: attributes that predate 2.0 and are reached for directly. `redis_conn` was one of them and
 #: is not any more: 4.0 removed the client's Redis-named property, because a client that can
@@ -226,7 +226,7 @@ def test_the_redis_client_is_shared_and_lives_in_its_own_module(redis_server):
     assert not hasattr(django_aiogram, 'redis_conn'), 'the package still exports it'
 
 
-ENUM_CLASSES = ('DeliveryKind', 'SerializerKind', 'StorageKind', 'UpdateMode', 'RateLimitKey', 'SerializationTag')
+ENUM_CLASSES = ('SerializerKind', 'StorageKind', 'UpdateMode', 'RateLimitKey', 'SerializationTag')
 ERROR_CLASSES = ('DjangoRedisAiogramError', 'SerializationError', 'UnknownApiMethodError')
 
 
@@ -263,7 +263,7 @@ def test_one_family_catches_everything_the_package_raises():
     TELEGRAM_BOT={
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost:6379/0',
-        'DELIVERY': DeliveryKind.BLPOP,
+        'DELIVERY': 'django_aiogram.consumer.delivery.BlpopDelivery',
         'SERIALIZER': SerializerKind.JSON,
         'FSM_STORAGE': StorageKind.REDIS,
         'MODE': UpdateMode.POLLING,

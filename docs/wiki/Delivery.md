@@ -32,13 +32,63 @@ matters at all is `BufferedInputFile`, which queues a file's *bytes*.
 
 The rest of this page is what the consumer does with any of them.
 
-`DELIVERY` is a separate and much smaller choice: it names the consumer *class*, and `'blpop'` is
-its only value. The `keyspace` consumer 1.x used — write a key with a TTL, react to its expiry
-event — was removed in 3.0, because it needed `CONFIG SET notify-keyspace-events`, which managed
-providers refuse, and nothing could be delivered before the TTL elapsed. Settings that still say
-`'keyspace'` fail `E009` rather than falling back quietly. The name has outlived its accuracy —
-that consumer now asks a broker rather than issuing `BLPOP` — and renaming it is a settings
-migration rather than a rename, so it waits.
+## `DELIVERY`: which consumer runs
+
+`DELIVERY` is a **dotted path** to a `Delivery` subclass, the way `BROKER` is a path to a
+`Broker` one. The default is `'django_aiogram.consumer.delivery.BlpopDelivery'`, the consumer
+this package ships, and a project that changes nothing gets it.
+
+Until 4.0 the setting accepted exactly one string, `'blpop'` — the name of a Redis command that
+three of the four transports never issue, since the consumer asks the broker and the broker
+reaches for `basic_get`, a stream read or a poll. So the setting named one transport's mechanism
+while offering no choice at all. It is a path now, which makes the name accurate and the setting
+useful in the same change. The `keyspace` consumer 1.x used — write a key with a TTL, react to
+its expiry event — was removed in 3.0: it needed `CONFIG SET notify-keyspace-events`, which
+managed providers refuse, and nothing could be delivered before the TTL elapsed. `E009` names
+both old words against what to write instead.
+
+### Writing your own
+
+Subclass `Delivery` and implement `run()`. Everything else is provided, and the provided parts
+are the ones that are easy to get wrong:
+
+```python
+from django_aiogram.consumer.delivery import Delivery
+
+
+class BatchedDelivery(Delivery):
+    """Takes in batches, settles each message as its send finishes."""
+
+    def run(self) -> None:
+        while not self.stopping:
+            self.heartbeat()
+            self.collect()  # settle what finished while we blocked
+            taken = self.broker.take(timeout=5)  # or take_nowait, in a loop of your own
+            if taken is None:
+                continue
+            if self.dispatch(taken.payload, taken.handle):
+                self.acknowledge(taken.handle)
+```
+
+Four rules, and each is a defect this package has already had:
+
+* **`run()` must return when `stop()` is called.** `self.stopping` is the flag;
+  `start_tgbot` joins the thread with a deadline taken from the transport's own timeout, and a
+  consumer that outlives its join goes on to acknowledge a message the bot has already refused.
+* **Acknowledge only what `dispatch` says is done.** `dispatch` returns `False` when the send is
+  still in flight — a handler taking `on_complete` settles the message itself, later, from the
+  producer's thread. Acknowledging on `False` is the at-most-once bug 3.1.0 removed.
+* **Call `collect()` every turn.** Sends that finished while the last read was blocking report
+  themselves into a queue only the consumer thread drains. Skip it and every stop redelivers.
+* **Do the transport's I/O on your own thread only.** The broker instance is process-global and
+  each transport restricts what a foreign thread may touch; `heartbeat()`, `take()` and
+  `acknowledge()` all belong to the thread `run()` is on.
+
+`E009` checks the shape of the path at `manage.py check` and nothing more: resolving it would
+import the consumer module, which imports the serializer, which imports aiogram — 883ms and
+135 MiB on every `migrate` and `runserver`, measured. Whether the path imports, and imports a
+`Delivery`, is settled by `start_tgbot` before it starts a thread, and a `DeliveryNotConfiguredError`
+there names the setting and the value.
 
 ## Running more than one worker
 

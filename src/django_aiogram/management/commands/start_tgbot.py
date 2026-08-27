@@ -106,10 +106,11 @@ class Command(BaseCommand):
         # raises, and raised from the `finally` below it would skip `close()`, `collect()` and
         # `recorder.stop()`, stranding the drain's own messages
         #
-        # Asked of the registry rather than through `delivery.broker`: `DELIVERY` is a
-        # documented extension point and `Testing.md` shows people writing their own, so
-        # reaching into one for an attribute would make `.broker` a contract nobody declared.
-        # The broker is process-global anyway -- the same instance the delivery holds
+        # Asked of the registry rather than through `delivery.broker`. `DELIVERY` names a class
+        # a project may write, so a `Delivery` here is not necessarily one of ours -- and the
+        # attribute is set in `Delivery.__init__`, which a double standing in for a consumer need
+        # not have run. The broker is process-global, so this is the same instance the delivery
+        # holds when it has one
         join_timeout = get_broker().call_ceiling + 1
         threads: list[threading.Thread] = []
 

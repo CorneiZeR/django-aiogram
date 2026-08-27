@@ -1,4 +1,6 @@
 import asyncio
+import pathlib
+import re
 import threading
 import time
 
@@ -21,15 +23,55 @@ def an_outbound(function='send_message', **kwargs):
     return Outbound(new_correlation_id(), function, kwargs or {'chat_id': 1, 'text': 'x'})
 
 
-@override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop'})
-def test_get_delivery_blpop():
+@override_settings(TELEGRAM_BOT={})
+def test_get_delivery_builds_what_the_default_path_names():
+    """The default is a dotted path now, and it resolves to the shipped consumer."""
     assert isinstance(get_delivery(handler=lambda **kwargs: None), BlpopDelivery)
 
 
-@override_settings(TELEGRAM_BOT={'DELIVERY': 'smoke-signals'})
-def test_get_delivery_rejects_unknown():
-    with pytest.raises(ValueError, match='Unknown delivery'):
+class NotADelivery:
+    """A class the setting can name and the resolution must refuse."""
+
+    def __init__(self, handler):
+        raise AssertionError('a non-Delivery was built')
+
+
+@pytest.mark.parametrize(
+    ('value', 'says'),
+    [
+        ('', 'no consumer is chosen'),
+        ('blpop', "dotted path -- write 'django_aiogram.consumer.delivery.BlpopDelivery'"),
+        ('keyspace', 'removed in 3.0'),
+        ('tests.test_delivery.NoSuchName', 'cannot be imported'),
+        ('tests.test_delivery.NotADelivery', 'not a Delivery subclass'),
+    ],
+    ids=['empty', '3.x blpop', '3.x keyspace', 'absent', 'not a delivery'],
+)
+def test_get_delivery_refuses_what_it_cannot_build(value, says):
+    """Four ways a path can be wrong, and the 3.x word that is none of them.
+
+    Still a `ValueError` — `DeliveryNotConfiguredError` is one — so a project that wrote
+    `except ValueError` around building a consumer in 3.x keeps working.
+    """
+    with override_settings(TELEGRAM_BOT={'DELIVERY': value}), pytest.raises(ValueError, match=re.escape(says)):
         get_delivery(handler=lambda **kwargs: None)
+
+
+@override_settings(TELEGRAM_BOT={'DELIVERY': 'tests.test_delivery.RecordingDouble'})
+def test_get_delivery_builds_a_consumer_the_project_wrote():
+    """The point of the setting: a class this package never heard of, named in settings.
+
+    `DELIVERY` accepted exactly one string until 4.0 — `'blpop'`, a Redis command three of the
+    four transports never issue — so this is the first version where the setting selects
+    anything.
+    """
+    built = get_delivery(handler=lambda **kwargs: None)
+
+    assert isinstance(built, RecordingDouble), f'the setting built {type(built).__name__}'
+
+
+class RecordingDouble(BlpopDelivery):
+    """A project's own consumer, as far as the resolution is concerned."""
 
 
 def drain(delivery, expected, timeout=5):
@@ -55,7 +97,7 @@ class RecordingBlpop(BlpopDelivery):
         super().__init__(handler=lambda correlation_id=None, queued_at=0.0, **kwargs: self.handled.append(kwargs))
 
 
-@override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop', 'BLPOP_TIMEOUT': 1})
+@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1})
 def test_blpop_delivers_queued_messages(redis_server):
     redis_server.rpush('TELEGRAM_BOT_MESSAGE', JsonSerializer().dumps({'function': 'send_message', 'chat_id': 7}))
     delivery = RecordingBlpop()
@@ -63,7 +105,7 @@ def test_blpop_delivers_queued_messages(redis_server):
     assert delivery.handled == [{'function': 'send_message', 'chat_id': 7}]
 
 
-@override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop', 'BLPOP_TIMEOUT': 1})
+@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1})
 def test_a_payload_cannot_overwrite_what_the_envelope_says(redis_server):
     """The queue is a trust boundary, and the envelope's own fields are the trusted half.
 
@@ -115,7 +157,7 @@ def test_a_payload_cannot_overwrite_what_the_envelope_says(redis_server):
     assert seen['chat_id'] == 7, 'the real arguments stopped arriving'
 
 
-@override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop', 'BLPOP_TIMEOUT': 1})
+@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1})
 def test_blpop_drains_a_backlog(redis_server):
     """A worker that was down must still find its messages waiting."""
     for index in range(3):
@@ -128,7 +170,7 @@ def test_blpop_drains_a_backlog(redis_server):
     assert [item['chat_id'] for item in delivery.handled] == [0, 1, 2]
 
 
-@override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop', 'BLPOP_TIMEOUT': 1, 'ALLOW_PICKLE': True})
+@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1, 'ALLOW_PICKLE': True})
 def test_blpop_accepts_legacy_pickle(redis_server):
     redis_server.rpush('TELEGRAM_BOT_MESSAGE', PickleSerializer().dumps({'function': 'send_message', 'chat_id': 9}))
     delivery = RecordingBlpop()
@@ -136,7 +178,7 @@ def test_blpop_accepts_legacy_pickle(redis_server):
     assert delivery.handled[0]['chat_id'] == 9
 
 
-@override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop', 'BLPOP_TIMEOUT': 1})
+@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1})
 def test_undecodable_message_is_dropped_not_fatal(redis_server):
     redis_server.rpush('TELEGRAM_BOT_MESSAGE', b'{"__model__": "os", "data": {}}')
     redis_server.rpush('TELEGRAM_BOT_MESSAGE', JsonSerializer().dumps({'function': 'send_message', 'chat_id': 1}))
@@ -145,7 +187,7 @@ def test_undecodable_message_is_dropped_not_fatal(redis_server):
     assert [item['chat_id'] for item in delivery.handled] == [1]
 
 
-@override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop', 'BLPOP_TIMEOUT': 1})
+@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1})
 def test_failing_handler_does_not_kill_the_consumer(redis_server):
     calls = []
 
@@ -169,7 +211,7 @@ def test_failing_handler_does_not_kill_the_consumer(redis_server):
     assert len(calls) == 2
 
 
-@override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop'})
+@override_settings(TELEGRAM_BOT={})
 def test_enqueue_does_not_write_an_expiry_key(redis_server):
     TelegramBot().enqueue(chat_id=1, text='hi')
     assert redis_server.llen('TELEGRAM_BOT_MESSAGE') == 1
@@ -346,7 +388,7 @@ def test_sends_that_all_see_a_stopped_loop_are_serialized():
     instance.close()
 
 
-@override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop', 'BLPOP_TIMEOUT': 0})
+@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 0})
 def test_a_zero_blpop_timeout_is_clamped(redis_server, monkeypatch):
     """0 means "block for ever" to a real Redis, and stop() would never be seen.
 
@@ -464,9 +506,7 @@ def test_concurrent_first_sends_share_one_event_loop(monkeypatch):
         loop.close()
 
 
-@override_settings(
-    TELEGRAM_BOT={'DELIVERY': 'blpop', 'BLPOP_TIMEOUT': 30, 'HEARTBEAT_INTERVAL': 4, 'REDIS_TIMEOUT': 60}
-)
+@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 30, 'HEARTBEAT_INTERVAL': 4, 'REDIS_TIMEOUT': 60})
 def test_the_consumer_pops_for_what_the_shared_ceiling_says(redis_server, monkeypatch):
     """W004 describes a cap; this is what makes the description true.
 
@@ -498,7 +538,7 @@ def test_the_consumer_pops_for_what_the_shared_ceiling_says(redis_server, monkey
     assert asked[0] == 4, f'popped for {asked[0]}s while the ceiling says 4'
 
 
-@override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop', 'BLPOP_TIMEOUT': 1, 'WORKER_NAME': 'mine'})
+@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1, 'WORKER_NAME': 'mine'})
 def test_a_broker_subclass_can_name_its_own_in_flight_list(redis_server, monkeypatch):
     """Two consumers on one queue under different names, which is what the capability is for.
 
@@ -547,3 +587,56 @@ def test_a_broker_subclass_can_name_its_own_in_flight_list(redis_server, monkeyp
     # and the module function is untouched by the override, which is what keeps the producer
     # and `tgbot_reclaim` agreeing with each other rather than with one broker instance
     assert processing_key() == 'TELEGRAM_BOT_MESSAGE:processing:mine'
+
+
+DELIVERY_PAGE = (pathlib.Path(__file__).resolve().parent.parent / 'docs' / 'wiki' / 'Delivery.md').read_text(
+    encoding='utf-8'
+)
+
+
+def documented_consumer():
+    """The `BatchedDelivery` block from the Delivery page, compiled from the page itself.
+
+    Read rather than copied, because a copy is a second thing to keep true. The page tells a
+    reader how to write a consumer now that `DELIVERY` takes a dotted path, and a recipe that
+    does not run is worse than none: they trust it and then debug our page instead of their code.
+    """
+    blocks = [block for block in DELIVERY_PAGE.split('```')[1::2] if 'class BatchedDelivery' in block]
+    assert len(blocks) == 1, f'the page has {len(blocks)} BatchedDelivery blocks'
+    source = blocks[0].removeprefix('python\n')
+    namespace: dict[str, object] = {}
+    exec(compile(source, 'Delivery.md', 'exec'), namespace)  # noqa: S102 - our own page, read above
+    return namespace['BatchedDelivery']
+
+
+@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1})
+def test_the_documented_consumer_delivers(redis_server):
+    """Run the page's own class against a queue with a message in it.
+
+    The four rules the page states are each a defect this package has had, so the case drives the
+    ones that can be seen from outside: the message is delivered, it leaves the in-flight list,
+    and `stop()` ends the loop.
+    """
+    handled = []
+    consumer = documented_consumer()(handler=lambda function, **payload: handled.append((function, payload)))
+    consumer.broker.publish([JsonSerializer().dumps({'function': 'send_message', 'chat_id': 7, 'text': 'hi'})])
+
+    thread = consumer.start_thread()
+    try:
+        for _ in range(200):
+            if handled:
+                break
+            time.sleep(0.02)
+    finally:
+        consumer.stop()
+        thread.join(timeout=5)
+
+    assert len(handled) == 1, handled
+    function, payload = handled[0]
+    # the envelope's own fields ride along with the call arguments -- asserted on the arguments
+    # rather than on the whole mapping, so this case does not pin the envelope's shape twice
+    assert function == 'send_message'
+    assert payload['chat_id'] == 7
+    assert payload['text'] == 'hi'
+    assert consumer.broker.inflight_depth() == 0, 'the delivered message was left in flight'
+    assert not thread.is_alive(), 'stop() did not end the documented loop'

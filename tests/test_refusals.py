@@ -34,6 +34,7 @@ import django_aiogram
 ARGUMENTS = {
     'BrokerDependencyError': {'broker': 'pkg.mod.Broker', 'module': 'pika', 'extra': 'rabbitmq'},
     'WorkerDepthUnavailableError': {'broker': 'KafkaBroker', 'worker': 'bot-7'},
+    'DeliveryNotConfiguredError': {'path': 'myapp.delivery.Missing', 'detail': 'which cannot be imported: x'},
     'ProduceRefusedError': {'topic': 'telegram-outbound', 'reason': 'Unknown topic or partition'},
     'QueueRefusedError': {'queue': 'telegram-outbound', 'reason': 'NO_ROUTE'},
     'StreamServerTooOldError': {},
@@ -59,6 +60,10 @@ ARGUMENTS = {
 EXEMPT = {
     ('UnknownApiMethodError', 'method_count'): (
         'the length of the installed aiogram method table, which anyone holding this can read'
+    ),
+    ('DeliveryNotConfiguredError', 'detail'): (
+        'a sentence composed at the raise site to finish the message, the same shape as '
+        "`MalformedEnvelopeError`'s argument -- the value a caller acts on is `path`"
     ),
     ('MalformedEnvelopeError', 'found'): (
         'what it is handed is already a sentence -- "a decoded str, not a mapping" -- composed at '

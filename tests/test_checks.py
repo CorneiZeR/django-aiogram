@@ -1040,3 +1040,70 @@ def test_the_enum_this_package_publishes_counts_as_redis_storage():
     reported = [problem for problem in check_settings() if str(problem.id) == 'django_aiogram.W002']
 
     assert reported, 'the enum form of Redis FSM storage did not ask for a URL'
+
+
+@pytest.mark.parametrize(
+    ('value', 'says'),
+    [
+        ('', 'is empty'),
+        ('blpop', "Write 'django_aiogram.consumer.delivery.BlpopDelivery'"),
+        ('keyspace', 'removed in 3.0'),
+        ('smoke-signals', 'not a dotted path'),
+        ('BlpopDelivery', 'not a dotted path'),
+    ],
+    ids=['empty', '3.x blpop', '3.x keyspace', 'not a path', 'bare name'],
+)
+def test_e009_reports_what_a_string_can_be_wrong_about(value, says):
+    """`DELIVERY` is a dotted path since 4.0, so it can be wrong in the ways a path can be.
+
+    The 3.x words are reported by name rather than as "not a path": a project upgrading has one
+    of them in its settings file, and being told what to write is the difference between a
+    minute and an afternoon.
+    """
+    with override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'DELIVERY': value}):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.E009']
+
+    assert len(found) == 1, f'E009 reported {len(found)} problems for {value!r}'
+    assert says in found[0].msg, found[0].msg
+    # every finding carries the same hint, and it has to name where the rest is settled:
+    # a reader told only about the shape goes hunting for a rule that cannot exist
+    assert 'start_tgbot' in (found[0].hint or ''), found[0].hint
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'DELIVERY': 'myproject.consumers.NotHereYet',
+    }
+)
+def test_e009_accepts_a_path_it_cannot_resolve_and_says_where_it_will_be():
+    """The rule stops at the shape, and the hint says so, because resolving costs aiogram.
+
+    Importing the consumer module pulls `wire.serializers`, which encodes aiogram models and so
+    imports their types -- measured at 883ms and 135 MiB on a bare settings module, on every
+    `migrate`, `runserver` and `shell`. `E018` exists because that cost was once paid here.
+
+    So a plausible path that does not exist passes the checks and fails at `start_tgbot`, which
+    resolves it before starting a thread. What this case pins is that the reader is *told* that:
+    a hint naming only the shape would send somebody hunting for a rule that cannot exist.
+    """
+    reported = [message for message in check_settings() if message.id == 'django_aiogram.E009']
+
+    assert reported == [], f'the shape is fine, so nothing should be reported: {reported}'
+    assert any(check.key == 'DELIVERY' for check in CHECKS), 'E009 no longer looks at DELIVERY'
+
+
+def test_the_two_lists_of_3x_delivery_names_agree():
+    """The consumer and the checks each carry the table, and they must not drift.
+
+    Two copies on purpose: `checks.py` cannot import the consumer without paying aiogram, which
+    is the whole reason `E009` stops at the shape. So the copies are pinned against each other
+    here -- the cheapest place to notice, and the only one that fails when a name is added to one.
+    """
+    from django_aiogram.config import checks as rules
+    from django_aiogram.consumer import delivery as consumer
+
+    assert rules.THREE_X_DELIVERIES == consumer.THREE_X_DELIVERIES, (
+        f'checks: {rules.THREE_X_DELIVERIES}; consumer: {consumer.THREE_X_DELIVERIES}'
+    )
