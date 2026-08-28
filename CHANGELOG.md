@@ -415,9 +415,11 @@ Entries land here as the work does; nothing below is released.
   Two moved paths are ones a project wrote down itself. `DATABASE_ROUTERS` becomes
   `django_aiogram.eventlog.dbrouter.TelegramEventLogRouter`, and the webhook view in your
   `urls.py` becomes `django_aiogram.consumer.webhook.telegram_webhook`. **`E048` catches the
-  first**: it reports a `django_redis_aiogram.` entry in `DATABASE_ROUTERS` and names what to
-  write, where otherwise the router is imported on the first query that needs routing — a request
-  rather than a deployment step — and fails with Django's `ImportError`. It cannot catch the
+  first**: it reports any `django_redis_aiogram.` entry in `DATABASE_ROUTERS` — naming the
+  replacement for the router we shipped, and saying the distribution is gone for any other path
+  from it, since a replacement it never had is not ours to invent. Otherwise the router is imported
+  on the first query that needs routing — a request rather than a deployment step — and fails with
+  Django's `ImportError`. It cannot catch the
   second, because nothing here can read your `urls.py`, so **Upgrading** carries that row and says
   what a stale one costs: a webhook answering 404 while the process looks healthy. `SERIALIZER` is
   unaffected — it holds a short name, not a path. **`DELIVERY` is a path now**, and the entry

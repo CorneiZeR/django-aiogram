@@ -46,10 +46,12 @@ something needs them:
 | `DATABASE_ROUTERS` | `django_redis_aiogram.dbrouter.TelegramEventLogRouter` | `django_aiogram.eventlog.dbrouter.TelegramEventLogRouter` |
 | `urls.py` | `django_redis_aiogram.webhook.telegram_webhook` | `django_aiogram.consumer.webhook.telegram_webhook` |
 
-**`manage.py check` catches the first one** — `E048` reports a `django_redis_aiogram.` entry in
-`DATABASE_ROUTERS` and names what to write. Without it the router is imported on the first query
-that needs routing, which is a request rather than a deployment step, and the failure is Django's
-own `ImportError` naming a module rather than the fix.
+**`manage.py check` catches the first one.** `E048` reports any `django_redis_aiogram.` entry in
+`DATABASE_ROUTERS`: for the router in the table above it names the replacement, and for any other
+path from that distribution it says the distribution is gone — which is all it can honestly say
+about a path this package never shipped. Without the check the router is imported on the first
+query that needs routing, which is a request rather than a deployment step, and the failure is
+Django's own `ImportError` naming a module rather than the fix.
 
 **It cannot catch the second.** Nothing in this package can read your `urls.py` — the URL
 configuration is Django's, resolved at request time, and a check that tried to import it would be
