@@ -83,11 +83,17 @@ class Problem:
 
     ``key`` names the setting to blame when it is not the one the check guards —
     one webhook rule reports against both WEBHOOK_URL and WEBHOOK_SECRET.
+
+    ``label`` is for a setting that is not ours: 4.0 moved two module paths a project writes into
+    *Django's* settings, and a rule about `DATABASE_ROUTERS` that introduced itself as
+    ``TELEGRAM_BOT['...']`` would send the reader to the wrong file. Everything else keeps the
+    prefix, since almost every rule here is about one of our own keys.
     """
 
     message: str
     key: str | None = None
     hint: str | None = None
+    label: str | None = None
 
 
 Validator = Callable[[str], list[Problem]]
@@ -117,8 +123,9 @@ class Check:
     def _message(self, problem: Problem) -> CheckMessage:
         """Label one problem with the setting it is about and this row's id."""
         key = self.key if problem.key is None else problem.key
-        # an empty key means the check is about the settings dict as a whole
-        label = f"{SETTINGS_NAME}['{key}']" if key else SETTINGS_NAME
+        # an empty key means the check is about the settings dict as a whole, and a `label` means
+        # it is about a setting of Django's rather than one of ours
+        label = problem.label or (f"{SETTINGS_NAME}['{key}']" if key else SETTINGS_NAME)
         report = _LEVELS.get(self.code[0], Error)
         return report(f'{label} {problem.message}', hint=problem.hint, id=f'{_ID_PREFIX}.{self.code}')
 
@@ -735,6 +742,58 @@ def _a_routed_log_database(key: str) -> list[Problem]:
     ]
 
 
+#: paths a 3.x project wrote into its *own* settings, against what to write in 4.0. The router is
+#: the only one a check can reach: nothing here can read a project's `urls.py`, so the webhook view
+#: is documentation and **Upgrading** carries it
+THREE_X_PATHS = {
+    'django_redis_aiogram.dbrouter.TelegramEventLogRouter': ('django_aiogram.eventlog.dbrouter.TelegramEventLogRouter'),
+}
+
+
+def _a_router_this_release_still_has(_key: str) -> list[Problem]:
+    """Report a `DATABASE_ROUTERS` entry that names 3.x, with the 4.0 path.
+
+    The one moved path a check can reach. `DATABASE_ROUTERS` is Django's, and a project wrote our
+    dotted path into it by hand, so the rename in 4.0 leaves a string nothing resolves -- and
+    nothing here imports it, so nothing fails until the first query, which then fails with
+    Django's own `ImportError` naming a module rather than the fix.
+
+    Reported for **any** `django_redis_aiogram.` entry rather than only the router, and both halves
+    of that matter: the known path gets its replacement named, and an unknown one still gets told
+    that the distribution is gone, since guessing a replacement it never had would be worse than
+    saying so.
+
+    An error rather than a warning: this cannot work. The string names a package that a 4.0
+    install does not have, and a router Django cannot import takes down the first query that needs
+    routing -- there is no configuration in which this is deliberate.
+    """
+    from django.conf import settings as django_settings  # noqa: PLC0415 - only when the checks run
+
+    problems = []
+    for entry in getattr(django_settings, 'DATABASE_ROUTERS', ()) or ():
+        if not isinstance(entry, str) or not entry.startswith('django_redis_aiogram.'):
+            continue
+        replacement = THREE_X_PATHS.get(entry)
+        instead = (
+            f'Write {replacement!r}.'
+            if replacement
+            else 'That distribution is gone in 4.0; the package is `django_aiogram` now.'
+        )
+        problems.append(
+            Problem(
+                f'names {entry!r}, which 4.0 renamed. {instead}',
+                label='DATABASE_ROUTERS',
+                hint=(
+                    'The rename is mechanical for the router, and the webhook view in your '
+                    "`urls.py` moved with it -- to 'django_aiogram.consumer.webhook."
+                    "telegram_webhook'. Nothing here can read `urls.py`, so that one is only in "
+                    'the Upgrading page.'
+                ),
+            )
+        )
+    return problems
+
+
 def _a_log_that_is_pruned(key: str) -> list[Problem]:
     """Warn when nothing will ever delete a row, so the table only grows."""
     if not _the_log_is_on():
@@ -992,6 +1051,7 @@ CHECKS: tuple[Check, ...] = (
     # the consumer is known
     Check('I001', 'WORKER_NAME', _a_worker_that_keeps_its_name),
     Check('W003', '', _known_keys),
+    Check('E048', '', _a_router_this_release_still_has),
     Check(
         'W001',
         'TOKEN',
