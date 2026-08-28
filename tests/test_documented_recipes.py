@@ -142,7 +142,7 @@ def test_a_catch_all_registered_earlier_swallows_the_update():
     assert observers == before, 'the recipe left the shared router changed'
 
 
-@override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop'})
+@override_settings(TELEGRAM_BOT={})
 def test_draining_the_queue_without_a_thread(redis_server):
     """Queued by enqueue and read by the consumer, which is the whole path."""
     bot.enqueue(chat_id=42, text='hi')

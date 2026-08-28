@@ -29,7 +29,7 @@ from django_aiogram.wire.serializers import JsonSerializer, PickleSerializer
 LOGGER = 'django_aiogram'
 QUEUE = 'TELEGRAM_BOT_MESSAGE'
 # the in-flight list is per worker, so ask the delivery for its own name
-SETTINGS = {'DELIVERY': 'blpop', 'BLPOP_TIMEOUT': 1, 'WORKER_NAME': 'tests'}
+SETTINGS = {'BLPOP_TIMEOUT': 1, 'WORKER_NAME': 'tests'}
 PROCESSING = f'{QUEUE}:processing:tests'
 
 
@@ -215,7 +215,7 @@ def test_enqueue_refuses_a_non_api_method(redis_server):
     assert redis_server.llen('TELEGRAM_BOT_MESSAGE') == 0
 
 
-@override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop', 'BLPOP_TIMEOUT': 1})
+@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1})
 def test_a_queued_non_api_method_is_dropped_not_executed(redis_server):
     """A payload written by something malicious must not kill the worker either."""
     redis_server.rpush(QUEUE, JsonSerializer().dumps({'function': 'download_file', 'file_path': 'x'}))
@@ -1033,7 +1033,7 @@ def test_a_cancelled_send_does_not_end_the_consumer(redis_server, caplog):
     assert redis_server.llen(PROCESSING) == 1, 'the canceled message was acknowledged'
 
 
-@override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop'})
+@override_settings(TELEGRAM_BOT={})
 def test_an_unconfigured_project_gets_the_old_behavior():
     """Both settings are new, and both default to what 3.0 already did.
 

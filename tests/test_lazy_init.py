@@ -97,7 +97,7 @@ def test_handlers_register_without_a_token():
 def test_defaults_are_readable():
     assert conf['ENABLED'] is True
     assert conf['MAX_RETRIES'] == 10
-    assert conf['DELIVERY'] == 'blpop'
+    assert conf['DELIVERY'] == 'django_aiogram.consumer.delivery.BlpopDelivery'
 
 
 @override_settings(TELEGRAM_BOT={'MAX_RETRIES': 3})

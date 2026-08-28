@@ -13,10 +13,17 @@ never got past startup. `manage.py check` will say which.
 
 ## `manage.py check` fails with `E009` after upgrading
 
-`'DELIVERY': 'keyspace'` was the 1.x mechanism and 3.0 removed it. Drop the key,
-or set it to `'blpop'` — see **[[Delivery]]**. The check fails rather than
-falling back silently, because a delivery mode that quietly changes is worse
-than one that refuses to start.
+`DELIVERY` is a dotted path since 4.0, so the words that used to go there no longer
+do. `'blpop'` is now `'django_aiogram.consumer.delivery.BlpopDelivery'` — or drop the
+key, which is the same thing by default. `'keyspace'` was the 1.x mechanism, removed
+in 3.0, and there is nothing to write instead. `E009` names both by name rather than
+reporting "not a dotted path", because a settings file being upgraded has one of them
+in it.
+
+The check fails rather than falling back silently, because a consumer that quietly
+changes is worse than one that refuses to start. What `E009` cannot tell you is whether
+a *plausible* path imports and is a `Delivery`: resolving it would make every
+`manage.py check` import aiogram. `start_tgbot` settles that before it starts a thread.
 
 ## A send hangs instead of failing
 

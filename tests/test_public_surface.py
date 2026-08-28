@@ -25,7 +25,7 @@ import django_aiogram
 from django_aiogram import TelegramBot
 from django_aiogram import redis as redis_module
 from django_aiogram.config.checks import check_settings
-from django_aiogram.config.enums import DeliveryKind, SerializerKind, StorageKind, UpdateMode
+from django_aiogram.config.enums import SerializerKind, StorageKind, UpdateMode
 
 #: attributes that predate 2.0 and are reached for directly. `redis_conn` was one of them and
 #: is not any more: 4.0 removed the client's Redis-named property, because a client that can
@@ -226,7 +226,11 @@ def test_the_redis_client_is_shared_and_lives_in_its_own_module(redis_server):
     assert not hasattr(django_aiogram, 'redis_conn'), 'the package still exports it'
 
 
-ENUM_CLASSES = ('DeliveryKind', 'SerializerKind', 'StorageKind', 'UpdateMode', 'RateLimitKey', 'SerializationTag')
+ENUM_CLASSES = ('SerializerKind', 'StorageKind', 'UpdateMode', 'RateLimitKey', 'SerializationTag')
+#: retired in 4.0, and pinned for the same reason the removed package names above are: dropping a
+#: name from the list of documented ones is not an assertion about anything. `DeliveryKind` had a
+#: single member, `BLPOP`, and `DELIVERY` takes a dotted path now -- an enum of one is not a choice
+REMOVED_ENUMS = ('DeliveryKind',)
 ERROR_CLASSES = ('DjangoRedisAiogramError', 'SerializationError', 'UnknownApiMethodError')
 
 
@@ -236,6 +240,19 @@ def test_the_enums_page_documents_a_real_class(name):
     from django_aiogram.config import enums
 
     assert hasattr(enums, name), f'{name} is documented but missing'
+
+
+@pytest.mark.parametrize('name', REMOVED_ENUMS)
+def test_the_enums_module_no_longer_carries_it(name):
+    """Bringing one back would give the setting two spellings, which is the drift 4.0 ended.
+
+    The list above shrinking is not evidence: a name removed from what the suite iterates is
+    simply a name nobody looks at, and the enum would go on being exported and documented
+    nowhere.
+    """
+    from django_aiogram.config import enums
+
+    assert not hasattr(enums, name), f'{name} is back; DELIVERY takes a dotted path since 4.0'
 
 
 @pytest.mark.parametrize('name', ERROR_CLASSES)
@@ -263,7 +280,7 @@ def test_one_family_catches_everything_the_package_raises():
     TELEGRAM_BOT={
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost:6379/0',
-        'DELIVERY': DeliveryKind.BLPOP,
+        'DELIVERY': 'django_aiogram.consumer.delivery.BlpopDelivery',
         'SERIALIZER': SerializerKind.JSON,
         'FSM_STORAGE': StorageKind.REDIS,
         'MODE': UpdateMode.POLLING,

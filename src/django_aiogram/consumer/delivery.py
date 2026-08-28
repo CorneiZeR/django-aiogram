@@ -1,10 +1,15 @@
-"""The backend that moves queued messages from Redis to Telegram.
+"""The consumer that moves queued messages to Telegram, and the seam a project may replace.
 
-``blpop`` is the only consumer: a blocking pop needs no server configuration,
-works on any database index, delivers immediately and leaves messages in the
-list while the worker is down. The keyspace consumer 1.x used was removed in
-3.0 — it needed ``CONFIG SET notify-keyspace-events``, which managed Redis
-providers usually refuse, and it could not deliver before the TTL elapsed.
+:class:`BlpopDelivery` is the one this package ships and the value ``DELIVERY`` defaults to: it
+takes from the broker in a blocking read, which needs no server configuration, delivers as soon
+as a message arrives and leaves messages where they are while the worker is down. The keyspace
+consumer 1.x used was removed in 3.0 — it needed ``CONFIG SET notify-keyspace-events``, which
+managed Redis providers usually refuse, and it could not deliver before the TTL elapsed.
+
+Since 4.0 ``DELIVERY`` is a **dotted path**, so a project can name a :class:`Delivery` of its
+own; until then it accepted the single string ``'blpop'``, the name of a Redis command that three
+of the four transports never issue. What a subclass must do is on the **Delivery** page, with the
+six rules that are each a defect this module has already had.
 
 It consumes crash-safely where the server allows it: a message is moved to a
 processing list while it is being sent and removed once the send has actually
@@ -33,12 +38,15 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
 
+from django.utils.module_loading import import_string
+
 from django_aiogram.api import check_function
 from django_aiogram.broker.registry import get_broker
-from django_aiogram.config.enums import DeliveryKind, EventKind
+from django_aiogram.config.enums import EventKind
 from django_aiogram.config.settings import blpop_ceiling, conf
 from django_aiogram.eventlog.events import new_correlation_id, worker_identity
 from django_aiogram.eventlog.recorder import Event, as_identifier, recorder
+from django_aiogram.exceptions import DeliveryNotConfiguredError
 from django_aiogram.redis import (
     heartbeat_interval,
     heartbeat_key,
@@ -146,6 +154,40 @@ class Delivery(ABC):
     def stop(self) -> None:
         """Ask :meth:`run` to return after its current read."""
         self._stop.set()
+
+    @property
+    def read_timeout(self) -> int:
+        """How long a blocking take may ask for, in seconds.
+
+        ``BLPOP_TIMEOUT`` capped by what the transport and the heartbeat allow: a read asked to
+        wait longer than the socket deadline raises inside the read instead of returning, and one
+        that outlasts ``HEARTBEAT_INTERVAL`` lets the heartbeat expire under a consumer that is
+        doing fine. `W004` reports on the same helper, so a check cannot describe a cap the
+        consumer does not use.
+
+        Public for the reason :attr:`stopping` is: a subclass that has to redo this arithmetic
+        will get it wrong, and the page that documents writing one would have to teach it.
+
+        **The transport term is `REDIS_TIMEOUT` on all four transports today**, which is issue
+        #41 and not this property's to fix: the same helper feeds `W004`, so moving the term here
+        alone would leave a check describing a cap the consumer does not use -- and moving both
+        changes what that check prints, which is why it was split off. On a deployment whose own
+        timeout is *lower* than the Redis one, the cap is looser than the transport allows and a
+        read can outlast `Broker.call_ceiling`; the join in `start_tgbot` is derived from that
+        ceiling, so the consumer can outlive it. Measured and written down in #41.
+        """
+        return max(1, min(int(conf['BLPOP_TIMEOUT']), blpop_ceiling().seconds))
+
+    @property
+    def stopping(self) -> bool:
+        """Whether :meth:`stop` has been called, which is what ``run`` loops until.
+
+        Public because ``DELIVERY`` names a class a project may write, and a subclass that has
+        to read ``self._stop`` to know when to return is not being offered an extension point.
+        The shipped consumer reads this same property, so the two cannot describe different
+        conditions.
+        """
+        return self._stop.is_set()
 
     def start_thread(self) -> threading.Thread:
         """Run the consumer on a daemon thread and return it."""
@@ -493,7 +535,7 @@ class Delivery(ABC):
 
     def consume_pending(self) -> None:
         """Drain the queue without blocking, acknowledging each message."""
-        while not self._stop.is_set():
+        while not self.stopping:
             self.collect()
             if self.at_capacity():
                 # the blocking loop waits here; a drain has no thread to wait on,
@@ -513,25 +555,22 @@ class BlpopDelivery(Delivery):
 
     def run(self) -> None:
         """Block on the queue until :meth:`stop` is called."""
-        # 0 means "block for ever" in Redis, which would swallow stop(); the
-        # heartbeat would expire under a consumer that is doing fine; and a pop asked
-        # to wait longer than the socket will turns an idle round into an error.
-        # `blpop_ceiling()` weighs the last two and this line applies the first against
-        # them, which is why `bound_by` never names `BLPOP_TIMEOUT`. `W004` reports on the
-        # same helper — one place, so the check cannot describe a cap the consumer does
-        # not use
-        timeout = max(1, min(int(conf['BLPOP_TIMEOUT']), blpop_ceiling().seconds))
+        # read once and reused below: `read_timeout` is a property over `blpop_ceiling()`,
+        # which the subclass a project writes needs as much as this one does -- see the
+        # property for what the three terms are and why `bound_by` never names
+        # `BLPOP_TIMEOUT`
+        timeout = self.read_timeout
         reclaimed = self.reclaim()
         logger.info(
             'delivery started',
             extra={
-                'tg_delivery': DeliveryKind.BLPOP.value,
+                'tg_delivery': type(self).__name__,
                 'tg_key': self.queue_key,
                 'tg_timeout': timeout,
                 'tg_crash_safe': self.crash_safe,
             },
         )
-        while not self._stop.is_set():
+        while not self.stopping:
             self.heartbeat()
             self.collect()
             self.hold_for_capacity()
@@ -558,17 +597,51 @@ class BlpopDelivery(Delivery):
         self.collect()
 
 
-# keyed by the enum's value, so the keys are the plain strings the setting holds
-DELIVERIES: dict[str, type[Delivery]] = {
-    DeliveryKind.BLPOP.value: BlpopDelivery,
+#: what 3.x accepted, against the path that does the same thing now. Kept because a project
+#: upgrading has the old word in its settings and deserves to be told where it went rather than
+#: `'blpop' is not a dotted path`. `keyspace` was removed in 3.0 and is named for the same reason:
+#: the reader wants to know what to write, not what their value is not
+THREE_X_DELIVERIES = {
+    'blpop': 'django_aiogram.consumer.delivery.BlpopDelivery',
+    'keyspace': '',
 }
 
 
-def get_delivery(handler: Handler) -> Delivery:
-    """Build the consumer the DELIVERY setting names."""
-    name = conf['DELIVERY']
+def delivery_class() -> type[Delivery]:
+    """Resolve ``DELIVERY`` to a class, and refuse anything that is not a delivery.
+
+    A dotted path, the way ``BROKER`` is one, because a consumer somebody else wrote is a
+    reasonable thing to want and the setting is where a reader looks for it. Until 4.0 this
+    accepted exactly one string -- ``'blpop'``, the name of a Redis command that three of the
+    four transports never issue -- so the setting documented one transport's mechanism while
+    offering no choice at all.
+
+    Separate from :func:`get_delivery` for the reason `broker_class` is separate from
+    `get_broker`: the checks want the class without building one, and a check must not be the
+    thing that starts a consumer.
+    """
+    path = str(conf['DELIVERY'] or '').strip()
+    if not path:
+        raise DeliveryNotConfiguredError(conf['DELIVERY'], 'so no consumer is chosen.')
+    if path in THREE_X_DELIVERIES:
+        replacement = THREE_X_DELIVERIES[path]
+        instead = f'write {replacement!r}' if replacement else 'that consumer was removed in 3.0'
+        raise DeliveryNotConfiguredError(path, f'a name 4.0 replaced with a dotted path -- {instead}.')
     try:
-        return DELIVERIES[name](handler)
-    except KeyError:
-        msg = f'Unknown delivery {name!r}, expected one of {sorted(DELIVERIES)}.'
-        raise ValueError(msg) from None
+        resolved = import_string(path)
+    except ImportError as error:
+        raise DeliveryNotConfiguredError(path, f'which cannot be imported: {error}') from error
+    if not (isinstance(resolved, type) and issubclass(resolved, Delivery)):
+        raise DeliveryNotConfiguredError(path, 'which is not a Delivery subclass.')
+    if inspect.isabstract(resolved):
+        # `Delivery` itself, or a subclass that left `run` abstract. Building one raises
+        # `TypeError: Can't instantiate abstract class`, which names the class and not the
+        # setting -- and this is the one refusal a reader is most likely to earn, since the base
+        # class is the name they have just read on the page
+        raise DeliveryNotConfiguredError(path, 'which is abstract: implement run() or name a subclass that does.')
+    return resolved
+
+
+def get_delivery(handler: Handler) -> Delivery:
+    """Build the consumer ``DELIVERY`` names, with the handler it delivers through."""
+    return delivery_class()(handler)

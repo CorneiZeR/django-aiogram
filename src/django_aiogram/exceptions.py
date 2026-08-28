@@ -4,6 +4,8 @@ They live together, and build their own messages, so that call sites raise a
 named domain error instead of a bare builtin with a formatted string.
 """
 
+from django_aiogram.config.settings import SETTINGS_NAME
+
 
 class DjangoRedisAiogramError(Exception):
     """Base class for every error this package raises."""
@@ -48,6 +50,29 @@ class LoopThreadNotStartedError(LoopUnavailableError):
             'the loop from this thread instead would put two threads on one loop. '
             'The update was not handled here.',
         )
+
+
+class DeliveryNotConfiguredError(DjangoRedisAiogramError, ValueError):
+    """``DELIVERY`` names something that is not a consumer, or names nothing.
+
+    Also a ``ValueError``, which is what 3.x raised for an unknown delivery: a project that
+    wrote ``except ValueError`` around building a consumer keeps working, and gets a named
+    class if it wants one.
+
+    One class rather than one per way of being wrong, because the caller's move is the same in
+    each -- fix the setting -- and only the message differs. `E009` reports what it can before a
+    consumer is built, so this is the runtime backstop rather than the usual path: it is what
+    `start_tgbot` raises for a path that reads correctly and does not resolve.
+    """
+
+    def __init__(self, path: object, detail: str) -> None:
+        """Keep what was named, since that is what the caller has to change.
+
+        The path is an attribute for the reason every refusal here keeps one: a management
+        command reporting which setting to fix should not have to read it back out of English.
+        """
+        self.path = path
+        super().__init__(f"{SETTINGS_NAME}['DELIVERY'] is {path!r}: {detail}")
 
 
 class SerializationError(DjangoRedisAiogramError):

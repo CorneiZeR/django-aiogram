@@ -104,6 +104,20 @@ missing and a required setting that is empty, so a half-configured process usual
 startup rather than silently — but a process still naming the *old* transport is a correct
 configuration, and nothing can tell it apart from one that meant it.
 
+### `DELIVERY` takes a dotted path
+
+`'blpop'` is `'django_aiogram.consumer.delivery.BlpopDelivery'` now — or drop the key, which is
+the same thing, since that is the default. The old word was the name of a Redis command that three
+of the four transports never issue, and the setting had exactly one legal value; it selects a class
+now, so a consumer you write goes there. `E009` refuses `'blpop'` by name and says what to write,
+rather than reporting that a Redis command is not a dotted path.
+
+`DeliveryKind` is gone with it: an enum of one member is not a choice. If you imported it to spell
+the value, write the path.
+
+**[[Delivery]]** has what a subclass must do, and the six rules that are each a defect this
+package has already had.
+
 ### The shutdown budget follows it too
 
 `stop_grace_period` is computed from a table on **[[Deployment]]**, and its first row used to be

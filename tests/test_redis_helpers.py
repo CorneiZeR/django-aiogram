@@ -54,7 +54,7 @@ def decoded_server(monkeypatch):
     return server
 
 
-@override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop', 'BLPOP_TIMEOUT': 1})
+@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1})
 def test_blpop_handles_str_payloads(decoded_server):
     decoded_server.rpush(
         'TELEGRAM_BOT_MESSAGE',
@@ -128,7 +128,7 @@ def test_draining_pops_atomically(redis_server):
     assert redis_server.llen('TELEGRAM_BOT_MESSAGE') == 0
 
 
-@override_settings(TELEGRAM_BOT={'DELIVERY': 'blpop'})
+@override_settings(TELEGRAM_BOT={})
 def test_enqueue_round_trips_through_a_decoded_connection(decoded_server):
     TelegramBot().enqueue(chat_id=1, text='hi')
 

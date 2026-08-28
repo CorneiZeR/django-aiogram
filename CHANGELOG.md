@@ -303,6 +303,32 @@ Entries land here as the work does; nothing below is released.
 
 ### Changed
 
+- **`DELIVERY` is a dotted path, and a consumer you write goes in it.** It accepted exactly one
+  string until now — `'blpop'`, the name of a Redis command that three of the four transports
+  never issue, since the consumer asks the broker and the broker reaches for `basic_get`, a
+  stream read or a poll. So the setting documented one transport's mechanism while offering no
+  choice at all. It resolves a path the way `BROKER` does; the default is
+  `'django_aiogram.consumer.delivery.BlpopDelivery'`, so a project that changes nothing keeps the
+  consumer it had.
+
+  `Delivery.stopping` and `Delivery.read_timeout` are public with it, because a subclass that has
+  to read `self._stop` to know when to return, or redo the read-deadline arithmetic to know how
+  long it may block, is not being offered an extension point. The second is the one that bites:
+  `BLPOP_TIMEOUT` capped by `HEARTBEAT_INTERVAL` and by `REDIS_TIMEOUT`, where a number of your own
+  blocks for ever, raises inside the read, or lets the heartbeat expire under a consumer that is
+  fine. That the socket term is `REDIS_TIMEOUT` on every transport is #41, filed and not fixed
+  here; **Delivery** says so where a subclass reads the property. `Delivery` itself and any subclass that leaves `run()` abstract are refused by
+  name rather than by `TypeError`. **Delivery** documents what `run()` must
+  do, with the six rules that are each a defect this package has already had, and the page's own
+  example is executed by the suite.
+
+  `DeliveryKind` is **gone**: an enum of one member is not a choice. `E009` refuses `'blpop'` and
+  `'keyspace'` by name and says what to write instead, rather than reporting that a Redis command
+  is not a dotted path — and it stops at the *shape*, because resolving the path would import the
+  consumer, which imports the serializer, which imports aiogram: 883ms and 135 MiB on every
+  `manage.py check`, measured. `start_tgbot` settles the rest before it starts a thread, and
+  `DeliveryNotConfiguredError` names the setting and the value when it cannot.
+
 - **No transport driver is a dependency of this package any more.** `pip install
   django-aiogram` brings Django and aiogram; the driver comes with the transport you name.
   For the default that is **`pip install "django-aiogram[redis]"`** — an existing project
@@ -359,8 +385,9 @@ Entries land here as the work does; nothing below is released.
 
   Two moved paths are ones a project wrote down itself. `DATABASE_ROUTERS` becomes
   `django_aiogram.eventlog.dbrouter.TelegramEventLogRouter`, and the webhook view in your
-  `urls.py` becomes `django_aiogram.consumer.webhook.telegram_webhook`. `DELIVERY` and
-  `SERIALIZER` are unaffected — they hold short names, not paths.
+  `urls.py` becomes `django_aiogram.consumer.webhook.telegram_webhook`. `SERIALIZER` is
+  unaffected — it holds a short name, not a path. **`DELIVERY` is a path now**, and the entry
+  above says what to write; a 3.x value of `'blpop'` is refused by name rather than relocated.
 
   | was | is |
   | --- | --- |
