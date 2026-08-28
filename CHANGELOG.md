@@ -222,6 +222,35 @@ Entries land here as the work does; nothing below is released.
 
 ### Fixed
 
+- **The bot process resets a dead database connection, which it never did.** Django closes a
+  broken or obsolete connection in `close_old_connections()`, wired to the `request_started` and
+  `request_finished` signals only — and a bot worker has no requests. So a connection that died
+  once stayed dead in that process for ever: measured in production on 2026-08-27, Postgres
+  restarted at 23:43, the first update after it arrived at 03:22, and every handler raised
+  `InterfaceError: connection already closed` for the next ten hours until the container was
+  restarted. `CONN_MAX_AGE` was never the fix; at `0`, the default, the connection is still only
+  closed inside that same request hook.
+
+  **Outbound delivery was unaffected, and that is what made it invisible.** The consumer kept
+  sending and `python -m django_aiogram.healthcheck` kept passing, because neither touches the
+  database — so `docker ps` and the probe both said the bot was fine while every deeplink and
+  every inline button silently did nothing. aiogram logs the exception and leaves the update
+  unhandled, so the person pressing the button gets no answer at all. **Deployment** now says
+  which class of failure the probe cannot see.
+
+  Every update is bracketed with the reset now, by an unconditional outer middleware registered
+  where the dispatcher is built — so polling and webhook both get it, and it is the outermost
+  frame rather than one behind the event log's. Before *and* after, because each side does a
+  different job: the leading close recovers from a connection that died while the process was
+  idle, and the trailing one returns the connection at `CONN_MAX_AGE=0` instead of parking an open
+  socket per worker between updates.
+
+  `thread_sensitive=True` on the `sync_to_async` is load-bearing rather than a default copied
+  over, and the suite pins it: handlers reach the ORM on asgiref's thread-sensitive executor, a
+  Django connection is thread-local, and a reset on the loop thread would close a connection
+  nobody used — the fix would look applied and change nothing. Dropping the flag makes the
+  recovery case fail with the outage's own error and the thread case report two different threads.
+
 - **Naming a worker in `inflight_depth` asks the transport, not Redis.** The unnamed call went
   through the broker seam; naming somebody else reached a Redis client directly, whatever `BROKER`
   said. On a RabbitMQ or Kafka deployment that either raised about a missing `REDIS_URL` or —
@@ -317,10 +346,10 @@ Entries land here as the work does; nothing below is released.
   `BLPOP_TIMEOUT` capped by `HEARTBEAT_INTERVAL` and by `REDIS_TIMEOUT`, where a number of your own
   blocks for ever, raises inside the read, or lets the heartbeat expire under a consumer that is
   fine. That the socket term is `REDIS_TIMEOUT` on every transport is #41, filed and not fixed
-  here; **Delivery** says so where a subclass reads the property. `Delivery` itself and any subclass that leaves `run()` abstract are refused by
-  name rather than by `TypeError`. **Delivery** documents what `run()` must
-  do, with the six rules that are each a defect this package has already had, and the page's own
-  example is executed by the suite.
+  here; **Delivery** says so where a subclass reads the property. `Delivery` itself and any
+  subclass that leaves `run()` abstract are refused by name rather than by `TypeError`.
+  **Delivery** documents what `run()` must do, with the six rules that are each a defect this
+  package has already had, and the page's own example is executed by the suite.
 
   `DeliveryKind` is **gone**: an enum of one member is not a choice. `E009` refuses `'blpop'` and
   `'keyspace'` by name and says what to write instead, rather than reporting that a Redis command

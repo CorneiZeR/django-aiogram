@@ -75,8 +75,14 @@ bot.send(chat_id=CHAT_ID, text='Order approved')
 python manage.py start_tgbot
 ```
 
-A router module, a call, and one process running the bot. Everything else — rate
-limits, per-process opt-out, healthchecks — is configuration, and it is
+A router module, a call, and one process running the bot. That process gets Django's
+between-requests connection handling without having any requests: every update is bracketed with
+`close_old_connections()`, so a database that restarts under a long-running bot does not leave
+every handler raising `InterfaceError` until somebody notices. Nothing to configure, and
+[Deployment](https://github.com/CorneiZeR/django-aiogram/wiki/Deployment) says what the healthcheck
+can and cannot see about it.
+
+Everything else — rate limits, per-process opt-out, healthchecks — is configuration, and it is
 documented rather than required. Webhook mode is the one alternative that also
 asks for a URL route; [Webhook](https://github.com/CorneiZeR/django-aiogram/wiki/Webhook) has the four steps.
 
