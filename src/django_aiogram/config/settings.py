@@ -242,19 +242,28 @@ def take_ceiling(deadline_option: str, deadline: float) -> TakeCeiling:
 
     ``bound_by`` is what makes a hint actionable: told only that the read is capped, an operator
     raises the transport deadline when it was the heartbeat that bound it — and when the two tie,
-    raising either one alone changes nothing at all.
+    raising either one alone changes nothing at all. It can also name one setting rather than two,
+    because a broker is allowed to name ``HEARTBEAT_INTERVAL`` as its own deadline option.
     """
-    limits = {
-        'HEARTBEAT_INTERVAL': max(1, int(conf['HEARTBEAT_INTERVAL'])),
+    # pairs and not a mapping: a broker may name `HEARTBEAT_INTERVAL` as its own deadline option --
+    # legal, since `option` only refuses a *differing* default -- and a key would then have the
+    # deadline overwrite the heartbeat. With an override returning a number other than the setting
+    # it names, that lost the smaller of the two: measured, a heartbeat of 2 against a deadline of
+    # 100 capped the read at 99, so the worker waits its own heartbeat out and is reaped while
+    # healthy, which is the one failure this ceiling exists to prevent
+    limits = (
+        ('HEARTBEAT_INTERVAL', max(1, int(conf['HEARTBEAT_INTERVAL']))),
         # floored before the subtraction, so a fractional deadline cannot round *up* into a cap
         # the transport will not honour: `KAFKA_TIMEOUT = 2.5` allows one whole second inside it,
         # not two
-        deadline_option: max(1, math.floor(max(1.0, deadline)) - 1),
-    }
-    seconds = min(limits.values())
+        (deadline_option, max(1, math.floor(max(1.0, deadline)) - 1)),
+    )
+    seconds = min(value for _, value in limits)
     # every setting sitting at the minimum, not the first one found: a tie means both
-    # have to move, and a hint naming one of them is a round trip that achieves nothing
-    return TakeCeiling(seconds=seconds, bound_by=tuple(key for key, value in limits.items() if value == seconds))
+    # have to move, and a hint naming one of them is a round trip that achieves nothing.
+    # Deduplicated, because the two names can be one name
+    bound_by = tuple(dict.fromkeys(name for name, value in limits if value == seconds))
+    return TakeCeiling(seconds=seconds, bound_by=bound_by)
 
 
 def _reset_on_setting_change(

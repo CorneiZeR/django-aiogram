@@ -253,6 +253,13 @@ Entries land here as the work does; nothing below is released.
   Kafka's range check narrows the same reader instead of replacing it, which is how a non-numeric
   `KAFKA_TIMEOUT` stopped raising a bare `ValueError` naming nothing.
 
+  The ceiling weighs its two bounds as pairs rather than as a mapping keyed by option name. A
+  broker may name `HEARTBEAT_INTERVAL` as its own deadline option — `option` refuses only a
+  *differing* default — and with an override returning a number other than the setting it names,
+  the deadline entry replaced the heartbeat entry and the larger of the two won: a heartbeat of 2
+  against a deadline of 100 capped the read at 99, so the consumer waits its own heartbeat out and
+  is reaped while healthy. `bound_by` deduplicates, because the two names can be one name.
+
   The driver is verified **last**, after everything this rule can judge without one. Resolving the
   broker with the driver checked first meant the deadline findings were reachable only where the
   extra happened to be installed — and never at all in a process with `ENABLED` off, which returns

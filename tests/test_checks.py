@@ -1440,6 +1440,24 @@ def test_one_rule_reports_a_deadline_that_has_a_rule_of_its_own():
     assert 'django_aiogram.E047' not in reported, 'E047 reported a setting another rule owns'
 
 
+def test_the_ceiling_keeps_both_bounds_when_one_name_answers_for_both():
+    """A broker may name `HEARTBEAT_INTERVAL` as its own deadline option, and then the two are one.
+
+    Legal, because `Broker.option` refuses only a *differing* default, and reachable as soon as the
+    broker overrides `call_timeout()` to return something other than the setting it names. Keyed by
+    option name, the deadline entry then replaced the heartbeat entry and the larger of the two won:
+    a heartbeat of 2 against a deadline of 100 capped the read at 99, so the consumer waits its own
+    heartbeat out and is reaped while healthy — which is the failure this ceiling exists to prevent.
+
+    The name is asserted once, too: the hint has to read as one setting, not the same one twice.
+    """
+    with override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'HEARTBEAT_INTERVAL': 2}):
+        ceiling = take_ceiling('HEARTBEAT_INTERVAL', 100.0)
+
+    assert ceiling.seconds == 2, f'the heartbeat bound was lost: {ceiling}'
+    assert ceiling.bound_by == ('HEARTBEAT_INTERVAL',), f'one setting named twice: {ceiling.bound_by}'
+
+
 @pytest.mark.parametrize('enabled', [True, False], ids=['enabled', 'disabled'])
 def test_a_deadline_is_judged_without_the_transport_driver(monkeypatch, enabled):
     """Nothing about the deadline needs the driver, so nothing about it may depend on having one.
