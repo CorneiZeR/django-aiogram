@@ -20,9 +20,7 @@ import django_aiogram
 from django_aiogram import TelegramBot, bot, conf
 from django_aiogram.config.settings import Settings, parse_bool
 from django_aiogram.redis import redis_conn
-
-#: seconds a nested interpreter gets before the test fails instead of hanging
-SUBPROCESS_TIMEOUT = 120
+from tests.support import SUBPROCESS_TIMEOUT, run_python
 
 
 def test_the_suite_still_boots_without_a_database():
@@ -190,14 +188,7 @@ def test_importing_the_package_pulls_nothing_third_party():
         assert django_aiogram.bot is _, 'a second access built a second bot'
         print('lazy ok')
     """)
-    result = subprocess.run(  # noqa: S603 - our own interpreter, and a script written right above
-        [sys.executable, '-c', script],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=SUBPROCESS_TIMEOUT,
-        env={**os.environ, 'DJANGO_SETTINGS_MODULE': 'tests.settings'},
-    )
+    result = run_python(script, env={'DJANGO_SETTINGS_MODULE': 'tests.settings'})
     assert result.returncode == 0, result.stderr
     assert 'lazy ok' in result.stdout
 
@@ -216,18 +207,7 @@ def test_a_disabled_django_boot_never_pays_for_aiogram():
         assert not loaded, f'a disabled boot imported {sorted(loaded)}'
         print('cheap boot ok')
     """)
-    result = subprocess.run(  # noqa: S603 - our own interpreter, and a script written right above
-        [sys.executable, '-c', script],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=SUBPROCESS_TIMEOUT,
-        env={
-            **os.environ,
-            'DJANGO_SETTINGS_MODULE': 'tests.settings',
-            'DJANGO_AIOGRAM_ENABLED': '0',
-        },
-    )
+    result = run_python(script, env={'DJANGO_SETTINGS_MODULE': 'tests.settings', 'DJANGO_AIOGRAM_ENABLED': '0'})
     assert result.returncode == 0, result.stderr
     assert 'cheap boot ok' in result.stdout
 
@@ -270,14 +250,7 @@ def test_running_the_system_checks_does_not_import_aiogram():
         assert not loaded, f'the system checks imported {sorted(loaded)}'
         print('cheap checks ok')
     """)
-    result = subprocess.run(  # noqa: S603 - our own interpreter, and a script written right above
-        [sys.executable, '-c', script],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=SUBPROCESS_TIMEOUT,
-        env={**os.environ, 'DJANGO_SETTINGS_MODULE': 'tests.bare_settings'},
-    )
+    result = run_python(script, env={'DJANGO_SETTINGS_MODULE': 'tests.bare_settings'})
     assert result.returncode == 0, result.stderr
     assert 'cheap checks ok' in result.stdout
 
@@ -344,14 +317,7 @@ def test_connecting_a_metrics_receiver_pulls_neither_aiogram_nor_the_orm():
         events_recorded.connect(lambda sender, **kwargs: None, weak=False)
         print('cheap seam ok')
     """)
-    result = subprocess.run(  # noqa: S603 - our own interpreter, and a script written right above
-        [sys.executable, '-c', script],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=SUBPROCESS_TIMEOUT,
-        env={**os.environ, 'DJANGO_SETTINGS_MODULE': 'tests.settings'},
-    )
+    result = run_python(script, env={'DJANGO_SETTINGS_MODULE': 'tests.settings'})
     assert result.returncode == 0, result.stderr
     assert 'cheap seam ok' in result.stdout
 
@@ -422,14 +388,7 @@ def test_the_healthcheck_probe_does_not_import_aiogram():
         assert hasattr(tgbot_healthcheck, 'Command')
         print('cheap probe ok')
     """)
-    result = subprocess.run(  # noqa: S603 - our own interpreter, and a script written right above
-        [sys.executable, '-c', script],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=SUBPROCESS_TIMEOUT,
-        env={**os.environ, 'DJANGO_SETTINGS_MODULE': 'tests.settings', 'DJANGO_AIOGRAM_AUTODISCOVER': '0'},
-    )
+    result = run_python(script, env={'DJANGO_SETTINGS_MODULE': 'tests.settings', 'DJANGO_AIOGRAM_AUTODISCOVER': '0'})
     assert result.returncode == 0, result.stderr
     assert 'cheap probe ok' in result.stdout
 

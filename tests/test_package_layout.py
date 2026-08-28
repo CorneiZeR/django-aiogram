@@ -6,12 +6,11 @@ cannot forget: a package with no declared exports, and a published path that qui
 
 import ast
 import pathlib
-import subprocess
-import sys
 
 import pytest
 
 from django_aiogram.broker.registry import SHIPPED
+from tests.support import run_python
 
 SRC = pathlib.Path(__file__).resolve().parent.parent / 'src' / 'django_aiogram'
 
@@ -135,9 +134,7 @@ def test_configuration_does_not_import_what_it_configures():
         " and m.startswith('django_aiogram.')))\n"
         "print('aiogram' in sys.modules)\n"
     )
-    finished = subprocess.run(  # noqa: S603 - our own interpreter, and a script written right above
-        [sys.executable, '-c', code], capture_output=True, text=True, check=True
-    )
+    finished = run_python(code, check=True)
     pulled, aiogram = finished.stdout.strip().splitlines()
 
     assert pulled == '[]', f'importing the checks pulled {pulled}'
@@ -169,9 +166,7 @@ def test_neither_the_transport_nor_the_producer_imports_the_driver():
     transports = [path.rsplit('.', 1)[0] for path in sorted(SHIPPED)]
     for module in [*transports, 'django_aiogram.producer.client']:
         code = f'import sys, {module}; print("redis" in sys.modules)'
-        finished = subprocess.run(  # noqa: S603 - our own interpreter, and a script written right above
-            [sys.executable, '-c', code], capture_output=True, text=True, check=True
-        )
+        finished = run_python(code, check=True)
 
         assert finished.stdout.strip() == 'False', f'importing {module} pulled the driver'
 

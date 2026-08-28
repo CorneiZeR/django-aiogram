@@ -1,8 +1,5 @@
 """The admin: what it shows, what it refuses, and what it will not ask the database."""
 
-import os
-import subprocess
-import sys
 import textwrap
 
 import pytest
@@ -21,6 +18,7 @@ from django_aiogram.admin import (
 from django_aiogram.config.enums import EventKind
 from django_aiogram.eventlog.events import new_correlation_id
 from django_aiogram.models import TelegramEvent
+from tests.support import run_python
 
 ON = {'EVENT_LOG': True}
 CHANGELIST = '/admin/django_aiogram/telegramevent/'
@@ -329,13 +327,9 @@ def test_the_admin_module_pulls_no_aiogram():
         assert admin.site.is_registered(TelegramEvent), 'ready() did not register the admin'
         print('the admin stays cheap')
     """)
-    result = subprocess.run(  # noqa: S603 - our own interpreter, and a script written right above
-        [sys.executable, '-c', script],
-        capture_output=True,
-        text=True,
-        check=False,
+    result = run_python(
+        script,
         env={
-            **os.environ,
             'DJANGO_SETTINGS_MODULE': 'tests.db_settings',
             'DJANGO_AIOGRAM_ENABLED': '0',
             'DJANGO_AIOGRAM_EVENT_LOG': '1',

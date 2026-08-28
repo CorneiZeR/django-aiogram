@@ -15,10 +15,12 @@ from aiogram.methods import SendMessage
 from django.core.management import CommandError, call_command
 from django.test import override_settings
 
-# ConnectionError shadows the builtin deliberately: this is the one redis-py raises, and a
-# fake raising the builtin proved nothing — `redis.exceptions.ConnectionError` is a
-# `RedisError` and not an `OSError`, so a guard narrowed to either would stay green
-from redis.exceptions import ConnectionError, ResponseError  # noqa: A004
+# redis-py raises its own `RedisConnectionError`, which is a `RedisError` and not an `OSError` --
+# a fake raising the builtin is pretending to be a failure no real client produces, and a
+# guard narrowed to either would stay green against it. Imported under a name of its own:
+# the hazard is the shadowing, and recording it in a comment did not remove it
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import ResponseError
 
 from django_aiogram import TelegramBot
 from django_aiogram.api import API_METHODS, check_function
@@ -237,7 +239,7 @@ def test_reclaim_survives_a_redis_that_is_not_up_yet(redis_server, monkeypatch):
     class Unreachable:
         def lmove(self, *args, **kwargs):
             msg = 'Connection refused'
-            raise ConnectionError(msg)
+            raise RedisConnectionError(msg)
 
         def __getattr__(self, name):
             return getattr(redis_server, name)
@@ -278,7 +280,7 @@ def test_reclaim_is_retried_when_redis_was_down_at_startup(redis_server):
             if not failures:
                 failures.append(True)
                 msg = 'Connection refused'
-                raise ConnectionError(msg)
+                raise RedisConnectionError(msg)
             return redis_server.lmove(*args, **kwargs)
 
         def __getattr__(self, name):

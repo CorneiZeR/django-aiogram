@@ -5,9 +5,6 @@ and `models.py` never drags aiogram into a boot that wants nothing to do with
 it. Both are asserted here rather than assumed.
 """
 
-import os
-import subprocess
-import sys
 import textwrap
 import threading
 import uuid
@@ -27,6 +24,7 @@ from django_aiogram.eventlog.events import (
 )
 from django_aiogram.eventlog.recorder import WRITER_THREAD, Event, EventRecorder
 from django_aiogram.models import TelegramEvent
+from tests.support import run_python
 
 
 def test_recording_is_free_while_the_flag_is_off():
@@ -99,17 +97,7 @@ def test_the_model_module_never_imports_aiogram():
         assert 'django_aiogram.eventlog.writer' not in sys.modules, 'a disabled recorder imported the ORM layer'
         print('models stay cheap')
     """)
-    result = subprocess.run(  # noqa: S603 - our own interpreter, and a script written right above
-        [sys.executable, '-c', script],
-        capture_output=True,
-        text=True,
-        check=False,
-        env={
-            **os.environ,
-            'DJANGO_SETTINGS_MODULE': 'tests.settings',
-            'DJANGO_AIOGRAM_ENABLED': '0',
-        },
-    )
+    result = run_python(script, env={'DJANGO_SETTINGS_MODULE': 'tests.settings', 'DJANGO_AIOGRAM_ENABLED': '0'})
     assert result.returncode == 0, result.stderr
     assert 'models stay cheap' in result.stdout
 

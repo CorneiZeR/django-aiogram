@@ -22,9 +22,12 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Chat, Message, Update, User
 from django.db import OperationalError
 from django.test import override_settings
-from redis.exceptions import (
-    ConnectionError,  # noqa: A004 - shadowing the builtin is the point: this is what redis-py raises
-)
+
+# redis-py raises its own `RedisConnectionError`, which is a `RedisError` and not an `OSError` --
+# a fake raising the builtin is pretending to be a failure no real client produces, and a
+# guard narrowed to either would stay green against it. Imported under a name of its own:
+# the hazard is the shadowing, and recording it in a comment did not remove it
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from django_aiogram import TelegramBot
 from django_aiogram.eventlog import recorder as recorder_module
@@ -497,11 +500,11 @@ def test_a_receiver_still_gets_the_detail_a_seam_measured_itself(redis_server, c
     def refuse(*args, **kwargs):
         """Stand in for a Redis that has gone away."""
         message = 'redis is gone'
-        raise ConnectionError(message)
+        raise RedisConnectionError(message)
 
     monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', refuse)
 
-    with pytest.raises(ConnectionError):
+    with pytest.raises(RedisConnectionError):
         TelegramBot().enqueue(chat_id=7, text='hi')
     recorder.flush(timeout=5)
 
