@@ -426,7 +426,6 @@ def test_a_connection_whose_setup_fails_is_closed(broker, amqp_url, monkeypatch)
     from django_aiogram.broker.rabbitmq import client
 
     opened: list[object] = []
-    real = BlockingChannel.queue_declare
 
     def refuse(self, *args, **kwargs):
         opened.append(self.connection)
@@ -441,7 +440,6 @@ def test_a_connection_whose_setup_fails_is_closed(broker, amqp_url, monkeypatch)
     assert opened, 'the setup was never reached, so this proves nothing'
     assert not opened[0].is_open, 'the abandoned connection was left open'
     assert not client._opened, f'it was recorded anyway: {list(client._opened)}'
-    assert real is not None  # the patched method is restored by monkeypatch
 
 
 def test_a_connection_whose_thread_is_gone_is_not_held(broker, amqp_url, broker_channel):
