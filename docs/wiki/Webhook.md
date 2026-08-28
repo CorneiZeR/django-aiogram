@@ -21,8 +21,9 @@ compose recipe on **[[Deployment]]** is the service's own `environment:`:
       DJANGO_AIOGRAM_MODE: webhook
 ```
 
-In a shell it needs exporting, since a bare assignment lives until the prompt
-returns and no process ever sees it:
+In a shell it needs exporting: a bare assignment sets a variable in *that shell*
+and does not pass it to anything it starts, so the command below would read the
+setting from your settings module and not from the line above it:
 
 ```shell
 export DJANGO_AIOGRAM_MODE=webhook
