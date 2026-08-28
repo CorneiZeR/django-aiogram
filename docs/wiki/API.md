@@ -319,7 +319,7 @@ from django_aiogram.exceptions import DjangoRedisAiogramError
 | `LoopThreadNotStartedError` | the loop exists but nothing is turning it, so a hand-off would never be stepped | `timeout` |
 | `MalformedEnvelopeError` | a queued payload is not a shape any version of this package wrote | |
 | `WorkerDepthUnavailableError` | `inflight_depth` was asked about a *named* worker on a transport that knows unsettled work by channel or by group member rather than by name | `broker`, `worker` |
-| `DeliveryNotConfiguredError` | `DELIVERY` names nothing, names a 3.x word, or names something that is not a `Delivery` — also a `ValueError`, which is what 3.x raised | `path` |
+| `DeliveryNotConfiguredError` | `DELIVERY` names nothing, names a 3.x word, or names something that is not an **instantiable** `Delivery` subclass — `Delivery` itself and one that leaves `run()` abstract are refused too. Also a `ValueError`, which is what 3.x raised | `path` |
 | `UnknownEnvelopeVersionError` | a queued payload was written by a newer version than this consumer reads | `version` |
 | `UnknownInputFileKindError` | a queued payload names an input file kind this version cannot rebuild | `kind` |
 | `UnknownModelError` | a queued payload names a class that is not an aiogram type | `name` |
