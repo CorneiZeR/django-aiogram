@@ -16,9 +16,12 @@ from types import SimpleNamespace
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
-from redis.exceptions import (
-    ConnectionError,  # noqa: A004 - shadowing the builtin is the point: this is what redis-py raises
-)
+
+# redis-py raises its own `RedisConnectionError`, which is a `RedisError` and not an `OSError` --
+# a fake raising the builtin is pretending to be a failure no real client produces, and a
+# guard narrowed to either would stay green against it. Imported under a name of its own:
+# the hazard is the shadowing, and recording it in a comment did not remove it
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from django_aiogram import TelegramBot
 from django_aiogram import redis as redis_module
@@ -167,7 +170,7 @@ def test_a_failed_chunk_records_its_own_messages_and_raises(redis_server, bulk, 
 
     with pytest.MonkeyPatch.context() as patch:
         _count_writes(patch, calls, fail_on_call=2)
-        with pytest.raises(ConnectionError):
+        with pytest.raises(RedisConnectionError):
             broadcast()
 
     dropped = [event for event in recorded if event.kind == 'outbound.dropped']
@@ -568,7 +571,7 @@ def _count_writes(patch, writes, fail_on_call=None):
                 writes.append(len(payloads))
                 if fail_on_call is not None and len(writes) == fail_on_call:
                     msg = 'connection reset'
-                    raise ConnectionError(msg)
+                    raise RedisConnectionError(msg)
                 return await original(self, key, *payloads)
         else:
 
@@ -576,7 +579,7 @@ def _count_writes(patch, writes, fail_on_call=None):
                 writes.append(len(payloads))
                 if fail_on_call is not None and len(writes) == fail_on_call:
                     msg = 'connection reset'
-                    raise ConnectionError(msg)
+                    raise RedisConnectionError(msg)
                 return original(self, key, *payloads)
 
         patch.setattr(cls, 'rpush', counting)

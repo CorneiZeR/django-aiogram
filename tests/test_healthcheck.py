@@ -13,10 +13,12 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.management import CommandError, call_command
 from django.test import override_settings
 
-# redis-py's own ConnectionError, not the built-in one: it subclasses `RedisError` and
-# the built-in does not, so a fake raising the built-in was pretending to be a failure
-# no real client produces — which `except Exception` in the probe used to hide
-from redis.exceptions import ConnectionError, RedisError, ResponseError  # noqa: A004 - the point is to shadow it
+# redis-py raises its own `RedisConnectionError`, which is a `RedisError` and not an `OSError` --
+# a fake raising the builtin is pretending to be a failure no real client produces, and a
+# guard narrowed to either would stay green against it. Imported under a name of its own:
+# the hazard is the shadowing, and recording it in a comment did not remove it
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import RedisError, ResponseError
 
 from django_aiogram.consumer.delivery import BlpopDelivery
 from django_aiogram.healthcheck import build_parser, check, main
@@ -72,7 +74,7 @@ def test_the_heartbeat_is_paced(redis_server):
 def test_a_redis_that_refuses_the_write_does_not_stop_the_loop(redis_server, caplog):
     class Refuses:
         def set(self, *args, **kwargs):
-            raise ConnectionError(REFUSED)
+            raise RedisConnectionError(REFUSED)
 
         def __getattr__(self, name):
             return getattr(redis_server, name)
@@ -116,7 +118,7 @@ def test_unhealthy_when_the_heartbeat_is_stale(redis_server):
 def test_unhealthy_when_redis_is_unreachable(monkeypatch):
     class Down:
         def ping(self):
-            raise ConnectionError(REFUSED)
+            raise RedisConnectionError(REFUSED)
 
     monkeypatch.setattr('django_aiogram.healthcheck.get_redis', Down)
 
@@ -176,7 +178,7 @@ def test_a_long_blocking_read_cannot_outlast_the_heartbeat(redis_server, monkeyp
     class Spy:
         def blmove(self, source, destination, timeout, *args, **kwargs):
             seen.append(timeout)
-            raise ConnectionError(STOP_AFTER_ONE_READ)  # one read is enough to observe
+            raise RedisConnectionError(STOP_AFTER_ONE_READ)  # one read is enough to observe
 
         def __getattr__(self, name):
             return getattr(redis_server, name)
@@ -205,7 +207,7 @@ def test_a_heartbeat_read_that_fails_after_ping_is_reported(redis_server, monkey
             return True
 
         def get(self, *args, **kwargs):
-            raise ConnectionError(READONLY)
+            raise RedisConnectionError(READONLY)
 
         def __getattr__(self, name):
             return getattr(redis_server, name)
@@ -232,7 +234,7 @@ def test_a_queue_read_that_fails_is_reported(redis_server, monkeypatch):
             return str(int(time.time())).encode()
 
         def llen(self, *args, **kwargs):
-            raise ConnectionError(RESET)
+            raise RedisConnectionError(RESET)
 
         def __getattr__(self, name):
             return getattr(redis_server, name)
