@@ -1,4 +1,8 @@
-"""Rules the suite holds itself to, because a test that cannot fail is worse than no test.
+"""Rules the suite and the published documentation hold themselves to.
+
+A test that cannot fail is worse than no test, and a command that cannot work is worse than no
+command: both read as covered ground. The two rules here are the ones this repository has been
+bitten by, and each is a sweep kept rather than a sweep run once.
 
 A green case reads as coverage. One that was green before the change and green after it reads as
 coverage too, and there is nothing on its face to tell the two apart -- so the reader who comes
@@ -17,6 +21,7 @@ So the shape gets a rule rather than another round of reading.
 import ast
 import collections
 import pathlib
+import re
 
 import pytest
 
@@ -101,3 +106,92 @@ def test_something(monkeypatch):
         written.unlink()
 
     assert [text for _line, text, _why in found] == ['real is not None'], found
+
+
+#: where a reader is sent to copy commands from. The wiki pages and the two root files a
+#: contributor reads before anything else -- and `CHANGELOG.md` deliberately not: a historical
+#: entry quoting a command from its own release is a record, not an instruction
+PUBLISHED = (
+    'README.md',
+    'CONTRIBUTING.md',
+    'AGENTS.md',
+    *[f'docs/wiki/{page.name}' for page in sorted((ROOT / 'docs' / 'wiki').glob('*.md'))],
+)
+
+#: a line that is only `NAME=value`, which in a shell block is a no-op for the reader's purpose:
+#: it sets a variable in that shell and does not pass it to anything the shell starts, so the
+#: command they run next does not see it
+BARE_ASSIGNMENT = re.compile(r'^[A-Z][A-Z0-9_]*=\S*$')
+
+
+def shell_blocks(text):
+    """Every fenced block a reader would paste into a shell, with the line each one starts at.
+
+    The line count is the newlines in everything before the block, and nothing else: the fence
+    markers carry none of their own, so summing them per segment is exact. The first version added
+    one per preceding segment and drifted -- a second block was reported two lines late, and the
+    only thing that would have noticed is an assertion on the numbers, which the self-test below
+    now makes.
+    """
+    seen = 0
+    for index, chunk in enumerate(text.split('```')):
+        if index % 2 and chunk.split('\n', 1)[0].strip() in {'shell', 'bash', 'sh', 'console'}:
+            # `seen + 1` is the fence line, so the first line inside the block is one past it
+            yield seen + 2, chunk.split('\n', 1)[1] if '\n' in chunk else ''
+        seen += chunk.count('\n')
+
+
+@pytest.mark.parametrize('relative', PUBLISHED, ids=lambda relative: relative.rsplit('/', 1)[-1])
+def test_no_shell_block_tells_the_reader_to_run_nothing(relative):
+    """A block whose line is only an assignment does nothing when it is pasted.
+
+    `DJANGO_AIOGRAM_MODE=webhook` was such a block: the prose around it was right -- the setting
+    can come from the environment -- and the block set a shell variable that the process started
+    next does not inherit, so a reader who followed it exactly changed nothing and had no way to
+    see that. `export`, or the variable shown where the process is actually started, is what the
+    sentence means.
+
+    The same sweep found a `CONTRIBUTING.md` block whose two variables never reached the `pytest`
+    process they were for, which silenced the very cases the change that added them introduced.
+    """
+    path = ROOT / relative
+    offences = [
+        f'{relative}:{start + offset}  {stripped}'
+        for start, block in shell_blocks(path.read_text(encoding='utf-8'))
+        for offset, stripped in enumerate(line.strip() for line in block.split('\n'))
+        if BARE_ASSIGNMENT.fullmatch(stripped)
+    ]
+
+    assert offences == [], '\n'.join(
+        [*offences, 'a bare assignment in a shell block is a no-op: export it, or show where the process is started']
+    )
+
+
+def test_the_shell_sweep_can_see_the_shape_it_is_for():
+    """As above, the rule passes when the parser sees nothing, so the parser gets its own case."""
+    page = """Set the mode from the environment:
+
+```shell
+DJANGO_AIOGRAM_MODE=webhook
+```
+
+and then, correctly:
+
+```shell
+export DJANGO_AIOGRAM_MODE=webhook
+python manage.py start_tgbot
+```
+"""
+    blocks = list(shell_blocks(page))
+
+    assert len(blocks) == 2, blocks
+    # the numbers, not just the count: a line the reader is pointed at is the whole value of this
+    # sweep, and an arithmetic drift is invisible to a case that only counts blocks
+    assert [start for start, _block in blocks] == [4, 10], [start for start, _block in blocks]
+    bare = [
+        stripped
+        for _start, block in blocks
+        for stripped in (line.strip() for line in block.split('\n'))
+        if BARE_ASSIGNMENT.fullmatch(stripped)
+    ]
+    assert bare == ['DJANGO_AIOGRAM_MODE=webhook'], bare
