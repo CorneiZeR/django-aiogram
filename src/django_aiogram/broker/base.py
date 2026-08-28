@@ -136,10 +136,17 @@ class Broker(ABC):
 
         **A key that also lives in the package-wide defaults resolves there**, because
         `conf` has already folded those in and cannot say whether a value came from the
-        project or from the table. The four the Redis list declares are in both today, for
-        the releases that read them from `conf` directly; they leave that table when the
-        extras work makes each driver optional. Declaring a different default here than the
-        package-wide one would therefore be a lie, and this refuses to tell it.
+        project or from the table. Declaring a different default here than the package-wide one
+        would therefore be a lie, and this refuses to tell it.
+
+        Two keys are in both tables and stay there: `REDIS_URL` and `REDIS_TIMEOUT` are read by the
+        package under *every* transport, because the FSM storage builds a Redis client whatever
+        carries the messages. The guard above is what keeps that honest — the Redis transports
+        declare both with the package-wide default, so a reader of either table sees one number.
+        `REDIS_MESSAGES_KEY` and `BLPOP_TIMEOUT` were in both for the releases that read them off
+        `conf` directly, and each went to its single owner in 4.0: the list key to the transport
+        that has a list, the pop timeout to the package, whose consumer reads it whatever it takes
+        from.
         """
         if key not in cls.OPTIONS:
             msg = f'{cls.__name__} declares no option {key!r}'

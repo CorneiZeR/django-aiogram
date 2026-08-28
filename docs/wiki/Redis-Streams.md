@@ -30,7 +30,6 @@ may report any version it likes and what matters is whether the field is there.
 | `REDIS_STREAM_KEY` | **required** | the stream. No default on purpose: a stream is created on first use, so a default name would silently make one |
 | `REDIS_STREAM_GROUP` | `django-aiogram` | the consumer group every worker joins |
 | `REDIS_TIMEOUT` | `10` | the deadline on any single call |
-| `BLPOP_TIMEOUT` | `5` | how long a read blocks before it is interrupted to check for shutdown |
 
 ## What it guarantees
 

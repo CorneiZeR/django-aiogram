@@ -18,7 +18,6 @@ TELEGRAM_BOT = {
 | `REDIS_URL` | — | where the server is; a query string on it overrides the timeouts below |
 | `REDIS_MESSAGES_KEY` | `TELEGRAM_BOT_MESSAGE` | the list, and the prefix every other key here derives from |
 | `REDIS_TIMEOUT` | `10` | the deadline on any single call |
-| `BLPOP_TIMEOUT` | `5` | how often the blocking pop is interrupted to check for shutdown |
 
 See **[[Settings]]** for the rest, and **[[Delivery]]** for what the consumer does with any
 transport. This page is the part that is this one's alone.

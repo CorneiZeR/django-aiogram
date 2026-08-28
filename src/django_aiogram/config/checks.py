@@ -121,7 +121,18 @@ class Check:
     validate: Validator
 
     def run(self) -> list[CheckMessage]:
-        """Turn everything the rule found into Django check messages."""
+        """Turn everything the rule found into Django check messages.
+
+        A row about a **transport's** setting runs only where that transport is configured, and
+        which kind a row is needs no flag: a key outside the package-wide table belongs to whichever
+        broker declares it. So `E007` validated `REDIS_MESSAGES_KEY` as a string on a Kafka
+        deployment that has no such setting, and would do the same for every option each new
+        transport brings.
+
+        An empty key means the row is about the settings dict as a whole, and those always run.
+        """
+        if self.key and self.key not in DEFAULTS and self.key not in _broker_options():
+            return []
         return [self._message(problem) for problem in self.validate(self.key)]
 
     def _message(self, problem: Problem) -> CheckMessage:
@@ -149,7 +160,7 @@ def _a_readable_boolean(key: str) -> list[Problem]:
     have raised, which is the sentence a reader needs.
     """
     try:
-        coerce_bool(conf.get(key), f"{SETTINGS_NAME}['{key}']")
+        coerce_bool(_setting(key), f"{SETTINGS_NAME}['{key}']")
     except ImproperlyConfigured as error:
         # the message already names the setting, and `Check._message` prefixes it
         # again — so hand back only the tail
@@ -159,7 +170,7 @@ def _a_readable_boolean(key: str) -> list[Problem]:
 
 def _an_integer(key: str, *, minimum: int | None = None) -> list[Problem]:
     """Require an integer, at or above ``minimum`` when one is given."""
-    value = conf.get(key)
+    value = _setting(key)
     # bool is a subclass of int, so it has to be rejected explicitly
     if isinstance(value, bool) or not isinstance(value, int):
         return [Problem(f'must be an integer, got {type(value).__name__}.')]
@@ -176,7 +187,7 @@ def _a_number(key: str, *, minimum: float | None = None) -> list[Problem]:
     it are all false, so it would slip past the bound and then make every deadline
     built from it expire immediately.
     """
-    value = conf.get(key)
+    value = _setting(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return [Problem(f'must be a number, got {type(value).__name__}.')]
     if not math.isfinite(value):
@@ -188,7 +199,7 @@ def _a_number(key: str, *, minimum: float | None = None) -> list[Problem]:
 
 def _a_string(key: str, *, allowed: Collection[str] | None = None) -> list[Problem]:
     """Require a string, one of ``allowed`` when the setting is an enumeration."""
-    value = conf.get(key)
+    value = _setting(key)
     if not isinstance(value, str):
         return [Problem(f'must be a string, got {type(value).__name__}.')]
     if allowed is not None and value not in allowed:
@@ -198,7 +209,7 @@ def _a_string(key: str, *, allowed: Collection[str] | None = None) -> list[Probl
 
 def _a_callable(key: str) -> list[Problem]:
     """Require something callable."""
-    value = conf.get(key)
+    value = _setting(key)
     if callable(value):
         return []
     return [Problem(f'must be callable, got {type(value).__name__}.')]
@@ -206,7 +217,7 @@ def _a_callable(key: str) -> list[Problem]:
 
 def _a_mapping(key: str) -> list[Problem]:
     """Require a mapping."""
-    value = conf.get(key)
+    value = _setting(key)
     if isinstance(value, Mapping):
         return []
     return [Problem(f'must be a mapping, got {type(value).__name__}.')]
@@ -214,7 +225,7 @@ def _a_mapping(key: str) -> list[Problem]:
 
 def _known_bot_properties(key: str) -> list[Problem]:
     """Reject names ``DefaultBotProperties`` does not have, which it would drop."""
-    value = conf.get(key)
+    value = _setting(key)
     if not isinstance(value, Mapping):
         return []
     # before the import, not after: the default is {}, which is a Mapping, so without
@@ -234,7 +245,7 @@ def _known_bot_properties(key: str) -> list[Problem]:
 
 def _importable_storage(key: str) -> list[Problem]:
     """Resolve a dotted path here, so a typo fails before the first message."""
-    value = conf.get(key)
+    value = _setting(key)
     if not isinstance(value, str):
         return []
     if value in _STORAGE_CHOICES:
@@ -255,7 +266,7 @@ def _importable_storage(key: str) -> list[Problem]:
 
 def _sane_rate_limits(key: str) -> list[Problem]:
     """Require known budget names holding non-negative numbers."""
-    value = conf.get(key)
+    value = _setting(key)
     if value is None:
         return []
     if not isinstance(value, Mapping):
@@ -273,7 +284,7 @@ def _sane_rate_limits(key: str) -> list[Problem]:
 def _readable_serializer(key: str) -> list[Problem]:
     """Refuse to write pickle the reader would throw away: sends would vanish."""
     # coerced like the reader coerces it: from the environment this is a string
-    if conf.get(key) != SerializerKind.PICKLE:
+    if _setting(key) != SerializerKind.PICKLE:
         return []
     try:
         # coerced like the reader coerces it: from the environment this is a string
@@ -410,7 +421,7 @@ def _a_usable_broker(key: str) -> list[Problem]:
             return []
         return [
             Problem(
-                f'names {conf.get(key)!r}, whose driver is not installed.',
+                f'names {_setting(key)!r}, whose driver is not installed.',
                 hint=f'pip install "django-aiogram[{missing.extra}]"',
             )
         ]
@@ -448,7 +459,7 @@ def _a_url_pickle_can_survive(key: str) -> list[Problem]:
     # deferred: this module is imported at every enabled boot, and redis-py is not
     from django_aiogram.redis import url_decodes_responses  # noqa: PLC0415 - as above
 
-    if not url_decodes_responses(str(conf.get(key) or '')):
+    if not url_decodes_responses(str(_setting(key) or '')):
         return []
     return [
         Problem(
@@ -490,7 +501,7 @@ def _a_worker_that_keeps_its_name(key: str) -> list[Problem]:
     # the same test `worker_identity()` makes. Stripping here would warn about a
     # hostname the worker does not use: a padded name is a poor one, but it is
     # stable, and stability is the only thing this check is about
-    if conf.get(key):
+    if _setting(key):
         return []
     hostname = os.environ.get('HOSTNAME') or socket.gethostname()
     if not _EPHEMERAL_HOSTNAME.fullmatch(hostname):
@@ -513,7 +524,7 @@ def _a_worker_that_keeps_its_name(key: str) -> list[Problem]:
 
 def _serviceable_webhook(key: str) -> list[Problem]:
     """Reject a webhook Telegram cannot reach, or one anybody could post to."""
-    url = str(conf.get(key) or '').strip()
+    url = str(_setting(key) or '').strip()
     webhook_mode = str(conf.get('MODE') or '').strip().lower() == UpdateMode.WEBHOOK
     if not url:
         if webhook_mode:
@@ -542,7 +553,7 @@ def _serviceable_webhook(key: str) -> list[Problem]:
 
 def _known_update_types(key: str) -> list[Problem]:
     """Require a real collection: a string would reach Telegram as single characters."""
-    allowed = conf.get(key)
+    allowed = _setting(key)
     if not allowed:
         return []
     if isinstance(allowed, (str, bytes)) or not isinstance(allowed, Collection):
@@ -575,12 +586,10 @@ def _known_keys(_key: str) -> list[Problem]:
     Only the configured one, not every shipped one: a key belonging to a transport this
     project is not using is read by nothing, which is exactly what this warns about.
 
-    That works for a key only a transport declares, and **not** for the four the Redis list
-    shares with the package-wide table. `REDIS_MESSAGES_KEY` is in `DEFAULTS`, so it stays
-    known whichever transport is configured, and a project that moved to Streams keeps a line
-    nothing reads without being told. Saying so here rather than implying otherwise: the fix
-    is to split that table into what the package owns and what a transport does, which is #23
-    and belongs with the removal of the Redis-named public API rather than in a transport.
+    Two settings are in both tables and mean it: `REDIS_URL` and `REDIS_TIMEOUT` are read by the
+    package under every transport, because the FSM storage builds a Redis client whatever the queue
+    is. They are known whichever broker is configured, and that is not the gap `REDIS_MESSAGES_KEY`
+    was — a list key is read by nothing at all under Kafka.
     """
     known = set(DEFAULTS) | _broker_options()
     # a non-string key would raise out of join and sorting mixed types raises
@@ -618,18 +627,39 @@ def _identity_matters() -> bool:
         return True
 
 
+def _setting(key: str) -> Any:  # noqa: ANN401 - a setting holds whatever the project put there
+    """Resolve one setting the way its own table does, package-wide or transport-owned.
+
+    `conf` folds in the package-wide table and answers `None` for anything outside it, so a rule
+    about a transport's own setting read `None` where the transport reads its declared default --
+    `E007` reported `REDIS_MESSAGES_KEY` as "must be a string, got NoneType" on the very
+    configuration that supplies it. A transport setting is resolved the way the transport resolves
+    it, through `option`, which is the one place that knows the default.
+    """
+    if key in DEFAULTS or key not in _broker_options():
+        return conf.get(key)
+    from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - only when the checks run
+
+    return broker_class(verify_driver=False).option(key)
+
+
 def _broker_options() -> set[str]:
     """Collect what the configured transport declares, or nothing if it cannot be resolved.
 
     Nothing rather than a guess: a `BROKER` that names something unusable is `E047`'s
     finding, and this rule reporting a pile of unknown keys on top of it would bury the one
     message that says what to do.
+
+    Without verifying the driver, because what a transport *declares* is class state and needs
+    none. Verified, this returned nothing on a machine that had not installed the extra yet — so
+    `W003` called that transport's own required settings unknown keys and invited an operator to
+    delete them, and every rule that guards one of those settings stopped running.
     """
     from django_aiogram.broker.exceptions import BrokerError  # noqa: PLC0415 - only when the checks run
     from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
 
     try:
-        return set(broker_class().OPTIONS)
+        return set(broker_class(verify_driver=False).OPTIONS)
     except (BrokerError, ImproperlyConfigured):
         return set()
 
@@ -658,7 +688,7 @@ def _a_pop_inside_the_deadline(key: str) -> list[Problem]:
     from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
 
     try:
-        asked = int(conf[key])
+        asked = int(_setting(key))
         # without the driver check: the cap is arithmetic over settings, and staying silent
         # because an extra is not installed would drop a settings warning on every machine that
         # has not installed it. `E047` owns the driver, with the install line
@@ -685,7 +715,7 @@ def _a_pop_inside_the_deadline(key: str) -> list[Problem]:
 
 def _a_collection_of_strings(key: str) -> list[Problem]:
     """Require a real collection: a string would be read one character per item."""
-    value = conf.get(key)
+    value = _setting(key)
     if not value:
         return []
     if isinstance(value, (str, bytes)) or not isinstance(value, Collection):
@@ -700,7 +730,7 @@ def _a_collection_of_strings(key: str) -> list[Problem]:
 
 def _kinds_this_version_records(key: str) -> list[Problem]:
     """Warn about a kind nothing writes: a typo here silently records nothing."""
-    value = conf.get(key)
+    value = _setting(key)
     if not value or isinstance(value, (str, bytes)) or not isinstance(value, Collection):
         return []  # E032 owns the shape complaint
     known = known_kinds()
@@ -731,7 +761,7 @@ def _a_configured_log_database(key: str) -> list[Problem]:
     writer thread, where the only trace is a log line in a container nobody
     reads and a queue that quietly fills and drops.
     """
-    value = conf.get(key)
+    value = _setting(key)
     if not isinstance(value, str):
         return []  # E040 owns the type complaint
     alias = value.strip()
@@ -811,7 +841,7 @@ def _a_routed_log_database(key: str) -> list[Problem]:
     """
     if not _the_log_is_on():
         return []
-    alias = str(conf.get(key) or '').strip()
+    alias = str(_setting(key) or '').strip()
     if not alias:
         return []  # nothing was pointed anywhere, so nothing needs routing
     from django.conf import settings as django_settings  # noqa: PLC0415 - as above
@@ -897,7 +927,7 @@ def _a_log_that_is_pruned(key: str) -> list[Problem]:
     if not _the_log_is_on():
         return []
     try:
-        days = int(conf[key])
+        days = int(_setting(key))
     except (TypeError, ValueError):
         return []  # E039 owns the type complaint
     if days > 0:
@@ -917,7 +947,7 @@ def _a_batch_the_buffer_can_hold(key: str) -> list[Problem]:
     not a bigger write but a partial one every flush interval.
     """
     try:
-        batch = int(conf[key])
+        batch = int(_setting(key))
         buffer = int(conf['EVENT_LOG_BUFFER_SIZE'])
     except (TypeError, ValueError):
         return []  # E036 and E037 own the type complaints
@@ -944,7 +974,7 @@ def _a_writer_that_does_not_block(key: str) -> list[Problem]:
     if not _the_log_is_on():
         return []
     try:
-        if not coerce_bool(conf[key], f"{SETTINGS_NAME}['{key}']"):
+        if not coerce_bool(_setting(key), f"{SETTINGS_NAME}['{key}']"):
             return []
     except ImproperlyConfigured:
         return []  # E042 owns the type complaint
@@ -1023,7 +1053,7 @@ def _a_usable_delivery(key: str) -> list[Problem]:
     hint says so, because a reader who typed a plausible path deserves to know where it *will*
     be checked.
     """
-    value = conf.get(key)
+    value = _setting(key)
     path = str(value or '').strip()
     if not path:
         # E005 owns "required and empty" for the keys that have no default; this one has one,
@@ -1078,7 +1108,7 @@ def _filled_in_when_enabled(key: str, *, hint: str, only_if: Callable[[], bool] 
     """
     if only_if is not None and not only_if():
         return []
-    if not _bot_is_enabled() or str(conf.get(key) or '').strip():
+    if not _bot_is_enabled() or str(_setting(key) or '').strip():
         return []
     return [Problem('is empty while the bot is enabled.', hint=hint)]
 

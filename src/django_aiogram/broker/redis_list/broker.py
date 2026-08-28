@@ -44,7 +44,6 @@ class RedisListBroker(Broker):
         'REDIS_URL': '',
         'REDIS_MESSAGES_KEY': 'TELEGRAM_BOT_MESSAGE',
         'REDIS_TIMEOUT': 10,
-        'BLPOP_TIMEOUT': 5,
     }
 
     def _queue(self) -> str:

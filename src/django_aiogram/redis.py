@@ -65,8 +65,20 @@ def connection_kwargs() -> dict[str, Any]:
 
 
 def queue_key() -> str:
-    """Return the list queued messages are written to and read from."""
-    return str(conf['REDIS_MESSAGES_KEY'])
+    """Return the list queued messages are written to and read from.
+
+    Asked of the transport that owns the setting rather than of `conf`, because since #23
+    ``REDIS_MESSAGES_KEY`` is not in the package-wide table: a list key means nothing to Kafka, and
+    leaving it there kept `W003` silent about a project that moved to Streams and never removed it.
+
+    `RedisListBroker` is where the default lives, and this reads it whichever transport is
+    configured — the callers are the parts of the package that speak the list's own scheme, and
+    each of them is reached only where that scheme applies. Imported here rather than at module
+    scope: the broker imports this module.
+    """
+    from django_aiogram.broker.redis_list import RedisListBroker  # noqa: PLC0415 - it imports this module
+
+    return str(RedisListBroker.option('REDIS_MESSAGES_KEY'))
 
 
 def processing_key(worker: str | None = None) -> str:
