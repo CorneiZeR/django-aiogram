@@ -227,6 +227,10 @@ def test_the_redis_client_is_shared_and_lives_in_its_own_module(redis_server):
 
 
 ENUM_CLASSES = ('SerializerKind', 'StorageKind', 'UpdateMode', 'RateLimitKey', 'SerializationTag')
+#: retired in 4.0, and pinned for the same reason the removed package names above are: dropping a
+#: name from the list of documented ones is not an assertion about anything. `DeliveryKind` had a
+#: single member, `BLPOP`, and `DELIVERY` takes a dotted path now -- an enum of one is not a choice
+REMOVED_ENUMS = ('DeliveryKind',)
 ERROR_CLASSES = ('DjangoRedisAiogramError', 'SerializationError', 'UnknownApiMethodError')
 
 
@@ -236,6 +240,19 @@ def test_the_enums_page_documents_a_real_class(name):
     from django_aiogram.config import enums
 
     assert hasattr(enums, name), f'{name} is documented but missing'
+
+
+@pytest.mark.parametrize('name', REMOVED_ENUMS)
+def test_the_enums_module_no_longer_carries_it(name):
+    """Bringing one back would give the setting two spellings, which is the drift 4.0 ended.
+
+    The list above shrinking is not evidence: a name removed from what the suite iterates is
+    simply a name nobody looks at, and the enum would go on being exported and documented
+    nowhere.
+    """
+    from django_aiogram.config import enums
+
+    assert not hasattr(enums, name), f'{name} is back; DELIVERY takes a dotted path since 4.0'
 
 
 @pytest.mark.parametrize('name', ERROR_CLASSES)
