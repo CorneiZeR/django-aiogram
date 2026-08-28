@@ -355,7 +355,10 @@ def _a_usable_broker(key: str) -> list[Problem]:
 
     The driver and the required settings are gated on the bot being enabled, for the same reason
     `W002` is: a process with `ENABLED` off sends nothing, so asking it to install a driver it will
-    never call is an error nobody can act on except by installing it anyway. The gate is a trade,
+    never call is an error nobody can act on except by installing it anyway. Which is also why the
+    driver is verified *after* everything this rule can judge without one: a disabled process
+    returns early on a missing driver, and a broken deadline in that process went unreported by
+    anything -- as it did in a process that simply had not installed the extra yet. The gate is a trade,
     not a proof -- a disabled process that reads `queue_depth` *does* reach the transport, and
     hears the `ModuleNotFoundError` this rule exists to prevent. Documented rather than checked,
     because firing here would warn every image build and migration container that never reads a
@@ -364,21 +367,23 @@ def _a_usable_broker(key: str) -> list[Problem]:
 
     Nothing here imports the driver — the registry checks its own table of shipped brokers
     before importing anything, so an absent one is named rather than discovered by traceback.
+    Nothing here *needs* the driver either, which is why it is verified last: see below.
 
-    Then the call deadline the seam is built on, in two more findings, the second of which stands
-    aside where the option it names has a rule of its own that is already reporting the value --
-    `REDIS_TIMEOUT` has `E030`, because it sits in the package-wide table. Already *reporting*, and
-    not merely present: a broker of somebody's own can name that setting and refuse a value `E030`
-    accepts. `CALL_TIMEOUT_OPTION` unset,
-    or naming an option the broker does not declare -- the only finding here about a broker
-    somebody wrote, and without it the failure lands as a `KeyError` out of `option('')`, in
-    whichever rule asks first. And a deadline that cannot be one: `RABBITMQ_TIMEOUT` was neither a
-    number nor positive on a configuration that passed every rule, and the transport then refused
-    to build a channel at the first send. `W004` quotes that name and the consumer caps its reads
-    by that number, so both belong to whichever rule owns `BROKER`.
+    Then the call deadline the seam is built on, in two more findings. `CALL_TIMEOUT_OPTION` unset,
+    or naming an option the broker does not declare -- the only finding here about a broker somebody
+    wrote, and without it the failure lands as a `KeyError` out of `option('')`, in whichever rule
+    asks first. And a deadline that cannot be one: `RABBITMQ_TIMEOUT` was neither a number nor
+    positive on a configuration that passed every rule, and the transport then refused to build a
+    channel at the first send. `W004` quotes that name and the consumer caps its reads by that
+    number, so both belong to whichever rule owns `BROKER`.
 
-    Neither of those is gated on `ENABLED`: both are arithmetic over settings that needs no driver,
-    and a deadline the transport refuses is refused in every process that reaches it.
+    The second of those stands aside where the option it names has a rule of its own that is already
+    reporting the value -- `REDIS_TIMEOUT` has `E030`, because it sits in the package-wide table.
+    Already *reporting*, and not merely present: a broker of somebody's own can name that setting
+    and refuse a value `E030` accepts.
+
+    Neither is gated on `ENABLED`: both are arithmetic over settings that needs no driver, and a
+    deadline the transport refuses is refused in every process that reaches it.
     """
     from django_aiogram.broker.exceptions import (  # noqa: PLC0415 - only when the checks run
         BrokerDependencyError,
@@ -387,8 +392,19 @@ def _a_usable_broker(key: str) -> list[Problem]:
     from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
 
     enabled = _bot_is_enabled()
+    # the driver is verified separately below, so everything this rule can judge without one is
+    # judged in every environment. Resolving *with* the check first meant the deadline findings
+    # were reachable only where the extra happened to be installed -- and never at all in a
+    # disabled process, which returns early on a missing driver by design
     try:
-        resolved = broker_class()
+        resolved = broker_class(verify_driver=False)
+    except BrokerNotConfiguredError as wrong:
+        return [Problem(f'is unusable: {wrong}', hint='Name a Broker subclass by dotted path.')]
+    deadline = _the_deadline_the_broker_declares(resolved, key)
+    if deadline:
+        return deadline
+    try:
+        broker_class()
     except BrokerDependencyError as missing:
         if not enabled:
             return []
@@ -398,11 +414,6 @@ def _a_usable_broker(key: str) -> list[Problem]:
                 hint=f'pip install "django-aiogram[{missing.extra}]"',
             )
         ]
-    except BrokerNotConfiguredError as wrong:
-        return [Problem(f'is unusable: {wrong}', hint='Name a Broker subclass by dotted path.')]
-    deadline = _the_deadline_the_broker_declares(resolved, key)
-    if deadline:
-        return deadline
     required = [option for option in resolved.required() if not str(conf.get(option) or '').strip()]
     if required and enabled:
         return [

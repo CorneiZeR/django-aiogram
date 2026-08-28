@@ -253,6 +253,13 @@ Entries land here as the work does; nothing below is released.
   Kafka's range check narrows the same reader instead of replacing it, which is how a non-numeric
   `KAFKA_TIMEOUT` stopped raising a bare `ValueError` naming nothing.
 
+  The driver is verified **last**, after everything this rule can judge without one. Resolving the
+  broker with the driver checked first meant the deadline findings were reachable only where the
+  extra happened to be installed — and never at all in a process with `ENABLED` off, which returns
+  early on a missing driver by design. That is where a settings typo is most likely to sit
+  unnoticed, and it was also why two cases passed on a machine with every extra installed and
+  failed on the unit legs, which install one.
+
   Every page that wrote the cap out was writing `<deadline> - 1`, which is false for a fractional
   one — and a test now holds prose to the helper by refusing a statement of the cap without its
   floor, deliberately grep-shaped: what went wrong was the formula being written a fourth time, and

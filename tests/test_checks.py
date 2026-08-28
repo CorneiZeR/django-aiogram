@@ -1440,6 +1440,39 @@ def test_one_rule_reports_a_deadline_that_has_a_rule_of_its_own():
     assert 'django_aiogram.E047' not in reported, 'E047 reported a setting another rule owns'
 
 
+@pytest.mark.parametrize('enabled', [True, False], ids=['enabled', 'disabled'])
+def test_a_deadline_is_judged_without_the_transport_driver(monkeypatch, enabled):
+    """Nothing about the deadline needs the driver, so nothing about it may depend on having one.
+
+    The rule used to resolve the broker *with* its driver verified, and a missing one returned
+    first: the install line where the bot is enabled, and nothing at all where it is not. So a
+    deadline that cannot be one was reported only on a machine that happened to have the extra
+    installed — and never in a disabled web tier, which is where a settings typo is most likely to
+    sit unnoticed. It is also why the cases below this one passed here and failed on a CI leg that
+    installs one driver, which is the shape of green that means nothing.
+
+    `find_spec` is patched rather than pika uninstalled — the suite needs the driver for everything
+    else, and a case that only answers on a machine without it is the defect this one is about. On
+    `importlib.util` itself, since the registry imports it inside the function that asks.
+    """
+    monkeypatch.setattr('importlib.util.find_spec', lambda name, *args: None if name == 'pika' else True)
+    settings = {
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'ENABLED': enabled,
+        'BROKER': 'django_aiogram.broker.rabbitmq.RabbitMQBroker',
+        'RABBITMQ_URL': 'amqp://localhost',
+        'RABBITMQ_QUEUE': 'tg',
+        'RABBITMQ_TIMEOUT': 'abc',
+    }
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.E047']
+
+    assert len(found) == 1, f'E047 reported {[message.msg for message in found]}'
+    assert 'call deadline is unusable' in found[0].msg, found[0].msg
+    assert 'RABBITMQ_TIMEOUT' in found[0].msg, found[0].msg
+
+
 def test_e047_reports_a_deadline_only_its_own_transport_refuses():
     """Standing aside for `E030` must mean "it is reporting this", not "it exists".
 
@@ -1488,7 +1521,12 @@ def test_the_checks_survive_a_deadline_the_transport_refuses(broker, option):
     with override_settings(TELEGRAM_BOT=settings):
         reported = check_settings()
 
-    assert [message for message in reported if message.id == 'django_aiogram.E047'], 'E047 said nothing'
+    found = [message for message in reported if message.id == 'django_aiogram.E047']
+    assert len(found) == 1, f'E047 reported {[message.msg for message in found]}'
+    # the message and not merely the id: on a machine without the driver this rule has another
+    # finding to make, and asserting the id alone passed on exactly that machine while proving
+    # nothing about the deadline
+    assert 'call deadline is unusable' in found[0].msg, found[0].msg
     assert [message for message in reported if message.id == 'django_aiogram.W004'] == [], (
         'W004 reported a cap it cannot compute'
     )
