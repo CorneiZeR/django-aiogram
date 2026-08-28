@@ -241,6 +241,14 @@ Entries land here as the work does; nothing below is released.
   quotes cannot drift from the one the cap uses. `blpop_ceiling()` is `take_ceiling()` with the
   deadline passed in, and `PopCeiling` is `TakeCeiling`: three of the four transports issue no pop.
 
+  The deadline is a **float** throughout, because `KAFKA_TIMEOUT` accepts fractions: read as an
+  integer, `0.5` raised and left `W004` silent on a deployment whose poll is capped at a second,
+  and `2.5` reported a ceiling one second away from the one the consumer applies. The cap floors
+  it, so `2.6` allows one whole second inside the deadline rather than two. And `E047` gained a
+  fourth finding for a broker somebody wrote: no `CALL_TIMEOUT_OPTION`, or one naming an option it
+  does not declare — the seam needs that name, and without this the gap surfaced as a `KeyError`
+  out of whichever rule asked first, taking every other finding with it.
+
 - **The Kafka producer states its acknowledgement level instead of inheriting one.** `publish`
   waits for the broker rather than returning once librdkafka has queued the record, and the
   guarantee that rests on `acks` was whatever the driver defaulted to — a decision nobody in this

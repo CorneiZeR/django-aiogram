@@ -217,7 +217,7 @@ class TakeCeiling:
     bound_by: tuple[str, ...]
 
 
-def take_ceiling(deadline_option: str, deadline: int) -> TakeCeiling:
+def take_ceiling(deadline_option: str, deadline: float) -> TakeCeiling:
     """Return the real cap on a blocking take, which is not ``BLPOP_TIMEOUT`` alone.
 
     Two bounds are weighed here and the smallest wins: the ``HEARTBEAT_INTERVAL`` — a worker that
@@ -246,7 +246,10 @@ def take_ceiling(deadline_option: str, deadline: int) -> TakeCeiling:
     """
     limits = {
         'HEARTBEAT_INTERVAL': max(1, int(conf['HEARTBEAT_INTERVAL'])),
-        deadline_option: max(1, max(1, deadline) - 1),
+        # floored before the subtraction, so a fractional deadline cannot round *up* into a cap
+        # the transport will not honour: `KAFKA_TIMEOUT = 2.5` allows one whole second inside it,
+        # not two
+        deadline_option: max(1, math.floor(max(1.0, deadline)) - 1),
     }
     seconds = min(limits.values())
     # every setting sitting at the minimum, not the first one found: a tie means both

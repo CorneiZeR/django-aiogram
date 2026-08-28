@@ -68,14 +68,24 @@ class Broker(ABC):
     CALL_TIMEOUT_OPTION: ClassVar[str] = ''
 
     @classmethod
-    def call_timeout(cls) -> int:
-        """Return this broker's own call deadline in whole seconds, read off the class.
+    def call_timeout(cls) -> float:
+        """Return this broker's own call deadline in seconds, read off the class.
 
         A classmethod because `W004` needs it before anything is built: instantiating a broker to
         answer a check would mean importing its driver, which is what `E047` reports on instead of
         provoking.
+
+        **This is where the number comes from, and :attr:`call_ceiling` returns it.** One
+        implementation rather than two, because the two would be read by different callers -- the
+        check quotes what this says while the consumer uses what the property says -- and a
+        difference between them would be invisible from either side. A transport that validates its
+        setting overrides this, not the property.
+
+        A `float`, and not for symmetry: `KAFKA_TIMEOUT` accepts fractions, and reading it as an
+        `int` here made `0.5` raise -- so `W004` fell silent -- and `2.5` report a ceiling one
+        second away from the one the consumer applies.
         """
-        return max(1, int(str(cls.option(cls.CALL_TIMEOUT_OPTION))))
+        return float(str(cls.option(cls.CALL_TIMEOUT_OPTION)))
 
     #: importable module name, and the extra that installs it. Empty means no driver.
     REQUIRES: ClassVar[tuple[str, str] | None] = None

@@ -240,7 +240,7 @@ class RedisListBroker(Broker):
         The socket deadline rather than ``BLPOP_TIMEOUT``: the pop is asked to wait for less
         than this on purpose, so the longest a call can take is the deadline, not the wait.
         """
-        return float(max(1, int(str(self.option('REDIS_TIMEOUT')))))
+        return type(self).call_timeout()
 
     @property
     def crash_safe(self) -> bool:

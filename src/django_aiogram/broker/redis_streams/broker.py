@@ -648,7 +648,7 @@ class RedisStreamsBroker(Broker):
     @property
     def call_ceiling(self) -> float:
         """``REDIS_TIMEOUT``, as on the list: the same server and the same socket deadline."""
-        return float(max(1, int(str(self.option('REDIS_TIMEOUT')))))
+        return type(self).call_timeout()
 
     @property
     def crash_safe(self) -> bool:

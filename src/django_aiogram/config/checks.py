@@ -313,6 +313,12 @@ def _a_usable_broker(key: str) -> list[Problem]:
 
     Nothing here imports the driver — the registry checks its own table of shipped brokers
     before importing anything, so an absent one is named rather than discovered by traceback.
+
+    A fourth finding, and the only one about a broker somebody wrote: `CALL_TIMEOUT_OPTION` unset,
+    or naming an option the broker does not declare. The seam needs it -- `W004` quotes that name
+    and the consumer caps its reads by that number -- and without it the failure lands as a
+    `KeyError` out of `option('')`, in whichever rule asks first. Reported here so it reads as the
+    contract it is.
     """
     from django_aiogram.broker.exceptions import (  # noqa: PLC0415 - only when the checks run
         BrokerDependencyError,
@@ -334,6 +340,19 @@ def _a_usable_broker(key: str) -> list[Problem]:
         ]
     except BrokerNotConfiguredError as wrong:
         return [Problem(f'is unusable: {wrong}', hint='Name a Broker subclass by dotted path.')]
+    named = resolved.CALL_TIMEOUT_OPTION
+    if not named or named not in resolved.OPTIONS:
+        return [
+            Problem(
+                f'is {resolved.__name__}, which declares no call deadline: CALL_TIMEOUT_OPTION is {named!r}.',
+                hint=(
+                    'A Broker names the one of its own options that bounds a single call, so '
+                    "W004 can quote it and the consumer can cap its reads by it -- 'REDIS_TIMEOUT' "
+                    'on the Redis transports, and each of the others its own. See the Delivery '
+                    'page for what a transport has to declare.'
+                ),
+            )
+        ]
     required = [option for option in resolved.required() if not str(conf.get(option) or '').strip()]
     if required and enabled:
         return [
@@ -586,8 +605,11 @@ def _a_pop_inside_the_deadline(key: str) -> list[Problem]:
         ceiling = take_ceiling(broker.CALL_TIMEOUT_OPTION, broker.call_timeout())
     except (ImproperlyConfigured, TypeError, ValueError):
         return []  # E014, E023 and E030 own the type complaints
-    except BrokerError:
-        return []  # E047 owns every complaint about which transport is configured
+    except (BrokerError, KeyError):
+        # E047 owns every complaint about which transport is configured, including a broker that
+        # declares no deadline option -- `option('')` raises `KeyError`, and a rule about
+        # `BLPOP_TIMEOUT` must not be the thing that takes `manage.py check` down
+        return []
     if asked <= ceiling.seconds:
         return []
     named = ' and '.join(f"{SETTINGS_NAME}['{key}']" for key in ceiling.bound_by)

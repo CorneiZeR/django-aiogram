@@ -1305,3 +1305,90 @@ def test_w004_is_silent_when_the_transport_deadline_leaves_room():
         found = [message for message in check_settings() if message.id == 'django_aiogram.W004']
 
     assert found == [], f'W004 reported {[message.msg for message in found]} with room to spare'
+
+
+class BrokerWithNoDeadline(RedisListBroker):
+    """A broker somebody wrote that never says what bounds one of its calls."""
+
+    CALL_TIMEOUT_OPTION = ''
+
+
+class BrokerNamingAnOptionItDoesNotHave(RedisListBroker):
+    """And one that names an option it does not declare, which is the same gap one step later."""
+
+    CALL_TIMEOUT_OPTION = 'SOME_OTHER_TIMEOUT'
+
+
+@pytest.mark.parametrize(
+    'broker',
+    ['tests.test_checks.BrokerWithNoDeadline', 'tests.test_checks.BrokerNamingAnOptionItDoesNotHave'],
+    ids=['declares nothing', 'names what it does not declare'],
+)
+def test_e047_reports_a_broker_that_cannot_name_its_call_deadline(broker):
+    """The seam needs the name, and without it the failure lands as a `KeyError` somewhere else.
+
+    `W004` quotes that name and the consumer caps its reads by the number behind it, so a broker
+    that does not declare it is incomplete rather than merely unusual — and `option('')` raises
+    `KeyError`, which would surface out of whichever rule asked first.
+    """
+    with override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'BROKER': broker}):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.E047']
+
+    assert len(found) == 1, f'E047 reported {len(found)} problems for {broker}'
+    assert 'declares no call deadline' in found[0].msg, found[0].msg
+    assert 'CALL_TIMEOUT_OPTION' in found[0].msg, found[0].msg
+
+
+@pytest.mark.parametrize(
+    'broker',
+    ['tests.test_checks.BrokerWithNoDeadline', 'tests.test_checks.BrokerNamingAnOptionItDoesNotHave'],
+    ids=['declares nothing', 'names what it does not declare'],
+)
+def test_the_checks_survive_a_broker_that_cannot_name_its_call_deadline(broker):
+    """`manage.py check` has to answer, and `W004` must not be what stops it.
+
+    A rule about `BLPOP_TIMEOUT` reaching `option('')` would raise `KeyError` out of the whole
+    run — every other finding lost with it, on a configuration one of those findings is about.
+    """
+    with override_settings(
+        TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'BROKER': broker, 'BLPOP_TIMEOUT': 300}
+    ):
+        reported = check_settings()
+
+    assert [message for message in reported if message.id == 'django_aiogram.E047'], 'E047 said nothing'
+    assert [message for message in reported if message.id == 'django_aiogram.W004'] == [], (
+        'W004 reported a cap it cannot compute'
+    )
+
+
+@pytest.mark.parametrize(
+    ('timeout', 'cap'),
+    # 2.6 rather than 2.5 alone: `round(2.5)` is 2 in Python, so rounding and flooring agree
+    # there and the case could not tell them apart. At 2.6 they differ -- flooring allows one
+    # whole second inside the deadline, rounding would allow two and leave 0.6 of a second
+    [('0.5', 1), (2.5, 1), (2.6, 1), (30, 29)],
+    ids=['a fraction below one', 'a fraction at the tie', 'a fraction above the tie', 'a whole number'],
+)
+def test_w004_reads_a_fractional_transport_deadline(timeout, cap):
+    """`KAFKA_TIMEOUT` accepts fractions, and reading it as an integer got both ends wrong.
+
+    `0.5` raised out of `int()`, so the rule fell silent on a deployment whose poll is capped at a
+    second; `2.5` became `2`, so the rule reported a ceiling one second away from the one the
+    consumer applies. The floor is deliberate in the other direction: 2.5 allows one whole second
+    inside the deadline, not two.
+    """
+    settings = {
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'BROKER': 'django_aiogram.broker.kafka.KafkaBroker',
+        'KAFKA_BOOTSTRAP': 'localhost:9092',
+        'KAFKA_TOPIC': 'tg',
+        'KAFKA_TIMEOUT': timeout,
+        'BLPOP_TIMEOUT': 300,
+        'HEARTBEAT_INTERVAL': 600,
+    }
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.W004']
+
+    assert len(found) == 1, f'W004 said nothing about KAFKA_TIMEOUT={timeout!r}'
+    assert f'caps at {cap}.' in found[0].msg, found[0].msg
