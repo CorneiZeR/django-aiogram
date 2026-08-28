@@ -132,11 +132,13 @@ class KafkaBroker(Broker):
         Overriding the base classmethod rather than sitting beside it, so the validation is in the
         one place both readers go through: `W004` asks the class, the consumer asks
         :attr:`call_ceiling`, and a value librdkafka would refuse is reported to either.
+
+        Narrowing the base rule rather than replacing it, which is also how a non-numeric
+        ``KAFKA_TIMEOUT`` stopped raising a bare `ValueError` naming nothing.
         """
-        # no `or 10` here: the default is declared in `OPTIONS`, so `option` already answers
-        # with it — and `or` would read a configured 0 as unset and hand back 10, which is the
-        # one value that most needs to reach the bound below
-        timeout = float(str(cls.option('KAFKA_TIMEOUT')))
+        # through the base, which owns reading the number and refusing one that cannot be a
+        # deadline at all; this narrows the range to what the driver takes
+        timeout = super().call_timeout()
         if not _SOCKET_FLOOR <= timeout <= _SOCKET_CEILING:
             msg = (
                 f"{SETTINGS_NAME}['KAFKA_TIMEOUT'] is {timeout}, which librdkafka will not "

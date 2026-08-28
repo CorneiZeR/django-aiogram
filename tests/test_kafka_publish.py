@@ -38,18 +38,29 @@ def payload(chat_id):
     return JsonSerializer().dumps({'function': 'send_message', 'chat_id': chat_id})
 
 
-@pytest.mark.parametrize('timeout', [0, 0.005, 301, 600])
-def test_a_timeout_the_driver_would_refuse_is_refused_here_by_name(broker, timeout):
+@pytest.mark.parametrize(
+    ('timeout', 'because'),
+    [
+        (0, 'positive, finite number of seconds'),
+        (0.005, 'socket.timeout.ms'),
+        (301, 'socket.timeout.ms'),
+        (600, 'socket.timeout.ms'),
+    ],
+)
+def test_a_timeout_the_driver_would_refuse_is_refused_here_by_name(broker, timeout, because):
     """A setting librdkafka will not take has to fail with the setting's name, not the driver's.
 
     `KAFKA_TIMEOUT` becomes `socket.timeout.ms`, which accepts 10ms to 300s. Outside that range
     building a client fails with librdkafka complaining about a key nobody wrote — so the
     complaint is made here instead, where it can say which setting and what the bound is.
 
-    `0` is in the cases because it is the one value a `x or default` would swallow: it reads as
-    unset, so the configured number would be replaced by 10 and never reach this bound at all.
-    The default lives in `OPTIONS`, which is what makes the fallback unnecessary as well as
-    wrong.
+    Two rules, one reader, and the case says which one answers. `0` is refused by the base
+    classmethod this one narrows, as no transport's deadline rather than as one librdkafka would
+    not take — naming the driver's key there would explain a value that is wrong for a reason the
+    driver has nothing to do with. It is in the cases because it is the one value a `x or default`
+    would swallow: it reads as unset, so the configured number would be replaced by 10 and never
+    reach either bound. The default lives in `OPTIONS`, which is what makes the fallback
+    unnecessary as well as wrong.
     """
     # `_timeout()` rather than a method that uses it: everything else here would reach the
     # driver's import first, and the unit legs do not install it
@@ -60,7 +71,7 @@ def test_a_timeout_the_driver_would_refuse_is_refused_here_by_name(broker, timeo
         broker._timeout()
 
     assert 'KAFKA_TIMEOUT' in str(refusal.value), str(refusal.value)
-    assert 'socket.timeout.ms' in str(refusal.value), str(refusal.value)
+    assert because in str(refusal.value), str(refusal.value)
 
 
 def test_a_timeout_the_driver_accepts_is_left_alone(broker):

@@ -17,6 +17,7 @@ import time
 from collections import Counter
 
 import pytest
+from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 from django.utils.module_loading import import_string
 
@@ -479,3 +480,28 @@ def test_the_ceiling_follows_the_setting_the_broker_names(path):
     for other in others:
         with override_settings(TELEGRAM_BOT={**base, named: 37, other: 3}):
             assert broker.call_timeout() == 37, f'{path} reads {other} as well as {named}'
+
+
+@pytest.mark.parametrize('value', ['', 'abc', 0, -1, float('nan'), float('inf')], ids=repr)
+@pytest.mark.parametrize('path', sorted(SHIPPED))
+def test_a_deadline_that_cannot_be_one_is_refused_by_name(path, value):
+    """Every transport, one reader, one refusal — and the setting named in it.
+
+    The number reaches the driver as written since #41, so `RABBITMQ_TIMEOUT=0` is what pika is
+    handed rather than something an `or 10` rewrote on the way. That makes refusing it the reader's
+    job: the alternative is the driver's own complaint about a key the project never wrote, or, on
+    `''`, a bare `ValueError` from `float` naming nothing at all.
+
+    `nan` is in the list because it passes `> 0` — every comparison against it is false — and a
+    deadline of `nan` expires immediately, everywhere it is used.
+    """
+    broker = import_string(path)
+    required = {'REDIS_STREAM_KEY': 'tg', 'KAFKA_TOPIC': 'tg', 'RABBITMQ_QUEUE': 'tg'}
+    settings = {**SETTINGS, 'BROKER': path, **required, broker.CALL_TIMEOUT_OPTION: value}
+
+    with override_settings(TELEGRAM_BOT=settings), pytest.raises(ImproperlyConfigured) as refused:
+        broker.call_timeout()
+
+    assert broker.CALL_TIMEOUT_OPTION in str(refused.value), (
+        f'{path} refused {value!r} without naming the setting: {refused.value}'
+    )

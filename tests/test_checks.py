@@ -1362,6 +1362,90 @@ def test_the_checks_survive_a_broker_that_cannot_name_its_call_deadline(broker):
 
 
 @pytest.mark.parametrize(
+    ('broker', 'option'),
+    [
+        ('django_aiogram.broker.rabbitmq.RabbitMQBroker', 'RABBITMQ_TIMEOUT'),
+        ('django_aiogram.broker.kafka.KafkaBroker', 'KAFKA_TIMEOUT'),
+    ],
+)
+@pytest.mark.parametrize('value', ['', 'abc', 0, -1], ids=repr)
+def test_e047_reports_a_deadline_the_transport_refuses(broker, option, value):
+    """A deadline that cannot be one passed every rule, and the transport refused it at first send.
+
+    Nothing owned the type of a transport's own deadline: `REDIS_TIMEOUT` has `E030` because it
+    sits in the package-wide table, and the other three sit with their transports where no rule
+    reached them. So `RABBITMQ_TIMEOUT='abc'` was a clean `manage.py check` and a `ValueError` out
+    of the first publish, naming `float` rather than the setting.
+
+    Reported by whichever rule owns `BROKER`, because the deadline is part of what a transport has
+    to supply -- and ungated by `ENABLED`, since it is arithmetic over settings that needs no
+    driver, and refused in the web tier exactly as in the worker.
+    """
+    settings = {
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'BROKER': broker,
+        'RABBITMQ_URL': 'amqp://localhost',
+        'RABBITMQ_QUEUE': 'tg',
+        'KAFKA_BOOTSTRAP': 'localhost:9092',
+        'KAFKA_TOPIC': 'tg',
+        option: value,
+    }
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.E047']
+
+    assert len(found) == 1, f'E047 reported {len(found)} problems for {option}={value!r}'
+    assert option in found[0].msg, found[0].msg
+    assert 'call deadline is unusable' in found[0].msg, found[0].msg
+
+
+def test_one_rule_reports_a_deadline_that_has_a_rule_of_its_own():
+    """`REDIS_TIMEOUT` is guarded by `E030`, so `E047` says nothing about the same value.
+
+    Two errors about one setting sends the reader looking for two problems, and this is the
+    convention `W004` already states from the other side -- it stays silent because "E014, E023 and
+    E030 own the type complaints". The rule asks the registry rather than carrying a list of names,
+    so the day `REDIS_TIMEOUT` leaves the package-wide table with its own rule (#23), this one
+    picks it up.
+    """
+    settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'REDIS_TIMEOUT': 'five'}
+    with override_settings(TELEGRAM_BOT=settings):
+        reported = {str(message.id) for message in check_settings()}
+
+    assert 'django_aiogram.E030' in reported, 'the rule that owns REDIS_TIMEOUT said nothing'
+    assert 'django_aiogram.E047' not in reported, 'E047 reported a setting another rule owns'
+
+
+@pytest.mark.parametrize(
+    ('broker', 'option'),
+    [
+        ('django_aiogram.broker.rabbitmq.RabbitMQBroker', 'RABBITMQ_TIMEOUT'),
+        ('django_aiogram.broker.kafka.KafkaBroker', 'KAFKA_TIMEOUT'),
+    ],
+)
+def test_the_checks_survive_a_deadline_the_transport_refuses(broker, option):
+    """And the run still answers: `W004` reads the same number, and it must not be what raises."""
+    settings = {
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'BROKER': broker,
+        'RABBITMQ_URL': 'amqp://localhost',
+        'RABBITMQ_QUEUE': 'tg',
+        'KAFKA_BOOTSTRAP': 'localhost:9092',
+        'KAFKA_TOPIC': 'tg',
+        'BLPOP_TIMEOUT': 300,
+        option: 'abc',
+    }
+    with override_settings(TELEGRAM_BOT=settings):
+        reported = check_settings()
+
+    assert [message for message in reported if message.id == 'django_aiogram.E047'], 'E047 said nothing'
+    assert [message for message in reported if message.id == 'django_aiogram.W004'] == [], (
+        'W004 reported a cap it cannot compute'
+    )
+
+
+@pytest.mark.parametrize(
     ('timeout', 'cap'),
     # 2.6 rather than 2.5 alone: `round(2.5)` is 2 in Python, so rounding and flooring agree
     # there and the case could not tell them apart. At 2.6 they differ -- flooring allows one

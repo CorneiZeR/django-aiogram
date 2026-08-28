@@ -103,6 +103,20 @@ Six rules, and each is a defect this package has already had:
   reports on the same helper and names the same setting, so a check cannot describe a cap your
   consumer does not use.
 
+### What a transport has to declare about its deadline
+
+The cap above needs two things from whichever `Broker` is configured, and a broker of your own
+supplies both: `CALL_TIMEOUT_OPTION`, the name of the one option that bounds a single call, and the
+number behind it, read through `call_timeout()`.
+
+Name it, because `W004` quotes that name in its hint and the consumer's cap is computed from it — a
+broker leaving it unset is reported by `E047` rather than found as a `KeyError` inside whichever
+rule asked first. And read it *only* there: the classmethod is the single reader, it refuses
+anything that is not a positive finite number of seconds, and a transport with a narrower range —
+Kafka's `0.01` to `300` — narrows it by calling `super()` rather than reading the setting again.
+Two readers is not a style question: `RABBITMQ_TIMEOUT` was read a second time with an `or 10` on
+it, so a configured `0` reached pika as ten while `W004` and the cap were computed from zero.
+
 `E009` checks the shape of the path at `manage.py check` and nothing more: resolving it would
 import the consumer module, which imports the serializer, which imports aiogram — 883ms and
 135 MiB on every `migrate` and `runserver`, measured. Whether the path imports, and imports a

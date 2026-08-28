@@ -244,10 +244,21 @@ Entries land here as the work does; nothing below is released.
   The deadline is a **float** throughout, because `KAFKA_TIMEOUT` accepts fractions: read as an
   integer, `0.5` raised and left `W004` silent on a deployment whose poll is capped at a second,
   and `2.5` reported a ceiling one second away from the one the consumer applies. The cap floors
-  it, so `2.6` allows one whole second inside the deadline rather than two. And `E047` gained a
-  fourth finding for a broker somebody wrote: no `CALL_TIMEOUT_OPTION`, or one naming an option it
-  does not declare — the seam needs that name, and without this the gap surfaced as a `KeyError`
-  out of whichever rule asked first, taking every other finding with it.
+  it, so `2.6` allows one whole second inside the deadline rather than two.
+
+  `call_timeout()` is also the only reader, and refuses what cannot be a deadline: not a number,
+  or not above zero, or not finite. `RabbitMQBroker` read `RABBITMQ_TIMEOUT` a second time with an
+  `or 10` on it, which fires on exactly the values a project writes and `or` treats as unset — so a
+  configured `0` reached pika as ten while `W004` and the consumer's cap were computed from zero.
+  Kafka's range check narrows the same reader instead of replacing it, which is how a non-numeric
+  `KAFKA_TIMEOUT` stopped raising a bare `ValueError` naming nothing.
+
+  `E047` grew two findings to match, neither gated on `ENABLED`: a broker declaring no
+  `CALL_TIMEOUT_OPTION`, or naming an option it does not declare — the seam needs that name, and
+  without this the gap surfaced as a `KeyError` out of whichever rule asked first, taking every
+  other finding with it — and a deadline the transport refuses, which until now passed every rule
+  and failed at the first send. `REDIS_TIMEOUT` had `E030` for this because it sits in the
+  package-wide table; the other three sat with their transports where no rule reached them.
 
 - **The Kafka producer states its acknowledgement level instead of inheriting one.** `publish`
   waits for the broker rather than returning once librdkafka has queued the record, and the

@@ -68,7 +68,9 @@ rather than the multiple.
 
 `BLPOP_TIMEOUT` is what the consumer asks for, and `RABBITMQ_TIMEOUT` caps it together with
 `HEARTBEAT_INTERVAL` — the smaller wins, one second inside the deadline so a read returns before it
-fires. `W004` reports a `BLPOP_TIMEOUT` above that cap and names whichever bound it.
+fires. `W004` reports a `BLPOP_TIMEOUT` above that cap and names whichever bound it, and `E047`
+refuses a `RABBITMQ_TIMEOUT` that is not a positive finite number — one reader, so the number
+bounding the channel and the number the cap is computed from cannot be two different numbers.
 
 Until 4.0 the transport term was `REDIS_TIMEOUT` whichever broker was configured, so this
 deployment's poll was bounded by a setting it never reads, and the hint named it. The setting keeps

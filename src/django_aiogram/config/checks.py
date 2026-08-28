@@ -16,7 +16,7 @@ import socket
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, fields
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from django.core.checks import CheckMessage, Error, Info
 from django.core.checks import Warning as CheckWarning
@@ -34,6 +34,10 @@ from django_aiogram.config.enums import (
 )
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf, take_ceiling
 from django_aiogram.eventlog.events import known_kinds
+
+if TYPE_CHECKING:  # the seam is a type here and nothing more: importing it at run time would
+    # pull the broker package into every process that only runs the checks
+    from django_aiogram.broker.base import Broker
 
 MODE_CHOICES = choices(UpdateMode)
 SERIALIZER_CHOICES = choices(SerializerKind)
@@ -288,6 +292,47 @@ def _readable_serializer(key: str) -> list[Problem]:
     ]
 
 
+def _the_deadline_the_broker_declares(resolved: 'type[Broker]') -> list[Problem]:
+    """Report a transport that cannot answer how long one of its calls may take.
+
+    Its own function so `E047` keeps one return per finding without growing past what a reader can
+    follow, and because the two findings are one subject: the name, and the number behind it.
+    """
+    named = resolved.CALL_TIMEOUT_OPTION
+    if not named or named not in resolved.OPTIONS:
+        return [
+            Problem(
+                f'is {resolved.__name__}, which declares no call deadline: CALL_TIMEOUT_OPTION is {named!r}.',
+                hint=(
+                    'A Broker names the one of its own options that bounds a single call, so '
+                    "W004 can quote it and the consumer can cap its reads by it -- 'REDIS_TIMEOUT' "
+                    'on the Redis transports, and each of the others its own. See the Delivery '
+                    'page for what a transport has to declare.'
+                ),
+            )
+        ]
+    # one rule per setting, which is the convention `W004` states from the other side: a deadline
+    # sitting in the package-wide table has a rule of its own -- `REDIS_TIMEOUT` has `E030` -- and
+    # two errors about one value is noise that makes the reader look for two problems. The registry
+    # is asked rather than a name being listed here, so this picks the setting up on the day #23
+    # moves it out of that table and its own rule goes with it
+    if named in {check.key for check in CHECKS}:
+        return []
+    try:
+        resolved.call_timeout()
+    except (ImproperlyConfigured, TypeError, ValueError) as refused:
+        return [
+            Problem(
+                f'is {resolved.__name__}, whose call deadline is unusable: {refused}',
+                hint=(
+                    'It bounds one call to the transport, W004 quotes it, and the consumer caps '
+                    'each take by it — see the page for your transport for the range it accepts.'
+                ),
+            )
+        ]
+    return []
+
+
 def _a_usable_broker(key: str) -> list[Problem]:
     """Refuse a transport that cannot be reached before anything tries to send through it.
 
@@ -298,27 +343,34 @@ def _a_usable_broker(key: str) -> list[Problem]:
     and hearing `ModuleNotFoundError: redis` from inside a producer is the whole point of this
     rule.
 
-    Three findings, and each says what to do rather than what happened: the setting is empty;
-    it names something that is not a broker; or the driver behind it is absent, in which case
-    the hint carries the install line for that extra.
+    Each finding says what to do rather than what happened: the setting is empty; it names
+    something that is not a broker; the driver behind it is absent, in which case the hint carries
+    the install line for that extra; or the transport's own required settings are unset.
 
-    Two of those are gated on the bot being enabled, for the same reason `W002` is: a process
-    with `ENABLED` off sends nothing, so asking it to install a driver it will never call is an
-    error nobody can act on except by installing it anyway. The gate is a trade, not a proof --
-    a disabled process that reads `queue_depth` *does* reach the transport, and hears the
-    `ModuleNotFoundError` this rule exists to prevent. Documented rather than checked, because
-    firing here would warn every image build and migration container that never reads a depth. The name itself is
-    judged either way — nothing legitimately names a non-broker, and a typo in the web tier is
-    the same typo in the worker, where it would fail.
+    The driver and the required settings are gated on the bot being enabled, for the same reason
+    `W002` is: a process with `ENABLED` off sends nothing, so asking it to install a driver it will
+    never call is an error nobody can act on except by installing it anyway. The gate is a trade,
+    not a proof -- a disabled process that reads `queue_depth` *does* reach the transport, and
+    hears the `ModuleNotFoundError` this rule exists to prevent. Documented rather than checked,
+    because firing here would warn every image build and migration container that never reads a
+    depth. The name itself is judged either way — nothing legitimately names a non-broker, and a
+    typo in the web tier is the same typo in the worker, where it would fail.
 
     Nothing here imports the driver — the registry checks its own table of shipped brokers
     before importing anything, so an absent one is named rather than discovered by traceback.
 
-    A fourth finding, and the only one about a broker somebody wrote: `CALL_TIMEOUT_OPTION` unset,
-    or naming an option the broker does not declare. The seam needs it -- `W004` quotes that name
-    and the consumer caps its reads by that number -- and without it the failure lands as a
-    `KeyError` out of `option('')`, in whichever rule asks first. Reported here so it reads as the
-    contract it is.
+    Then the call deadline the seam is built on, in two more findings, the second of which stands
+    aside when the option it names has a rule of its own -- `REDIS_TIMEOUT` has `E030`, because it
+    sits in the package-wide table. `CALL_TIMEOUT_OPTION` unset,
+    or naming an option the broker does not declare -- the only finding here about a broker
+    somebody wrote, and without it the failure lands as a `KeyError` out of `option('')`, in
+    whichever rule asks first. And a deadline that cannot be one: `RABBITMQ_TIMEOUT` was neither a
+    number nor positive on a configuration that passed every rule, and the transport then refused
+    to build a channel at the first send. `W004` quotes that name and the consumer caps its reads
+    by that number, so both belong to whichever rule owns `BROKER`.
+
+    Neither of those is gated on `ENABLED`: both are arithmetic over settings that needs no driver,
+    and a deadline the transport refuses is refused in every process that reaches it.
     """
     from django_aiogram.broker.exceptions import (  # noqa: PLC0415 - only when the checks run
         BrokerDependencyError,
@@ -340,19 +392,9 @@ def _a_usable_broker(key: str) -> list[Problem]:
         ]
     except BrokerNotConfiguredError as wrong:
         return [Problem(f'is unusable: {wrong}', hint='Name a Broker subclass by dotted path.')]
-    named = resolved.CALL_TIMEOUT_OPTION
-    if not named or named not in resolved.OPTIONS:
-        return [
-            Problem(
-                f'is {resolved.__name__}, which declares no call deadline: CALL_TIMEOUT_OPTION is {named!r}.',
-                hint=(
-                    'A Broker names the one of its own options that bounds a single call, so '
-                    "W004 can quote it and the consumer can cap its reads by it -- 'REDIS_TIMEOUT' "
-                    'on the Redis transports, and each of the others its own. See the Delivery '
-                    'page for what a transport has to declare.'
-                ),
-            )
-        ]
+    deadline = _the_deadline_the_broker_declares(resolved)
+    if deadline:
+        return deadline
     required = [option for option in resolved.required() if not str(conf.get(option) or '').strip()]
     if required and enabled:
         return [

@@ -39,7 +39,13 @@ logger = logging.getLogger('django_aiogram')
 
 
 def read_timeout() -> int:
-    """How long any single Redis call may take before the server is dead to us."""
+    """How long any single Redis call may take before the server is dead to us.
+
+    Not the Redis transports' reader of `REDIS_TIMEOUT` — that is `call_timeout()` on the broker,
+    and this is the package-wide one: the FSM storage builds a client under every transport, Kafka
+    included. The two can only disagree on a value `E030` reports, since it requires an integer of
+    at least two, and unifying them waits on `REDIS_TIMEOUT` leaving the package-wide table (#23).
+    """
     return max(1, int(conf['REDIS_TIMEOUT']))
 
 

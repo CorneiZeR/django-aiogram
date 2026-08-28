@@ -11,6 +11,7 @@ its own messages however it already does.
 """
 
 import importlib.util
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from collections.abc import Sequence as Seq
@@ -84,8 +85,30 @@ class Broker(ABC):
         A `float`, and not for symmetry: `KAFKA_TIMEOUT` accepts fractions, and reading it as an
         `int` here made `0.5` raise -- so `W004` fell silent -- and `2.5` report a ceiling one
         second away from the one the consumer applies.
+
+        **No `or <default>` on the way through, and refused here rather than at each reader.**
+        `option` already answers with the value declared in `OPTIONS`, so `or 10` can only fire on
+        a number the project wrote -- and it rewrote a configured `0` into 10. `RabbitMQBroker` did
+        exactly that: `_channel()` handed pika 10 while this said 0, so the consumer capped its
+        takes by a deadline no call it made ever carried. One reader leaves nothing to diverge, and
+        because the number now reaches the driver as written, a value that cannot be a deadline is
+        refused by name here instead of surfacing as the driver's complaint about a key nobody
+        wrote. `E047` reports that refusal.
         """
-        return float(str(cls.option(cls.CALL_TIMEOUT_OPTION)))
+        raw = cls.option(cls.CALL_TIMEOUT_OPTION)
+        refused = (
+            f"{SETTINGS_NAME}['{cls.CALL_TIMEOUT_OPTION}'] is {raw!r}, and a call deadline has to "
+            f'be a positive, finite number of seconds.'
+        )
+        try:
+            timeout = float(str(raw))
+        except ValueError as exc:
+            raise ImproperlyConfigured(refused) from exc
+        # `isfinite` and not just the bound: every comparison against `nan` is false, so it would
+        # pass a `> 0` test and then make each deadline built from it expire immediately
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ImproperlyConfigured(refused)
+        return timeout
 
     #: importable module name, and the extra that installs it. Empty means no driver.
     REQUIRES: ClassVar[tuple[str, str] | None] = None

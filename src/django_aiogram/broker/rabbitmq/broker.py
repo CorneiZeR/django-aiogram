@@ -92,12 +92,23 @@ class RabbitMQBroker(Broker):
         return str(self.option('RABBITMQ_QUEUE'))
 
     def _channel(self) -> 'BlockingChannel':
-        """Reach this thread's channel, declaring the queue on first use."""
+        """Reach this thread's channel, declaring the queue on first use.
+
+        The deadline comes from :meth:`call_timeout`, which is the only reader of
+        ``RABBITMQ_TIMEOUT``. It used to be read again here with an `or 10` on it, and the two
+        disagreed on every value a project wrote and `or` treats as unset: a configured `0` gave
+        pika 10 while :attr:`call_ceiling` said 0, so `W004` and the consumer's cap were computed
+        from a deadline no publish, get or confirm on this channel ever carried.
+        """
         return channel_for_thread(
             str(self.option('RABBITMQ_URL')),
             self._queue(),
+            # the same `or` idiom the deadline no longer uses, and kept on purpose: 0 *is* this
+            # option's declared default and its meaning, so nothing a project writes changes hands
+            # here except a value `int` would refuse outright. Refusing it by name needs a rule per
+            # transport option, which is #23 rather than this line
             int(str(self.option('RABBITMQ_PREFETCH') or 0)),
-            float(str(self.option('RABBITMQ_TIMEOUT') or 10)),
+            type(self).call_timeout(),
         )
 
     # ------------------------------------------------------------------ producer
