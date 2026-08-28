@@ -421,6 +421,30 @@ Entries land here as the work does; nothing below is released.
 
 ### Changed
 
+- **Each setting belongs to one table: the package's, or the transport that reads it.** Four keys
+  were in both, and the overlap made two rules quietly wrong. `W003` knows a key by the package-wide
+  table plus whatever the configured transport declares, so `REDIS_MESSAGES_KEY` — being in the
+  table — stayed known under Kafka, and a project that moved to Streams kept a line nothing reads
+  without being told. `E007` validated that same key as a string on a deployment that has no list.
+
+  `REDIS_MESSAGES_KEY` is the Redis list's alone now, and `BLPOP_TIMEOUT` is the package's alone:
+  every consumer reads it, whichever queue it takes from, and it was declared by the two Redis
+  transports as well. `REDIS_URL` and `REDIS_TIMEOUT` stay in both tables and mean it — the FSM
+  storage builds a Redis client under every transport, so a Kafka deployment with
+  `FSM_STORAGE = 'redis'` sets both and neither is stranded. That is also why `Broker.option`'s
+  guard against declaring a *differing* default stays: it is what keeps one number in two tables
+  honest.
+
+  A rule follows its setting, and which kind a rule is needs no flag — a key outside the
+  package-wide table belongs to whichever broker declares it, so a row guarding one runs only where
+  that transport is configured. Nothing else changes for a project that keeps the Redis list.
+
+  Two rules also stopped depending on the extra being installed: what a transport *declares* is
+  class state and needs no driver, and asking with the driver verified collapsed to the package-wide
+  table on a machine one `pip install` short — so `W003` called that transport's own required
+  settings unknown keys and invited an operator to delete them, and every rule guarding one of those
+  settings stopped running.
+
 - **`DELIVERY` is a dotted path, and a consumer you write goes in it.** It accepted exactly one
   string until now — `'blpop'`, the name of a Redis command that three of the four transports
   never issue, since the consumer asks the broker and the broker reaches for `basic_get`, a

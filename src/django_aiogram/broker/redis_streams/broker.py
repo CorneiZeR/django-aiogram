@@ -62,7 +62,6 @@ class RedisStreamsBroker(Broker):
         'REDIS_STREAM_KEY': REQUIRED,
         'REDIS_STREAM_GROUP': 'django-aiogram',
         'REDIS_TIMEOUT': 10,
-        'BLPOP_TIMEOUT': 5,
     }
 
     def __init__(self) -> None:

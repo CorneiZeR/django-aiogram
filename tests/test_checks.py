@@ -14,8 +14,10 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
 from django.core.management.base import SystemCheckError
 from django.test import override_settings
+from django.utils.module_loading import import_string
 
 from django_aiogram.broker.redis_list import RedisListBroker
+from django_aiogram.broker.registry import SHIPPED
 from django_aiogram.config.checks import CHECKS, check_settings, worker_name_problems
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import StorageKind
@@ -387,11 +389,105 @@ def test_every_registry_row_reports_under_its_own_id():
     assert sorted(codes) == sorted(set(codes))
 
 
+STREAMS = {
+    'TOKEN': '42:x',
+    'REDIS_URL': 'redis://localhost',
+    'BROKER': 'django_aiogram.broker.redis_streams.RedisStreamsBroker',
+    'REDIS_STREAM_KEY': 'tg',
+}
+
+
+def test_a_key_belonging_to_another_transport_is_reported_as_stranded():
+    """The symptom #23 is about: a project that moved to Streams keeps its list key.
+
+    `REDIS_MESSAGES_KEY` was in the package-wide table, so it stayed known whichever transport was
+    configured — and a line nothing reads is exactly what `W003` exists to name. It is the
+    transport's now, so the rule answers.
+    """
+    with override_settings(TELEGRAM_BOT={**STREAMS, 'REDIS_MESSAGES_KEY': 'TELEGRAM_BOT_MESSAGE'}):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.W003']
+
+    assert len(found) == 1, f'W003 reported {[message.msg for message in found]}'
+    assert 'REDIS_MESSAGES_KEY' in found[0].msg, found[0].msg
+
+
+def test_a_transport_setting_is_validated_only_where_that_transport_is_configured():
+    """The other half: `E007` validated a list key as a string on a deployment that has no list.
+
+    Both directions, because either alone is a rule that could be doing nothing: under Streams the
+    value is not the package's business, and under the list the same value is still reported.
+    """
+    with override_settings(TELEGRAM_BOT={**STREAMS, 'REDIS_MESSAGES_KEY': 42}):
+        under_streams = ids(check_settings())
+
+    listed = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'REDIS_MESSAGES_KEY': 42}
+    with override_settings(TELEGRAM_BOT=listed):
+        under_the_list = ids(check_settings())
+
+    assert 'django_aiogram.E007' not in under_streams, 'a list key was validated on a stream'
+    assert 'django_aiogram.E007' in under_the_list, 'and the rule no longer reports where it applies'
+
+
+def test_a_transports_own_settings_are_known_without_its_driver(monkeypatch):
+    """What a transport declares is class state, so nothing about it needs the extra installed.
+
+    Resolved with the driver verified, this collapsed to "the package-wide table" on a machine that
+    had not run the `pip install` yet — so `W003` called that transport's own required settings
+    unknown keys and invited an operator to delete them, and every rule guarding one of those
+    settings quietly stopped running. Reproduced with `find_spec` patched, because the suite has
+    every driver installed and a case that only answers without one is a case nobody runs.
+    """
+    monkeypatch.setattr('importlib.util.find_spec', lambda name, *args: None if name == 'pika' else True)
+    settings = {
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'BROKER': 'django_aiogram.broker.rabbitmq.RabbitMQBroker',
+        'RABBITMQ_URL': 'amqp://localhost',
+        'RABBITMQ_QUEUE': 'tg',
+        'RABBITMQ_PREFETCH': 0,
+    }
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.W003']
+
+    assert found == [], f'a transport was told to delete its own settings: {[m.msg for m in found]}'
+
+
+def test_the_settings_the_package_reads_are_known_whichever_transport_runs():
+    """`REDIS_URL` and `REDIS_TIMEOUT` are in both tables and mean it.
+
+    The FSM storage builds a Redis client under every transport, so a Kafka deployment with
+    `FSM_STORAGE = 'redis'` sets both — and neither may be reported as a key nothing reads. This is
+    what stops the split from being "every REDIS_ name belongs to the Redis transports".
+    """
+    settings = {
+        'TOKEN': '42:x',
+        'BROKER': 'django_aiogram.broker.kafka.KafkaBroker',
+        'KAFKA_BOOTSTRAP': 'localhost:9092',
+        'KAFKA_TOPIC': 'tg',
+        'FSM_STORAGE': 'redis',
+        'REDIS_URL': 'redis://localhost',
+        'REDIS_TIMEOUT': 10,
+        'BLPOP_TIMEOUT': 5,
+    }
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.W003']
+
+    assert found == [], f'a package-wide setting was called unknown: {[m.msg for m in found]}'
+
+
 def test_every_registry_row_guards_a_real_setting():
-    """A typo in the key would validate a setting nothing ever reads."""
+    """A typo in the key would validate a setting nothing ever reads.
+
+    Two tables answer "a real setting" since #23, and a row may guard either kind: the package-wide
+    defaults, or an option some transport declares. Both, and not their union loosely — a row whose
+    key is in neither is a typo, and one whose key belongs to a transport runs only where that
+    transport is configured, which is what `Check.run` decides from exactly this distinction.
+    """
     # the unknown-keys row is about the settings dict as a whole, so it has no key
-    unknown = sorted({check.key for check in CHECKS if check.key} - set(DEFAULTS))
-    assert unknown == []
+    guarded = {check.key for check in CHECKS if check.key}
+    declared = {option for path in SHIPPED for option in import_string(path).OPTIONS}
+
+    assert sorted(guarded - set(DEFAULTS) - declared) == []
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://x', 'WORKER_NAME': 7})

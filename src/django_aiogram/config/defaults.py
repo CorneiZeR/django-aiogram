@@ -46,7 +46,6 @@ DEFAULTS: dict[str, Any] = {
     },
     'MAX_RETRIES': 10,
     'RAISE_EXCEPTION': False,
-    'REDIS_MESSAGES_KEY': 'TELEGRAM_BOT_MESSAGE',
     # names this worker's in-flight list; defaults to the hostname. Set it when
     # several workers share a host, so they cannot reclaim each other's messages
     'WORKER_NAME': '',
