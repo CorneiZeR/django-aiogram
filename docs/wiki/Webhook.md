@@ -11,10 +11,22 @@ TELEGRAM_BOT = {'MODE': 'webhook'}  # or 'polling', the default
 ```
 
 Scalars can come from the environment, so the choice can be made at startup
-without touching code:
+without touching code — set it where the process is started, which for the
+compose recipe on **[[Deployment]]** is the service's own `environment:`:
+
+```yaml
+  telegram_bot:
+    command: python manage.py start_tgbot
+    environment:
+      DJANGO_AIOGRAM_MODE: webhook
+```
+
+In a shell it needs exporting, since a bare assignment lives until the prompt
+returns and no process ever sees it:
 
 ```shell
-DJANGO_AIOGRAM_MODE=webhook
+export DJANGO_AIOGRAM_MODE=webhook
+python manage.py start_tgbot
 ```
 
 `start_tgbot` prints which mode it is running in, honours `--mode` for a single
