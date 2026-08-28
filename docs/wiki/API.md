@@ -234,8 +234,8 @@ from django_aiogram.redis import get_redis, redis_conn
 
 ## Values the settings accept
 
-Every choice a setting offers exists as an enum member, so a project can import
-the value instead of spelling the string:
+Some settings offer a **fixed set of choices**, and every one of those exists as an enum member,
+so a project can import the value instead of spelling the string:
 
 ```python
 from django_aiogram.config.enums import StorageKind, UpdateMode
@@ -257,10 +257,13 @@ TELEGRAM_BOT = {
 
 They are `(str, Enum)`, so a member compares equal to its string and works
 anywhere the string does. `choices(SerializerKind)` gives the plain-string set,
-which is what the system checks validate against.
+which is what the system checks validate for **these** settings.
 
-`DeliveryKind` is gone in 4.0: it had one member, `BLPOP`, and `DELIVERY` takes a dotted path
-now — see **[[Delivery]]**.
+**The settings that name an implementation are not among them.** `BROKER` and `DELIVERY` take a
+dotted path — to a `Broker` and to a `Delivery` subclass — so their sets are open by design, and
+their checks judge a path rather than a membership. `DeliveryKind` is gone in 4.0 for exactly that
+reason: it had one member, `BLPOP`, and an enum of one is not a choice. There is no replacement to
+look for; write the path, and see **[[Delivery]]**.
 
 The values are **frozen**: queued payloads and stored settings carry them, so a
 member may be renamed but never revalued.
