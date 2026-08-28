@@ -43,7 +43,7 @@ from django.utils.module_loading import import_string
 from django_aiogram.api import check_function
 from django_aiogram.broker.registry import get_broker
 from django_aiogram.config.enums import EventKind
-from django_aiogram.config.settings import blpop_ceiling, conf
+from django_aiogram.config.settings import conf, take_ceiling
 from django_aiogram.eventlog.events import new_correlation_id, worker_identity
 from django_aiogram.eventlog.recorder import Event, as_identifier, recorder
 from django_aiogram.exceptions import DeliveryNotConfiguredError
@@ -168,15 +168,18 @@ class Delivery(ABC):
         Public for the reason :attr:`stopping` is: a subclass that has to redo this arithmetic
         will get it wrong, and the page that documents writing one would have to teach it.
 
-        **The transport term is `REDIS_TIMEOUT` on all four transports today**, which is issue
-        #41 and not this property's to fix: the same helper feeds `W004`, so moving the term here
-        alone would leave a check describing a cap the consumer does not use -- and moving both
-        changes what that check prints, which is why it was split off. On a deployment whose own
-        timeout is *lower* than the Redis one, the cap is looser than the transport allows and a
-        read can outlast `Broker.call_ceiling`; the join in `start_tgbot` is derived from that
-        ceiling, so the consumer can outlive it. Measured and written down in #41.
+        The transport term is the configured broker's own deadline, asked of the broker rather
+        than read from `REDIS_TIMEOUT`: until #41 it was the Redis setting whichever transport was
+        running, so a Kafka deployment had its poll shortened by a setting it never reads --
+        measured, `REDIS_TIMEOUT: 2` capped a 30-second `KAFKA_TIMEOUT` at one second -- and a read
+        could outlast `Broker.call_ceiling` on a transport whose own timeout was lower, while the
+        join in `start_tgbot` is derived from that ceiling.
         """
-        return max(1, min(int(conf['BLPOP_TIMEOUT']), blpop_ceiling().seconds))
+        # asked of the object rather than of its class: a `Delivery` may hold anything that
+        # answers like a broker -- a test double, a wrapper a project wrote -- and
+        # `type(...).CALL_TIMEOUT_OPTION` reads the wrapper's class, which does not have it
+        ceiling = take_ceiling(self.broker.CALL_TIMEOUT_OPTION, int(self.broker.call_ceiling))
+        return max(1, min(int(conf['BLPOP_TIMEOUT']), ceiling.seconds))
 
     @property
     def stopping(self) -> bool:

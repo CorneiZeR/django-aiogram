@@ -10,14 +10,16 @@ import pytest
 from django.core.checks import WARNING, Error
 from django.core.checks import Warning as CheckWarning
 from django.core.checks.registry import registry
+from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
 from django.core.management.base import SystemCheckError
 from django.test import override_settings
 
+from django_aiogram.broker.redis_list import RedisListBroker
 from django_aiogram.config.checks import CHECKS, check_settings, worker_name_problems
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import StorageKind
-from django_aiogram.config.settings import blpop_ceiling
+from django_aiogram.config.settings import take_ceiling
 from django_aiogram.eventlog.dbrouter import TelegramEventLogRouter
 from django_aiogram.eventlog.events import worker_identity
 from django_aiogram.redis import read_timeout
@@ -756,7 +758,7 @@ def test_the_worker_name_rule_is_information_and_the_consumer_warns_for_itself(m
 def test_a_read_deadline_of_one_second_is_refused():
     """At 1 the consumer's blocking pop cannot fit inside the deadline it is capped by.
 
-    `blpop_ceiling()` promises one second inside `REDIS_TIMEOUT`; at 1 the subtraction
+    `take_ceiling()` promises one second inside the transport's deadline; at 1 the subtraction
     clamps back to 1, so the pop's own timeout *equals* the read deadline and the deadline
     always wins. Every idle second then costs a `TimeoutError`, a traceback and a
     reconnect, against a healthy server, for ever — and `W004` invited exactly that by
@@ -772,7 +774,8 @@ def test_every_read_deadline_the_check_admits_leaves_room_for_the_pop(timeout):
         TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'REDIS_TIMEOUT': timeout}
     ):
         assert errors(check_settings()) == [], 'the check refuses a value the consumer can work with'
-        assert blpop_ceiling().seconds < read_timeout(), 'the pop cannot outlast the socket it reads through'
+        ceiling = take_ceiling(RedisListBroker.CALL_TIMEOUT_OPTION, RedisListBroker.call_timeout())
+        assert ceiling.seconds < read_timeout(), 'the take cannot outlast the socket it reads through'
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': 42, 'REDIS_URL': 'r://x'})
@@ -1235,3 +1238,346 @@ def test_e048_is_silent_on_anything_that_is_not_a_3_x_path(routers):
         found = [message for message in check_settings() if message.id == 'django_aiogram.E048']
 
     assert found == [], f'E048 reported {[message.msg for message in found]} for {routers}'
+
+
+@pytest.mark.parametrize(
+    ('broker', 'extra', 'names'),
+    [
+        ('django_aiogram.broker.redis_list.RedisListBroker', {}, 'REDIS_TIMEOUT'),
+        (
+            'django_aiogram.broker.kafka.KafkaBroker',
+            {'KAFKA_BOOTSTRAP': 'localhost:9092', 'KAFKA_TOPIC': 'tg'},
+            'KAFKA_TIMEOUT',
+        ),
+        (
+            'django_aiogram.broker.rabbitmq.RabbitMQBroker',
+            {'RABBITMQ_URL': 'amqp://guest:guest@localhost:5672/', 'RABBITMQ_QUEUE': 'tg'},
+            'RABBITMQ_TIMEOUT',
+        ),
+    ],
+    ids=['redis list', 'kafka', 'rabbitmq'],
+)
+def test_w004_names_the_deadline_of_the_configured_transport(broker, extra, names):
+    """The hint has to name a setting the deployment actually has.
+
+    Until #41 the cap weighed `REDIS_TIMEOUT` whichever transport was configured, so a Kafka
+    deployment was told to raise a setting it does not read — and, worse, had its poll shortened
+    by it: measured, `REDIS_TIMEOUT: 2` capped a 30-second `KAFKA_TIMEOUT` at one second.
+
+    Both directions here. The named setting has to be the configured transport's, and the Redis
+    one must not appear on a transport that never reads it.
+    """
+    settings = {
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'BROKER': broker,
+        'BLPOP_TIMEOUT': 30,
+        'HEARTBEAT_INTERVAL': 60,
+        names: 5,
+        **extra,
+    }
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.W004']
+
+    assert len(found) == 1, f'W004 reported {len(found)} problems on {broker}'
+    assert names in (found[0].hint or ''), found[0].hint
+    assert 'which the consumer caps at 4' in found[0].msg, found[0].msg
+    if names != 'REDIS_TIMEOUT':
+        assert 'REDIS_TIMEOUT' not in (found[0].hint or ''), f'the hint names a Redis setting: {found[0].hint}'
+
+
+def test_w004_is_silent_when_the_transport_deadline_leaves_room():
+    """The rule reports a cap the consumer applies, so a setting under the cap is not a finding.
+
+    On Kafka with its own timeout at 30 the cap is 29, and `BLPOP_TIMEOUT` at 5 is under it — where
+    the same configuration used to be reported, and capped, against `REDIS_TIMEOUT`.
+
+    Which is why `REDIS_TIMEOUT` is **2** here rather than left out: at its default of 10 the old
+    cap was 9, above the 5 being asked for, so the rule was silent before the fix as well and the
+    case proved nothing. At 2 the old cap is 1, and a `BLPOP_TIMEOUT` of 5 was reported.
+    """
+    settings = {
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'REDIS_TIMEOUT': 2,
+        'BROKER': 'django_aiogram.broker.kafka.KafkaBroker',
+        'KAFKA_BOOTSTRAP': 'localhost:9092',
+        'KAFKA_TOPIC': 'tg',
+        'KAFKA_TIMEOUT': 30,
+        'BLPOP_TIMEOUT': 5,
+        'HEARTBEAT_INTERVAL': 60,
+    }
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.W004']
+
+    assert found == [], f'W004 reported {[message.msg for message in found]} with room to spare'
+
+
+class BrokerWithNoDeadline(RedisListBroker):
+    """A broker somebody wrote that never says what bounds one of its calls."""
+
+    CALL_TIMEOUT_OPTION = ''
+
+
+class BrokerNamingAnOptionItDoesNotHave(RedisListBroker):
+    """And one that names an option it does not declare, which is the same gap one step later."""
+
+    CALL_TIMEOUT_OPTION = 'SOME_OTHER_TIMEOUT'
+
+
+class BrokerNeedingMoreThanTheRuleAsks(RedisListBroker):
+    """A broker of somebody's own whose transport needs more of `REDIS_TIMEOUT` than `E030` does.
+
+    `E030` accepts any integer from 2 up, so a value this refuses is one that rule reports nothing
+    about — which is the whole point of the case that uses this.
+    """
+
+    _FLOOR = 5
+
+    @classmethod
+    def call_timeout(cls) -> float:
+        timeout = super().call_timeout()
+        if timeout < cls._FLOOR:
+            msg = f"TELEGRAM_BOT['REDIS_TIMEOUT'] is {timeout}, and this transport needs {cls._FLOOR} or more."
+            raise ImproperlyConfigured(msg)
+        return timeout
+
+
+@pytest.mark.parametrize(
+    'broker',
+    ['tests.test_checks.BrokerWithNoDeadline', 'tests.test_checks.BrokerNamingAnOptionItDoesNotHave'],
+    ids=['declares nothing', 'names what it does not declare'],
+)
+def test_e047_reports_a_broker_that_cannot_name_its_call_deadline(broker):
+    """The seam needs the name, and without it the failure lands as a `KeyError` somewhere else.
+
+    `W004` quotes that name and the consumer caps its reads by the number behind it, so a broker
+    that does not declare it is incomplete rather than merely unusual — and `option('')` raises
+    `KeyError`, which would surface out of whichever rule asked first.
+    """
+    with override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'BROKER': broker}):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.E047']
+
+    assert len(found) == 1, f'E047 reported {len(found)} problems for {broker}'
+    assert 'declares no call deadline' in found[0].msg, found[0].msg
+    assert 'CALL_TIMEOUT_OPTION' in found[0].msg, found[0].msg
+
+
+@pytest.mark.parametrize(
+    'broker',
+    ['tests.test_checks.BrokerWithNoDeadline', 'tests.test_checks.BrokerNamingAnOptionItDoesNotHave'],
+    ids=['declares nothing', 'names what it does not declare'],
+)
+def test_the_checks_survive_a_broker_that_cannot_name_its_call_deadline(broker):
+    """`manage.py check` has to answer, and `W004` must not be what stops it.
+
+    A rule about `BLPOP_TIMEOUT` reaching `option('')` would raise `KeyError` out of the whole
+    run — every other finding lost with it, on a configuration one of those findings is about.
+    """
+    with override_settings(
+        TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'BROKER': broker, 'BLPOP_TIMEOUT': 300}
+    ):
+        reported = check_settings()
+
+    assert [message for message in reported if message.id == 'django_aiogram.E047'], 'E047 said nothing'
+    assert [message for message in reported if message.id == 'django_aiogram.W004'] == [], (
+        'W004 reported a cap it cannot compute'
+    )
+
+
+@pytest.mark.parametrize(
+    ('broker', 'option'),
+    [
+        ('django_aiogram.broker.rabbitmq.RabbitMQBroker', 'RABBITMQ_TIMEOUT'),
+        ('django_aiogram.broker.kafka.KafkaBroker', 'KAFKA_TIMEOUT'),
+    ],
+)
+@pytest.mark.parametrize('value', ['', 'abc', 0, -1], ids=repr)
+def test_e047_reports_a_deadline_the_transport_refuses(broker, option, value):
+    """A deadline that cannot be one passed every rule, and the transport refused it at first send.
+
+    Nothing owned the type of a transport's own deadline: `REDIS_TIMEOUT` has `E030` because it
+    sits in the package-wide table, and the other three sit with their transports where no rule
+    reached them. So `RABBITMQ_TIMEOUT='abc'` was a clean `manage.py check` and a `ValueError` out
+    of the first publish, naming `float` rather than the setting.
+
+    Reported by whichever rule owns `BROKER`, because the deadline is part of what a transport has
+    to supply -- and ungated by `ENABLED`, since it is arithmetic over settings that needs no
+    driver, and refused in the web tier exactly as in the worker.
+    """
+    settings = {
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'BROKER': broker,
+        'RABBITMQ_URL': 'amqp://localhost',
+        'RABBITMQ_QUEUE': 'tg',
+        'KAFKA_BOOTSTRAP': 'localhost:9092',
+        'KAFKA_TOPIC': 'tg',
+        option: value,
+    }
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.E047']
+
+    assert len(found) == 1, f'E047 reported {len(found)} problems for {option}={value!r}'
+    assert option in found[0].msg, found[0].msg
+    assert 'call deadline is unusable' in found[0].msg, found[0].msg
+
+
+def test_one_rule_reports_a_deadline_that_has_a_rule_of_its_own():
+    """`REDIS_TIMEOUT` is guarded by `E030`, so `E047` says nothing about the same value.
+
+    Two errors about one setting sends the reader looking for two problems, and this is the
+    convention `W004` already states from the other side -- it stays silent because "E014, E023 and
+    E030 own the type complaints". The rule asks the registry rather than carrying a list of names,
+    so the day `REDIS_TIMEOUT` leaves the package-wide table with its own rule (#23), this one
+    picks it up.
+    """
+    settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'REDIS_TIMEOUT': 'five'}
+    with override_settings(TELEGRAM_BOT=settings):
+        reported = {str(message.id) for message in check_settings()}
+
+    assert 'django_aiogram.E030' in reported, 'the rule that owns REDIS_TIMEOUT said nothing'
+    assert 'django_aiogram.E047' not in reported, 'E047 reported a setting another rule owns'
+
+
+def test_the_ceiling_keeps_both_bounds_when_one_name_answers_for_both():
+    """A broker may name `HEARTBEAT_INTERVAL` as its own deadline option, and then the two are one.
+
+    Legal, because `Broker.option` refuses only a *differing* default, and reachable as soon as the
+    broker overrides `call_timeout()` to return something other than the setting it names. Keyed by
+    option name, the deadline entry then replaced the heartbeat entry and the larger of the two won:
+    a heartbeat of 2 against a deadline of 100 capped the read at 99, so the consumer waits its own
+    heartbeat out and is reaped while healthy — which is the failure this ceiling exists to prevent.
+
+    The name is asserted once, too: the hint has to read as one setting, not the same one twice.
+    """
+    with override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'HEARTBEAT_INTERVAL': 2}):
+        ceiling = take_ceiling('HEARTBEAT_INTERVAL', 100.0)
+
+    assert ceiling.seconds == 2, f'the heartbeat bound was lost: {ceiling}'
+    assert ceiling.bound_by == ('HEARTBEAT_INTERVAL',), f'one setting named twice: {ceiling.bound_by}'
+
+
+@pytest.mark.parametrize('enabled', [True, False], ids=['enabled', 'disabled'])
+def test_a_deadline_is_judged_without_the_transport_driver(monkeypatch, enabled):
+    """Nothing about the deadline needs the driver, so nothing about it may depend on having one.
+
+    The rule used to resolve the broker *with* its driver verified, and a missing one returned
+    first: the install line where the bot is enabled, and nothing at all where it is not. So a
+    deadline that cannot be one was reported only on a machine that happened to have the extra
+    installed — and never in a disabled web tier, which is where a settings typo is most likely to
+    sit unnoticed. It is also why the cases below this one passed here and failed on a CI leg that
+    installs one driver, which is the shape of green that means nothing.
+
+    `find_spec` is patched rather than pika uninstalled — the suite needs the driver for everything
+    else, and a case that only answers on a machine without it is the defect this one is about. On
+    `importlib.util` itself, since the registry imports it inside the function that asks.
+    """
+    monkeypatch.setattr('importlib.util.find_spec', lambda name, *args: None if name == 'pika' else True)
+    settings = {
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'ENABLED': enabled,
+        'BROKER': 'django_aiogram.broker.rabbitmq.RabbitMQBroker',
+        'RABBITMQ_URL': 'amqp://localhost',
+        'RABBITMQ_QUEUE': 'tg',
+        'RABBITMQ_TIMEOUT': 'abc',
+    }
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.E047']
+
+    assert len(found) == 1, f'E047 reported {[message.msg for message in found]}'
+    assert 'call deadline is unusable' in found[0].msg, found[0].msg
+    assert 'RABBITMQ_TIMEOUT' in found[0].msg, found[0].msg
+
+
+def test_e047_reports_a_deadline_only_its_own_transport_refuses():
+    """Standing aside for `E030` must mean "it is reporting this", not "it exists".
+
+    A broker somebody wrote can name `REDIS_TIMEOUT` — the two Redis transports do — and need more
+    of it than `E030` asks for, which is any integer from 2 up. Suppressing on the name alone left
+    a 3 that this broker refuses unreported by every rule, and refused by the transport the first
+    time it read the setting.
+    """
+    settings = {
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'REDIS_TIMEOUT': 3,
+        'BROKER': 'tests.test_checks.BrokerNeedingMoreThanTheRuleAsks',
+    }
+    with override_settings(TELEGRAM_BOT=settings):
+        reported = check_settings()
+
+    found = [message for message in reported if message.id == 'django_aiogram.E047']
+    assert len(found) == 1, f'E047 reported {[message.msg for message in found]}'
+    assert 'needs 5 or more' in found[0].msg, found[0].msg
+    assert [message for message in reported if message.id == 'django_aiogram.E030'] == [], (
+        'E030 reported a value it accepts, so this case proves nothing about the suppression'
+    )
+
+
+@pytest.mark.parametrize(
+    ('broker', 'option'),
+    [
+        ('django_aiogram.broker.rabbitmq.RabbitMQBroker', 'RABBITMQ_TIMEOUT'),
+        ('django_aiogram.broker.kafka.KafkaBroker', 'KAFKA_TIMEOUT'),
+    ],
+)
+def test_the_checks_survive_a_deadline_the_transport_refuses(broker, option):
+    """And the run still answers: `W004` reads the same number, and it must not be what raises."""
+    settings = {
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'BROKER': broker,
+        'RABBITMQ_URL': 'amqp://localhost',
+        'RABBITMQ_QUEUE': 'tg',
+        'KAFKA_BOOTSTRAP': 'localhost:9092',
+        'KAFKA_TOPIC': 'tg',
+        'BLPOP_TIMEOUT': 300,
+        option: 'abc',
+    }
+    with override_settings(TELEGRAM_BOT=settings):
+        reported = check_settings()
+
+    found = [message for message in reported if message.id == 'django_aiogram.E047']
+    assert len(found) == 1, f'E047 reported {[message.msg for message in found]}'
+    # the message and not merely the id: on a machine without the driver this rule has another
+    # finding to make, and asserting the id alone passed on exactly that machine while proving
+    # nothing about the deadline
+    assert 'call deadline is unusable' in found[0].msg, found[0].msg
+    assert [message for message in reported if message.id == 'django_aiogram.W004'] == [], (
+        'W004 reported a cap it cannot compute'
+    )
+
+
+@pytest.mark.parametrize(
+    ('timeout', 'cap'),
+    # 2.6 rather than 2.5 alone: `round(2.5)` is 2 in Python, so rounding and flooring agree
+    # there and the case could not tell them apart. At 2.6 they differ -- flooring allows one
+    # whole second inside the deadline, rounding would allow two and leave 0.6 of a second
+    [('0.5', 1), (2.5, 1), (2.6, 1), (30, 29)],
+    ids=['a fraction below one', 'a fraction at the tie', 'a fraction above the tie', 'a whole number'],
+)
+def test_w004_reads_a_fractional_transport_deadline(timeout, cap):
+    """`KAFKA_TIMEOUT` accepts fractions, and reading it as an integer got both ends wrong.
+
+    `0.5` raised out of `int()`, so the rule fell silent on a deployment whose poll is capped at a
+    second; `2.5` became `2`, so the rule reported a ceiling one second away from the one the
+    consumer applies. The floor is deliberate in the other direction: 2.5 allows one whole second
+    inside the deadline, not two.
+    """
+    settings = {
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'BROKER': 'django_aiogram.broker.kafka.KafkaBroker',
+        'KAFKA_BOOTSTRAP': 'localhost:9092',
+        'KAFKA_TOPIC': 'tg',
+        'KAFKA_TIMEOUT': timeout,
+        'BLPOP_TIMEOUT': 300,
+        'HEARTBEAT_INTERVAL': 600,
+    }
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.W004']
+
+    assert len(found) == 1, f'W004 said nothing about KAFKA_TIMEOUT={timeout!r}'
+    assert f'caps at {cap}.' in found[0].msg, found[0].msg

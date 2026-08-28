@@ -16,7 +16,7 @@ import socket
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, fields
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from django.core.checks import CheckMessage, Error, Info
 from django.core.checks import Warning as CheckWarning
@@ -32,8 +32,12 @@ from django_aiogram.config.enums import (
     UpdateMode,
     choices,
 )
-from django_aiogram.config.settings import SETTINGS_NAME, blpop_ceiling, coerce_bool, conf
+from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf, take_ceiling
 from django_aiogram.eventlog.events import known_kinds
+
+if TYPE_CHECKING:  # the seam is a type here and nothing more: importing it at run time would
+    # pull the broker package into every process that only runs the checks
+    from django_aiogram.broker.base import Broker
 
 MODE_CHOICES = choices(UpdateMode)
 SERIALIZER_CHOICES = choices(SerializerKind)
@@ -288,6 +292,53 @@ def _readable_serializer(key: str) -> list[Problem]:
     ]
 
 
+def _the_deadline_the_broker_declares(resolved: 'type[Broker]', key: str) -> list[Problem]:
+    """Report a transport that cannot answer how long one of its calls may take.
+
+    Its own function so `E047` keeps one return per finding without growing past what a reader can
+    follow, and because the two findings are one subject: the name, and the number behind it.
+
+    ``key`` is the setting the calling rule is about, and it is here only to be excluded from the
+    rules asked below -- a broker naming it as its own deadline option would otherwise re-enter this
+    rule for ever.
+    """
+    named = resolved.CALL_TIMEOUT_OPTION
+    if not named or named not in resolved.OPTIONS:
+        return [
+            Problem(
+                f'is {resolved.__name__}, which declares no call deadline: CALL_TIMEOUT_OPTION is {named!r}.',
+                hint=(
+                    'A Broker names the one of its own options that bounds a single call, so '
+                    "W004 can quote it and the consumer can cap its reads by it -- 'REDIS_TIMEOUT' "
+                    'on the Redis transports, and each of the others its own. See the Delivery '
+                    'page for what a transport has to declare.'
+                ),
+            )
+        ]
+    try:
+        resolved.call_timeout()
+    except (ImproperlyConfigured, TypeError, ValueError) as refused:
+        # one rule per setting, which is the convention `W004` states from the other side: a
+        # deadline sitting in the package-wide table has a rule of its own -- `REDIS_TIMEOUT` has
+        # `E030` -- and two errors about one value make the reader look for two problems. But the
+        # rules are *asked*, not assumed: a broker of somebody's own can name `REDIS_TIMEOUT` and
+        # refuse a 3 that `E030` accepts, and suppressing on the name alone left that silent until
+        # the transport first used it. The registry rather than a list of names here, so this picks
+        # a setting up on the day #23 moves it out of that table and its own rule goes with it
+        if any(check.run() for check in CHECKS if check.key == named and check.key != key):
+            return []
+        return [
+            Problem(
+                f'is {resolved.__name__}, whose call deadline is unusable: {refused}',
+                hint=(
+                    'It bounds one call to the transport, W004 quotes it, and the consumer caps '
+                    'each take by it — see the page for your transport for the range it accepts.'
+                ),
+            )
+        ]
+    return []
+
+
 def _a_usable_broker(key: str) -> list[Problem]:
     """Refuse a transport that cannot be reached before anything tries to send through it.
 
@@ -298,21 +349,41 @@ def _a_usable_broker(key: str) -> list[Problem]:
     and hearing `ModuleNotFoundError: redis` from inside a producer is the whole point of this
     rule.
 
-    Three findings, and each says what to do rather than what happened: the setting is empty;
-    it names something that is not a broker; or the driver behind it is absent, in which case
-    the hint carries the install line for that extra.
+    Each finding says what to do rather than what happened: the setting is empty; it names
+    something that is not a broker; the driver behind it is absent, in which case the hint carries
+    the install line for that extra; or the transport's own required settings are unset.
 
-    Two of those are gated on the bot being enabled, for the same reason `W002` is: a process
-    with `ENABLED` off sends nothing, so asking it to install a driver it will never call is an
-    error nobody can act on except by installing it anyway. The gate is a trade, not a proof --
-    a disabled process that reads `queue_depth` *does* reach the transport, and hears the
-    `ModuleNotFoundError` this rule exists to prevent. Documented rather than checked, because
-    firing here would warn every image build and migration container that never reads a depth. The name itself is
-    judged either way — nothing legitimately names a non-broker, and a typo in the web tier is
-    the same typo in the worker, where it would fail.
+    The driver and the required settings are gated on the bot being enabled, for the same reason
+    `W002` is: a process with `ENABLED` off sends nothing, so asking it to install a driver it will
+    never call is an error nobody can act on except by installing it anyway. Which is also why the
+    driver is verified *after* everything this rule can judge without one: a disabled process
+    returns early on a missing driver, and a broken deadline in that process went unreported by
+    anything -- as it did in a process that simply had not installed the extra yet. The gate is a trade,
+    not a proof -- a disabled process that reads `queue_depth` *does* reach the transport, and
+    hears the `ModuleNotFoundError` this rule exists to prevent. Documented rather than checked,
+    because firing here would warn every image build and migration container that never reads a
+    depth. The name itself is judged either way — nothing legitimately names a non-broker, and a
+    typo in the web tier is the same typo in the worker, where it would fail.
 
     Nothing here imports the driver — the registry checks its own table of shipped brokers
     before importing anything, so an absent one is named rather than discovered by traceback.
+    Nothing here *needs* the driver either, which is why it is verified last: see below.
+
+    Then the call deadline the seam is built on, in two more findings. `CALL_TIMEOUT_OPTION` unset,
+    or naming an option the broker does not declare -- the only finding here about a broker somebody
+    wrote, and without it the failure lands as a `KeyError` out of `option('')`, in whichever rule
+    asks first. And a deadline that cannot be one: `RABBITMQ_TIMEOUT` was neither a number nor
+    positive on a configuration that passed every rule, and the transport then refused to build a
+    channel at the first send. `W004` quotes that name and the consumer caps its reads by that
+    number, so both belong to whichever rule owns `BROKER`.
+
+    The second of those stands aside where the option it names has a rule of its own that is already
+    reporting the value -- `REDIS_TIMEOUT` has `E030`, because it sits in the package-wide table.
+    Already *reporting*, and not merely present: a broker of somebody's own can name that setting
+    and refuse a value `E030` accepts.
+
+    Neither is gated on `ENABLED`: both are arithmetic over settings that needs no driver, and a
+    deadline the transport refuses is refused in every process that reaches it.
     """
     from django_aiogram.broker.exceptions import (  # noqa: PLC0415 - only when the checks run
         BrokerDependencyError,
@@ -321,8 +392,19 @@ def _a_usable_broker(key: str) -> list[Problem]:
     from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
 
     enabled = _bot_is_enabled()
+    # the driver is verified separately below, so everything this rule can judge without one is
+    # judged in every environment. Resolving *with* the check first meant the deadline findings
+    # were reachable only where the extra happened to be installed -- and never at all in a
+    # disabled process, which returns early on a missing driver by design
     try:
-        resolved = broker_class()
+        resolved = broker_class(verify_driver=False)
+    except BrokerNotConfiguredError as wrong:
+        return [Problem(f'is unusable: {wrong}', hint='Name a Broker subclass by dotted path.')]
+    deadline = _the_deadline_the_broker_declares(resolved, key)
+    if deadline:
+        return deadline
+    try:
+        broker_class()
     except BrokerDependencyError as missing:
         if not enabled:
             return []
@@ -332,8 +414,6 @@ def _a_usable_broker(key: str) -> list[Problem]:
                 hint=f'pip install "django-aiogram[{missing.extra}]"',
             )
         ]
-    except BrokerNotConfiguredError as wrong:
-        return [Problem(f'is unusable: {wrong}', hint='Name a Broker subclass by dotted path.')]
     required = [option for option in resolved.required() if not str(conf.get(option) or '').strip()]
     if required and enabled:
         return [
@@ -567,12 +647,30 @@ def _a_pop_inside_the_deadline(key: str) -> list[Problem]:
     whether or not that was the term doing the binding. It now reports the cap the
     consumer actually computes, from the same helper the consumer uses, and names
     whichever setting produced it.
+
+    And the deadline term comes from the **configured transport**, which is #41: it was
+    ``REDIS_TIMEOUT`` whichever broker was running, so this hint told a Kafka deployment to raise
+    a setting it does not have. The broker is asked for the name and the number without being
+    built — ``call_timeout()`` is a classmethod for that reason, since building one would import
+    its driver, which is `E047`'s business rather than this rule's.
     """
+    from django_aiogram.broker.exceptions import BrokerError  # noqa: PLC0415 - only when the checks run
+    from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
+
     try:
         asked = int(conf[key])
-        ceiling = blpop_ceiling()
+        # without the driver check: the cap is arithmetic over settings, and staying silent
+        # because an extra is not installed would drop a settings warning on every machine that
+        # has not installed it. `E047` owns the driver, with the install line
+        broker = broker_class(verify_driver=False)
+        ceiling = take_ceiling(broker.CALL_TIMEOUT_OPTION, broker.call_timeout())
     except (ImproperlyConfigured, TypeError, ValueError):
         return []  # E014, E023 and E030 own the type complaints
+    except (BrokerError, KeyError):
+        # E047 owns every complaint about which transport is configured, including a broker that
+        # declares no deadline option -- `option('')` raises `KeyError`, and a rule about
+        # `BLPOP_TIMEOUT` must not be the thing that takes `manage.py check` down
+        return []
     if asked <= ceiling.seconds:
         return []
     named = ' and '.join(f"{SETTINGS_NAME}['{key}']" for key in ceiling.bound_by)

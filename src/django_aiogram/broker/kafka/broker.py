@@ -72,6 +72,8 @@ class KafkaBroker(Broker):
 
     #: this transport's own settings. The servers and the topic are required for the same
     #: reason the AMQP url and queue are: neither has a default worth baking in
+    CALL_TIMEOUT_OPTION: ClassVar[str] = 'KAFKA_TIMEOUT'
+
     OPTIONS: ClassVar[Mapping[str, Any]] = {
         'KAFKA_BOOTSTRAP': REQUIRED,
         'KAFKA_TOPIC': REQUIRED,
@@ -118,18 +120,25 @@ class KafkaBroker(Broker):
         """Name the servers to reach, as librdkafka spells them."""
         return str(self.option('KAFKA_BOOTSTRAP'))
 
-    def _timeout(self) -> float:
+    @classmethod
+    def call_timeout(cls) -> float:
         """How long any single call may take before the broker is unreachable.
 
         Refused outside what librdkafka accepts for ``socket.timeout.ms``: this number becomes
         that setting, so a value outside the range makes building a client fail with the
         driver's own complaint about a key the reader never wrote. Said here instead, naming the
         setting and the bound.
+
+        Overriding the base classmethod rather than sitting beside it, so the validation is in the
+        one place both readers go through: `W004` asks the class, the consumer asks
+        :attr:`call_ceiling`, and a value librdkafka would refuse is reported to either.
+
+        Narrowing the base rule rather than replacing it, which is also how a non-numeric
+        ``KAFKA_TIMEOUT`` stopped raising a bare `ValueError` naming nothing.
         """
-        # no `or 10` here: the default is declared in `OPTIONS`, so `option` already answers
-        # with it — and `or` would read a configured 0 as unset and hand back 10, which is the
-        # one value that most needs to reach the bound below
-        timeout = float(str(self.option('KAFKA_TIMEOUT')))
+        # through the base, which owns reading the number and refusing one that cannot be a
+        # deadline at all; this narrows the range to what the driver takes
+        timeout = super().call_timeout()
         if not _SOCKET_FLOOR <= timeout <= _SOCKET_CEILING:
             msg = (
                 f"{SETTINGS_NAME}['KAFKA_TIMEOUT'] is {timeout}, which librdkafka will not "
@@ -138,6 +147,10 @@ class KafkaBroker(Broker):
             )
             raise ImproperlyConfigured(msg)
         return timeout
+
+    def _timeout(self) -> float:
+        """Return the same number, for the callers inside this class that read it per call."""
+        return type(self).call_timeout()
 
     def _consumer(self) -> 'Consumer':
         """Reach this thread's consumer, subscribed on first use."""
@@ -528,7 +541,7 @@ class KafkaBroker(Broker):
         is reported here as well — a ceiling read from a setting nobody can use is a number
         the join deadline would then be derived from.
         """
-        return self._timeout()
+        return type(self).call_timeout()
 
     @property
     def crash_safe(self) -> bool:

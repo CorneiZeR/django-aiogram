@@ -60,7 +60,13 @@ python -m pytest -q --ds=tests.db_settings tests/db
 ```
 
 The extra is named on purpose — the driver is an extra since 4.0, and CI names it in
-every job for the same reason.
+every job for the same reason. **Name only the extras that job needs, and keep a
+`.[redis]`-only environment to run the gate in.** A venv carrying `rabbitmq` and `kafka`
+as well — which anyone doing integration work ends up with — takes a different branch
+through the checks: `E047` reports a missing driver, so a case about anything reported
+*after* that finding passes locally and fails on the unit legs, which install one driver.
+That has cost a red build. The integration suite and the conformance cases for the other
+transports need their extras; the gate does not.
 
 
 Those gate every pull request. `pytest` needs no Redis and no token.

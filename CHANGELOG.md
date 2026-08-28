@@ -222,6 +222,76 @@ Entries land here as the work does; nothing below is released.
 
 ### Fixed
 
+- **The cap on a blocking take comes from the transport that is being read, and `W004` names it.**
+  The consumer weighs `BLPOP_TIMEOUT` against `HEARTBEAT_INTERVAL` and a whole second inside the
+  floored call deadline — and that deadline was `REDIS_TIMEOUT` whichever transport was configured. So a setting
+  three of the four never read shortened their reads: measured on Kafka with `KAFKA_TIMEOUT = 30`,
+  `REDIS_TIMEOUT: 2` capped the poll at **one second**, and `W004` told the operator to raise
+  `REDIS_TIMEOUT` — a setting their deployment does not have. Now the same configuration caps at 10
+  seconds, bound by `HEARTBEAT_INTERVAL`, and `REDIS_TIMEOUT` moves nothing.
+
+  The other direction mattered too: a transport whose own timeout was *lower* than the Redis one
+  got a cap looser than it allows, so a read could outlast `Broker.call_ceiling` — the number
+  `start_tgbot` derives its join from, which is 3.1.0's B3 through the last door it had.
+
+  `Broker.CALL_TIMEOUT_OPTION` names each transport's deadline setting and `Broker.call_timeout()`
+  reads it, both on the class, because `W004` has to answer without building a broker — building
+  one imports its driver, and a missing driver is `E047`'s report to make rather than this rule's.
+  The conformance suite holds the name to the number in both directions, so the setting `W004`
+  quotes cannot drift from the one the cap uses. `blpop_ceiling()` is `take_ceiling()` with the
+  deadline passed in, and `PopCeiling` is `TakeCeiling`: three of the four transports issue no pop.
+
+  The deadline is a **float** throughout, because `KAFKA_TIMEOUT` accepts fractions: read as an
+  integer, `0.5` raised and left `W004` silent on a deployment whose poll is capped at a second,
+  and `2.5` reported a ceiling one second away from the one the consumer applies. The cap floors
+  it, so `2.6` allows one whole second inside the deadline rather than two.
+
+  `call_timeout()` is also the only reader, and refuses what cannot be a deadline: not a number,
+  or not above zero, or not finite. `RabbitMQBroker` read `RABBITMQ_TIMEOUT` a second time with an
+  `or 10` on it, which fires on exactly the values a project writes and `or` treats as unset — so a
+  configured `0` reached pika as ten while `W004` and the consumer's cap were computed from zero.
+  Kafka's range check narrows the same reader instead of replacing it, which is how a non-numeric
+  `KAFKA_TIMEOUT` stopped raising a bare `ValueError` naming nothing.
+
+  On RabbitMQ that number now wins over a `blocked_connection_timeout` written into `RABBITMQ_URL`,
+  where the URL used to win — the one pika parameter the package takes off a project, and for
+  arithmetic rather than taste: the consumer's take is capped by `RABBITMQ_TIMEOUT` and
+  `start_tgbot` derives its join from it, so a URL overriding it left both describing a deadline no
+  call carried. Measured, a URL saying 60 against a setting of 2 left the join at 3 seconds while a
+  blocked publish could sit for a minute. Every other parameter in the URL is still the project's,
+  `socket_timeout` included — measured, that one does not bound a take: an idle 4-second `consume`
+  returns empty under a `socket_timeout` of 1.
+
+  The ceiling weighs its two bounds as pairs rather than as a mapping keyed by option name. A
+  broker may name `HEARTBEAT_INTERVAL` as its own deadline option — `option` refuses only a
+  *differing* default — and with an override returning a number other than the setting it names,
+  the deadline entry replaced the heartbeat entry and the larger of the two won: a heartbeat of 2
+  against a deadline of 100 capped the read at 99, so the consumer waits its own heartbeat out and
+  is reaped while healthy. `bound_by` deduplicates, because the two names can be one name.
+
+  The driver is verified **last**, after everything this rule can judge without one. Resolving the
+  broker with the driver checked first meant the deadline findings were reachable only where the
+  extra happened to be installed — and never at all in a process with `ENABLED` off, which returns
+  early on a missing driver by design. That is where a settings typo is most likely to sit
+  unnoticed, and it was also why two cases passed on a machine with every extra installed and
+  failed on the unit legs, which install one.
+
+  Every page that wrote the cap out was writing `<deadline> - 1`, which is false for a fractional
+  one — and a test now holds prose to the helper by refusing a statement of the cap without its
+  floor, deliberately grep-shaped: what went wrong was the formula being written a fourth time, and
+  a test that computed the cap would have agreed with all four.
+
+  `E047` grew two findings to match, neither gated on `ENABLED`: a broker declaring no
+  `CALL_TIMEOUT_OPTION`, or naming an option it does not declare — the seam needs that name, and
+  without this the gap surfaced as a `KeyError` out of whichever rule asked first, taking every
+  other finding with it — and a deadline the transport refuses, which until now passed every rule
+  and failed at the first send. `REDIS_TIMEOUT` had `E030` for this because it sits in the
+  package-wide table; the other three sat with their transports where no rule reached them. It
+  stands aside where the option has a rule of its own that is *already reporting* the value, asking
+  the registry rather than matching a name — a broker somebody wrote can name `REDIS_TIMEOUT` and
+  need more of it than `E030`'s minimum of 2, and suppressing on the name alone left that value
+  unreported by everything until the transport first read it.
+
 - **The Kafka producer states its acknowledgement level instead of inheriting one.** `publish`
   waits for the broker rather than returning once librdkafka has queued the record, and the
   guarantee that rests on `acks` was whatever the driver defaulted to — a decision nobody in this

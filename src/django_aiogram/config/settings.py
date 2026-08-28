@@ -202,48 +202,68 @@ conf = Settings()
 
 
 @dataclass(frozen=True)
-class PopCeiling:
-    """How long a blocking pop may actually wait, and which settings decided that.
+class TakeCeiling:
+    """How long a blocking take may actually wait, and which settings decided that.
 
-    ``bound_by`` is a tuple because the limits can tie: ``HEARTBEAT_INTERVAL`` at 9
-    beside ``REDIS_TIMEOUT`` at 10 both produce 9, and naming one of them sends an
-    operator to raise it and meet the same warning again, unchanged.
+    ``bound_by`` is a tuple because the limits can tie: ``HEARTBEAT_INTERVAL`` at 9 beside a
+    transport deadline of 10 both produce 9, and naming one of them sends an operator to raise it
+    and meet the same warning again, unchanged.
+
+    Named for the *take* rather than for a pop: three of the four transports issue no pop at all,
+    and the setting an operator has to raise is whichever transport's deadline is in play.
     """
 
     seconds: int
     bound_by: tuple[str, ...]
 
 
-def blpop_ceiling() -> PopCeiling:
-    """Return the real cap on a blocking pop, which is not ``BLPOP_TIMEOUT`` alone.
+def take_ceiling(deadline_option: str, deadline: float) -> TakeCeiling:
+    """Return the real cap on a blocking take, which is not ``BLPOP_TIMEOUT`` alone.
 
-    Two bounds are weighed here and the smallest wins: the ``HEARTBEAT_INTERVAL`` — a
-    worker that popped for longer than that would let its own heartbeat key expire and
-    look dead — and one second inside ``REDIS_TIMEOUT``, so the pop returns before the
-    read deadline fires. The configured ``BLPOP_TIMEOUT`` is the third, applied by the
-    caller against this ceiling, which is why ``bound_by`` can never name it.
+    Two bounds are weighed here and the smallest wins: the ``HEARTBEAT_INTERVAL`` — a worker that
+    waited longer than that would let its own heartbeat expire and look dead — and one second
+    inside the **transport's own** call deadline, so the read returns before that deadline fires.
+    The configured ``BLPOP_TIMEOUT`` is the third, applied by the caller against this ceiling,
+    which is why ``bound_by`` can never name it.
 
-    One second inside ``REDIS_TIMEOUT`` is only possible from 2 upwards, which is what
-    ``E030``'s floor is for: at 1 the subtraction clamps back to 1, the pop's timeout
-    equals the read deadline, and every idle pop raises instead of returning empty.
+    The deadline is passed in rather than read here, and that is the whole of #41: it used to be
+    ``REDIS_TIMEOUT`` for every transport, so a Kafka deployment had its poll shortened by a
+    setting it never reads — measured, ``REDIS_TIMEOUT: 2`` capped a 30-second ``KAFKA_TIMEOUT``
+    at one second — and ``W004`` told the operator to raise a setting their deployment does not
+    have. The caller names the option so the hint can quote it.
 
-    Lives here rather than beside the consumer because ``checks.py`` needs it too, and
-    importing :mod:`django_aiogram.consumer.delivery` would pull in aiogram through
-    :mod:`django_aiogram.api` — which is the whole reason ``manage.py check``
-    costs nothing.
+    One second inside the deadline is only possible from 2 upwards, which is what ``E030``'s floor
+    is for: at 1 the subtraction clamps back to 1, the read's timeout equals the deadline, and
+    every idle read raises instead of returning empty.
 
-    ``bound_by`` is what makes a hint actionable: told only that the pop is capped, an
-    operator raises ``REDIS_TIMEOUT`` when it was the heartbeat that bound it — and
-    when the two tie, raising either one alone changes nothing at all.
+    Lives here rather than beside the consumer because ``checks.py`` needs it too, and importing
+    :mod:`django_aiogram.consumer.delivery` would pull in aiogram through
+    :mod:`django_aiogram.api` — which is the whole reason ``manage.py check`` costs nothing.
+
+    ``bound_by`` is what makes a hint actionable: told only that the read is capped, an operator
+    raises the transport deadline when it was the heartbeat that bound it — and when the two tie,
+    raising either one alone changes nothing at all. It can also name one setting rather than two,
+    because a broker is allowed to name ``HEARTBEAT_INTERVAL`` as its own deadline option.
     """
-    limits = {
-        'HEARTBEAT_INTERVAL': max(1, int(conf['HEARTBEAT_INTERVAL'])),
-        'REDIS_TIMEOUT': max(1, max(1, int(conf['REDIS_TIMEOUT'])) - 1),
-    }
-    seconds = min(limits.values())
+    # pairs and not a mapping: a broker may name `HEARTBEAT_INTERVAL` as its own deadline option --
+    # legal, since `option` only refuses a *differing* default -- and a key would then have the
+    # deadline overwrite the heartbeat. With an override returning a number other than the setting
+    # it names, that lost the smaller of the two: measured, a heartbeat of 2 against a deadline of
+    # 100 capped the read at 99, so the worker waits its own heartbeat out and is reaped while
+    # healthy, which is the one failure this ceiling exists to prevent
+    limits = (
+        ('HEARTBEAT_INTERVAL', max(1, int(conf['HEARTBEAT_INTERVAL']))),
+        # floored before the subtraction, so a fractional deadline cannot round *up* into a cap
+        # the transport will not honour: `KAFKA_TIMEOUT = 2.5` allows one whole second inside it,
+        # not two
+        (deadline_option, max(1, math.floor(max(1.0, deadline)) - 1)),
+    )
+    seconds = min(value for _, value in limits)
     # every setting sitting at the minimum, not the first one found: a tie means both
-    # have to move, and a hint naming one of them is a round trip that achieves nothing
-    return PopCeiling(seconds=seconds, bound_by=tuple(key for key, value in limits.items() if value == seconds))
+    # have to move, and a hint naming one of them is a round trip that achieves nothing.
+    # Deduplicated, because the two names can be one name
+    bound_by = tuple(dict.fromkeys(name for name, value in limits if value == seconds))
+    return TakeCeiling(seconds=seconds, bound_by=bound_by)
 
 
 def _reset_on_setting_change(

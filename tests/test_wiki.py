@@ -230,6 +230,29 @@ def test_the_upgrade_page_covers_the_version_being_shipped():
     )
 
 
+def test_every_documented_cap_formula_states_the_floor():
+    """A page writing the consumer's cap has to write the whole of it, floor included.
+
+    `take_ceiling` computes `min(HEARTBEAT_INTERVAL, floor(deadline) - 1)`, never below 1, and the
+    floor is not a rounding detail: two of the four transport deadlines accept fractions, so at
+    `KAFKA_TIMEOUT = 2.6` the raw subtraction states 1.6 where the consumer applies 1. Three pages
+    stated it that way and the suite could not tell, because nothing held prose to the helper.
+
+    A grep-shaped rule on purpose: what went wrong was a formula written out a fourth time, and any
+    test that computes the cap instead would have agreed with all four.
+    """
+    stated = [
+        (path.name, line)
+        for path in PAGES
+        for line in path.read_text(encoding='utf-8').splitlines()
+        if 'min(HEARTBEAT_INTERVAL' in line
+    ]
+    assert stated, 'no page states the cap any more, so this rule guards nothing'
+
+    without = [(name, line.strip()[:90]) for name, line in stated if 'floor(' not in line]
+    assert without == [], f'the cap is stated without its floor in: {without}'
+
+
 def test_home_and_sidebar_exist():
     assert (WIKI / 'Home.md').is_file()
     assert (WIKI / '_Sidebar.md').is_file()

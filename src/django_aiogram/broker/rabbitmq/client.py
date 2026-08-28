@@ -86,12 +86,19 @@ def channel_for_thread(url: str, queue: str, prefetch: int, blocked_timeout: flo
     # close is involved
     _drop_this_threads_connection()
     parameters = URLParameters(url)
-    if parameters.blocked_connection_timeout is None:
-        # pika leaves this unset, measured, and a broker that blocks the connection under
-        # resource pressure then blocks every synchronous call on it for ever. `publish` runs
-        # on request threads, so that is a web worker that never comes back. An explicit URL
-        # value wins: somebody who wrote one meant it
-        parameters.blocked_connection_timeout = blocked_timeout
+    # pika leaves this unset, measured, and a broker that blocks the connection under resource
+    # pressure then blocks every synchronous call on it for ever. `publish` runs on request
+    # threads, so that is a web worker that never comes back.
+    #
+    # Unconditionally, and this is the one connection parameter the package takes off a project:
+    # `RABBITMQ_TIMEOUT` is the number the consumer's take is capped by and the number the
+    # shutdown join is derived from, so a `blocked_connection_timeout` in the URL winning made
+    # both of those describe a deadline no call carried -- measured, a URL saying 60 against a
+    # setting of 2 left the join at 3 seconds while a blocked publish could sit for a minute.
+    # Everything else in the URL is still the project's, `socket_timeout` included: that one does
+    # not bound a take, measured -- an idle 4-second `consume` returns empty under a
+    # `socket_timeout` of 1
+    parameters.blocked_connection_timeout = blocked_timeout
     connection = BlockingConnection(parameters)
     try:
         channel = connection.channel()
