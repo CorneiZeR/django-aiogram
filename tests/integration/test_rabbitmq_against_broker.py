@@ -244,6 +244,10 @@ def test_a_blocked_connection_cannot_hold_a_call_for_ever(broker, amqp_url):
     connection with no timeout holds every synchronous call on it indefinitely — on a request
     thread, that is a web worker that never comes back. Asserted on the parameters the
     connection was built with, because the condition itself needs a broker under pressure.
+
+    Both halves of the precedence, because it is the one pika parameter the package takes off a
+    project and the reason is arithmetic rather than taste: `RABBITMQ_TIMEOUT` is what the take is
+    capped by and what the shutdown join is derived from.
     """
     from django_aiogram.broker.rabbitmq import client
 
@@ -254,12 +258,17 @@ def test_a_blocked_connection_cannot_hold_a_call_for_ever(broker, amqp_url):
         # parameters it was built with — measured, there is no public accessor for them
         assert client._local.connection._impl.params.blocked_connection_timeout == 3.0
 
+    # and the setting wins over the URL, which is the way round it did *not* go before 4.0. The
+    # consumer's take is capped by this number and `start_tgbot` derives its join from it, so a URL
+    # overriding it left both describing a deadline no call carried: measured, a URL saying 60
+    # against a setting of 2 left the join at 3 seconds while a blocked publish could sit for a
+    # minute. Every other pika parameter in the URL is still the project's
     explicit = f'{amqp_url}?blocked_connection_timeout=7'
     with override_settings(TELEGRAM_BOT={**settings_for(explicit), 'RABBITMQ_TIMEOUT': 3}):
         RabbitMQBroker().publish([payload(2)])
 
-        assert client._local.connection._impl.params.blocked_connection_timeout == 7.0, (
-            'a timeout written into the URL was overridden by the setting'
+        assert client._local.connection._impl.params.blocked_connection_timeout == 3.0, (
+            'a URL overrode the setting the take cap and the shutdown join are computed from'
         )
 
 

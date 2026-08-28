@@ -154,6 +154,14 @@ Nothing to change if you keep the defaults: all four default their own timeout t
 total is the 21 seconds it was. It matters the moment you raise one, and the setting to raise
 alongside it is the grace period, not `REDIS_TIMEOUT`.
 
+One consequence for RabbitMQ, and the only thing here that changes without you touching a setting:
+`RABBITMQ_TIMEOUT` now wins over a `blocked_connection_timeout` written into `RABBITMQ_URL`, where
+the URL used to win. Both of the numbers above are computed from the setting, so a URL overriding it
+left the take cap and the join describing a deadline no call carried — measured, a URL saying 60
+against a setting of 2 left the join at 3 seconds while a blocked publish could sit for a minute. If
+you set it in the URL, move the number to `RABBITMQ_TIMEOUT`; every other pika parameter in the URL
+is still yours, `socket_timeout` included, and that one does not bound a take.
+
 ## Rename what used to say Redis
 
 Five public names said Redis, in the four entries below, for two different reasons — and the

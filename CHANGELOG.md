@@ -253,6 +253,15 @@ Entries land here as the work does; nothing below is released.
   Kafka's range check narrows the same reader instead of replacing it, which is how a non-numeric
   `KAFKA_TIMEOUT` stopped raising a bare `ValueError` naming nothing.
 
+  On RabbitMQ that number now wins over a `blocked_connection_timeout` written into `RABBITMQ_URL`,
+  where the URL used to win — the one pika parameter the package takes off a project, and for
+  arithmetic rather than taste: the consumer's take is capped by `RABBITMQ_TIMEOUT` and
+  `start_tgbot` derives its join from it, so a URL overriding it left both describing a deadline no
+  call carried. Measured, a URL saying 60 against a setting of 2 left the join at 3 seconds while a
+  blocked publish could sit for a minute. Every other parameter in the URL is still the project's,
+  `socket_timeout` included — measured, that one does not bound a take: an idle 4-second `consume`
+  returns empty under a `socket_timeout` of 1.
+
   The ceiling weighs its two bounds as pairs rather than as a mapping keyed by option name. A
   broker may name `HEARTBEAT_INTERVAL` as its own deadline option — `option` refuses only a
   *differing* default — and with an override returning a number other than the setting it names,
