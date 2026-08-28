@@ -341,7 +341,10 @@ _CODECS: tuple[TypeCodec[Any], ...] = (
 )
 
 
-def encode(value: Any) -> Any:  # noqa: ANN401 - a queued call argument is arbitrary by nature
+# `object` going in, since this accepts whatever a project passes to a Telegram method and narrows
+# by `isinstance`. `Any` coming out is the honest half: the result is JSON-safe data whose shape
+# follows the input, and every caller hands it to `json.dumps` or back to `decode`
+def encode(value: object) -> Any:  # noqa: ANN401 - JSON-safe data whose shape follows the input
     """Turn an arbitrary aiogram call argument into JSON-safe data."""
     for codec in _CODECS:
         if codec.matches(value):
@@ -355,7 +358,7 @@ def encode(value: Any) -> Any:  # noqa: ANN401 - a queued call argument is arbit
     return value
 
 
-def decode(value: Any) -> Any:  # noqa: ANN401 - the mirror image of encode
+def decode(value: object) -> Any:  # noqa: ANN401 - the mirror image of encode
     """Reverse :func:`encode`."""
     if isinstance(value, dict):
         for codec in _CODECS:
@@ -403,7 +406,7 @@ class _TaggedEncoder(json.JSONEncoder):
     would break every caller that uses the two functions on their own.
     """
 
-    def default(self, o: Any) -> Any:  # noqa: ANN401 - a queued call argument is arbitrary by nature
+    def default(self, o: object) -> Any:  # noqa: ANN401 - what `json` asks of an encoder, and what it hands back
         """Tag what JSON cannot write, exactly as :func:`encode` would."""
         for codec in _CODECS:
             if codec.matches(o):

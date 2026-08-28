@@ -22,9 +22,11 @@ So this brackets every update with the reset, which is what
 """
 
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware
+from aiogram.types import TelegramObject
 from asgiref.sync import sync_to_async
 from django.db import close_old_connections
 
@@ -71,10 +73,12 @@ class DatabaseConnectionMiddleware(BaseMiddleware):
 
     async def __call__(
         self,
-        handler: Any,  # noqa: ANN401 - aiogram types this as a bare callable
-        event: Any,  # noqa: ANN401 - any TelegramObject, and this looks at none of it
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
         data: dict[str, Any],
-    ) -> Any:  # noqa: ANN401 - whatever the handler chain returns
+        # `Any` because `BaseMiddleware.__call__` declares it: this returns whatever the chain
+        # returned, and an override cannot promise the caller more than the chain does
+    ) -> Any:  # noqa: ANN401 - aiogram's own contract for the value passing through
         """Bracket the handler chain with the reset."""
         await reset_connections()
         try:

@@ -14,7 +14,7 @@ previous row for the same key is it.
 import logging
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -86,10 +86,11 @@ class RecordingMiddleware(BaseMiddleware):
 
     async def __call__(
         self,
-        handler: Any,  # noqa: ANN401 - aiogram types this as a bare callable
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
         event: TelegramObject,
         data: dict[str, Any],
-    ) -> Any:  # noqa: ANN401 - whatever the handler chain returns
+        # `Any` because `BaseMiddleware.__call__` declares it: see `db.DatabaseConnectionMiddleware`
+    ) -> Any:  # noqa: ANN401 - aiogram's own contract for the value passing through
         """Record the update, then run the handlers inside its correlation scope."""
         if not isinstance(event, Update):
             return await handler(event, data)

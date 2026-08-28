@@ -54,7 +54,7 @@ class _Unhandled:
 _UNHANDLED = _Unhandled()
 
 
-def _scalar(value: Any, *, bodies: bool) -> Any:  # noqa: ANN401 - a call argument is anything
+def _scalar(value: object, *, bodies: bool) -> Any:  # noqa: ANN401 - see `summarize`
     """Render the values that need no recursion, or report that this is not one."""
     if isinstance(value, (bytes, bytearray, memoryview)):
         return {_OMITTED: 'bytes', 'size': len(value)}
@@ -69,7 +69,11 @@ def _scalar(value: Any, *, bodies: bool) -> Any:  # noqa: ANN401 - a call argume
     return _UNHANDLED
 
 
-def summarize(value: Any, *, bodies: bool, depth: int = 0) -> Any:  # noqa: ANN401 - as above
+# `object` going in, because this accepts anything and narrows by `isinstance` -- and `Any` coming
+# out, because what comes back has the *shape* of what went in: a mapping stays a mapping, and
+# `describe` hands the result straight to `bounded`, which takes a dict. Expressing that needs an
+# overload per shape, which is more machinery than the invariant is worth stating twice
+def summarize(value: object, *, bodies: bool, depth: int = 0) -> Any:  # noqa: ANN401 - shape follows the input
     """Render a call argument for the log: readable, bounded, never a file."""
     if depth > MAX_DEPTH:
         return {_OMITTED: 'depth'}
@@ -115,10 +119,10 @@ def redact_text(text: str, configured: tuple[str, ...] | None = None) -> str:
 
 
 def redact_values(
-    value: Any,  # noqa: ANN401 - walks whatever summarize produced
+    value: object,
     keys: frozenset[str],
     configured: tuple[str, ...] | None = None,
-) -> Any:  # noqa: ANN401 - as above
+) -> Any:  # noqa: ANN401 - as `summarize`: shape follows the input
     """Blank out values under credential-named keys, at any depth."""
     if configured is None:
         configured = secrets()
