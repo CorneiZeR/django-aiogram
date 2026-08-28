@@ -223,8 +223,8 @@ Entries land here as the work does; nothing below is released.
 ### Fixed
 
 - **The cap on a blocking take comes from the transport that is being read, and `W004` names it.**
-  The consumer weighs `BLPOP_TIMEOUT` against `HEARTBEAT_INTERVAL` and one second inside the call
-  deadline — and that deadline was `REDIS_TIMEOUT` whichever transport was configured. So a setting
+  The consumer weighs `BLPOP_TIMEOUT` against `HEARTBEAT_INTERVAL` and a whole second inside the
+  floored call deadline — and that deadline was `REDIS_TIMEOUT` whichever transport was configured. So a setting
   three of the four never read shortened their reads: measured on Kafka with `KAFKA_TIMEOUT = 30`,
   `REDIS_TIMEOUT: 2` capped the poll at **one second**, and `W004` told the operator to raise
   `REDIS_TIMEOUT` — a setting their deployment does not have. Now the same configuration caps at 10
@@ -253,12 +253,21 @@ Entries land here as the work does; nothing below is released.
   Kafka's range check narrows the same reader instead of replacing it, which is how a non-numeric
   `KAFKA_TIMEOUT` stopped raising a bare `ValueError` naming nothing.
 
+  Every page that wrote the cap out was writing `<deadline> - 1`, which is false for a fractional
+  one — and a test now holds prose to the helper by refusing a statement of the cap without its
+  floor, deliberately grep-shaped: what went wrong was the formula being written a fourth time, and
+  a test that computed the cap would have agreed with all four.
+
   `E047` grew two findings to match, neither gated on `ENABLED`: a broker declaring no
   `CALL_TIMEOUT_OPTION`, or naming an option it does not declare — the seam needs that name, and
   without this the gap surfaced as a `KeyError` out of whichever rule asked first, taking every
   other finding with it — and a deadline the transport refuses, which until now passed every rule
   and failed at the first send. `REDIS_TIMEOUT` had `E030` for this because it sits in the
-  package-wide table; the other three sat with their transports where no rule reached them.
+  package-wide table; the other three sat with their transports where no rule reached them. It
+  stands aside where the option has a rule of its own that is *already reporting* the value, asking
+  the registry rather than matching a name — a broker somebody wrote can name `REDIS_TIMEOUT` and
+  need more of it than `E030`'s minimum of 2, and suppressing on the name alone left that value
+  unreported by everything until the transport first read it.
 
 - **The Kafka producer states its acknowledgement level instead of inheriting one.** `publish`
   waits for the broker rather than returning once librdkafka has queued the record, and the

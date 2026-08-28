@@ -292,11 +292,15 @@ def _readable_serializer(key: str) -> list[Problem]:
     ]
 
 
-def _the_deadline_the_broker_declares(resolved: 'type[Broker]') -> list[Problem]:
+def _the_deadline_the_broker_declares(resolved: 'type[Broker]', key: str) -> list[Problem]:
     """Report a transport that cannot answer how long one of its calls may take.
 
     Its own function so `E047` keeps one return per finding without growing past what a reader can
     follow, and because the two findings are one subject: the name, and the number behind it.
+
+    ``key`` is the setting the calling rule is about, and it is here only to be excluded from the
+    rules asked below -- a broker naming it as its own deadline option would otherwise re-enter this
+    rule for ever.
     """
     named = resolved.CALL_TIMEOUT_OPTION
     if not named or named not in resolved.OPTIONS:
@@ -311,16 +315,18 @@ def _the_deadline_the_broker_declares(resolved: 'type[Broker]') -> list[Problem]
                 ),
             )
         ]
-    # one rule per setting, which is the convention `W004` states from the other side: a deadline
-    # sitting in the package-wide table has a rule of its own -- `REDIS_TIMEOUT` has `E030` -- and
-    # two errors about one value is noise that makes the reader look for two problems. The registry
-    # is asked rather than a name being listed here, so this picks the setting up on the day #23
-    # moves it out of that table and its own rule goes with it
-    if named in {check.key for check in CHECKS}:
-        return []
     try:
         resolved.call_timeout()
     except (ImproperlyConfigured, TypeError, ValueError) as refused:
+        # one rule per setting, which is the convention `W004` states from the other side: a
+        # deadline sitting in the package-wide table has a rule of its own -- `REDIS_TIMEOUT` has
+        # `E030` -- and two errors about one value make the reader look for two problems. But the
+        # rules are *asked*, not assumed: a broker of somebody's own can name `REDIS_TIMEOUT` and
+        # refuse a 3 that `E030` accepts, and suppressing on the name alone left that silent until
+        # the transport first used it. The registry rather than a list of names here, so this picks
+        # a setting up on the day #23 moves it out of that table and its own rule goes with it
+        if any(check.run() for check in CHECKS if check.key == named and check.key != key):
+            return []
         return [
             Problem(
                 f'is {resolved.__name__}, whose call deadline is unusable: {refused}',
@@ -360,8 +366,10 @@ def _a_usable_broker(key: str) -> list[Problem]:
     before importing anything, so an absent one is named rather than discovered by traceback.
 
     Then the call deadline the seam is built on, in two more findings, the second of which stands
-    aside when the option it names has a rule of its own -- `REDIS_TIMEOUT` has `E030`, because it
-    sits in the package-wide table. `CALL_TIMEOUT_OPTION` unset,
+    aside where the option it names has a rule of its own that is already reporting the value --
+    `REDIS_TIMEOUT` has `E030`, because it sits in the package-wide table. Already *reporting*, and
+    not merely present: a broker of somebody's own can name that setting and refuse a value `E030`
+    accepts. `CALL_TIMEOUT_OPTION` unset,
     or naming an option the broker does not declare -- the only finding here about a broker
     somebody wrote, and without it the failure lands as a `KeyError` out of `option('')`, in
     whichever rule asks first. And a deadline that cannot be one: `RABBITMQ_TIMEOUT` was neither a
@@ -392,7 +400,7 @@ def _a_usable_broker(key: str) -> list[Problem]:
         ]
     except BrokerNotConfiguredError as wrong:
         return [Problem(f'is unusable: {wrong}', hint='Name a Broker subclass by dotted path.')]
-    deadline = _the_deadline_the_broker_declares(resolved)
+    deadline = _the_deadline_the_broker_declares(resolved, key)
     if deadline:
         return deadline
     required = [option for option in resolved.required() if not str(conf.get(option) or '').strip()]

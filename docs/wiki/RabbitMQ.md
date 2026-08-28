@@ -67,8 +67,9 @@ rather than the multiple.
 ## What bounds a read
 
 `BLPOP_TIMEOUT` is what the consumer asks for, and `RABBITMQ_TIMEOUT` caps it together with
-`HEARTBEAT_INTERVAL` — the smaller wins, one second inside the deadline so a read returns before it
-fires. `W004` reports a `BLPOP_TIMEOUT` above that cap and names whichever bound it, and `E047`
+`HEARTBEAT_INTERVAL` — the smaller wins, a whole second inside the deadline so a read returns before
+it fires. The deadline is floored first, since this one accepts fractions: at `2.6` the cap is 1
+rather than 1.6. `W004` reports a `BLPOP_TIMEOUT` above that cap and names whichever bound it, and `E047`
 refuses a `RABBITMQ_TIMEOUT` that is not a positive finite number — one reader, so the number
 bounding the channel and the number the cap is computed from cannot be two different numbers.
 

@@ -113,8 +113,9 @@ below `all` fails to construct, measured.
 ## What bounds a poll
 
 `BLPOP_TIMEOUT` is what the consumer asks for and `KAFKA_TIMEOUT` is one of the two things that
-cap it — the other is `HEARTBEAT_INTERVAL`, and the smaller wins, one second inside the deadline so
-a poll returns before it fires. `W004` reports a `BLPOP_TIMEOUT` above that cap and names whichever
+cap it — the other is `HEARTBEAT_INTERVAL`, and the smaller wins, a whole second inside the deadline
+so a poll returns before it fires. The deadline is floored first, since this one accepts fractions:
+at `2.6` the cap is 1 rather than 1.6. `W004` reports a `BLPOP_TIMEOUT` above that cap and names whichever
 bound it.
 
 Until 4.0 the transport term was `REDIS_TIMEOUT` on every transport, which on a Kafka deployment

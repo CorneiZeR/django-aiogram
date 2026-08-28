@@ -10,6 +10,7 @@ import pytest
 from django.core.checks import WARNING, Error
 from django.core.checks import Warning as CheckWarning
 from django.core.checks.registry import registry
+from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
 from django.core.management.base import SystemCheckError
 from django.test import override_settings
@@ -1289,11 +1290,16 @@ def test_w004_is_silent_when_the_transport_deadline_leaves_room():
     """The rule reports a cap the consumer applies, so a setting under the cap is not a finding.
 
     On Kafka with its own timeout at 30 the cap is 29, and `BLPOP_TIMEOUT` at 5 is under it — where
-    the same configuration used to be reported, and capped, against `REDIS_TIMEOUT` at 10.
+    the same configuration used to be reported, and capped, against `REDIS_TIMEOUT`.
+
+    Which is why `REDIS_TIMEOUT` is **2** here rather than left out: at its default of 10 the old
+    cap was 9, above the 5 being asked for, so the rule was silent before the fix as well and the
+    case proved nothing. At 2 the old cap is 1, and a `BLPOP_TIMEOUT` of 5 was reported.
     """
     settings = {
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost',
+        'REDIS_TIMEOUT': 2,
         'BROKER': 'django_aiogram.broker.kafka.KafkaBroker',
         'KAFKA_BOOTSTRAP': 'localhost:9092',
         'KAFKA_TOPIC': 'tg',
@@ -1317,6 +1323,24 @@ class BrokerNamingAnOptionItDoesNotHave(RedisListBroker):
     """And one that names an option it does not declare, which is the same gap one step later."""
 
     CALL_TIMEOUT_OPTION = 'SOME_OTHER_TIMEOUT'
+
+
+class BrokerNeedingMoreThanTheRuleAsks(RedisListBroker):
+    """A broker of somebody's own whose transport needs more of `REDIS_TIMEOUT` than `E030` does.
+
+    `E030` accepts any integer from 2 up, so a value this refuses is one that rule reports nothing
+    about — which is the whole point of the case that uses this.
+    """
+
+    _FLOOR = 5
+
+    @classmethod
+    def call_timeout(cls) -> float:
+        timeout = super().call_timeout()
+        if timeout < cls._FLOOR:
+            msg = f"TELEGRAM_BOT['REDIS_TIMEOUT'] is {timeout}, and this transport needs {cls._FLOOR} or more."
+            raise ImproperlyConfigured(msg)
+        return timeout
 
 
 @pytest.mark.parametrize(
@@ -1414,6 +1438,31 @@ def test_one_rule_reports_a_deadline_that_has_a_rule_of_its_own():
 
     assert 'django_aiogram.E030' in reported, 'the rule that owns REDIS_TIMEOUT said nothing'
     assert 'django_aiogram.E047' not in reported, 'E047 reported a setting another rule owns'
+
+
+def test_e047_reports_a_deadline_only_its_own_transport_refuses():
+    """Standing aside for `E030` must mean "it is reporting this", not "it exists".
+
+    A broker somebody wrote can name `REDIS_TIMEOUT` — the two Redis transports do — and need more
+    of it than `E030` asks for, which is any integer from 2 up. Suppressing on the name alone left
+    a 3 that this broker refuses unreported by every rule, and refused by the transport the first
+    time it read the setting.
+    """
+    settings = {
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'REDIS_TIMEOUT': 3,
+        'BROKER': 'tests.test_checks.BrokerNeedingMoreThanTheRuleAsks',
+    }
+    with override_settings(TELEGRAM_BOT=settings):
+        reported = check_settings()
+
+    found = [message for message in reported if message.id == 'django_aiogram.E047']
+    assert len(found) == 1, f'E047 reported {[message.msg for message in found]}'
+    assert 'needs 5 or more' in found[0].msg, found[0].msg
+    assert [message for message in reported if message.id == 'django_aiogram.E030'] == [], (
+        'E030 reported a value it accepts, so this case proves nothing about the suppression'
+    )
 
 
 @pytest.mark.parametrize(
