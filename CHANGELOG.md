@@ -222,6 +222,25 @@ Entries land here as the work does; nothing below is released.
 
 ### Fixed
 
+- **The cap on a blocking take comes from the transport that is being read, and `W004` names it.**
+  The consumer weighs `BLPOP_TIMEOUT` against `HEARTBEAT_INTERVAL` and one second inside the call
+  deadline — and that deadline was `REDIS_TIMEOUT` whichever transport was configured. So a setting
+  three of the four never read shortened their reads: measured on Kafka with `KAFKA_TIMEOUT = 30`,
+  `REDIS_TIMEOUT: 2` capped the poll at **one second**, and `W004` told the operator to raise
+  `REDIS_TIMEOUT` — a setting their deployment does not have. Now the same configuration caps at 10
+  seconds, bound by `HEARTBEAT_INTERVAL`, and `REDIS_TIMEOUT` moves nothing.
+
+  The other direction mattered too: a transport whose own timeout was *lower* than the Redis one
+  got a cap looser than it allows, so a read could outlast `Broker.call_ceiling` — the number
+  `start_tgbot` derives its join from, which is 3.1.0's B3 through the last door it had.
+
+  `Broker.CALL_TIMEOUT_OPTION` names each transport's deadline setting and `Broker.call_timeout()`
+  reads it, both on the class, because `W004` has to answer without building a broker — building
+  one imports its driver, and a missing driver is `E047`'s report to make rather than this rule's.
+  The conformance suite holds the name to the number in both directions, so the setting `W004`
+  quotes cannot drift from the one the cap uses. `blpop_ceiling()` is `take_ceiling()` with the
+  deadline passed in, and `PopCeiling` is `TakeCeiling`: three of the four transports issue no pop.
+
 - **The Kafka producer states its acknowledgement level instead of inheriting one.** `publish`
   waits for the broker rather than returning once librdkafka has queued the record, and the
   guarantee that rests on `acks` was whatever the driver defaulted to — a decision nobody in this

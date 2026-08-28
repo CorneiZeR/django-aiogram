@@ -63,6 +63,8 @@ class RabbitMQBroker(Broker):
     #: this transport's own settings. Both names are required: a URL carries credentials and
     #: a host, and neither has a default worth baking in, while the queue is where messages
     #: go — the same reason the stream key has none
+    CALL_TIMEOUT_OPTION: ClassVar[str] = 'RABBITMQ_TIMEOUT'
+
     OPTIONS: ClassVar[Mapping[str, Any]] = {
         'RABBITMQ_URL': REQUIRED,
         'RABBITMQ_QUEUE': REQUIRED,

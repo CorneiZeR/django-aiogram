@@ -60,11 +60,34 @@ class Broker(ABC):
     #: `REDIS_MESSAGES_KEY` means nothing to Kafka, and a topic means nothing to a list.
     OPTIONS: ClassVar[Mapping[str, Any]] = {}
 
+    #: which of this broker's own options bounds a single call, by name. The number is
+    #: :attr:`call_ceiling`; this is the *name*, and it exists because two things outside any
+    #: instance need it: `W004`'s hint has to tell an operator which setting to raise, and a check
+    #: must not open a connection to find out. Held to the number by
+    #: `test_the_ceiling_follows_the_setting_the_broker_names`, so the pair cannot drift.
+    CALL_TIMEOUT_OPTION: ClassVar[str] = ''
+
+    @classmethod
+    def call_timeout(cls) -> int:
+        """Return this broker's own call deadline in whole seconds, read off the class.
+
+        A classmethod because `W004` needs it before anything is built: instantiating a broker to
+        answer a check would mean importing its driver, which is what `E047` reports on instead of
+        provoking.
+        """
+        return max(1, int(str(cls.option(cls.CALL_TIMEOUT_OPTION))))
+
     #: importable module name, and the extra that installs it. Empty means no driver.
     REQUIRES: ClassVar[tuple[str, str] | None] = None
 
-    def option(self, key: str) -> object:
+    @classmethod
+    def option(cls, key: str) -> object:
         """Read one of this broker's own settings, with its own default.
+
+        A classmethod, and nothing about it ever needed an instance -- it reads `OPTIONS`, which is
+        class state, and the settings, which are the project's. Made one so `W004` can ask a
+        transport for its call deadline without building it, since building means importing a
+        driver.
 
         Returns ``object``, so the caller narrows: a setting can arrive from the environment
         as a string whatever its declared default, and the existing code already writes
@@ -85,24 +108,24 @@ class Broker(ABC):
         extras work makes each driver optional. Declaring a different default here than the
         package-wide one would therefore be a lie, and this refuses to tell it.
         """
-        if key not in self.OPTIONS:
-            msg = f'{type(self).__name__} declares no option {key!r}'
+        if key not in cls.OPTIONS:
+            msg = f'{cls.__name__} declares no option {key!r}'
             raise KeyError(msg)
-        default = self.OPTIONS[key]
+        default = cls.OPTIONS[key]
         if key in DEFAULTS:
             if default is REQUIRED:
                 # a contradiction, and a bug in the broker rather than the project: `conf`
                 # would answer with the package-wide default and the refusal below would
                 # never run, so a required option would silently become optional
                 msg = (
-                    f'{type(self).__name__} declares {key!r} as REQUIRED, but it is also in the '
+                    f'{cls.__name__} declares {key!r} as REQUIRED, but it is also in the '
                     'package-wide defaults, where it would always resolve. A required option '
                     'has to belong to one broker alone.'
                 )
                 raise ImproperlyConfigured(msg)
             if default != DEFAULTS[key]:
                 msg = (
-                    f'{type(self).__name__} declares {key!r} defaulting to {default!r} while the '
+                    f'{cls.__name__} declares {key!r} defaulting to {default!r} while the '
                     f'package-wide default is {DEFAULTS[key]!r}, which is what would be used. '
                     'Declare the same value or take the key out of the package-wide table.'
                 )
@@ -110,7 +133,7 @@ class Broker(ABC):
         value = conf.get(key, None if default is REQUIRED else default)
         if default is REQUIRED and (value is None or (isinstance(value, str) and not value.strip())):
             msg = (
-                f"{type(self).__name__} needs {SETTINGS_NAME}['{key}'], which is not set. "
+                f"{cls.__name__} needs {SETTINGS_NAME}['{key}'], which is not set. "
                 'It has no default: this transport cannot say where to put a message without it.'
             )
             raise ImproperlyConfigured(msg)

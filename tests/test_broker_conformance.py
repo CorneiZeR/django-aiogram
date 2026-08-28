@@ -18,6 +18,7 @@ from collections import Counter
 
 import pytest
 from django.test import override_settings
+from django.utils.module_loading import import_string
 
 from django_aiogram.broker.base import Broker
 from django_aiogram.broker.registry import SHIPPED
@@ -449,3 +450,32 @@ def test_every_transport_has_a_kill_case_and_the_map_names_it():
             f'no kill case is named for {kind!r} ({path}); add one and list it, '
             f'rather than leaving a transport whose crash behaviour nobody checked'
         )
+
+
+@pytest.mark.parametrize('path', sorted(SHIPPED))
+def test_the_ceiling_follows_the_setting_the_broker_names(path):
+    """`CALL_TIMEOUT_OPTION` is a name and `call_ceiling` is a number: they must be one fact.
+
+    Two declarations for one thing invite drift, and this is where the drift would be invisible:
+    `W004`'s hint quotes the name while the consumer's cap uses the number, so a broker whose name
+    said one setting and whose ceiling read another would tell an operator to raise a setting that
+    changes nothing.
+
+    Both directions. Moving the named setting moves the ceiling, and moving *another* transport's
+    timeout does not -- which is the defect #41 was: `REDIS_TIMEOUT` bound the cap on every
+    transport.
+    """
+    broker = import_string(path)
+    named = broker.CALL_TIMEOUT_OPTION
+    assert named, f'{path} declares no CALL_TIMEOUT_OPTION'
+    assert named in broker.OPTIONS, f'{path} names {named!r}, which it does not declare'
+
+    others = {'REDIS_TIMEOUT', 'RABBITMQ_TIMEOUT', 'KAFKA_TIMEOUT'} - {named}
+    # every required option of every transport, so one `override_settings` serves all four
+    required = {'REDIS_STREAM_KEY': 'tg', 'KAFKA_TOPIC': 'tg', 'RABBITMQ_QUEUE': 'tg'}
+    base = {**SETTINGS, 'BROKER': path, **required}
+    with override_settings(TELEGRAM_BOT={**base, named: 37}):
+        assert broker.call_timeout() == 37, f'{path} does not read {named}'
+    for other in others:
+        with override_settings(TELEGRAM_BOT={**base, named: 37, other: 3}):
+            assert broker.call_timeout() == 37, f'{path} reads {other} as well as {named}'

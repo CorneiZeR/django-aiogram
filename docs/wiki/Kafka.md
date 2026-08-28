@@ -110,6 +110,19 @@ correlation id. It costs one PID acquisition per process: the steady-state publi
 that runs for weeks. The driver refuses the pair any other way: `enable.idempotence` with `acks`
 below `all` fails to construct, measured.
 
+## What bounds a poll
+
+`BLPOP_TIMEOUT` is what the consumer asks for and `KAFKA_TIMEOUT` is one of the two things that
+cap it — the other is `HEARTBEAT_INTERVAL`, and the smaller wins, one second inside the deadline so
+a poll returns before it fires. `W004` reports a `BLPOP_TIMEOUT` above that cap and names whichever
+bound it.
+
+Until 4.0 the transport term was `REDIS_TIMEOUT` on every transport, which on a Kafka deployment
+meant a setting nothing here reads shortened the poll: measured, `REDIS_TIMEOUT: 2` capped a
+30-second `KAFKA_TIMEOUT` at one second, and `W004`'s hint told the operator to raise the Redis
+setting. The name is unchanged because a queued message is still a queued message; what it means is
+the transport's own.
+
 ## Where it shows through
 
 - **What a payload may weigh is smallest here, by a wide margin, and it is the one to check

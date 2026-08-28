@@ -32,7 +32,7 @@ from django_aiogram.config.enums import (
     UpdateMode,
     choices,
 )
-from django_aiogram.config.settings import SETTINGS_NAME, blpop_ceiling, coerce_bool, conf
+from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf, take_ceiling
 from django_aiogram.eventlog.events import known_kinds
 
 MODE_CHOICES = choices(UpdateMode)
@@ -567,12 +567,27 @@ def _a_pop_inside_the_deadline(key: str) -> list[Problem]:
     whether or not that was the term doing the binding. It now reports the cap the
     consumer actually computes, from the same helper the consumer uses, and names
     whichever setting produced it.
+
+    And the deadline term comes from the **configured transport**, which is #41: it was
+    ``REDIS_TIMEOUT`` whichever broker was running, so this hint told a Kafka deployment to raise
+    a setting it does not have. The broker is asked for the name and the number without being
+    built — ``call_timeout()`` is a classmethod for that reason, since building one would import
+    its driver, which is `E047`'s business rather than this rule's.
     """
+    from django_aiogram.broker.exceptions import BrokerError  # noqa: PLC0415 - only when the checks run
+    from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
+
     try:
         asked = int(conf[key])
-        ceiling = blpop_ceiling()
+        # without the driver check: the cap is arithmetic over settings, and staying silent
+        # because an extra is not installed would drop a settings warning on every machine that
+        # has not installed it. `E047` owns the driver, with the install line
+        broker = broker_class(verify_driver=False)
+        ceiling = take_ceiling(broker.CALL_TIMEOUT_OPTION, broker.call_timeout())
     except (ImproperlyConfigured, TypeError, ValueError):
         return []  # E014, E023 and E030 own the type complaints
+    except BrokerError:
+        return []  # E047 owns every complaint about which transport is configured
     if asked <= ceiling.seconds:
         return []
     named = ' and '.join(f"{SETTINGS_NAME}['{key}']" for key in ceiling.bound_by)

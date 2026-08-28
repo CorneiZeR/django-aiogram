@@ -64,6 +64,17 @@ rather than the multiple.
 
 `scripts/measurements/amqp_driver_choice.py` re-takes all of it.
 
+## What bounds a read
+
+`BLPOP_TIMEOUT` is what the consumer asks for, and `RABBITMQ_TIMEOUT` caps it together with
+`HEARTBEAT_INTERVAL` — the smaller wins, one second inside the deadline so a read returns before it
+fires. `W004` reports a `BLPOP_TIMEOUT` above that cap and names whichever bound it.
+
+Until 4.0 the transport term was `REDIS_TIMEOUT` whichever broker was configured, so this
+deployment's poll was bounded by a setting it never reads, and the hint named it. The setting keeps
+its name — a queued message is still a queued message — and the deadline it is measured against is
+now this transport's.
+
 ## Where it shows through
 
 - `RABBITMQ_PREFETCH` and `MAX_IN_FLIGHT` bound the same thing from two ends: the broker's

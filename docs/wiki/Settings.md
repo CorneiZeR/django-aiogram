@@ -131,7 +131,7 @@ splitting those into what the package owns and what a transport does is its own 
 | `REDIS_URL` | `''` | Where the server is. Shared with the Streams transport and with the FSM storage, which is why it also sits under **Credentials** above |
 | `REDIS_MESSAGES_KEY` | `'TELEGRAM_BOT_MESSAGE'` | The list, and the prefix the in-flight and heartbeat keys derive from |
 | `REDIS_TIMEOUT` | `10` | The deadline on any single call. `E030` refuses anything below 2, because the pop has to sit a second inside it |
-| `BLPOP_TIMEOUT` | `5` | How often the blocking pop is interrupted to check for shutdown, capped at `min(HEARTBEAT_INTERVAL, REDIS_TIMEOUT - 1)` — `W004` says so and names the bound that binds |
+| `BLPOP_TIMEOUT` | `5` | How often the blocking take is interrupted to check for shutdown, capped at `min(HEARTBEAT_INTERVAL, <the transport's own timeout> - 1)` — `REDIS_TIMEOUT`, `RABBITMQ_TIMEOUT` or `KAFKA_TIMEOUT`, whichever `BROKER` names. `W004` says so and names the bound that binds |
 
 #### Redis Streams
 
@@ -278,7 +278,7 @@ entry naming a retired one is dead but harmless.
 | -- | ------- |
 | `W001` / `W002` | `TOKEN` / `REDIS_URL` empty while the bot is enabled |
 | `W003` | `TELEGRAM_BOT` contains unknown keys |
-| `W004` | `BLPOP_TIMEOUT` is **above** the ceiling the consumer applies — `min(HEARTBEAT_INTERVAL, REDIS_TIMEOUT - 1)` — so the pop is silently shortened to it. Equal to the ceiling is not warned about and is not shortened. The hint names whichever of the two binds |
+| `W004` | `BLPOP_TIMEOUT` is **above** the ceiling the consumer applies — `min(HEARTBEAT_INTERVAL, <the configured transport's timeout> - 1)` — so the take is silently shortened to it. Equal to the ceiling is not warned about and is not shortened. The hint names whichever of the two binds, and the transport term is the one `BROKER` names rather than always `REDIS_TIMEOUT` |
 | `E001`–`E003`, `E017` | a boolean setting holds something that cannot be read as true or false. `ENABLED` and `AUTODISCOVER` are read while the app loads, so in practice those two refuse the boot with the same message before `check` runs at all |
 | `E004`–`E007`, `E009`–`E011` | a string setting is wrong, or not one of the allowed values |
 | `E012`, `E014` | an integer setting is wrong or below its minimum |

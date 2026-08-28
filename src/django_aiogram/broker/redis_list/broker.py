@@ -38,6 +38,8 @@ class RedisListBroker(Broker):
     """``RPUSH`` to publish, ``BLMOVE`` to take, ``LREM`` to settle."""
 
     #: this broker's own keys, which stopped being everyone's in 4.0
+    CALL_TIMEOUT_OPTION: ClassVar[str] = 'REDIS_TIMEOUT'
+
     OPTIONS: ClassVar[Mapping[str, Any]] = {
         'REDIS_URL': '',
         'REDIS_MESSAGES_KEY': 'TELEGRAM_BOT_MESSAGE',

@@ -72,6 +72,8 @@ class KafkaBroker(Broker):
 
     #: this transport's own settings. The servers and the topic are required for the same
     #: reason the AMQP url and queue are: neither has a default worth baking in
+    CALL_TIMEOUT_OPTION: ClassVar[str] = 'KAFKA_TIMEOUT'
+
     OPTIONS: ClassVar[Mapping[str, Any]] = {
         'KAFKA_BOOTSTRAP': REQUIRED,
         'KAFKA_TOPIC': REQUIRED,

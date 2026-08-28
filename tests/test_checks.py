@@ -14,10 +14,11 @@ from django.core.management import call_command
 from django.core.management.base import SystemCheckError
 from django.test import override_settings
 
+from django_aiogram.broker.redis_list import RedisListBroker
 from django_aiogram.config.checks import CHECKS, check_settings, worker_name_problems
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import StorageKind
-from django_aiogram.config.settings import blpop_ceiling
+from django_aiogram.config.settings import take_ceiling
 from django_aiogram.eventlog.dbrouter import TelegramEventLogRouter
 from django_aiogram.eventlog.events import worker_identity
 from django_aiogram.redis import read_timeout
@@ -756,7 +757,7 @@ def test_the_worker_name_rule_is_information_and_the_consumer_warns_for_itself(m
 def test_a_read_deadline_of_one_second_is_refused():
     """At 1 the consumer's blocking pop cannot fit inside the deadline it is capped by.
 
-    `blpop_ceiling()` promises one second inside `REDIS_TIMEOUT`; at 1 the subtraction
+    `take_ceiling()` promises one second inside the transport's deadline; at 1 the subtraction
     clamps back to 1, so the pop's own timeout *equals* the read deadline and the deadline
     always wins. Every idle second then costs a `TimeoutError`, a traceback and a
     reconnect, against a healthy server, for ever — and `W004` invited exactly that by
@@ -772,7 +773,8 @@ def test_every_read_deadline_the_check_admits_leaves_room_for_the_pop(timeout):
         TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'REDIS_TIMEOUT': timeout}
     ):
         assert errors(check_settings()) == [], 'the check refuses a value the consumer can work with'
-        assert blpop_ceiling().seconds < read_timeout(), 'the pop cannot outlast the socket it reads through'
+        ceiling = take_ceiling(RedisListBroker.CALL_TIMEOUT_OPTION, RedisListBroker.call_timeout())
+        assert ceiling.seconds < read_timeout(), 'the take cannot outlast the socket it reads through'
 
 
 @override_settings(TELEGRAM_BOT={'TOKEN': 42, 'REDIS_URL': 'r://x'})
@@ -1235,3 +1237,71 @@ def test_e048_is_silent_on_anything_that_is_not_a_3_x_path(routers):
         found = [message for message in check_settings() if message.id == 'django_aiogram.E048']
 
     assert found == [], f'E048 reported {[message.msg for message in found]} for {routers}'
+
+
+@pytest.mark.parametrize(
+    ('broker', 'extra', 'names'),
+    [
+        ('django_aiogram.broker.redis_list.RedisListBroker', {}, 'REDIS_TIMEOUT'),
+        (
+            'django_aiogram.broker.kafka.KafkaBroker',
+            {'KAFKA_BOOTSTRAP': 'localhost:9092', 'KAFKA_TOPIC': 'tg'},
+            'KAFKA_TIMEOUT',
+        ),
+        (
+            'django_aiogram.broker.rabbitmq.RabbitMQBroker',
+            {'RABBITMQ_URL': 'amqp://guest:guest@localhost:5672/', 'RABBITMQ_QUEUE': 'tg'},
+            'RABBITMQ_TIMEOUT',
+        ),
+    ],
+    ids=['redis list', 'kafka', 'rabbitmq'],
+)
+def test_w004_names_the_deadline_of_the_configured_transport(broker, extra, names):
+    """The hint has to name a setting the deployment actually has.
+
+    Until #41 the cap weighed `REDIS_TIMEOUT` whichever transport was configured, so a Kafka
+    deployment was told to raise a setting it does not read — and, worse, had its poll shortened
+    by it: measured, `REDIS_TIMEOUT: 2` capped a 30-second `KAFKA_TIMEOUT` at one second.
+
+    Both directions here. The named setting has to be the configured transport's, and the Redis
+    one must not appear on a transport that never reads it.
+    """
+    settings = {
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'BROKER': broker,
+        'BLPOP_TIMEOUT': 30,
+        'HEARTBEAT_INTERVAL': 60,
+        names: 5,
+        **extra,
+    }
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.W004']
+
+    assert len(found) == 1, f'W004 reported {len(found)} problems on {broker}'
+    assert names in (found[0].hint or ''), found[0].hint
+    assert 'which the consumer caps at 4' in found[0].msg, found[0].msg
+    if names != 'REDIS_TIMEOUT':
+        assert 'REDIS_TIMEOUT' not in (found[0].hint or ''), f'the hint names a Redis setting: {found[0].hint}'
+
+
+def test_w004_is_silent_when_the_transport_deadline_leaves_room():
+    """The rule reports a cap the consumer applies, so a setting under the cap is not a finding.
+
+    On Kafka with its own timeout at 30 the cap is 29, and `BLPOP_TIMEOUT` at 5 is under it — where
+    the same configuration used to be reported, and capped, against `REDIS_TIMEOUT` at 10.
+    """
+    settings = {
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'BROKER': 'django_aiogram.broker.kafka.KafkaBroker',
+        'KAFKA_BOOTSTRAP': 'localhost:9092',
+        'KAFKA_TOPIC': 'tg',
+        'KAFKA_TIMEOUT': 30,
+        'BLPOP_TIMEOUT': 5,
+        'HEARTBEAT_INTERVAL': 60,
+    }
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.W004']
+
+    assert found == [], f'W004 reported {[message.msg for message in found]} with room to spare'

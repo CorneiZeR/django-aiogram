@@ -40,18 +40,26 @@ _broker: Broker | None = None
 _exit_hook_armed = False
 
 
-def broker_class() -> type[Broker]:
+def broker_class(*, verify_driver: bool = True) -> type[Broker]:
     """Resolve ``BROKER`` to a class, and refuse anything that is not one.
 
     Separate from :func:`get_broker` because the checks want the class and its declared
     requirement without building a connection, and a check must never be the thing that
     opens a socket.
+
+    ``verify_driver=False`` skips the missing-driver refusal, for a caller that needs what the
+    class *declares* rather than what it can do. `W004` is the one: the cap it reports is
+    arithmetic over settings, and refusing to compute it because an extra is not installed would
+    silence a settings warning on every machine that has not installed the driver -- including the
+    unit legs in CI. `E047` owns the missing driver, and says so with the install line.
+
+    Every shipped broker imports its driver lazily, so the import below succeeds without it.
     """
     path = str(conf['BROKER'] or '').strip()
     if not path:
         msg = f"{SETTINGS_NAME}['BROKER'] is empty, so no transport is chosen."
         raise BrokerNotConfiguredError(msg)
-    if path in SHIPPED:
+    if path in SHIPPED and verify_driver:
         # verified before the import, which is belt to `verify`'s braces. Every shipped
         # transport imports its driver lazily, so importing the class would *not* raise —
         # `verify` would name the extra by itself. This table is what keeps that true of a

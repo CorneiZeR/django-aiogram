@@ -95,19 +95,13 @@ Six rules, and each is a defect this package has already had:
   gate releases on shutdown as well as on capacity, which is why the check after it is not
   redundant: without it the loop takes one more message it has no intention of sending.
 * **Ask `self.read_timeout` how long a blocking read may wait.** It is `BLPOP_TIMEOUT` capped by
-  `HEARTBEAT_INTERVAL` and by `REDIS_TIMEOUT`, and a number of your own gets it wrong in one of
-  three ways: `0` blocks for ever and swallows `stop()`; longer than the socket deadline turns an
-  idle round into an error raised inside the read; longer than `HEARTBEAT_INTERVAL` lets the
-  heartbeat expire under a consumer that is doing fine. `W004` reports on the same helper, so a
-  check cannot describe a cap your consumer does not use.
-
-  **The transport term is `REDIS_TIMEOUT` whichever transport you run**, which is
-  [#41](https://github.com/CorneiZeR/django-aiogram/issues/41) and not yet fixed. On RabbitMQ or
-  Kafka with a lower `RABBITMQ_TIMEOUT` or `KAFKA_TIMEOUT`, this cap can therefore exceed what the
-  transport allows, and a read can outlast `Broker.call_ceiling` — which is the number
-  `start_tgbot` derives its join from. Until that lands, set `BLPOP_TIMEOUT` below your own
-  transport's timeout if you run one lower than `REDIS_TIMEOUT`; the issue carries the measurement
-  and why fixing it changes what `W004` prints.
+  `HEARTBEAT_INTERVAL` and by **your transport's own call deadline** — `REDIS_TIMEOUT`,
+  `RABBITMQ_TIMEOUT` or `KAFKA_TIMEOUT`, whichever `BROKER` names — and a number of your own gets
+  it wrong in one of three ways: `0` blocks for ever and swallows `stop()`; longer than the
+  transport's deadline turns an idle round into an error raised inside the read; longer than
+  `HEARTBEAT_INTERVAL` lets the heartbeat expire under a consumer that is doing fine. `W004`
+  reports on the same helper and names the same setting, so a check cannot describe a cap your
+  consumer does not use.
 
 `E009` checks the shape of the path at `manage.py check` and nothing more: resolving it would
 import the consumer module, which imports the serializer, which imports aiogram — 883ms and

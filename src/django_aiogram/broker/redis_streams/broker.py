@@ -55,6 +55,8 @@ class RedisStreamsBroker(Broker):
     #: this transport's own settings. `REDIS_STREAM_KEY` has no default on purpose: see
     #: `_key`. The two timeouts are the package-wide ones, declared here because this
     #: broker reads them and `option` refuses a default that disagrees with that table
+    CALL_TIMEOUT_OPTION: ClassVar[str] = 'REDIS_TIMEOUT'
+
     OPTIONS: ClassVar[Mapping[str, Any]] = {
         'REDIS_URL': '',
         'REDIS_STREAM_KEY': REQUIRED,
