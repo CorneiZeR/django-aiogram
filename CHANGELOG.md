@@ -314,9 +314,10 @@ Entries land here as the work does; nothing below is released.
   `Delivery.stopping` and `Delivery.read_timeout` are public with it, because a subclass that has
   to read `self._stop` to know when to return, or redo the read-deadline arithmetic to know how
   long it may block, is not being offered an extension point. The second is the one that bites:
-  `BLPOP_TIMEOUT` capped by the transport's timeout and by `HEARTBEAT_INTERVAL`, where a number of
-  your own blocks for ever, raises inside the read, or lets the heartbeat expire under a consumer
-  that is fine. `Delivery` itself and any subclass that leaves `run()` abstract are refused by
+  `BLPOP_TIMEOUT` capped by `HEARTBEAT_INTERVAL` and by `REDIS_TIMEOUT`, where a number of your own
+  blocks for ever, raises inside the read, or lets the heartbeat expire under a consumer that is
+  fine. That the socket term is `REDIS_TIMEOUT` on every transport is #41, filed and not fixed
+  here; **Delivery** says so where a subclass reads the property. `Delivery` itself and any subclass that leaves `run()` abstract are refused by
   name rather than by `TypeError`. **Delivery** documents what `run()` must
   do, with the six rules that are each a defect this package has already had, and the page's own
   example is executed by the suite.
