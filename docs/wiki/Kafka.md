@@ -84,6 +84,32 @@ confirmed publish costs 6.4 ms on the default against 241 µs at 0. Batching sti
 hundred payloads cost 0.44 ms against 7.01 ms on the default — so what is switched off is the
 waiting, and the bulk path is faster for it too.
 
+## What the acknowledgement means
+
+`acks` is **`all`** and `enable.idempotence` is **on**, both stated in the producer config rather
+than inherited: the guarantee this transport advertises rests on them, and a default two layers
+down in the driver is not a decision anybody made.
+
+`all` is what the rest of the package assumes. `publish` waits for the broker instead of returning
+once librdkafka has queued the record, so the acknowledgement it waits for has to mean every
+in-sync replica has it. Measured on a single-broker cluster, that costs nothing against the
+inherited default — 442 µs median against 452 — because the inherited default *is* `all`; `acks=1`
+would buy 60 µs and a window where an acknowledged record lives on one log.
+
+**What it does not mean, on one broker.** A single-node cluster has one in-sync replica, so `all`
+and `1` acknowledge the same write, and neither says the record is on a disk rather than in the
+page cache. The same caution as RabbitMQ's confirm: what you get is the broker taking
+responsibility, and how much that is worth is a property of your cluster rather than of this
+package. Replication is what makes `all` mean more than `1`.
+
+Idempotence is on because librdkafka retries by default, unbounded, and a retried produce after a
+partial success writes the record twice — a duplicate here is a second Telegram message, which no
+consumer-side key can deduplicate, since it is the same payload arriving twice with the same
+correlation id. It costs one PID acquisition per process: the steady-state publish is unchanged at
+431 µs, and the *first* publish paid 1.0 second once on a cold coordinator — once, in a container
+that runs for weeks. The driver refuses the pair any other way: `enable.idempotence` with `acks`
+below `all` fails to construct, measured.
+
 ## Where it shows through
 
 - **What a payload may weigh is smallest here, by a wide margin, and it is the one to check

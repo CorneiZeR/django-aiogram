@@ -222,6 +222,25 @@ Entries land here as the work does; nothing below is released.
 
 ### Fixed
 
+- **The Kafka producer states its acknowledgement level instead of inheriting one.** `publish`
+  waits for the broker rather than returning once librdkafka has queued the record, and the
+  guarantee that rests on `acks` was whatever the driver defaulted to — a decision nobody in this
+  package had made, and one release of the driver away from being something else. It is `acks=all`
+  now, with `enable.idempotence` on.
+
+  Measured on a single-broker cluster: `all` costs nothing against the inherited default, 442 µs
+  median against 452, because the inherited default *is* `all`; `acks=1` would buy 60 µs and a
+  window where an acknowledged record lives on one log. Idempotence leaves the steady-state
+  publish unchanged at 431 µs and costs one PID acquisition per process — the first publish paid
+  1.0 second once on a cold coordinator, in a container that runs for weeks. What it buys is no
+  duplicate from librdkafka's own retries, which are unbounded by default: a retried produce after
+  a partial success writes the record twice, and a duplicate here is a second Telegram message
+  that no consumer-side key can deduplicate.
+
+  **Kafka** explains what the acknowledgement does and does not mean, including the part a single
+  broker cannot give you: one in-sync replica means `all` and `1` acknowledge the same write, and
+  replication is what makes the difference real.
+
 - **The bot process resets a dead database connection, which it never did.** Django closes a
   broken or obsolete connection in `close_old_connections()`, wired to the `request_started` and
   `request_finished` signals only — and a bot worker has no requests. So a connection that died

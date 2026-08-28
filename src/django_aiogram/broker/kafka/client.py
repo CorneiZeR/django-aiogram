@@ -101,7 +101,34 @@ def shared_producer(bootstrap: str) -> 'Producer':
         # default against 241us at 0. Batching still happens -- a `publish` of a hundred
         # payloads costs 0.44ms here against 7.01ms on the default, 4.4us a message -- so what
         # is switched off is the waiting, and the bulk path is faster for it too
-        _producer = (bootstrap, KafkaProducer({'bootstrap.servers': bootstrap, 'linger.ms': 0}))
+        # `acks` and `enable.idempotence` stated rather than inherited, because the guarantee this
+        # transport advertises rests on them and a default two layers down is not a decision.
+        #
+        # `all` is what the rest of the package assumes: `publish` waits for the broker rather than
+        # returning once librdkafka has queued the record, so the acknowledgement it waits for has
+        # to mean every in-sync replica has it. Measured against the inherited default on a
+        # single-broker cluster, the cost is nil -- 442us median against 452us -- because the
+        # inherited default *is* all; `acks=1` would buy 60us and a window where an acknowledged
+        # record lives on one log.
+        #
+        # Idempotence costs one PID acquisition per process and buys no duplicate from librdkafka's
+        # own retries, which are on by default and unbounded: without it a retried produce after a
+        # partial success writes the record twice, and a duplicate here is a second Telegram
+        # message that no consumer-side key can deduplicate. Measured: median publish unchanged
+        # (431us), and the *first* publish paid 1.0s once on a cold coordinator -- once per
+        # process, in a container that runs for weeks. librdkafka refuses the pair any other way:
+        # `enable.idempotence` with `acks` below all fails to construct, measured
+        _producer = (
+            bootstrap,
+            KafkaProducer(
+                {
+                    'bootstrap.servers': bootstrap,
+                    'linger.ms': 0,
+                    'acks': 'all',
+                    'enable.idempotence': True,
+                }
+            ),
+        )
         return _producer[1]
 
 
