@@ -1161,3 +1161,77 @@ def test_e009_accepts_a_path_whose_segment_is_a_python_keyword():
     reported = [message for message in check_settings() if message.id == 'django_aiogram.E009']
 
     assert reported == [], f'a keyword segment is importable, and was refused: {reported}'
+
+
+class MyOwnRouter:
+    """A router a project wrote, for the case that has to stay silent.
+
+    Real rather than a dotted path that does not resolve, because `override_settings` cannot be
+    used with one -- see the note in the case below.
+    """
+
+    def db_for_read(self, model, **hints):
+        return None
+
+
+@pytest.mark.parametrize(
+    ('routers', 'says'),
+    [
+        (
+            ['django_redis_aiogram.dbrouter.TelegramEventLogRouter'],
+            "Write 'django_aiogram.eventlog.dbrouter.TelegramEventLogRouter'",
+        ),
+        # a path we never had: naming a replacement it never had would be worse than saying the
+        # distribution is gone
+        (['django_redis_aiogram.something.Else'], 'That distribution is gone in 4.0'),
+    ],
+    ids=['the router', 'some other 3.x path'],
+)
+@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'})
+def test_e048_names_the_4_0_path_for_a_3_x_router(routers, says, monkeypatch):
+    """A project wrote our dotted path into Django's settings, and 4.0 moved it.
+
+    In a deployment nothing imports `DATABASE_ROUTERS` until the first query that needs routing,
+    and then it fails with Django's own `ImportError` -- a module name, not the fix. Which is why
+    a check is worth having.
+
+    Set with `monkeypatch` rather than `override_settings`, and the reason is worth writing down:
+    Django's own `clear_routers_cache` receiver rebuilds `ConnectionRouter().routers` on
+    `setting_changed`, which **imports every router eagerly** -- so `override_settings` with a path
+    that does not resolve raises inside itself, before the code under test runs. The rule reads
+    `getattr(django_settings, 'DATABASE_ROUTERS', ())`, so this patches exactly what it reads.
+    """
+    from django.conf import settings as django_settings
+
+    monkeypatch.setattr(django_settings, 'DATABASE_ROUTERS', routers, raising=False)
+    found = [message for message in check_settings() if message.id == 'django_aiogram.E048']
+
+    assert len(found) == 1, f'E048 reported {len(found)} problems for {routers}'
+    assert says in found[0].msg, found[0].msg
+    # the label is Django's setting, not ours: a message introducing itself as
+    # TELEGRAM_BOT['...'] would send the reader to the wrong file
+    assert found[0].msg.startswith('DATABASE_ROUTERS '), found[0].msg
+    assert 'urls.py' in (found[0].hint or ''), 'the hint does not mention the other moved path'
+
+
+@pytest.mark.parametrize(
+    'routers',
+    [
+        [],
+        ['django_aiogram.eventlog.dbrouter.TelegramEventLogRouter'],
+        ['tests.test_checks.MyOwnRouter'],
+        ['django_aiogram.eventlog.dbrouter.TelegramEventLogRouter', 'tests.test_checks.MyOwnRouter'],
+    ],
+    ids=['none', 'the 4.0 path', "a project's own", 'both'],
+)
+def test_e048_is_silent_on_anything_that_is_not_a_3_x_path(routers):
+    """The rule reports a rename, so a correct configuration and an unrelated one are the same.
+
+    A router of the project's own is the case worth having: it neither resolves to ours nor starts
+    with the old distribution, and reporting it would make the rule noise on a working setup. This
+    one is a real class, so `override_settings` can carry it the way a project's settings would.
+    """
+    with override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'}, DATABASE_ROUTERS=routers):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.E048']
+
+    assert found == [], f'E048 reported {[message.msg for message in found]} for {routers}'
