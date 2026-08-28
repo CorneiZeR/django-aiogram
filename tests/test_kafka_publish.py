@@ -349,3 +349,44 @@ def test_take_nowait_still_gives_the_join_its_own_budget(broker, monkeypatch):
         f'no poll asked for the fetch budget, so the join was bounded by it: {consumer.polled}'
     )
     assert sum(consumer.polled[:-1]) > 0.3, f'the join itself was not given KAFKA_TIMEOUT: {consumer.polled}'
+
+
+def test_the_producer_states_its_acknowledgement_level(monkeypatch):
+    """The level is a decision this package makes, so the config has to carry it.
+
+    No test on one broker can falsify the *level*: with `acks=0` a record still survives a graceful
+    restart, because the log file is on the host either way, and losing an acknowledged record
+    needs a cluster where replication can be behind. That is recorded in #45 and in the restart
+    case on the integration side.
+
+    So what is pinned is that the config says it. `publish` waits for the broker rather than
+    returning once librdkafka has queued the record, and an inherited default is one release away
+    from being something else -- the driver's, not ours.
+
+    Idempotence with it, and the pair is not free to separate: librdkafka refuses
+    `enable.idempotence` with `acks` below `all`, measured, so a config that weakened one would
+    fail to construct rather than quietly lose the other.
+    """
+    # the driver is an extra and this patches a name inside it, so the case needs it present --
+    # the same `importorskip` the reconnect case above uses, and the Kafka CI leg has it
+    pytest.importorskip('confluent_kafka')
+
+    from django_aiogram.broker.kafka import client
+
+    built = {}
+
+    class Recording:
+        def __init__(self, config):
+            built.update(config)
+
+        def poll(self, timeout):
+            return 0
+
+    # patched where the driver is imported *from*, not on the client module: the import is inside
+    # `shared_producer` because the driver is an extra, so there is no module-level name to replace
+    monkeypatch.setattr('confluent_kafka.Producer', Recording)
+    monkeypatch.setattr(client, '_producer', None)
+    client.shared_producer('localhost:9092')
+
+    assert built.get('acks') == 'all', f'the producer does not state acks: {built}'
+    assert built.get('enable.idempotence') is True, f'the producer does not state idempotence: {built}'
