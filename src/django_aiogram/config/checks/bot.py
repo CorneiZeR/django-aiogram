@@ -123,7 +123,12 @@ def _readable_serializer(key: str) -> list[Problem]:
 def _serviceable_webhook(key: str) -> list[Problem]:
     """Reject a webhook Telegram cannot reach, or one anybody could post to."""
     url = str(_setting(key) or '').strip()
-    webhook_mode = str(conf.get('MODE') or '').strip().lower() == UpdateMode.WEBHOOK
+    # a member first, for the reason `_redis_fsm_storage` gives: `UpdateMode` mixes in `str`, and
+    # since 3.11 `str(UpdateMode.WEBHOOK)` is `'UpdateMode.WEBHOOK'`. Normalising that matches
+    # nothing, so a project passing the enum this package publishes had the required-URL finding
+    # silently dropped -- measured: no finding at all where the string form reports one
+    mode = conf.get('MODE')
+    webhook_mode = mode is UpdateMode.WEBHOOK or str(mode or '').strip().lower() == UpdateMode.WEBHOOK.value
     if not url:
         if webhook_mode:
             return [

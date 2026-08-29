@@ -21,7 +21,7 @@ from django_aiogram.broker.redis_list import RedisListBroker
 from django_aiogram.broker.registry import SHIPPED
 from django_aiogram.config.checks import CHECKS, check_settings, worker_name_problems
 from django_aiogram.config.defaults import DEFAULTS
-from django_aiogram.config.enums import StorageKind
+from django_aiogram.config.enums import StorageKind, UpdateMode
 from django_aiogram.config.settings import take_ceiling
 from django_aiogram.eventlog.dbrouter import TelegramEventLogRouter
 from django_aiogram.eventlog.events import worker_identity
@@ -1878,3 +1878,35 @@ def test_an_infinite_setting_is_reported_rather_than_raised(key, identifier):
         reported = [message.id for message in check_settings()]
 
     assert identifier in reported, reported
+
+
+@pytest.mark.parametrize('mode', [UpdateMode.WEBHOOK, 'webhook'], ids=['the enum member', 'the string'])
+def test_a_webhook_without_a_url_is_reported_however_the_mode_is_written(mode):
+    """`UpdateMode` mixes in `str`, and since 3.11 `str()` on a member gives its *name*.
+
+    So `str(UpdateMode.WEBHOOK).lower()` reads `'updatemode.webhook'` and matches nothing — and a
+    project passing the enum this package publishes, which `API.md` documents it for, had the
+    required-URL finding dropped without a word. Measured before the fix: no finding at all where
+    the string form reports one.
+
+    Both spellings, because either alone is a case that cannot see this.
+    """
+    with override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'MODE': mode}):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.E027']
+
+    assert len(found) == 1, f'E027 reported {[message.msg for message in found]}'
+    assert 'required when MODE' in found[0].msg, found[0].msg
+
+
+def test_a_frozenset_is_a_collection_too():
+    """The rules take any collection but a mapping, and the pages say so rather than a list of three."""
+    settings = {
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'EVENT_LOG': True,
+        'EVENT_LOG_REDACT_KEYS': frozenset({'token'}),
+    }
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.E035']
+
+    assert found == [], [message.msg for message in found]
