@@ -264,7 +264,11 @@ class RedisStreamsBroker(Broker):
         """
         if self._recovered_upto is None:
             return None
-        page = connection.xreadgroup(  # type: ignore[attr-defined]
+        # `connection` is typed `object` for the same reason the Kafka and RabbitMQ brokers type
+        # their message and method that way: the driver is an extra, and this signature does not
+        # name a class from one. The stubs are not the reason: redis-py has declared `xreadgroup`
+        # all along, and the first version of this comment blamed them for it
+        page = connection.xreadgroup(  # type: ignore[attr-defined]  # the parameter is `object`, see above
             self._group(), self._consumer(), {self._key(): self._recovered_upto}, count=_RECOVERY_PAGE
         )
         entries = self._entries(page)

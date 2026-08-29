@@ -134,7 +134,7 @@ class RedisListBroker(Broker):
                 return self.take_nowait()
         else:
             # lpop only widens to a list when given a count
-            raw = connection.lpop(self._queue())  # type: ignore[assignment]
+            raw = connection.lpop(self._queue())  # type: ignore[assignment]  # the widening above
         return None if raw is None else Taken(as_bytes(raw), raw)
 
     def ack(self, handle: object) -> None:

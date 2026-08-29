@@ -85,7 +85,8 @@ def new_correlation_id() -> uuid.UUID:
     """
     generate = getattr(uuid, 'uuid7', None)
     if generate is not None:  # pragma: no cover - 3.14 and newer
-        return generate()  # type: ignore[no-any-return]
+        # `getattr` with a default gives back `Any`, and this is 3.14's `uuid.uuid7`
+        return generate()  # type: ignore[no-any-return]  # reached through getattr, see above
     raw = bytearray(int(time.time() * 1000).to_bytes(6, 'big') + os.urandom(10))
     raw[6] = (raw[6] & 0x0F) | 0x70
     raw[8] = (raw[8] & 0x3F) | 0x80

@@ -101,7 +101,9 @@ class OutcomeFilter(admin.SimpleListFilter):
         return queryset
 
 
-class BoundedPaginator(Paginator):  # type: ignore[type-arg]
+# django-stubs makes `Paginator` generic in the object it pages over; Django does not, so writing
+# the parameter would be a name that exists only for the type checker
+class BoundedPaginator(Paginator):  # type: ignore[type-arg]  # generic in the stubs, not at runtime
     """Counts, but never past ``COUNT_LIMIT`` rows.
 
     Django's changelist runs ``COUNT(*)`` over the filtered queryset to build

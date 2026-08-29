@@ -197,7 +197,9 @@ class RabbitMQBroker(Broker):
         """
         if method is None or body is None:
             return None
-        tag = method.delivery_tag  # type: ignore[attr-defined]
+        # `method` is typed `object` for the same reason the Kafka broker types its message that
+        # way: pika is an extra, and this signature does not name a class from one
+        tag = method.delivery_tag  # type: ignore[attr-defined]  # the parameter is `object`, see above
         generation = channel_generation()
         self._unsettled.add((generation, tag))
         return Taken(body, (generation, tag))
