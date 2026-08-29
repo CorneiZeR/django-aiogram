@@ -450,6 +450,11 @@ Entries land here as the work does; nothing below is released.
   arrives. Django's own `sequence_reset_sql` does it, which is what `loaddata` uses for the same
   reason and speaks each backend's version.
 
+  The sequence is reset on the way out of a run that finds nothing to copy, too. A run killed
+  between its last chunk committing and that reset leaves the ids copied and the sequence behind
+  them — and every rerun then takes the "nothing is left" path, so without this the deployment stays
+  one duplicate-key error away from its next write with a command that reports success each time.
+
   A chunk that loses a race is retried. `NOT EXISTS` chooses the ids to insert and does not hold
   them, so a row this release writes in that gap ends the insert as a unique violation — likeliest
   of all before the command has ever run, when the destination's sequence is still where `migrate`

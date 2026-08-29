@@ -218,6 +218,34 @@ def test_the_check_is_silent_without_the_old_table():
 
 @pytest.mark.django_db
 @pytest.mark.skipif(connection.vendor != 'postgresql', reason='a sequence only behaves this way on a real one')
+def test_a_rerun_after_the_last_chunk_still_fixes_the_sequence(old_table):
+    """Killed between the last commit and the reset, a rerun has nothing to copy -- and must still reset.
+
+    That gap is one statement wide and the consequence outlives it: the ids are copied, the sequence
+    is behind them, and every rerun takes the "nothing is left to copy" path. Skipping the reset
+    there leaves the deployment one duplicate-key error away from its next write, with a command
+    that reports success each time it is run.
+
+    Reproduced by copying and then putting the sequence back, which is the state that gap produces.
+    """
+    write_old_rows(3)
+    move()
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT setval(pg_get_serial_sequence(%s, 'id'), 1, false)", [TelegramEvent._meta.db_table])
+
+    output = move()
+
+    assert 'nothing is left to copy' in output, output
+    fresh = TelegramEvent.objects.create(
+        kind=EventKind.OUTBOUND_SENT.value,
+        correlation_id=new_correlation_id(),
+        function='send_message',
+    )
+    assert fresh.pk > max(TelegramEvent.objects.exclude(pk=fresh.pk).values_list('id', flat=True))
+
+
+@pytest.mark.django_db
+@pytest.mark.skipif(connection.vendor != 'postgresql', reason='a sequence only behaves this way on a real one')
 def test_the_next_insert_after_a_move_succeeds(old_table):
     """The step a hand-written `INSERT ... SELECT` leaves out, and the one SQLite cannot show.
 
@@ -284,10 +312,9 @@ def test_a_database_that_cannot_be_read_leaves_the_check_quiet(old_table, monkey
 
     monkeypatch.setattr('django_aiogram.eventlog.moving.old_table_is_present', refuse)
 
-    reported = check_settings()
-
-    assert [message for message in reported if message.id == 'django_aiogram.I003'] == []
-    assert reported is not None, 'the run has to answer at all, which is the point'
+    # that the run *answers* is asserted by reaching this line at all: a rule which let the error
+    # through would come out of `check_settings` itself, and there is nothing to add after that
+    assert [message for message in check_settings() if message.id == 'django_aiogram.I003'] == []
 
 
 @pytest.mark.django_db

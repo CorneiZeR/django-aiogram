@@ -6,8 +6,9 @@ described as one ``INSERT ... SELECT``. Honest, and the wrong shape on a table s
 one statement, no pacing, no way to resume, and a sequence left behind.
 
 This module is the part both halves of the answer share -- the check that notices the old table and
-the command that empties it -- so neither can disagree with the other about which table, on which
-alias, is the one being talked about.
+the command that copies out of it -- so neither can disagree with the other about which table, on
+which alias, is the one being talked about. Neither empties it: the rows stay, and dropping the
+table is the operator's to do.
 """
 
 from django.db import connections

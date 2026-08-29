@@ -66,7 +66,8 @@ The table is `django_aiogram_event` now, and `migrate` creates it empty. The old
 drops it.
 
 `I003` says so on every `manage.py check` while that table is there, and names the command that
-empties it. With the app's own `migrate` already run:
+copies its rows across. It copies: the old table is left exactly as it is, including any row whose
+id was already taken. With the app's own `migrate` already run:
 
 ```shell
 python manage.py tgbot_move_events

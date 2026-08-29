@@ -101,8 +101,15 @@ class Command(BaseCommand):
 
         bounds = self._bounds(alias)
         if bounds is None:
-            # what it can say, and no more: an id that is present may hold the row this command
-            # copied or the row this release wrote, and only whoever knows the history can tell
+            # the sequence too, on the way out. A run killed after its last chunk committed and
+            # before the reset leaves the ids copied and the sequence behind them, and every rerun
+            # would take this same path and skip the reset again -- so the deployment stays one
+            # duplicate-key error away from its next write until somebody notices. Cheap, and
+            # idempotent: it sets the sequence from the table's own maximum
+            if not options['dry_run']:
+                self._reset_sequence(alias)
+            # what the message can say, and no more: an id that is present may hold the row this
+            # command copied or the row this release wrote, and only whoever knows can tell
             self.stdout.write(f'Every id in {OLD_TABLE} is present in {alias!r}; nothing is left to copy.')
             return
 
