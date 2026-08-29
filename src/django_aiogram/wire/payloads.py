@@ -150,9 +150,7 @@ def bounded(payload: dict[str, Any]) -> dict[str, Any]:
     """Keep a payload under the configured byte cap, whatever it holds."""
     try:
         cap = int(conf['EVENT_LOG_MAX_PAYLOAD_BYTES'])
-    except (TypeError, ValueError, OverflowError):
-        # `OverflowError` is what an infinite cap raises, and this runs per event: the caller logs
-        # whatever escapes, so without it every payload costs a traceback
+    except (TypeError, ValueError):
         return {}  # E034 reports it; a row is not the place to argue
     if cap <= 0:
         return {}
