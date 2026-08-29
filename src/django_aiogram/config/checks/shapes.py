@@ -129,13 +129,18 @@ def _a_mapping(key: str) -> list[Problem]:
 def _a_collection_of_strings(key: str) -> list[Problem]:
     """Require a real collection: a string would be read one character per item."""
     value = _setting(key)
-    if not value:
-        return []
+    # before the empty check, not after: `{}` is falsy, so a mapping was refused by name and then
+    # let through when it happened to be empty -- and the pages say a mapping is refused, without
+    # a footnote about which ones
     # `Mapping` is refused by name, and it is the one collection that passes every other test
     # here: a dict *is* a collection, of its keys, so `list(...)` downstream turns
     # `{'message': True}` into `['message']` and the project's values vanish without a word. A
     # set or a frozenset is accepted, because iterating one gives back what was written
-    if isinstance(value, (str, bytes, Mapping)) or not isinstance(value, Collection):
+    if isinstance(value, Mapping):
+        return [Problem(f'must be a list, tuple or set of strings, got {type(value).__name__}.')]
+    if not value:
+        return []
+    if isinstance(value, (str, bytes)) or not isinstance(value, Collection):
         return [Problem(f'must be a list, tuple or set of strings, got {type(value).__name__}.')]
     # anything unhashable would raise out of a membership test later, so the
     # element type is settled here and reported through repr's eyes

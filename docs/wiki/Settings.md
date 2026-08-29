@@ -296,7 +296,7 @@ entry naming a retired one is dead but harmless.
 | `E025` / `E026` | `WEBHOOK_URL` / `WEBHOOK_SECRET` is not a string |
 | `E027` | `WEBHOOK_URL` is set without a secret or is not https, or `MODE` is `webhook` with no URL |
 | `E028` | `MODE` is not `polling` or `webhook` |
-| `E029` | `WEBHOOK_ALLOWED_UPDATES` is not a collection of update types — a list, a tuple or a set, and any other collection of strings that is not a mapping — or names one Telegram does not have. A mapping is refused although it is a collection: it is a collection *of its keys*, so it would register those and drop the values silently |
+| `E029` | `WEBHOOK_ALLOWED_UPDATES` is not a collection of update types — a list, a tuple or a set, and any other collection of strings that is not a mapping — or names one Telegram does not have. A mapping is refused although it is a collection — empty ones included — because it is a collection *of its keys*, so it would register those and drop the values silently |
 | `E030` | `REDIS_TIMEOUT` is wrong or below 2 — the pop has to sit one second inside it |
 | `E031`, `E042` | `EVENT_LOG` / `EVENT_LOG_SYNC` cannot be read as true or false. `EVENT_LOG` is read while the app loads, so it too refuses the boot first |
 | `E032`, `E035` | `EVENT_LOG_KINDS` / `EVENT_LOG_REDACT_KEYS` is not a collection of strings — a list, a tuple or a set, and any other that is not a mapping. A mapping is refused for the reason `E029` gives |

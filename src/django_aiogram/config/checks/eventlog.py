@@ -173,7 +173,10 @@ def _a_routed_log_database(key: str) -> list[Problem]:
                 # a path is Django's own to instantiate, so the class behind it is a router in use
                 if import_string(entry) is TelegramEventLogRouter:
                     return []
-            except ImportError:
+            except (ImportError, ValueError):
+                # `ValueError` for a path with an empty module part -- `'.Router'` reaches
+                # `import_module('')`, which raises that rather than `ImportError`. Measured on
+                # Django 6.1, and a rule that only informs must not be what ends the run
                 continue  # a router Django itself will complain about
         # and anything else has to be an *instance*: Django uses a non-string entry as it stands,
         # so a bare class there is a router whose `db_for_read` is called without a `self` -- not

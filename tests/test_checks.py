@@ -1910,3 +1910,40 @@ def test_a_frozenset_is_a_collection_too():
         found = [message for message in check_settings() if message.id == 'django_aiogram.E035']
 
     assert found == [], [message.msg for message in found]
+
+
+@pytest.mark.parametrize(
+    ('key', 'identifier'),
+    [
+        ('WEBHOOK_ALLOWED_UPDATES', 'django_aiogram.E029'),
+        ('EVENT_LOG_KINDS', 'django_aiogram.E032'),
+        ('EVENT_LOG_REDACT_KEYS', 'django_aiogram.E035'),
+    ],
+    ids=['allowed updates', 'kinds', 'redact keys'],
+)
+def test_an_empty_mapping_is_refused_like_any_other(key, identifier):
+    """`{}` is falsy, so it reached the empty-value return before the rule looked at its type.
+
+    The refusal and the pages both say a mapping is refused, without a footnote about which ones —
+    and somebody who wrote `{}` meant a mapping, so the answer that helps is the one that names the
+    type rather than the silence an empty list would get.
+    """
+    settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG': True, key: {}}
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == identifier]
+
+    assert len(found) == 1, f'{identifier} reported {[message.msg for message in found]}'
+    assert 'dict' in found[0].msg, found[0].msg
+
+
+@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'FSM_STORAGE': '.Storage'})
+def test_a_path_with_an_empty_module_part_is_reported_not_raised():
+    """`import_string('.Storage')` reaches `import_module('')`, which raises `ValueError`.
+
+    Neither `ImportError` nor anything else the rule caught, so a settings typo ended
+    `manage.py check` with Django's own `Empty module name` and took every other finding with it.
+    Measured on Django 6.1 before the fix.
+    """
+    reported = [message.id for message in check_settings()]
+
+    assert 'django_aiogram.E019' in reported, reported

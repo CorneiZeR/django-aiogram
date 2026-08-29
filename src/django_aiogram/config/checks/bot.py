@@ -71,7 +71,7 @@ def _importable_storage(key: str) -> list[Problem]:
 
     try:
         storage = import_string(value)
-    except ImportError as error:
+    except (ImportError, ValueError) as error:
         return [Problem(f'cannot be imported: {error}')]
     if not (isinstance(storage, type) and issubclass(storage, BaseStorage)):
         return [Problem(f'must point to a BaseStorage subclass, got {value!r}.')]
@@ -157,11 +157,14 @@ def _serviceable_webhook(key: str) -> list[Problem]:
 def _known_update_types(key: str) -> list[Problem]:
     """Require a real collection: a string would reach Telegram as single characters."""
     allowed = _setting(key)
+    # a mapping is refused for the reason `_a_collection_of_strings` gives: `webhook_settings`
+    # calls `list()` on this, so a dict would register its keys as the allowed updates -- and
+    # before the empty check, since `{}` is falsy and would otherwise slip past the same sentence
+    if isinstance(allowed, Mapping):
+        return [Problem(f'must be a list, tuple or set of update types, got {type(allowed).__name__}.')]
     if not allowed:
         return []
-    # a mapping is refused for the reason `_a_collection_of_strings` gives: `webhook_settings`
-    # calls `list()` on this, so a dict would register its keys as the allowed updates
-    if isinstance(allowed, (str, bytes, Mapping)) or not isinstance(allowed, Collection):
+    if isinstance(allowed, (str, bytes)) or not isinstance(allowed, Collection):
         return [Problem(f'must be a list, tuple or set of update types, got {type(allowed).__name__}.')]
 
     # deferred for the same reason as DefaultBotProperties above
