@@ -154,7 +154,7 @@ def _known_update_types(key: str) -> list[Problem]:
     # a mapping is refused for the reason `_a_collection_of_strings` gives: `webhook_settings`
     # calls `list()` on this, so a dict would register its keys as the allowed updates
     if isinstance(allowed, (str, bytes, Mapping)) or not isinstance(allowed, Collection):
-        return [Problem(f'must be a list or tuple of update types, got {type(allowed).__name__}.')]
+        return [Problem(f'must be a list, tuple or set of update types, got {type(allowed).__name__}.')]
 
     # deferred for the same reason as DefaultBotProperties above
     from aiogram.enums import UpdateType  # noqa: PLC0415 - as above

@@ -141,7 +141,7 @@ def _a_collection_of_strings(key: str) -> list[Problem]:
     # `{'message': True}` into `['message']` and the project's values vanish without a word. A
     # set or a frozenset is accepted, because iterating one gives back what was written
     if isinstance(value, (str, bytes, Mapping)) or not isinstance(value, Collection):
-        return [Problem(f'must be a list or tuple, got {type(value).__name__}.')]
+        return [Problem(f'must be a list, tuple or set, got {type(value).__name__}.')]
     # anything unhashable would raise out of a membership test later, so the
     # element type is settled here and reported through repr's eyes
     invalid = sorted(repr(name) for name in value if not isinstance(name, str))
