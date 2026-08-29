@@ -80,6 +80,11 @@ dev = [
     # type check: they caught four real mistakes the first time they ran, including a
     # delivery tag typed as `object` reaching a driver that wants an int
     "types-pika-ts>=1.4",
+    # the database-backed suite runs on SQLite by default and on PostgreSQL through
+    # `tests/postgres_settings.py`, which is where the sequence case lives: `sqlite_sequence`
+    # follows an explicit id on its own and a PostgreSQL sequence does not, so a copy that
+    # inserts explicit ids is only observable here
+    "psycopg[binary]>=3.2",
     # tests/test_docstring_coverage.py reads `.coderabbit.yaml`, and that file's meaning
     # turns on YAML's own rules: a bare `off` is the boolean false, so the review policy
     # can be silently invalid. Asserting on the text cannot tell an active setting from

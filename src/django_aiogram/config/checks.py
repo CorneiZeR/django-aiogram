@@ -843,6 +843,49 @@ def worker_name_problems() -> list[Problem]:
     return _a_worker_that_keeps_its_name('WORKER_NAME')
 
 
+def _a_log_the_rename_left_behind(_key: str) -> list[Problem]:
+    """Say when 3.x's event log table is still sitting on the log's alias.
+
+    Nothing is broken: the table this release writes to exists, and the rows in the old one are
+    simply history nothing reads. But nothing points at them either -- the upgrade page mentions
+    the move and a page is only read by whoever goes looking -- so a project upgrades, sees a
+    working bot, and finds its history months later or not at all.
+
+    Information rather than a warning, and always on: it is cheap, and this is what makes the
+    command discoverable. Failing a build over it would be wrong twice over, since leaving the
+    rows where they are is a legitimate choice and the check cannot tell that choice from an
+    oversight.
+
+    Asked of whichever alias the log resolves to, not of the default: with `EVENT_LOG_DATABASE`
+    set, both tables live there, and a rule that looked at the default would report nothing on
+    exactly the deployment that has the most rows to move.
+    """
+    from django_aiogram.eventlog.moving import (  # noqa: PLC0415 - reaches django.db, which a check must not import at module scope
+        OLD_TABLE,
+        old_table_is_present,
+    )
+    from django_aiogram.eventlog.writer import log_alias  # noqa: PLC0415 - as above
+
+    alias = log_alias()
+    try:
+        present = old_table_is_present(alias)
+    except Exception:  # noqa: BLE001 - a rule reports; it never fails, and a database that cannot be reached is not a finding
+        return []
+    if not present:
+        return []
+    return [
+        Problem(
+            f'{OLD_TABLE} is still on the {alias!r} database, holding rows this release does not read.',
+            key='',
+            hint=(
+                'manage.py tgbot_move_events copies them into this release table in bounded '
+                'chunks, and can be stopped and rerun. Dropping the old table afterwards is '
+                'yours to do — see Upgrading.'
+            ),
+        )
+    ]
+
+
 def _a_routed_log_database(key: str) -> list[Problem]:
     """Say when the log is pointed at its own alias with nothing routing it there.
 
@@ -1182,6 +1225,9 @@ CHECKS: tuple[Check, ...] = (
     # the alias is correctly configured and would still be reported. Information the
     # reader can act on, not a condition worth failing `check --fail-level WARNING`
     Check('I002', 'EVENT_LOG_DATABASE', _a_routed_log_database),
+    # keyed on nothing, because the condition is a table rather than a setting: it is true or
+    # false whatever `TELEGRAM_BOT` says, and the message names the alias it asked
+    Check('I003', '', _a_log_the_rename_left_behind),
     Check('E047', 'BROKER', _a_usable_broker),
     Check('E042', 'EVENT_LOG_SYNC', _a_readable_boolean),
     Check('E043', 'REDIS_URL', _a_url_pickle_can_survive),

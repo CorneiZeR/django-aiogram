@@ -356,6 +356,61 @@ lock) is the follow-up.
 **Do not put a `ForeignKey` on `TelegramEvent`.** It breaks Django's fast-delete
 path, and every prune then has to fetch primary keys first.
 
+### Rows written before 4.0
+
+The table is `django_aiogram_event` now, and `migrate` creates it empty. Rows written by 3.x are
+in `django_redis_aiogram_event`, where nothing reads them and nothing drops them — `I003` says so
+on every `manage.py check` until they are moved or the table is gone.
+
+```shell
+python manage.py tgbot_move_events
+```
+
+The same shape as the prune above, and the same arguments: `--chunk`, `--sleep`, `--max-chunks`,
+`--database`, `--dry-run`. It copies by primary-key range, one transaction per chunk, naming every
+column rather than `SELECT *` — the two tables agree today, and would keep agreeing right up to the
+release that changes either of them. A mismatched column count is rejected; a matching count in a
+different order is accepted, with every value one column to the side. Naming them fails on the
+first and makes the second impossible.
+
+**Stopping it is safe, and so is running it after the bot has been writing.** Both tables share the
+primary key, so an id already in the new table is either a row the command copied or a row this
+release wrote — either way it is not inserted again, and each chunk copies only the ids that are
+not there yet. A killed run resumes at the first id the destination does not have, a finished one
+copies nothing, and running it twice is not a way to duplicate history.
+
+Starting above the destination's *highest* id would be cheaper and wrong: the bot writes to the new
+table from the first message after `migrate`, so a destination that has been written to at all
+would skip every old row beneath its highest id and report a completed move.
+
+**An id can be taken.** A row this release wrote may hold an id an old row also has, and nothing can
+put both under one primary key — so that old row is left where it is and the command says how many
+such rows there are, on every run, including the one that copies nothing. That last part is the one
+that matters: "every id is present, nothing is left to copy" is what somebody reads before dropping
+the old table, and it has to be followed by the rows that are only in it.
+
+The count is taken across the whole old table rather than the ranges being copied, because a
+destination that already holds low ids puts the resume point above them — no chunk would ever look —
+and it is taken after the copy, so a row that lands while a chunk is running is counted too. A row
+is told from a copy of itself by comparing every column: two rows can share an id, a timestamp and a
+kind and still differ in the payload or the chat, and the answer decides whether you can drop a
+table.
+
+Comparing them, and deciding what the history is worth, is yours: this will not renumber your rows
+to make a total tidy.
+
+A row that lands *while a chunk is being copied* is the same collision arriving late, and the chunk
+is retried rather than lost — each retry excludes what landed. It is likeliest before the first run,
+when the sequence is still where `migrate` left it and the bot is drawing the very ids the old table
+used, so the quiet night is worth choosing for more than the load.
+
+It also moves the sequence past the ids it inserted. That step is what a hand-written
+`INSERT ... SELECT` leaves out, and on PostgreSQL its absence is not visible until the *bot's* next
+write fails on a duplicate primary key.
+
+Dropping `django_redis_aiogram_event` afterwards is yours to do. This package will never run it
+for you.
+
 ## A separate database
 
 ```python

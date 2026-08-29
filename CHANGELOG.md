@@ -220,6 +220,73 @@ Entries land here as the work does; nothing below is released.
   broker's own doing. `Deployment` carries a compose recipe for each and `Troubleshooting` the
   duplicate each one produces.
 
+- **`manage.py tgbot_move_events` copies the 3.x event log into this release's table**, and `I003`
+  says it is there to be copied. The rename left `django_redis_aiogram_event` where it was, and the
+  upgrade page offered one `INSERT ... SELECT` — honest, and the wrong shape on a table sized by
+  traffic: one statement, no pacing, no way to resume, and a sequence left behind.
+
+  It walks primary-key ranges like `tgbot_prune_events` does, with the same `--chunk`, `--sleep`,
+  `--max-chunks`, `--database` and `--dry-run`. Both tables share the primary key, so an id already
+  in the new table is either a row the command copied or a row this release wrote — either way it is
+  not inserted again, and each chunk copies only the ids that are not there yet. A killed run
+  resumes at the first id the destination does not have, a second run copies nothing, and running it
+  twice is not a way to duplicate history.
+
+  What it could not copy is counted across the whole old table and named on every run, including the
+  one that copies nothing. Counting it from the ranges the walk visited would miss exactly the rows
+  most likely to be lost: a destination already holding low ids puts the resume point above them, no
+  chunk ever looks, the move reports a clean total, and every later run says every id is present —
+  which is the state in which somebody drops the old table. A row is told from a copy of itself by
+  comparing every column — two rows can share an id, a timestamp and a kind and still differ in the
+  payload or the chat — and the count is taken *after* the copy, so a row that lands while a chunk
+  is running is counted too.
+
+  Starting above the destination's *highest* id would be cheaper and silently wrong: the bot writes
+  to the new table from the first message after `migrate`, so a destination that has been
+  written to at all would skip every old row beneath it and report a completed move. An id a row of this release already
+  holds is left where it is and counted in the report, because nothing can put two rows under one
+  primary key and renumbering somebody's history is not a decision this command gets to make.
+
+  Columns are named one by one rather than `SELECT *` — the two tables agree today and would keep
+  agreeing right up to the release that changes either of them, where a mismatched column count is
+  rejected and a matching count in a different order is accepted with every value one column to the
+  side. Naming them fails on the first and makes the second impossible.
+
+  Then it moves the sequence past the ids it inserted, which is the step a hand-written copy leaves
+  out: explicit ids do not advance a PostgreSQL sequence, so the copy succeeds and the *bot's* next
+  write fails on a duplicate primary key, at whatever hour the first message after the migration
+  arrives. Django's own `sequence_reset_sql` does it, which is what `loaddata` uses for the same
+  reason and speaks each backend's version.
+
+  The sequence is reset on the way out of a run that finds nothing to copy, too. A run killed
+  between its last chunk committing and that reset leaves the ids copied and the sequence behind
+  them — and every rerun then takes the "nothing is left" path, so without this the deployment stays
+  one duplicate-key error away from its next write with a command that reports success each time.
+
+  A chunk that loses a race is retried. `NOT EXISTS` chooses the ids to insert and does not hold
+  them, so a row this release writes in that gap ends the insert as a unique violation — likeliest
+  of all before the command has ever run, when the destination's sequence is still where `migrate`
+  left it and the bot is drawing the very ids the old table used. Each retry excludes what landed,
+  so it converges; a chunk that keeps colliding names its range and says to move the rest while
+  nothing is writing, rather than ending the run with a traceback about a primary key.
+
+  A database that cannot be read stops the command and leaves the check quiet, which are opposite
+  answers to one question on purpose: a rule that raises takes `manage.py check` down, while "there
+  is no old table" and "I could not look" read the same to a cron job and only one of them means the
+  history has been moved.
+
+  Not a data migration, deliberately: `migrate` runs inside a deploy, and a copy that holds one open
+  for as long as the table is large cannot be paced, resumed or stopped. The check makes the command
+  discoverable; the operator picks the night. Nothing is dropped —
+  `DROP TABLE django_redis_aiogram_event` stays theirs to run.
+
+  The suite grew a leg for this: `tests/postgres_settings.py` runs the command's cases against a
+  real PostgreSQL, because `sqlite_sequence` follows an explicit id on its own and a sequence does
+  not. Written against SQLite alone, the case that matters here passes whether the command resets
+  the sequence or not — measured, by deleting the reset and watching it stay green. One file rather
+  than all of `tests/db`, because eleven cases there are written to SQLite on purpose and pointing
+  them at PostgreSQL fails for reasons about the cases; widening that is #64.
+
 ### Fixed
 
 - **The cap on a blocking take comes from the transport that is being read, and `W004` names it.**

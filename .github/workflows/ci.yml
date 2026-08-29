@@ -81,6 +81,47 @@ jobs:
       - run: pip install -e '.[redis]' --group dev
       - run: python -m pytest -q --ds=tests.db_settings tests/db
 
+  test-db-postgres:
+    # one file, against a real backend, because one thing SQLite cannot answer: a sequence.
+    # `sqlite_sequence` follows an explicit id on its own and PostgreSQL's does not, so whether
+    # the next insert after a copy succeeds is only observable here.
+    #
+    # One file and not all of tests/db: eleven cases there are written to SQLite on purpose —
+    # `EXPLAIN QUERY PLAN` in the admin ones, the harness asserting the engine, the recorder ones
+    # patching what an in-memory database cannot do — so pointing the whole directory here fails
+    # for reasons that are about the cases rather than about the package. Widening it is worth
+    # doing and is its own change
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: dra
+          POSTGRES_PASSWORD: dra
+          POSTGRES_DB: dra
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e '.[redis]' --group dev
+      # the second alias the router cases use is a database of its own, and the service
+      # image only creates the one it was given
+      - run: PGPASSWORD=dra psql -h 127.0.0.1 -U dra -d dra -c 'CREATE DATABASE dra_logs'
+      - run: python -m pytest -q --ds=tests.postgres_settings tests/db/test_move_events.py
+        env:
+          DJANGO_AIOGRAM_TEST_PG_PORT: '5432'
+
   test-floors:
     # CI otherwise installs the newest releases, so the declared minimums are
     # never exercised. Exact pins, not 5.2.* — that resolved to 5.2.16
