@@ -1686,3 +1686,57 @@ def test_w004_reads_a_fractional_transport_deadline(timeout, cap):
 
     assert len(found) == 1, f'W004 said nothing about KAFKA_TIMEOUT={timeout!r}'
     assert f'caps at {cap}.' in found[0].msg, found[0].msg
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'EVENT_LOG': True,
+        'EVENT_LOG_RETENTION_DAYS': -7,
+    }
+)
+def test_the_retention_warning_quotes_the_value_that_is_set():
+    """A negative retention reaches the same branch as zero, and is not zero.
+
+    The rule said "is 0" whatever the value was, so an operator who had written `-7` was told
+    about a setting that says something else and went looking for the one that says `0`. The
+    branch is right — nothing deletes a row either way — and the sentence has to name what it read.
+    """
+    found = [message for message in check_settings() if message.id == 'django_aiogram.W006']
+
+    assert len(found) == 1, [message.msg for message in found]
+    assert 'is -7' in found[0].msg, found[0].msg
+
+
+def test_a_broken_database_backend_does_not_take_the_run_down(monkeypatch):
+    """W005 is a warning, and a warning may not be the thing that stops `manage.py check`.
+
+    Reading the engine through `connections[alias]` builds the wrapper, which imports the backend
+    module — and an alias naming one that cannot be imported raises `ImproperlyConfigured` from
+    inside a rule whose finding is advice. `connections.settings` is the same values without the
+    machinery.
+
+    The backend is made unimportable rather than a real broken one configured, because what is on
+    trial is the rule's reach: any `ENGINE` Django cannot load produces this.
+    """
+    from django.db import connections
+
+    def refuse(_alias):
+        msg = 'the backend could not be imported'
+        raise ImproperlyConfigured(msg)
+
+    monkeypatch.setattr(type(connections), '__getitem__', lambda _self, alias: refuse(alias))
+    settings = {
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'EVENT_LOG': True,
+        'EVENT_LOG_DATABASE': 'default',
+    }
+
+    with override_settings(TELEGRAM_BOT=settings):
+        reported = [message.id for message in check_settings()]
+
+    # that the run answered at all is asserted by reaching this line; that the *rule* answered is
+    # asserted here, since a rule which caught the error and returned nothing would also not raise
+    assert 'django_aiogram.W005' in reported, reported

@@ -436,9 +436,15 @@ def _a_usable_delivery(key: str) -> list[Problem]:
         # so an empty value is a project having cleared it
         return [Problem('is empty, so no consumer is chosen.', hint=_DELIVERY_HINT)]
     if path in THREE_X_DELIVERIES:
+        # two different things happened to these two names, and one sentence for both said each of
+        # them about the wrong one: `blpop` is the consumer that is still here under a dotted path,
+        # `keyspace` is the one 3.0 removed. Telling a reader their consumer was replaced when it
+        # was deleted sends them looking for a new name that does not exist
         replacement = THREE_X_DELIVERIES[path]
-        instead = f'Write {replacement!r}.' if replacement else 'That consumer was removed in 3.0.'
-        return [Problem(f'is {path!r}, which 4.0 replaced with a dotted path. {instead}', hint=_DELIVERY_HINT)]
+        if replacement:
+            said = f'is {path!r}, which 4.0 replaced with a dotted path. Write {replacement!r}.'
+            return [Problem(said, hint=_DELIVERY_HINT)]
+        return [Problem(f'is {path!r}, a consumer removed in 3.0.', hint=_DELIVERY_HINT)]
     if not _reads_as_a_dotted_path(path):
         return [Problem(f'is {path!r}, which is not a dotted path.', hint=_DELIVERY_HINT)]
     return []

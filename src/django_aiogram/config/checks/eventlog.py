@@ -82,7 +82,11 @@ def _somewhere_to_write_the_log(key: str) -> list[Problem]:
     alias = str(conf.get('EVENT_LOG_DATABASE') or '').strip() or DEFAULT_DB_ALIAS
     if alias not in connections:
         return []  # E041 owns the missing alias
-    engine = str(connections[alias].settings_dict.get('ENGINE') or '')
+    # `connections.settings`, not `connections[alias]`: the second builds the wrapper, which loads
+    # the backend module and raises `ImproperlyConfigured` for one that cannot be imported -- out of
+    # a rule whose whole finding is a warning, taking `manage.py check` down with it. The settings
+    # dictionary is the same values without the machinery
+    engine = str(connections.settings.get(alias, {}).get('ENGINE') or '')
     if engine and engine != 'django.db.backends.dummy':
         return []
     return [
@@ -247,9 +251,11 @@ def _a_log_that_is_pruned(key: str) -> list[Problem]:
         return []  # E039 owns the type complaint
     if days > 0:
         return []
+    # the value rather than the branch's assumption: a negative retention reaches here too, and
+    # "is 0" sends the reader to check a setting that says something else
     return [
         Problem(
-            'is 0 while the log is on, so nothing ever deletes a row.',
+            f'is {days} while the log is on, so nothing ever deletes a row.',
             hint='Set it and schedule `manage.py tgbot_prune_events`, or accept unbounded growth.',
         )
     ]
