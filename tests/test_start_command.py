@@ -244,7 +244,7 @@ def test_an_ephemeral_worker_name_is_warned_about_where_the_process_is_known(mon
     sending, and this is the process that owns that list. Said before the thread exists,
     so an operator reading the first lines of the log sees it.
     """
-    monkeypatch.setattr('django_aiogram.config.checks.socket.gethostname', lambda: 'ba333cb79e00')
+    monkeypatch.setattr('django_aiogram.config.checks.transport.socket.gethostname', lambda: 'ba333cb79e00')
     monkeypatch.delenv('HOSTNAME', raising=False)
 
     with caplog.at_level('WARNING', logger='django_aiogram'):

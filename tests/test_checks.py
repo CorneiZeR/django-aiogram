@@ -3,6 +3,7 @@ was only ever set inside an `isinstance` branch that a wrong type never entered.
 """
 
 import builtins
+import importlib
 import pathlib
 import re
 
@@ -840,7 +841,7 @@ def test_the_worker_name_rule_is_information_and_the_consumer_warns_for_itself(m
     Being the consumer is knowable in the command and not in a check, and this is the
     one place the same rule is asked twice — so it is asked of one function.
     """
-    monkeypatch.setattr('django_aiogram.config.checks.socket.gethostname', lambda: 'ba333cb79e00')
+    monkeypatch.setattr('django_aiogram.config.checks.transport.socket.gethostname', lambda: 'ba333cb79e00')
     monkeypatch.delenv('HOSTNAME', raising=False)
 
     reported = [message for message in check_settings() if str(message.id).endswith('I001')]
@@ -1207,10 +1208,18 @@ def test_e009_accepts_a_path_it_cannot_resolve_and_says_where_it_will_be(monkeyp
         msg = 'mined'
         raise ImportError(msg)
 
-    # `checks.py` binds `import_string` at module import, so patching it where it is *defined*
-    # leaves the name this module calls pointing at the real one -- the mine would sit beside the
-    # road. Measured: with the wrong target, a rule restored to resolving passed this case
-    monkeypatch.setattr('django_aiogram.config.checks.import_string', record)
+    # Each rules module binds `import_string` at import, so patching it where it is *defined*
+    # leaves every name they call pointing at the real one -- the mine would sit beside the road.
+    # Measured: with the wrong target, a rule restored to resolving passed this case.
+    #
+    # Planted in every module of the package that holds the name rather than in a list of two:
+    # what this asserts is that *no* rule resolves the path, and a module added later that binds
+    # it would otherwise be the one place the mine is missing
+    package = importlib.import_module('django_aiogram.config.checks')
+    for name in sorted(pathlib.Path(str(package.__path__[0])).glob('*.py')):
+        module = importlib.import_module(f'django_aiogram.config.checks.{name.stem}')
+        if hasattr(module, 'import_string'):
+            monkeypatch.setattr(f'{module.__name__}.import_string', record)
     monkeypatch.setattr('django_aiogram.consumer.delivery.delivery_class', record)
 
     reported = [message for message in check_settings() if message.id == 'django_aiogram.E009']
@@ -1226,7 +1235,7 @@ def test_e009_accepts_a_path_it_cannot_resolve_and_says_where_it_will_be(monkeyp
 def test_the_two_lists_of_3x_delivery_names_agree():
     """The consumer and the checks each carry the table, and they must not drift.
 
-    Two copies on purpose: `checks.py` cannot import the consumer without paying aiogram, which
+    Two copies on purpose: the checks cannot import the consumer without paying aiogram, which
     is the whole reason `E009` stops at the shape. So the copies are pinned against each other
     here -- the cheapest place to notice, and the only one that fails when a name is added to one.
     """
