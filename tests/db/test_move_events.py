@@ -142,8 +142,61 @@ def test_an_id_this_release_already_holds_is_reported_not_overwritten(old_table)
     output = move()
 
     assert 'moved 1 events' in output, output
-    assert '1 rows were left because the id is already taken' in output, output
+    assert '1 rows in django_redis_aiogram_event have an id that a different row already holds' in output, output
     assert TelegramEvent.objects.count() == 2, 'a row was overwritten or duplicated'
+
+
+@pytest.mark.django_db
+def test_a_collision_below_the_resume_point_is_still_reported(old_table):
+    """The rows the walk never visits are the ones most likely to be lost.
+
+    A destination that already holds low ids — a bot that has been running since the upgrade —
+    puts the resume point above them, so no chunk ever looks at the old rows underneath. Counting
+    collisions from the ranges that were walked therefore reports none, the move looks clean, and
+    every later run says every id is present. That is the state in which somebody drops the old
+    table and loses the only copy of those rows.
+
+    So the count is taken across the whole table, once per run, and it holds on the run that copies
+    nothing at all.
+    """
+    written = write_old_rows(2)
+    blocking = TelegramEvent.objects.create(
+        kind=EventKind.OUTBOUND_SENT.value,
+        correlation_id=new_correlation_id(),
+        function='send_message',
+    )
+    # the destination's row takes the *lowest* old id, so the walk starts above it and never looks
+    statement = f'UPDATE {OLD_TABLE} SET id = %s WHERE id = %s'  # noqa: S608 - the table name is a constant of this package
+    with connection.cursor() as cursor:
+        cursor.execute(statement, [blocking.pk, written[0]])
+
+    output = move()
+
+    assert 'have an id that a different row already holds' in output, output
+    assert '1 rows in django_redis_aiogram_event' in output, output
+
+
+@pytest.mark.django_db
+def test_a_finished_run_still_names_what_it_could_not_copy(old_table):
+    """And the run that copies nothing says it too, which is the run an operator acts on.
+
+    "Every id is present; nothing is left to copy" is what somebody reads before dropping the old
+    table. It has to be followed by the rows that are only there.
+    """
+    written = write_old_rows(1)
+    blocking = TelegramEvent.objects.create(
+        kind=EventKind.OUTBOUND_SENT.value,
+        correlation_id=new_correlation_id(),
+        function='send_message',
+    )
+    statement = f'UPDATE {OLD_TABLE} SET id = %s WHERE id = %s'  # noqa: S608 - as above
+    with connection.cursor() as cursor:
+        cursor.execute(statement, [blocking.pk, written[0]])
+
+    output = move()
+
+    assert 'nothing is left to copy' in output, output
+    assert 'have an id that a different row already holds' in output, output
 
 
 @pytest.mark.django_db

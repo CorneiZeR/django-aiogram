@@ -99,6 +99,7 @@ class Command(BaseCommand):
             self.stdout.write(f'No {OLD_TABLE} table on {alias!r}, so there is nothing to move.')
             return
 
+        stranded = self._stranded(alias)
         bounds = self._bounds(alias)
         if bounds is None:
             # the sequence too, on the way out. A run killed after its last chunk committed and
@@ -111,20 +112,55 @@ class Command(BaseCommand):
             # what the message can say, and no more: an id that is present may hold the row this
             # command copied or the row this release wrote, and only whoever knows can tell
             self.stdout.write(f'Every id in {OLD_TABLE} is present in {alias!r}; nothing is left to copy.')
+            self._report_stranded(alias, stranded)
             return
 
-        moved, seen = self._walk(alias, bounds, options)
+        moved = self._walk(alias, bounds, options)
         verb = 'would move' if options['dry_run'] else 'moved'
         self.stdout.write(f'{verb} {moved} events from {OLD_TABLE} into {alias!r}.')
-        if seen > moved:
-            # not an error and not something this command may fix: renumbering somebody's rows to
-            # make a total tidy is a worse answer than saying which rows were left
-            self.stdout.write(
-                f'{seen - moved} rows were left because the id is already taken in {alias!r}. '
-                f'Those ids hold a row this release wrote; compare them before dropping {OLD_TABLE}.'
-            )
+        self._report_stranded(alias, stranded)
         if not options['dry_run']:
             self._reset_sequence(alias)
+
+    def _stranded(self, alias: str) -> int:
+        """Count old rows whose id is held by a *different* row in the destination.
+
+        Asked of the whole table and once per run, not of the ranges being walked -- which is the
+        difference between reporting a collision and never seeing one. The walk starts at the first
+        id the destination lacks, so a row this release wrote before the first run strands the old
+        rows *beneath* that id, and no chunk ever visits them. The move then reports a clean total
+        and every later run says every id is present, which is exactly the state in which somebody
+        drops the old table and loses the only copy of those rows.
+
+        Told apart by ``created_at``, which is not nullable and which a copy carries across
+        unchanged: two rows under one id with different timestamps are certainly two rows. Two with
+        the same timestamp to the microsecond are taken to be the copy, and this says so rather than
+        pretending to compare every column of a table it is walking in chunks for a reason.
+        """
+        connection = connections[alias]
+        old = connection.ops.quote_name(OLD_TABLE)
+        new = connection.ops.quote_name(TelegramEvent._meta.db_table)  # noqa: SLF001 - _meta is Django's own API
+        statement = (
+            f'SELECT COUNT(*) FROM {old} o JOIN {new} n ON n.id = o.id '  # noqa: S608 - both names are this package's own, quoted by the backend
+            f'WHERE n.created_at <> o.created_at OR n.kind <> o.kind'
+        )
+        with connection.cursor() as cursor:
+            cursor.execute(statement)
+            return int(cursor.fetchone()[0])
+
+    def _report_stranded(self, alias: str, stranded: int) -> None:
+        """Say what could not be copied, on every path that reports anything at all.
+
+        Not an error and not something this command may fix: nothing puts two rows under one
+        primary key, and renumbering somebody's history to make a total tidy is a worse answer than
+        naming what was left.
+        """
+        if not stranded:
+            return
+        self.stdout.write(
+            f'{stranded} rows in {OLD_TABLE} have an id that a different row already holds in '
+            f'{alias!r}, so they cannot be copied. Compare them before dropping {OLD_TABLE}.'
+        )
 
     def _bounds(self, alias: str) -> tuple[int, int] | None:
         """Return the first id the destination does not have and the last id in the old table.
@@ -149,26 +185,19 @@ class Command(BaseCommand):
             low, high = cursor.fetchone()
         return None if low is None else (low, high)
 
-    def _walk(self, alias: str, bounds: tuple[int, int], options: dict[str, Any]) -> tuple[int, int]:
-        """Copy each id range in turn, pausing between them.
-
-        Returns what moved and what was *there to move*, which differ by the rows whose id the
-        destination already holds -- the caller reports that difference rather than hiding it in a
-        total that reads like success.
-        """
+    def _walk(self, alias: str, bounds: tuple[int, int], options: dict[str, Any]) -> int:
+        """Copy each id range in turn, pausing between them, and return what moved."""
         low, high = bounds
         chunk = max(1, int(options['chunk']))
         limit = max(0, int(options['max_chunks']))
         pause = max(0.0, float(options['sleep']))
         moved = 0
-        seen = 0
         rounds = 0
 
         while low <= high:
             top = min(low + chunk - 1, high)
-            copied, available = self._copy(alias, low, top, dry_run=options['dry_run'])
+            copied = self._copy(alias, low, top, dry_run=options['dry_run'])
             moved += copied
-            seen += available
             low = top + 1
             rounds += 1
             if limit and rounds >= limit:
@@ -177,10 +206,10 @@ class Command(BaseCommand):
             # nothing was written, so there is nothing for a replica to catch up on
             if pause and copied and low <= high and not options['dry_run']:
                 time.sleep(pause)
-        return moved, seen
+        return moved
 
-    def _copy(self, alias: str, low: int, high: int, *, dry_run: bool) -> tuple[int, int]:
-        """Copy one id range, and say how many rows were in it.
+    def _copy(self, alias: str, low: int, high: int, *, dry_run: bool) -> int:
+        """Copy one id range, and say how many rows landed.
 
         `NOT EXISTS` rather than a range above a watermark, and it is doing two jobs at once. It is
         what makes a chunk idempotent on its own, so a killed run, a rerun and a `--max-chunks`
@@ -197,17 +226,14 @@ class Command(BaseCommand):
         # as in `_bounds`: names are this package's own and quoted, and the ids are bound
         window = f'FROM {old} o WHERE o.id >= %s AND o.id <= %s'
         missing = f'AND NOT EXISTS (SELECT 1 FROM {new} n WHERE n.id = o.id)'  # noqa: S608
-        in_range = f'SELECT COUNT(*) {window}'
         still_missing = f'SELECT COUNT(*) {window} {missing}'
         insert = f'INSERT INTO {new} ({columns}) SELECT {picked} {window} {missing}'
         arguments = [low, high]
 
-        with connection.cursor() as cursor:
-            cursor.execute(in_range, arguments)
-            available = int(cursor.fetchone()[0])
-            if dry_run:
+        if dry_run:
+            with connection.cursor() as cursor:
                 cursor.execute(still_missing, arguments)
-                return int(cursor.fetchone()[0]), available
+                return int(cursor.fetchone()[0])
 
         # `NOT EXISTS` decides what to insert; it does not hold the ids it chose. A row this
         # release writes between that read and the commit takes one of them, and the insert ends as
@@ -220,7 +246,7 @@ class Command(BaseCommand):
             try:
                 with transaction.atomic(using=alias), connection.cursor() as cursor:
                     cursor.execute(insert, arguments)
-                    return (cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0), available
+                    return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             # three attempts, each one a database round trip: the setup cost this rule measures is
             # nanoseconds against a network hop, and moving the handler out of the loop would mean a
             # second function whose only job is to be somewhere else
@@ -233,7 +259,7 @@ class Command(BaseCommand):
                     )
                     raise CommandError(msg) from None
                 logger.info('a chunk collided with a concurrent write and is being retried', extra={'tg_low': low})
-        return 0, available
+        return 0
 
     def _reset_sequence(self, alias: str) -> None:
         """Move the sequence past the ids just inserted, or the next insert collides.
