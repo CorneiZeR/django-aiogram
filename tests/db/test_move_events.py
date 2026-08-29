@@ -177,6 +177,40 @@ def test_a_collision_below_the_resume_point_is_still_reported(old_table):
 
 
 @pytest.mark.django_db
+def test_two_rows_alike_in_three_columns_are_still_two_rows(old_table):
+    """Sharing an id, a timestamp and a kind does not make a row a copy of another.
+
+    A destination row can match on all three and differ in the payload, the chat, the error — and a
+    comparison that stopped there would call it a copy, skip the old row, and report nothing. Since
+    the answer decides whether an operator can drop the old table, a difference in any column has
+    to count as one.
+
+    Built by making the two agree on exactly those three and disagree on the fourth, which is the
+    shape the cheaper comparison cannot see.
+    """
+    written = write_old_rows(1)
+    contested = written[0]
+    twin = TelegramEvent.objects.create(
+        id=contested,
+        kind=EventKind.OUTBOUND_SENT.value,
+        correlation_id=new_correlation_id(),
+        function='send_photo',
+    )
+    # both table names are this package's own and the ids are bound
+    statement = (
+        f'UPDATE {OLD_TABLE} SET created_at = '  # noqa: S608
+        f'(SELECT created_at FROM {TelegramEvent._meta.db_table} WHERE id = %s) WHERE id = %s'
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(statement, [twin.pk, contested])
+
+    output = move()
+
+    assert 'have an id that a different row already holds' in output, output
+    assert TelegramEvent.objects.get(pk=contested).function == 'send_photo', 'the twin was replaced'
+
+
+@pytest.mark.django_db
 def test_a_finished_run_still_names_what_it_could_not_copy(old_table):
     """And the run that copies nothing says it too, which is the run an operator acts on.
 
@@ -378,11 +412,24 @@ def test_a_chunk_that_loses_a_race_is_retried(old_table, monkeypatch):
     likeliest of all before this command has ever run, when the destination's sequence is still
     where `migrate` left it and the bot is drawing the very ids the old table used.
 
-    The race is produced rather than waited for: the first insert raises the error a lost race
-    raises, and the retry runs against a table where the row has landed. What the case pins is that
-    the run continues and the rest of the chunk arrives, not that the failure was rare.
+    The race is produced rather than waited for, and the competing row is *written* before the
+    error is raised: without it the retry would simply repeat the copy it was going to make, and
+    the case would pass against a command that ignored the error entirely. What it pins is that the
+    contested row is left alone, the rest of the chunk arrives, and the run says what it could not
+    take.
     """
     written = write_old_rows(3)
+    contested = written[0]
+    # committed before the command starts, because a test has one connection: a row created inside
+    # the chunk's own transaction would roll back with it, and the retry would then find the id
+    # free and copy over it -- proving nothing. The state the retry has to handle is this one, a
+    # row of this release already holding an id the chunk was told to copy
+    TelegramEvent.objects.create(
+        id=contested,
+        kind=EventKind.OUTBOUND_RETRIED.value,
+        correlation_id=new_correlation_id(),
+        function='send_photo',
+    )
     real_execute = connection.cursor().__class__.execute
     calls = []
 
@@ -399,6 +446,9 @@ def test_a_chunk_that_loses_a_race_is_retried(old_table, monkeypatch):
 
     assert calls, 'the insert never ran, so nothing was retried'
     assert sorted(TelegramEvent.objects.values_list('id', flat=True)) == written, output
+    kept = TelegramEvent.objects.get(pk=contested)
+    assert kept.function == 'send_photo', 'the contested row was overwritten by the copy'
+    assert 'have an id that a different row already holds' in output, output
 
 
 @pytest.mark.django_db

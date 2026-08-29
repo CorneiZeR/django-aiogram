@@ -99,7 +99,6 @@ class Command(BaseCommand):
             self.stdout.write(f'No {OLD_TABLE} table on {alias!r}, so there is nothing to move.')
             return
 
-        stranded = self._stranded(alias)
         bounds = self._bounds(alias)
         if bounds is None:
             # the sequence too, on the way out. A run killed after its last chunk committed and
@@ -112,38 +111,48 @@ class Command(BaseCommand):
             # what the message can say, and no more: an id that is present may hold the row this
             # command copied or the row this release wrote, and only whoever knows can tell
             self.stdout.write(f'Every id in {OLD_TABLE} is present in {alias!r}; nothing is left to copy.')
-            self._report_stranded(alias, stranded)
+            self._report_stranded(alias, self._stranded(alias))
             return
 
         moved = self._walk(alias, bounds, options)
         verb = 'would move' if options['dry_run'] else 'moved'
         self.stdout.write(f'{verb} {moved} events from {OLD_TABLE} into {alias!r}.')
-        self._report_stranded(alias, stranded)
+        # counted *after* the walk, and once: a row this release writes while a chunk is running
+        # strands a source row the count could not have seen beforehand, and the operator reading
+        # this line is the one deciding whether the old table can go
+        self._report_stranded(alias, self._stranded(alias))
         if not options['dry_run']:
             self._reset_sequence(alias)
 
     def _stranded(self, alias: str) -> int:
         """Count old rows whose id is held by a *different* row in the destination.
 
-        Asked of the whole table and once per run, not of the ranges being walked -- which is the
-        difference between reporting a collision and never seeing one. The walk starts at the first
-        id the destination lacks, so a row this release wrote before the first run strands the old
-        rows *beneath* that id, and no chunk ever visits them. The move then reports a clean total
-        and every later run says every id is present, which is exactly the state in which somebody
-        drops the old table and loses the only copy of those rows.
+        Asked of the whole table, not of the ranges being walked -- which is the difference between
+        reporting a collision and never seeing one. The walk starts at the first id the destination
+        lacks, so a row this release wrote before the first run strands the old rows *beneath* that
+        id, and no chunk ever visits them. The move then reports a clean total and every later run
+        says every id is present, which is exactly the state in which somebody drops the old table
+        and loses the only copy of those rows.
 
-        Told apart by ``created_at``, which is not nullable and which a copy carries across
-        unchanged: two rows under one id with different timestamps are certainly two rows. Two with
-        the same timestamp to the microsecond are taken to be the copy, and this says so rather than
-        pretending to compare every column of a table it is walking in chunks for a reason.
+        **Every column, not a sample of them.** Two rows can share an id, a timestamp and a kind and
+        still be different rows -- a chat id, a payload, an error apart -- and a comparison that
+        stopped at three columns would call that a copy, skip it, and report nothing. Since the
+        answer decides whether an operator can drop a table, the comparison is the whole row, and a
+        difference in any column is a difference. Built from the model's own column list, so it
+        covers a column added later without anybody remembering this query.
         """
         connection = connections[alias]
         old = connection.ops.quote_name(OLD_TABLE)
         new = connection.ops.quote_name(TelegramEvent._meta.db_table)  # noqa: SLF001 - _meta is Django's own API
-        statement = (
-            f'SELECT COUNT(*) FROM {old} o JOIN {new} n ON n.id = o.id '  # noqa: S608 - both names are this package's own, quoted by the backend
-            f'WHERE n.created_at <> o.created_at OR n.kind <> o.kind'
+        # written out per column rather than with `IS DISTINCT FROM`, which MySQL does not have:
+        # a null on one side and a value on the other is a difference, and two nulls are not
+        differs = ' OR '.join(
+            f'(n.{column} IS NULL AND o.{column} IS NOT NULL) '
+            f'OR (o.{column} IS NULL AND n.{column} IS NOT NULL) '
+            f'OR n.{column} <> o.{column}'
+            for column in (connection.ops.quote_name(name) for name in shared_columns() if name != 'id')
         )
+        statement = f'SELECT COUNT(*) FROM {old} o JOIN {new} n ON n.id = o.id WHERE {differs}'  # noqa: S608 - names quoted by the backend, no values at all
         with connection.cursor() as cursor:
             cursor.execute(statement)
             return int(cursor.fetchone()[0])
