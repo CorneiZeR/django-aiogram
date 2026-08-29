@@ -264,9 +264,10 @@ class RedisStreamsBroker(Broker):
         """
         if self._recovered_upto is None:
             return None
-        # `connection` is the sync client typed through a proxy, and redis-py's stubs put the
-        # stream commands on a class the proxy does not name
-        page = connection.xreadgroup(  # type: ignore[attr-defined]  # stream commands, see above
+        # `connection` is typed `object` for the same reason the Kafka and RabbitMQ brokers type
+        # their message and method that way: the driver is an extra, and this signature does not
+        # name a class from one. redis-py declares `xreadgroup` and always has
+        page = connection.xreadgroup(  # type: ignore[attr-defined]  # the parameter is `object`, see above
             self._group(), self._consumer(), {self._key(): self._recovered_upto}, count=_RECOVERY_PAGE
         )
         entries = self._entries(page)

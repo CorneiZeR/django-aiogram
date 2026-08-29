@@ -643,10 +643,10 @@ def _setting(key: str) -> Any:  # noqa: ANN401 - a setting holds whatever the pr
 def _configured_broker(*, verify_driver: bool = False) -> 'type[Broker]':
     """Resolve `BROKER` for a rule, importing the registry only when one runs.
 
-    Four rules asked for this and each imported the registry itself, which is four copies of a
-    sentence about *why* the import is here rather than at the top of the file. The reason is the
-    same in all four and belongs in one place: `manage.py check` runs on every `migrate`, and the
-    registry reaches a transport module, which since 4.0 may not have its driver installed.
+    Every caller that needed it imported the registry itself -- three rules and two helpers -- so
+    the sentence about *why* the import is down here was copied once per call site. The reason is
+    the same for all of them and belongs in one place: `manage.py check` runs on every `migrate`,
+    and the registry reaches a transport module, which since 4.0 may not have its driver installed.
 
     `verify_driver` defaults to **False** here, unlike in the registry: a rule that needs the
     driver is `E047` and says so, while every other rule is arithmetic over settings and answering
