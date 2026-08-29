@@ -18,6 +18,7 @@ from dataclasses import dataclass, fields
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
+from django.conf import settings as django_settings
 from django.core.checks import CheckMessage, Error, Info
 from django.core.checks import Warning as CheckWarning
 from django.core.exceptions import ImproperlyConfigured
@@ -396,11 +397,10 @@ def _a_usable_broker(key: str) -> list[Problem]:
     Neither is gated on `ENABLED`: both are arithmetic over settings that needs no driver, and a
     deadline the transport refuses is refused in every process that reaches it.
     """
-    from django_aiogram.broker.exceptions import (  # noqa: PLC0415 - only when the checks run
+    from django_aiogram.broker.exceptions import (  # noqa: PLC0415 - as `_configured_broker`
         BrokerDependencyError,
         BrokerNotConfiguredError,
     )
-    from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
 
     enabled = _bot_is_enabled()
     # the driver is verified separately below, so everything this rule can judge without one is
@@ -408,14 +408,14 @@ def _a_usable_broker(key: str) -> list[Problem]:
     # were reachable only where the extra happened to be installed -- and never at all in a
     # disabled process, which returns early on a missing driver by design
     try:
-        resolved = broker_class(verify_driver=False)
+        resolved = _configured_broker()
     except BrokerNotConfiguredError as wrong:
         return [Problem(f'is unusable: {wrong}', hint='Name a Broker subclass by dotted path.')]
     deadline = _the_deadline_the_broker_declares(resolved, key)
     if deadline:
         return deadline
     try:
-        broker_class()
+        _configured_broker(verify_driver=True)
     except BrokerDependencyError as missing:
         if not enabled:
             return []
@@ -618,12 +618,9 @@ def _identity_matters() -> bool:
     in each of them is a side effect nobody asked this rule for. Constructing one costs
     nothing and connects to nothing — both shipped transports only set flags in `__init__`.
     """
-    from django_aiogram.broker.exceptions import BrokerError  # noqa: PLC0415 - only when the checks run
-    from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
-
     try:
-        return bool(broker_class()().needs_identity)
-    except (BrokerError, ImproperlyConfigured):
+        return bool(_configured_broker(verify_driver=True)().needs_identity)
+    except (_broker_error(), ImproperlyConfigured):
         return True
 
 
@@ -638,9 +635,37 @@ def _setting(key: str) -> Any:  # noqa: ANN401 - a setting holds whatever the pr
     """
     if key in DEFAULTS or key not in _broker_options():
         return conf.get(key)
-    from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - only when the checks run
+    return _configured_broker().option(key)
 
-    return broker_class(verify_driver=False).option(key)
+
+def _configured_broker(*, verify_driver: bool = False) -> 'type[Broker]':
+    """Resolve `BROKER` for a rule, importing the registry only when one runs.
+
+    Four rules asked for this and each imported the registry itself, which is four copies of a
+    sentence about *why* the import is here rather than at the top of the file. The reason is the
+    same in all four and belongs in one place: `manage.py check` runs on every `migrate`, and the
+    registry reaches a transport module, which since 4.0 may not have its driver installed.
+
+    `verify_driver` defaults to **False** here, unlike in the registry: a rule that needs the
+    driver is `E047` and says so, while every other rule is arithmetic over settings and answering
+    "no such broker" on a machine one `pip install` short is how a whole page of findings went
+    missing.
+    """
+    from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - a transport module, and its driver
+
+    return broker_class(verify_driver=verify_driver)
+
+
+def _broker_error() -> type[Exception]:
+    """`BrokerError`, for the `except` clauses that catch it.
+
+    A function because an `except` clause needs the class where it stands, and the module it lives
+    in is one a check must not import at module scope. The same idiom as `_response_error()` in the
+    Redis list transport, and for the same reason.
+    """
+    from django_aiogram.broker.exceptions import BrokerError  # noqa: PLC0415 - as `_configured_broker`
+
+    return BrokerError
 
 
 def _broker_options() -> set[str]:
@@ -655,12 +680,9 @@ def _broker_options() -> set[str]:
     `W003` called that transport's own required settings unknown keys and invited an operator to
     delete them, and every rule that guards one of those settings stopped running.
     """
-    from django_aiogram.broker.exceptions import BrokerError  # noqa: PLC0415 - only when the checks run
-    from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
-
     try:
-        return set(broker_class(verify_driver=False).OPTIONS)
-    except (BrokerError, ImproperlyConfigured):
+        return set(_configured_broker().OPTIONS)
+    except (_broker_error(), ImproperlyConfigured):
         return set()
 
 
@@ -684,19 +706,16 @@ def _a_pop_inside_the_deadline(key: str) -> list[Problem]:
     built — ``call_timeout()`` is a classmethod for that reason, since building one would import
     its driver, which is `E047`'s business rather than this rule's.
     """
-    from django_aiogram.broker.exceptions import BrokerError  # noqa: PLC0415 - only when the checks run
-    from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
-
     try:
         asked = int(_setting(key))
         # without the driver check: the cap is arithmetic over settings, and staying silent
         # because an extra is not installed would drop a settings warning on every machine that
         # has not installed it. `E047` owns the driver, with the install line
-        broker = broker_class(verify_driver=False)
+        broker = _configured_broker()
         ceiling = take_ceiling(broker.CALL_TIMEOUT_OPTION, broker.call_timeout())
     except (ImproperlyConfigured, TypeError, ValueError):
         return []  # E014, E023 and E030 own the type complaints
-    except (BrokerError, KeyError):
+    except (_broker_error(), KeyError):
         # E047 owns every complaint about which transport is configured, including a broker that
         # declares no deadline option -- `option('')` raises `KeyError`, and a rule about
         # `BLPOP_TIMEOUT` must not be the thing that takes `manage.py check` down
@@ -844,8 +863,6 @@ def _a_routed_log_database(key: str) -> list[Problem]:
     alias = str(_setting(key) or '').strip()
     if not alias:
         return []  # nothing was pointed anywhere, so nothing needs routing
-    from django.conf import settings as django_settings  # noqa: PLC0415 - as above
-
     from django_aiogram.eventlog.dbrouter import TelegramEventLogRouter  # noqa: PLC0415 - no django.db at import
 
     for entry in getattr(django_settings, 'DATABASE_ROUTERS', ()) or ():
@@ -895,8 +912,6 @@ def _a_router_this_release_still_has(_key: str) -> list[Problem]:
     install does not have, and a router Django cannot import takes down the first query that needs
     routing -- there is no configuration in which this is deliberate.
     """
-    from django.conf import settings as django_settings  # noqa: PLC0415 - only when the checks run
-
     problems = []
     for entry in getattr(django_settings, 'DATABASE_ROUTERS', ()) or ():
         if not isinstance(entry, str) or not entry.startswith('django_redis_aiogram.'):
