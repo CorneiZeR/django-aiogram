@@ -595,7 +595,7 @@ def test_a_caller_that_wrote_does_not_stay_marked():
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_SYNC': True})
-def test_recording_does_not_doom_the_transaction_it_runs_inside(monkeypatch):
+def test_recording_does_not_doom_the_transaction_it_runs_inside(monkeypatch, observed_closes):
     """The one bug here that destroyed the caller's own data.
 
     `close_old_connections()` ran before every batch. Inside an `atomic()` block
@@ -611,8 +611,7 @@ def test_recording_does_not_doom_the_transaction_it_runs_inside(monkeypatch):
     reports itself as a file-backed one, and stubs the real close so nothing is
     actually torn down.
     """
-    monkeypatch.setattr(connection, 'is_in_memory_db', lambda: False)
-    monkeypatch.setattr(connection, '_close', lambda: None)
+    observed_closes()
     recorder = EventRecorder()
     # the premise, asserted rather than assumed: without it `record()` queues the event and
     # `_buffer()` starts a writer that drains it, so the row below would exist having gone
@@ -796,7 +795,7 @@ def test_events_racing_stop_are_still_written(paused_writer):
 
 @pytest.mark.django_db(transaction=True, databases=['default', 'logs'])
 @override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_DATABASE': 'logs'})
-def test_recording_to_another_alias_leaves_the_callers_connection_alone(monkeypatch):
+def test_recording_to_another_alias_leaves_the_callers_connection_alone(monkeypatch, observed_closes):
     """The guard has to be about the connection actually being closed.
 
     `close_old_connections()` walks *every* initialized connection. Checking that
@@ -806,8 +805,7 @@ def test_recording_to_another_alias_leaves_the_callers_connection_alone(monkeypa
     connection and doomed one it never writes to.
     """
     caller = connections['default']
-    monkeypatch.setattr(caller, 'is_in_memory_db', lambda: False)
-    monkeypatch.setattr(caller, '_close', lambda: None)
+    observed_closes(caller)
 
     try:
         with transaction.atomic(using='default'):
@@ -893,7 +891,7 @@ def test_an_event_put_into_a_detached_queue_is_moved_to_the_live_one(paused_writ
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_SYNC': True})
-def test_recording_does_not_close_a_connection_whose_autocommit_is_off(monkeypatch):
+def test_recording_does_not_close_a_connection_whose_autocommit_is_off(monkeypatch, observed_closes):
     """`in_atomic_block` is half of what an open transaction means, and the worse half.
 
     With autocommit off — `transaction.set_autocommit(False)`, or `AUTOCOMMIT: False` on
@@ -908,9 +906,7 @@ def test_recording_does_not_close_a_connection_whose_autocommit_is_off(monkeypat
     does not set — and on sqlite, where the consequence cannot be reproduced at all, the
     rule is the only thing there is to pin. The control below closes for real.
     """
-    closed = []
-    monkeypatch.setattr(connection, 'is_in_memory_db', lambda: False)
-    monkeypatch.setattr(connection, '_close', lambda: closed.append('closed'))
+    closed = observed_closes()
     recorder = EventRecorder()
     # the same premise the atomic-block test above asserts: queued instead of written,
     # nothing here looks at a connection at all and the empty list below is free
@@ -930,16 +926,14 @@ def test_recording_does_not_close_a_connection_whose_autocommit_is_off(monkeypat
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_SYNC': True})
-def test_an_obsolete_connection_is_still_recycled(monkeypatch):
+def test_an_obsolete_connection_is_still_recycled(monkeypatch, observed_closes):
     """The control: the guard must not have turned into "never recycle".
 
     Discarding a connection the database has since dropped is what `_recycle` is for —
     an expired `CONN_MAX_AGE`, a restart, a previous error. A guard that refused every
     close would satisfy the test above and break the reason the call exists.
     """
-    closed = []
-    monkeypatch.setattr(connection, 'is_in_memory_db', lambda: False)
-    monkeypatch.setattr(connection, '_close', lambda: closed.append('closed'))
+    closed = observed_closes()
     # obsolete by age: `close_if_unusable_or_obsolete` closes once `close_at` has passed
     # saved, not cleared: under `CONN_MAX_AGE` there is a real deadline here, and putting
     # `None` back would hand the next test this one's idea of the connection
@@ -958,7 +952,7 @@ def test_an_obsolete_connection_is_still_recycled(monkeypatch):
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_SYNC': True})
-def test_a_close_outside_an_atomic_block_does_not_mark_a_rollback(monkeypatch):
+def test_a_close_outside_an_atomic_block_does_not_mark_a_rollback(monkeypatch, observed_closes):
     """Why the autocommit case is silent, which is what makes it dangerous.
 
     Django sets `needs_rollback` in `close()` only when `in_atomic_block` is true. With
@@ -970,8 +964,7 @@ def test_a_close_outside_an_atomic_block_does_not_mark_a_rollback(monkeypatch):
     they are the whole chain — the guard is load-bearing, and without it the failure is
     quiet rather than loud.
     """
-    monkeypatch.setattr(connection, 'is_in_memory_db', lambda: False)
-    monkeypatch.setattr(connection, '_close', lambda: None)
+    observed_closes()
     transaction.set_autocommit(False)
 
     try:

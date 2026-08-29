@@ -82,15 +82,10 @@ jobs:
       - run: python -m pytest -q --ds=tests.db_settings tests/db
 
   test-db-postgres:
-    # one file, against a real backend, because one thing SQLite cannot answer: a sequence.
-    # `sqlite_sequence` follows an explicit id on its own and PostgreSQL's does not, so whether
-    # the next insert after a copy succeeds is only observable here.
-    #
-    # One file and not all of tests/db: eleven cases there are written to SQLite on purpose —
-    # `EXPLAIN QUERY PLAN` in the admin ones, the harness asserting the engine, the recorder ones
-    # patching what an in-memory database cannot do — so pointing the whole directory here fails
-    # for reasons that are about the cases rather than about the package. Widening it is worth
-    # doing and is its own change
+    # the whole database suite again, against a real backend, because three things SQLite cannot
+    # answer: a sequence that does not follow an explicit id, a connection that can genuinely die,
+    # and a planner whose index choices are the ones this app's indexes were added for. Every case
+    # runs on both now; the handful that can only hold on one say which and why.
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -118,7 +113,7 @@ jobs:
       # the second alias the router cases use is a database of its own, and the service
       # image only creates the one it was given
       - run: PGPASSWORD=dra psql -h 127.0.0.1 -U dra -d dra -c 'CREATE DATABASE dra_logs'
-      - run: python -m pytest -q --ds=tests.postgres_settings tests/db/test_move_events.py
+      - run: python -m pytest -q --ds=tests.postgres_settings tests/db
         env:
           DJANGO_AIOGRAM_TEST_PG_PORT: '5432'
 

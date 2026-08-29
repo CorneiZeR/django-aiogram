@@ -13,7 +13,17 @@ from django.db import connections
 
 
 def test_the_database_suite_has_a_database():
-    assert settings.DATABASES['default']['ENGINE'] == 'django.db.backends.sqlite3'
+    """Configured with one of the two engines this suite runs against, and not by accident.
+
+    `tests/settings.py` has no database at all, on purpose, so a run that picked it up would skip
+    everything here rather than fail — which is a green suite that tested nothing. Naming the two
+    engines is what makes that visible: SQLite in memory for the default run, and PostgreSQL for
+    the leg that answers the questions SQLite cannot, sequences and planner choices among them.
+    """
+    assert settings.DATABASES['default']['ENGINE'] in {
+        'django.db.backends.sqlite3',
+        'django.db.backends.postgresql',
+    }, settings.DATABASES['default']['ENGINE']
 
 
 @pytest.mark.django_db

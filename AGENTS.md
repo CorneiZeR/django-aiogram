@@ -84,7 +84,7 @@ log's table:
 
 ```shell
 DJANGO_AIOGRAM_TEST_REDIS_URL=redis://localhost:6399/0 python -m pytest -m integration
-python -m pytest -q --ds=tests.postgres_settings tests/db/test_move_events.py   # on a real backend
+python -m pytest -q --ds=tests.postgres_settings tests/db   # the same suite, on a real backend
 bash scripts/smoke_install.sh
 ```
 
@@ -95,11 +95,10 @@ answer: a sequence. `sqlite_sequence` follows an explicit id on its own and a
 PostgreSQL sequence does not, so a copy that inserts explicit ids leaves the
 next insert colliding, and only here does that show.
 
-It runs one file rather than the whole directory. Eleven cases in `tests/db` are
-written to SQLite deliberately — `EXPLAIN QUERY PLAN`, the engine the harness
-asserts, the recorder cases patching what an in-memory database cannot do — so
-they fail against PostgreSQL for reasons about the cases. Pointing more of the
-suite here is worth doing and is its own change.
+Every case runs on both. Where one backend cannot express the condition, the
+fixture supplies it there and stays out of the way here: a connection that can
+really die, a close that really closes, and a planner asked with `enable_seqscan`
+off so its answer is about the index rather than about the size of a fixture.
 
 The first needs a real server; run it when you touch delivery, serialization,
 FSM persistence or connection cleanup. It flushes the database it is pointed at,
