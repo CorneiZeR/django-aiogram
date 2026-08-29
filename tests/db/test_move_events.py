@@ -15,7 +15,7 @@ from io import StringIO
 import pytest
 from django.core.management import CommandError, call_command
 from django.db import connection
-from django.db.utils import OperationalError
+from django.db.utils import IntegrityError, OperationalError
 
 from django_aiogram.config.enums import EventKind
 from django_aiogram.eventlog.events import new_correlation_id
@@ -288,3 +288,57 @@ def test_a_database_that_cannot_be_read_leaves_the_check_quiet(old_table, monkey
 
     assert [message for message in reported if message.id == 'django_aiogram.I003'] == []
     assert reported is not None, 'the run has to answer at all, which is the point'
+
+
+@pytest.mark.django_db
+def test_a_chunk_that_loses_a_race_is_retried(old_table, monkeypatch):
+    """`NOT EXISTS` chooses the ids; it does not hold them until the insert commits.
+
+    A row this release writes in that gap takes one, and the insert ends as a unique violation --
+    likeliest of all before this command has ever run, when the destination's sequence is still
+    where `migrate` left it and the bot is drawing the very ids the old table used.
+
+    The race is produced rather than waited for: the first insert raises the error a lost race
+    raises, and the retry runs against a table where the row has landed. What the case pins is that
+    the run continues and the rest of the chunk arrives, not that the failure was rare.
+    """
+    written = write_old_rows(3)
+    real_execute = connection.cursor().__class__.execute
+    calls = []
+
+    def flaky(self, sql, params=None):
+        if sql.lstrip().startswith('INSERT') and not calls:
+            calls.append(sql)
+            msg = 'duplicate key value violates unique constraint'
+            raise IntegrityError(msg)
+        return real_execute(self, sql, params)
+
+    monkeypatch.setattr(connection.cursor().__class__, 'execute', flaky)
+
+    output = move()
+
+    assert calls, 'the insert never ran, so nothing was retried'
+    assert sorted(TelegramEvent.objects.values_list('id', flat=True)) == written, output
+
+
+@pytest.mark.django_db
+def test_a_chunk_that_keeps_losing_says_so(old_table, monkeypatch):
+    """And it stops with a sentence rather than a traceback about a primary key.
+
+    A collision that repeats is a bot still writing the ids being copied, which no amount of
+    retrying fixes -- so the command names the range and says what to do, and what already landed
+    stays landed.
+    """
+    write_old_rows(2)
+    real_execute = connection.cursor().__class__.execute
+
+    def always(self, sql, params=None):
+        if sql.lstrip().startswith('INSERT'):
+            msg = 'duplicate key value violates unique constraint'
+            raise IntegrityError(msg)
+        return real_execute(self, sql, params)
+
+    monkeypatch.setattr(connection.cursor().__class__, 'execute', always)
+
+    with pytest.raises(CommandError, match='kept colliding'):
+        move()

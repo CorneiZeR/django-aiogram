@@ -80,8 +80,13 @@ destination does not have, and a second run copies nothing. It is safe to run af
 been writing for a while — and if one of its rows holds an id an old row also has, that old row is
 left where it is and reported rather than overwritten.
 
-Doing it by hand is still a reasonable choice on a small table, and it takes two statements rather
-than one:
+Doing it by hand is still a reasonable choice on a small table **that nothing has written to yet**.
+Both tables carry the same primary key, so a destination holding even one row the bot wrote after
+`migrate` makes this `INSERT` fail on a duplicate key — and the ids it collides with are exactly the
+history you are trying to keep. Past that point the command is the path: it copies the ids the
+destination does not have and reports the ones it could not take.
+
+On an empty destination it takes two statements rather than one:
 
 ```sql
 INSERT INTO django_aiogram_event (id, created_at, correlation_id, kind, function, chat_id, user_id,
@@ -96,8 +101,9 @@ SELECT setval(pg_get_serial_sequence('django_aiogram_event', 'id'),
 ```
 
 The columns are unchanged from 3.1, which is what makes a column-wise copy safe — name them rather
-than writing `SELECT *`, which agrees with itself until the release that adds a column and then
-inserts the right values into the wrong places. And without the `setval`, PostgreSQL accepts the
+than writing `SELECT *`, which agrees with itself until either table changes: a mismatched count is
+rejected, and a matching count in a different order is accepted with every value one column to the
+side. And without the `setval`, PostgreSQL accepts the
 copy and refuses the *bot's* next write with a duplicate key: the sequence is still where `migrate`
 left it. The command does this step for you, on whichever backend you run.
 

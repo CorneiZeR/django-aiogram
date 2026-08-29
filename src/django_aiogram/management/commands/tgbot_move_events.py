@@ -38,13 +38,18 @@ from typing import Any
 
 from django.core.management import BaseCommand, CommandError
 from django.core.management.color import no_style
-from django.db import connections, transaction
+from django.db import IntegrityError, connections, transaction
 
 from django_aiogram.eventlog.moving import OLD_TABLE, old_table_is_present, shared_columns
 from django_aiogram.eventlog.writer import log_alias
 from django_aiogram.models import TelegramEvent
 
 logger = logging.getLogger('django_aiogram')
+
+#: how often one chunk is retried when a row lands under an id it was about to copy. Small on
+#: purpose: each retry excludes the ids that landed, so a chunk either converges immediately or is
+#: racing something that will keep taking ids -- and then saying so beats retrying for ever
+_COLLISION_ATTEMPTS = 3
 
 
 class Command(BaseCommand):
@@ -196,10 +201,32 @@ class Command(BaseCommand):
             if dry_run:
                 cursor.execute(still_missing, arguments)
                 return int(cursor.fetchone()[0]), available
-            with transaction.atomic(using=alias):
-                cursor.execute(insert, arguments)
-                copied = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-            return copied, available
+
+        # `NOT EXISTS` decides what to insert; it does not hold the ids it chose. A row this
+        # release writes between that read and the commit takes one of them, and the insert ends as
+        # a unique violation -- most likely of all *before* this command has run once, since the
+        # destination's sequence is still where `migrate` left it and the bot is drawing the very
+        # ids the old table used. So the chunk is retried, and each retry excludes one more id:
+        # this converges rather than spinning, and a chunk that keeps failing says so instead of
+        # ending the run with a traceback about a primary key
+        for attempt in range(1, _COLLISION_ATTEMPTS + 1):
+            try:
+                with transaction.atomic(using=alias), connection.cursor() as cursor:
+                    cursor.execute(insert, arguments)
+                    return (cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0), available
+            # three attempts, each one a database round trip: the setup cost this rule measures is
+            # nanoseconds against a network hop, and moving the handler out of the loop would mean a
+            # second function whose only job is to be somewhere else
+            except IntegrityError:  # noqa: PERF203
+                if attempt == _COLLISION_ATTEMPTS:
+                    msg = (
+                        f'ids {low} to {high} kept colliding with rows being written to {alias!r} '
+                        f'after {_COLLISION_ATTEMPTS} attempts. Move the rest while nothing is writing, '
+                        f'or rerun: what landed is committed and will not be copied twice.'
+                    )
+                    raise CommandError(msg) from None
+                logger.info('a chunk collided with a concurrent write and is being retried', extra={'tg_low': low})
+        return 0, available
 
     def _reset_sequence(self, alias: str) -> None:
         """Move the sequence past the ids just inserted, or the next insert collides.

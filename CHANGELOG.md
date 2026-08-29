@@ -440,14 +440,22 @@ Entries land here as the work does; nothing below is released.
   primary key and renumbering somebody's history is not a decision this command gets to make.
 
   Columns are named one by one rather than `SELECT *` — the two tables agree today and would keep
-  agreeing right up to the release that adds a column, at which point `*` would insert the right
-  values into the wrong places rather than failing.
+  agreeing right up to the release that changes either of them, where a mismatched column count is
+  rejected and a matching count in a different order is accepted with every value one column to the
+  side. Naming them fails on the first and makes the second impossible.
 
   Then it moves the sequence past the ids it inserted, which is the step a hand-written copy leaves
   out: explicit ids do not advance a PostgreSQL sequence, so the copy succeeds and the *bot's* next
   write fails on a duplicate primary key, at whatever hour the first message after the migration
   arrives. Django's own `sequence_reset_sql` does it, which is what `loaddata` uses for the same
   reason and speaks each backend's version.
+
+  A chunk that loses a race is retried. `NOT EXISTS` chooses the ids to insert and does not hold
+  them, so a row this release writes in that gap ends the insert as a unique violation — likeliest
+  of all before the command has ever run, when the destination's sequence is still where `migrate`
+  left it and the bot is drawing the very ids the old table used. Each retry excludes what landed,
+  so it converges; a chunk that keeps colliding names its range and says to move the rest while
+  nothing is writing, rather than ending the run with a traceback about a primary key.
 
   A database that cannot be read stops the command and leaves the check quiet, which are opposite
   answers to one question on purpose: a rule that raises takes `manage.py check` down, while "there

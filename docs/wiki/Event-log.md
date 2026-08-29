@@ -369,7 +369,9 @@ python manage.py tgbot_move_events
 The same shape as the prune above, and the same arguments: `--chunk`, `--sleep`, `--max-chunks`,
 `--database`, `--dry-run`. It copies by primary-key range, one transaction per chunk, naming every
 column rather than `SELECT *` — the two tables agree today, and would keep agreeing right up to the
-release that adds a column, at which point `*` would insert the right values into the wrong places.
+release that changes either of them. A mismatched column count is rejected; a matching count in a
+different order is accepted, with every value one column to the side. Naming them fails on the
+first and makes the second impossible.
 
 **Stopping it is safe, and so is running it after the bot has been writing.** Both tables share the
 primary key, so an id already in the new table is either a row the command copied or a row this
@@ -385,6 +387,11 @@ would skip every old row beneath its highest id and report a completed move.
 put both under one primary key — so that old row is left where it is and the command says how many
 it left. Comparing them, and deciding what the history is worth, is yours: this will not renumber
 your rows to make a total tidy.
+
+A row that lands *while a chunk is being copied* is the same collision arriving late, and the chunk
+is retried rather than lost — each retry excludes what landed. It is likeliest before the first run,
+when the sequence is still where `migrate` left it and the bot is drawing the very ids the old table
+used, so the quiet night is worth choosing for more than the load.
 
 It also moves the sequence past the ids it inserted. That step is what a hand-written
 `INSERT ... SELECT` leaves out, and on PostgreSQL its absence is not visible until the *bot's* next

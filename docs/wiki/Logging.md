@@ -43,6 +43,7 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_correlation_id` | the id every event about one message carries |
 | `tg_alternative` | the awaitable method a synchronous send from a loop should move to |
 | `tg_pending` | work still in flight at shutdown: sends, or the updates a webhook process is answering |
+| `tg_low` | the first id of the range a copy is retrying, when a row landed under an id it was about to move |
 | `tg_drain_timeout` | how long shutdown gave them |
 | `tg_kind` | the event log kind of a row |
 | `tg_receiver` | the `events_recorded` receiver that raised |

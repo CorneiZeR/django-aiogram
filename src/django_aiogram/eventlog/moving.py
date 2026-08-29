@@ -45,9 +45,11 @@ def shared_columns() -> tuple[str, ...]:
     """Name the columns to copy, one by one, from the model itself.
 
     Never ``SELECT *``. The two tables agree today, and would keep agreeing right up to the release
-    that adds a column -- at which point ``SELECT *`` inserts the right values into the wrong
-    places rather than failing. Named columns fail loudly instead, which is the answer a migration
-    wants.
+    that changes either of them -- at which point a `SELECT *` breaks in whichever way the two
+    shapes make available: a column count that no longer matches is rejected outright by every
+    backend this package supports, and a count that still matches with the order changed is
+    *accepted*, putting each value in the wrong column. Named columns fail on the first kind and
+    make the second impossible, which is the answer a migration wants.
     """
     # `column` is `str | None` in the stubs because an abstract field has none; every field on a
     # concrete model has one, and an empty name would produce invalid SQL rather than wrong data
