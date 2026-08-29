@@ -28,7 +28,7 @@ from aiogram import Bot, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import Chat, Message, Update, User
 from asgiref.sync import sync_to_async
-from django.db import connection, connections
+from django.db import connection
 from django.test import override_settings
 from django.utils import timezone
 
@@ -77,26 +77,19 @@ def poison():
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT=SETTINGS)
-def test_a_handler_recovers_from_a_connection_that_died_while_the_process_was_idle(monkeypatch):
+def test_a_handler_recovers_from_a_connection_that_died_while_the_process_was_idle(
+    a_backend_that_can_lose_a_connection,
+):
     """The outage, reproduced: a dead connection and the first update after it.
 
     Without the middleware the query raises `InterfaceError`; with it, the reset closes the
     connection Django thought it had and the next query opens a new one.
+
+    On PostgreSQL nothing is patched and this is the outage itself: `poison` closes the DBAPI
+    connection, `is_usable()` answers false because it is, and the close is a real one. The fixture
+    supplies both answers on SQLite, where an in-memory database can give neither -- and that
+    difference is the reason #64 pointed this suite at a second backend.
     """
-    # Two patches, both on Django's sqlite backend and neither on the code under test, because
-    # this database cannot report or perform what Postgres does:
-    #
-    #   * `is_usable()` returns True unconditionally on sqlite, so `close_if_unusable_or_obsolete`
-    #     would clear `errors_occurred` and keep the dead connection;
-    #   * `close()` is a no-op for an in-memory database -- deliberately, since closing it would
-    #     destroy the test database -- so nothing would be reset even once it agreed to.
-    #
-    # Patched on the *class*, not on `connection`: the wrapper that matters lives on the executor
-    # thread and is a different instance from the one this thread's proxy resolves to. The same
-    # `is_in_memory_db` stand-in is what `tests/db/test_recorder.py` uses, for the same reason.
-    wrapper = type(connections['default'])
-    monkeypatch.setattr(wrapper, 'is_usable', lambda self: False)
-    monkeypatch.setattr(wrapper, 'is_in_memory_db', lambda self: False)
     counted = []
 
     async def handler(message):

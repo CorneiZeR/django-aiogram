@@ -280,12 +280,14 @@ Entries land here as the work does; nothing below is released.
   discoverable; the operator picks the night. Nothing is dropped —
   `DROP TABLE django_redis_aiogram_event` stays theirs to run.
 
-  The suite grew a leg for this: `tests/postgres_settings.py` runs the command's cases against a
-  real PostgreSQL, because `sqlite_sequence` follows an explicit id on its own and a sequence does
+  The suite grew a leg for this: `tests/postgres_settings.py` runs the database-backed cases against
+  a real PostgreSQL, because `sqlite_sequence` follows an explicit id on its own and a sequence does
   not. Written against SQLite alone, the case that matters here passes whether the command resets
-  the sequence or not — measured, by deleting the reset and watching it stay green. One file rather
-  than all of `tests/db`, because eleven cases there are written to SQLite on purpose and pointing
-  them at PostgreSQL fails for reasons about the cases; widening that is #64.
+  the sequence or not — measured, by deleting the reset and watching it stay green. Every case in
+  `tests/db` runs on both backends, and where one cannot express the condition a fixture supplies
+  it there and stays out of the way on the other: a connection that can really die, a close that
+  really closes, and a planner asked with `enable_seqscan` off so its answer is about the index
+  rather than about the size of a fixture.
 
 ### Fixed
 

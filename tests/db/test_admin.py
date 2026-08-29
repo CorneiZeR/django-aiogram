@@ -18,6 +18,7 @@ from django_aiogram.admin import (
 from django_aiogram.config.enums import EventKind
 from django_aiogram.eventlog.events import new_correlation_id
 from django_aiogram.models import TelegramEvent
+from tests.db.conftest import sorts, sorts_beyond_a_tie, uses
 from tests.support import run_python
 
 ON = {'EVENT_LOG': True}
@@ -414,7 +415,7 @@ def test_only_indexed_columns_are_sortable():
 
 @pytest.mark.django_db
 @override_settings(TELEGRAM_BOT=ON)
-def test_a_kind_filtered_changelist_needs_no_sort(client):
+def test_a_kind_filtered_changelist_needs_no_sort(client, query_plan):
     """The index was `(kind, -created_at)` while `ordering` is `-id`.
 
     So every filtered changelist sorted in a temp b-tree — the page query and
@@ -432,22 +433,19 @@ def test_a_kind_filtered_changelist_needs_no_sort(client):
 
     touched = [q['sql'] for q in queries if 'django_aiogram_event' in q['sql']]
     assert touched, 'the changelist issued no query at all'
-    with connection.cursor() as cursor:
-        for sql in touched:
-            cursor.execute(f'EXPLAIN QUERY PLAN {sql}')
-            plan = ' '.join(str(row) for row in cursor.fetchall())
-            assert 'TEMP B-TREE' not in plan.upper(), f'{plan}\nfor: {sql}'
-            # and the index by name. Without this the assertion above passes with no index
-            # at all — sqlite serves `ORDER BY -id` by walking the primary key, so a plan
-            # with no sort and a full scan reads exactly like the fixed one, at the cost the
-            # index was added to remove
-            assert 'drai_event_kind_id' in plan, f'the kind filter no longer uses its index\n{plan}'
+    for sql in touched:
+        plan = query_plan(sql)
+        assert not sorts(plan), f'{plan}\nfor: {sql}'
+        # and the index by name. Without this the assertion above passes with no index at all —
+        # a plan with no sort and a full scan reads exactly like the fixed one, at the cost the
+        # index was added to remove
+        assert uses(plan, 'drai_event_kind_id'), f'the kind filter no longer uses its index\n{plan}'
 
 
 @pytest.mark.django_db
 @override_settings(TELEGRAM_BOT=ON)
 @pytest.mark.parametrize('order', ['created_at', '-created_at'])
-def test_the_created_at_headers_sort_at_most_a_tie(order):
+def test_the_created_at_headers_sort_at_most_a_tie(order, query_plan):
     """Django appends `-pk` to make the changelist's order deterministic, and a
     single-column index cannot serve that on its own.
 
@@ -465,12 +463,13 @@ def test_the_created_at_headers_sort_at_most_a_tie(order):
     rows = TelegramEvent.objects.order_by(order, '-pk')[:50]
     sql, params = rows.query.sql_with_params()
 
-    with connection.cursor() as cursor:
-        cursor.execute(f'EXPLAIN QUERY PLAN {sql}', params)
-        plan = ' | '.join(str(row[-1]) for row in cursor.fetchall())
+    plan = query_plan(sql, params)
 
-    assert 'drai_event_recent' in plan, plan
-    assert 'USE TEMP B-TREE FOR ORDER BY' not in plan.upper(), plan
+    assert uses(plan, 'drai_event_recent'), plan
+    # a tie is allowed and is what the name says: the index gives the order, and rows sharing a
+    # timestamp are settled by the second term. Sorting the whole result is the index not being
+    # used for the order at all
+    assert not sorts_beyond_a_tie(plan), plan
 
 
 @pytest.mark.django_db
@@ -517,7 +516,7 @@ def test_an_o_param_for_an_unindexed_column_does_not_sort(client, index, column)
 
 @pytest.mark.django_db
 @override_settings(TELEGRAM_BOT=ON)
-def test_the_outcome_filters_count_is_served_by_the_index(client):
+def test_the_outcome_filters_count_is_served_by_the_index(client, query_plan):
     """`BoundedPaginator` promised "one query the index can serve" and the failure
     filter was the one place it was not.
 
@@ -540,9 +539,7 @@ def test_the_outcome_filters_count_is_served_by_the_index(client):
 
     counts = [q['sql'] for q in queries if 'COUNT(' in q['sql'].upper() and 'django_aiogram_event' in q['sql']]
     assert counts, 'the changelist counted nothing, so this proves nothing'
-    with connection.cursor() as cursor:
-        for sql in counts:
-            cursor.execute(f'EXPLAIN QUERY PLAN {sql}')
-            plan = ' '.join(str(row) for row in cursor.fetchall())
-            assert 'TEMP B-TREE' not in plan.upper(), f'the bounded count still sorts: {plan}'
-            assert 'drai_event_kind_id' in plan, f'the count no longer uses the kind index: {plan}'
+    for sql in counts:
+        plan = query_plan(sql)
+        assert not sorts(plan), f'the bounded count still sorts: {plan}'
+        assert uses(plan, 'drai_event_kind_id'), f'the count no longer uses the kind index: {plan}'
