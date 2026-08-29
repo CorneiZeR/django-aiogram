@@ -69,7 +69,15 @@ class Command(BaseCommand):
         if alias not in connections:
             msg = f'no database is configured under the alias {alias!r}; DATABASES has {sorted(connections)}.'
             raise CommandError(msg)
-        if not old_table_is_present(alias):
+        try:
+            present = old_table_is_present(alias)
+        except Exception as unreachable:
+            # "there is no old table" and "I could not look" read the same to a cron job, and only
+            # one of them means the history has been moved. `I003` swallows this because a check
+            # must not fail; a command that did would report a migration it never made
+            msg = f'could not look for {OLD_TABLE} on {alias!r}: {unreachable}'
+            raise CommandError(msg) from unreachable
+        if not present:
             self.stdout.write(f'No {OLD_TABLE} table on {alias!r}, so there is nothing to move.')
             return
 

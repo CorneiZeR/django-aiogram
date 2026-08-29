@@ -22,21 +22,23 @@ OLD_TABLE = 'django_redis_aiogram_event'
 def old_table_is_present(alias: str) -> bool:
     """Whether 3.x's table is still on this alias.
 
-    Through ``introspection.table_names()`` rather than a query against the table, because a
-    system check calls this: a rule that raises takes ``manage.py check`` down, and the whole point
-    of the rule is to speak up on a deployment that has not finished upgrading.
+    Through ``introspection.table_names()`` rather than a query against the table, because asking
+    for a table that is not there is the question, not an error to catch.
 
-    Every failure reads as "no" -- an alias that is not configured, a database that is not up, a
-    connection this process is not allowed to open. A check cannot report what it cannot see, and
-    the copy command asks the same question again before it moves anything.
+    **Failures are raised, not answered with "no".** Two callers ask this and they want opposite
+    things from a database that cannot be reached: the check has to stay quiet, since a rule that
+    raises takes ``manage.py check`` down; the command has to stop, since "there is no old table"
+    and "I could not look" are the same sentence to a cron job and only one of them means the
+    history has been moved. Swallowing it here gave both of them the check's answer, and the
+    command then exited zero on a migration it had not done.
+
+    An alias with no database configured is not a failure -- there is nothing there to have a
+    table, and the command refuses an unknown alias by name before it gets here.
     """
     if alias not in connections:
         return False
-    try:
-        with connections[alias].cursor() as cursor:
-            return OLD_TABLE in connections[alias].introspection.table_names(cursor)
-    except Exception:  # noqa: BLE001 - every failure to look is a "cannot see", never a finding
-        return False
+    with connections[alias].cursor() as cursor:
+        return OLD_TABLE in connections[alias].introspection.table_names(cursor)
 
 
 def shared_columns() -> tuple[str, ...]:

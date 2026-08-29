@@ -15,6 +15,7 @@ from io import StringIO
 import pytest
 from django.core.management import CommandError, call_command
 from django.db import connection
+from django.db.utils import OperationalError
 
 from django_aiogram.config.enums import EventKind
 from django_aiogram.eventlog.events import new_correlation_id
@@ -194,3 +195,44 @@ def test_the_next_insert_after_a_move_succeeds(old_table):
     )
 
     assert fresh.pk > max(TelegramEvent.objects.exclude(pk=fresh.pk).values_list('id', flat=True))
+
+
+@pytest.mark.django_db
+def test_a_database_that_cannot_be_read_stops_the_command(monkeypatch):
+    """ "Nothing to move" and "I could not look" are the same sentence to a cron job.
+
+    Only one of them means the history has been moved, and a command that exits zero on the other
+    tells an operator the migration is done. The check has the opposite duty -- a rule that raises
+    takes `manage.py check` down -- so the two callers handle this differently on purpose, and the
+    case below holds the other half.
+    """
+
+    def refuse(_alias):
+        msg = 'connection refused'
+        raise OperationalError(msg)
+
+    monkeypatch.setattr('django_aiogram.management.commands.tgbot_move_events.old_table_is_present', refuse)
+
+    with pytest.raises(CommandError, match='could not look for'):
+        move()
+
+
+@pytest.mark.django_db
+def test_a_database_that_cannot_be_read_leaves_the_check_quiet(old_table, monkeypatch):
+    """And the rule says nothing rather than taking every other finding down with it.
+
+    The old table is present here on purpose: without it `I003` is silent whatever happens, and a
+    case that passes for that reason proves nothing about the handling it is named after.
+    """
+    from django_aiogram.config.checks import check_settings
+
+    def refuse(_alias):
+        msg = 'connection refused'
+        raise OperationalError(msg)
+
+    monkeypatch.setattr('django_aiogram.eventlog.moving.old_table_is_present', refuse)
+
+    reported = check_settings()
+
+    assert [message for message in reported if message.id == 'django_aiogram.I003'] == []
+    assert reported is not None, 'the run has to answer at all, which is the point'

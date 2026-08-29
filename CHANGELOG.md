@@ -440,6 +440,11 @@ Entries land here as the work does; nothing below is released.
   arrives. Django's own `sequence_reset_sql` does it, which is what `loaddata` uses for the same
   reason and speaks each backend's version.
 
+  A database that cannot be read stops the command and leaves the check quiet, which are opposite
+  answers to one question on purpose: a rule that raises takes `manage.py check` down, while "there
+  is no old table" and "I could not look" read the same to a cron job and only one of them means the
+  history has been moved.
+
   Not a data migration, deliberately: `migrate` runs inside a deploy, and a copy that holds one open
   for as long as the table is large cannot be paced, resumed or stopped. The check makes the command
   discoverable; the operator picks the night. Nothing is dropped —

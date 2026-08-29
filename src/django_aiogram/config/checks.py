@@ -867,7 +867,11 @@ def _a_log_the_rename_left_behind(_key: str) -> list[Problem]:
     from django_aiogram.eventlog.writer import log_alias  # noqa: PLC0415 - as above
 
     alias = log_alias()
-    if not old_table_is_present(alias):
+    try:
+        present = old_table_is_present(alias)
+    except Exception:  # noqa: BLE001 - a rule reports; it never fails, and a database that cannot be reached is not a finding
+        return []
+    if not present:
         return []
     return [
         Problem(
