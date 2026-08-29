@@ -16,7 +16,7 @@ from django.contrib.admin.views.main import ORDER_VAR
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.paginator import Paginator
 from django.db.models import Field, QuerySet
-from django.http import HttpRequest
+from django.http import HttpRequest, HttpResponse
 from django.utils.functional import cached_property
 from django.utils.html import format_html, format_html_join
 
@@ -202,7 +202,7 @@ class TelegramEventAdmin(ModelAdminBase):
         except (TelegramEvent.DoesNotExist, ValidationError, ValueError):
             return None
 
-    def changelist_view(self, request: HttpRequest, extra_context: dict[str, Any] | None = None) -> Any:  # noqa: ANN401 - Django types this as a bare response
+    def changelist_view(self, request: HttpRequest, extra_context: dict[str, Any] | None = None) -> HttpResponse:
         """Render the list, saying so when the count stopped at the cap.
 
         A page that reports exactly ten thousand results reads as the whole
