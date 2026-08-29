@@ -84,7 +84,7 @@ def test_nothing_to_move_when_the_old_table_is_gone():
 
 @pytest.mark.django_db
 def test_every_row_moves_once(old_table):
-    """The whole point, and the ids come across unchanged: they are the watermark."""
+    """The whole point, and the ids come across unchanged: they are what a rerun reads to resume."""
     written = write_old_rows(5)
 
     output = move(chunk=2)
@@ -92,6 +92,58 @@ def test_every_row_moves_once(old_table):
     assert TelegramEvent.objects.count() == 5, output
     assert sorted(TelegramEvent.objects.values_list('id', flat=True)) == written, 'the ids changed on the way'
     assert 'moved 5 events' in output, output
+
+
+@pytest.mark.django_db
+def test_rows_below_what_this_release_already_wrote_still_move(old_table):
+    """The destination is *not* empty when the move runs, and that is the normal case.
+
+    A project upgrades, `migrate` creates the table, the bot writes to it from the first message,
+    and the operator schedules the copy for a quiet night. Resuming above the destination's highest
+    id would then skip every old row beneath it — the whole history — and report a completed move.
+
+    Written with the native row's id deliberately above the old ones, which is what a fresh
+    sequence produces on the new table, and the assertion is on the ids: every old id has to arrive
+    even though the destination's maximum already exceeds all of them.
+    """
+    written = write_old_rows(3)
+    native = TelegramEvent.objects.create(
+        kind=EventKind.OUTBOUND_SENT.value,
+        correlation_id=new_correlation_id(),
+        function='send_message',
+    )
+    assert native.pk > max(written), 'the case needs a destination row above the old ids'
+
+    output = move()
+
+    assert sorted(TelegramEvent.objects.exclude(pk=native.pk).values_list('id', flat=True)) == written, output
+    assert 'moved 3 events' in output, output
+
+
+@pytest.mark.django_db
+def test_an_id_this_release_already_holds_is_reported_not_overwritten(old_table):
+    """Two rows cannot share a primary key, so one of them stays where it is and is named.
+
+    Renumbering somebody's history to make a total tidy is not this command's decision, and a total
+    that quietly counted the collision as moved would be the same defect as skipping it silently.
+    """
+    written = write_old_rows(2)
+    taken = TelegramEvent.objects.create(
+        kind=EventKind.OUTBOUND_SENT.value,
+        correlation_id=new_correlation_id(),
+        function='send_message',
+    )
+    # the collision sits *above* a row that can still move, which is the order a first pass meets
+    # them in: the run that walks a range is the one that reports what it could not take
+    statement = f'UPDATE {OLD_TABLE} SET id = %s WHERE id = %s'  # noqa: S608 - the table name is a constant of this package
+    with connection.cursor() as cursor:
+        cursor.execute(statement, [taken.pk, written[1]])
+
+    output = move()
+
+    assert 'moved 1 events' in output, output
+    assert '1 rows were left because the id is already taken' in output, output
+    assert TelegramEvent.objects.count() == 2, 'a row was overwritten or duplicated'
 
 
 @pytest.mark.django_db
@@ -103,7 +155,7 @@ def test_a_second_run_moves_nothing(old_table):
     output = move()
 
     assert TelegramEvent.objects.count() == 4, output
-    assert 'the move is finished' in output, output
+    assert 'nothing is left to copy' in output, output
 
 
 @pytest.mark.django_db
@@ -111,7 +163,7 @@ def test_a_stopped_run_resumes_where_it_left_off(old_table):
     """`--max-chunks` is the bound a nightly job runs under, so stopping is the normal case.
 
     Asserted as two halves and a total: the first run copies what its bound allows, the second
-    picks up the rest, and no id arrives twice — which a `created_at` watermark would not give,
+    picks up the rest, and no id arrives twice — which resuming by `created_at` would not give,
     since rows share timestamps.
     """
     written = write_old_rows(6)

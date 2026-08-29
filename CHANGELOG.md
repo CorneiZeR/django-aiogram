@@ -427,12 +427,21 @@ Entries land here as the work does; nothing below is released.
   traffic: one statement, no pacing, no way to resume, and a sequence left behind.
 
   It walks primary-key ranges like `tgbot_prune_events` does, with the same `--chunk`, `--sleep`,
-  `--max-chunks`, `--database` and `--dry-run`. Both tables share the primary key, so the
-  destination's highest id is the watermark and every chunk copies ids above it: a run that is
-  killed resumes where it stopped, a second run copies nothing, and running it twice is not a way
-  to duplicate history. Columns are named one by one rather than `SELECT *` — the two tables agree
-  today and would keep agreeing right up to the release that adds a column, at which point `*`
-  would insert the right values into the wrong places rather than failing.
+  `--max-chunks`, `--database` and `--dry-run`. Both tables share the primary key, so an id already
+  in the new table is either a row the command copied or a row this release wrote — either way it is
+  not inserted again, and each chunk copies only the ids that are not there yet. A killed run
+  resumes at the first id the destination does not have, a second run copies nothing, and running it
+  twice is not a way to duplicate history.
+
+  Starting above the destination's *highest* id would be cheaper and silently wrong: the bot writes
+  to the new table from the first message after `migrate`, so a destination that has been
+  written to at all would skip every old row beneath it and report a completed move. An id a row of this release already
+  holds is left where it is and counted in the report, because nothing can put two rows under one
+  primary key and renumbering somebody's history is not a decision this command gets to make.
+
+  Columns are named one by one rather than `SELECT *` — the two tables agree today and would keep
+  agreeing right up to the release that adds a column, at which point `*` would insert the right
+  values into the wrong places rather than failing.
 
   Then it moves the sequence past the ids it inserted, which is the step a hand-written copy leaves
   out: explicit ids do not advance a PostgreSQL sequence, so the copy succeeds and the *bot's* next

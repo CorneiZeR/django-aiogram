@@ -74,9 +74,11 @@ python manage.py tgbot_move_events
 
 It copies by primary-key range in bounded chunks — `--chunk`, `--sleep`, `--max-chunks`,
 `--dry-run`, and `--database` for a log on its own alias — so a table sized by traffic takes as
-many nights as it takes rather than one long statement. Both tables share the primary key, so the
-destination's highest id is the watermark: a run you stop resumes where it left off, and a second
-run copies nothing.
+many nights as it takes rather than one long statement. Both tables share the primary key, so an id
+already in the new table is never inserted again: a run you stop resumes at the first id the
+destination does not have, and a second run copies nothing. It is safe to run after the bot has
+been writing for a while — and if one of its rows holds an id an old row also has, that old row is
+left where it is and reported rather than overwritten.
 
 Doing it by hand is still a reasonable choice on a small table, and it takes two statements rather
 than one:

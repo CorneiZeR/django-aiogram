@@ -371,9 +371,20 @@ The same shape as the prune above, and the same arguments: `--chunk`, `--sleep`,
 column rather than `SELECT *` — the two tables agree today, and would keep agreeing right up to the
 release that adds a column, at which point `*` would insert the right values into the wrong places.
 
-**Stopping it is safe.** Both tables share the primary key, so the destination's highest id is the
-watermark and each chunk copies ids above it: a killed run resumes where it stopped, a finished one
+**Stopping it is safe, and so is running it after the bot has been writing.** Both tables share the
+primary key, so an id already in the new table is either a row the command copied or a row this
+release wrote — either way it is not inserted again, and each chunk copies only the ids that are
+not there yet. A killed run resumes at the first id the destination does not have, a finished one
 copies nothing, and running it twice is not a way to duplicate history.
+
+Starting above the destination's *highest* id would be cheaper and wrong: the bot writes to the new
+table from the first message after `migrate`, so a destination that has been written to at all
+would skip every old row beneath its highest id and report a completed move.
+
+**An id can be taken.** A row this release wrote may hold an id an old row also has, and nothing can
+put both under one primary key — so that old row is left where it is and the command says how many
+it left. Comparing them, and deciding what the history is worth, is yours: this will not renumber
+your rows to make a total tidy.
 
 It also moves the sequence past the ids it inserted. That step is what a hand-written
 `INSERT ... SELECT` leaves out, and on PostgreSQL its absence is not visible until the *bot's* next
