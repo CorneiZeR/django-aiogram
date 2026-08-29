@@ -76,15 +76,30 @@ The second invocation is the database-backed half. `tests/settings.py` has
 what the suite tests — so anything needing a database lives in `tests/db` under
 `tests/db_settings.py`, and the default run ignores that directory.
 
-CI also runs the two below — integration against a real Redis service, and the
-smoke install — so a change that only passes the loop above can still fail the
-build. Run them locally when you touch delivery, packaging or the public
-surface:
+CI also runs the three below — integration against a real Redis service, the
+database suite against a real PostgreSQL, and the smoke install — so a change
+that only passes the loop above can still fail the build. Run them locally when
+you touch delivery, packaging, the public surface or anything about the event
+log's table:
 
 ```shell
 DJANGO_AIOGRAM_TEST_REDIS_URL=redis://localhost:6399/0 python -m pytest -m integration
+python -m pytest -q --ds=tests.postgres_settings tests/db/test_move_events.py   # on a real backend
 bash scripts/smoke_install.sh
 ```
+
+The second needs a PostgreSQL and the `DJANGO_AIOGRAM_TEST_PG_*` variables its
+settings module reads — host, port, user, password and two database names, all
+with defaults for a local container. It exists for the one thing SQLite cannot
+answer: a sequence. `sqlite_sequence` follows an explicit id on its own and a
+PostgreSQL sequence does not, so a copy that inserts explicit ids leaves the
+next insert colliding, and only here does that show.
+
+It runs one file rather than the whole directory. Eleven cases in `tests/db` are
+written to SQLite deliberately — `EXPLAIN QUERY PLAN`, the engine the harness
+asserts, the recorder cases patching what an in-memory database cannot do — so
+they fail against PostgreSQL for reasons about the cases. Pointing more of the
+suite here is worth doing and is its own change.
 
 The first needs a real server; run it when you touch delivery, serialization,
 FSM persistence or connection cleanup. It flushes the database it is pointed at,

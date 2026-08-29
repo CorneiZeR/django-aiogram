@@ -356,6 +356,32 @@ lock) is the follow-up.
 **Do not put a `ForeignKey` on `TelegramEvent`.** It breaks Django's fast-delete
 path, and every prune then has to fetch primary keys first.
 
+### Rows written before 4.0
+
+The table is `django_aiogram_event` now, and `migrate` creates it empty. Rows written by 3.x are
+in `django_redis_aiogram_event`, where nothing reads them and nothing drops them — `I003` says so
+on every `manage.py check` until they are moved or the table is gone.
+
+```shell
+python manage.py tgbot_move_events
+```
+
+The same shape as the prune above, and the same arguments: `--chunk`, `--sleep`, `--max-chunks`,
+`--database`, `--dry-run`. It copies by primary-key range, one transaction per chunk, naming every
+column rather than `SELECT *` — the two tables agree today, and would keep agreeing right up to the
+release that adds a column, at which point `*` would insert the right values into the wrong places.
+
+**Stopping it is safe.** Both tables share the primary key, so the destination's highest id is the
+watermark and each chunk copies ids above it: a killed run resumes where it stopped, a finished one
+copies nothing, and running it twice is not a way to duplicate history.
+
+It also moves the sequence past the ids it inserted. That step is what a hand-written
+`INSERT ... SELECT` leaves out, and on PostgreSQL its absence is not visible until the *bot's* next
+write fails on a duplicate primary key.
+
+Dropping `django_redis_aiogram_event` afterwards is yours to do. This package will never run it
+for you.
+
 ## A separate database
 
 ```python

@@ -419,6 +419,39 @@ Entries land here as the work does; nothing below is released.
   thread through `add_callback_threadsafe`, and librdkafka flushes the process producer and closes
   only the calling thread's consumer.
 
+### Added
+
+- **`manage.py tgbot_move_events` copies the 3.x event log into this release's table**, and `I003`
+  says it is there to be copied. The rename left `django_redis_aiogram_event` where it was, and the
+  upgrade page offered one `INSERT ... SELECT` — honest, and the wrong shape on a table sized by
+  traffic: one statement, no pacing, no way to resume, and a sequence left behind.
+
+  It walks primary-key ranges like `tgbot_prune_events` does, with the same `--chunk`, `--sleep`,
+  `--max-chunks`, `--database` and `--dry-run`. Both tables share the primary key, so the
+  destination's highest id is the watermark and every chunk copies ids above it: a run that is
+  killed resumes where it stopped, a second run copies nothing, and running it twice is not a way
+  to duplicate history. Columns are named one by one rather than `SELECT *` — the two tables agree
+  today and would keep agreeing right up to the release that adds a column, at which point `*`
+  would insert the right values into the wrong places rather than failing.
+
+  Then it moves the sequence past the ids it inserted, which is the step a hand-written copy leaves
+  out: explicit ids do not advance a PostgreSQL sequence, so the copy succeeds and the *bot's* next
+  write fails on a duplicate primary key, at whatever hour the first message after the migration
+  arrives. Django's own `sequence_reset_sql` does it, which is what `loaddata` uses for the same
+  reason and speaks each backend's version.
+
+  Not a data migration, deliberately: `migrate` runs inside a deploy, and a copy that holds one open
+  for as long as the table is large cannot be paced, resumed or stopped. The check makes the command
+  discoverable; the operator picks the night. Nothing is dropped —
+  `DROP TABLE django_redis_aiogram_event` stays theirs to run.
+
+  The suite grew a leg for this: `tests/postgres_settings.py` runs the command's cases against a
+  real PostgreSQL, because `sqlite_sequence` follows an explicit id on its own and a sequence does
+  not. Written against SQLite alone, the case that matters here passes whether the command resets
+  the sequence or not — measured, by deleting the reset and watching it stay green. One file rather
+  than all of `tests/db`, because eleven cases there are written to SQLite on purpose and pointing
+  them at PostgreSQL fails for reasons about the cases; widening that is #64.
+
 ### Changed
 
 - **Each setting belongs to one table: the package's, or the transport that reads it.** Four keys

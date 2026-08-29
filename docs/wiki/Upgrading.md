@@ -65,17 +65,42 @@ The table is `django_aiogram_event` now, and `migrate` creates it empty. The old
 `django_redis_aiogram_event` is left exactly where it is: nothing reads it and nothing
 drops it.
 
-If the history matters, copy it across before the first write, with the app's own
-`migrate` already run:
+`I003` says so on every `manage.py check` while that table is there, and names the command that
+empties it. With the app's own `migrate` already run:
 
-```sql
-INSERT INTO django_aiogram_event
-SELECT * FROM django_redis_aiogram_event;
+```shell
+python manage.py tgbot_move_events
 ```
 
-The columns are unchanged from 3.1, which is what makes the plain `SELECT *` safe. Check
-that first on a copy, then drop the old table when you are satisfied — `DROP TABLE
-django_redis_aiogram_event` is yours to run, and this package will never run it for you.
+It copies by primary-key range in bounded chunks — `--chunk`, `--sleep`, `--max-chunks`,
+`--dry-run`, and `--database` for a log on its own alias — so a table sized by traffic takes as
+many nights as it takes rather than one long statement. Both tables share the primary key, so the
+destination's highest id is the watermark: a run you stop resumes where it left off, and a second
+run copies nothing.
+
+Doing it by hand is still a reasonable choice on a small table, and it takes two statements rather
+than one:
+
+```sql
+INSERT INTO django_aiogram_event (id, created_at, correlation_id, kind, function, chat_id, user_id,
+    message_id, update_id, worker, attempt, duration_ms, error_code, error, detail)
+SELECT id, created_at, correlation_id, kind, function, chat_id, user_id,
+    message_id, update_id, worker, attempt, duration_ms, error_code, error, detail
+FROM django_redis_aiogram_event;
+
+-- PostgreSQL only, and not optional: explicit ids do not advance the sequence
+SELECT setval(pg_get_serial_sequence('django_aiogram_event', 'id'),
+              (SELECT MAX(id) FROM django_aiogram_event));
+```
+
+The columns are unchanged from 3.1, which is what makes a column-wise copy safe — name them rather
+than writing `SELECT *`, which agrees with itself until the release that adds a column and then
+inserts the right values into the wrong places. And without the `setval`, PostgreSQL accepts the
+copy and refuses the *bot's* next write with a duplicate key: the sequence is still where `migrate`
+left it. The command does this step for you, on whichever backend you run.
+
+Then drop the old table when you are satisfied — `DROP TABLE django_redis_aiogram_event` is yours
+to run, and this package will never run it for you.
 
 ## Choose the transport explicitly
 

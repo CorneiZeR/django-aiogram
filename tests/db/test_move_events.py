@@ -1,0 +1,196 @@
+"""Moving the rows 3.x wrote into the table 4.0 reads.
+
+The old table has no model any more, so every case here creates it the way a real upgrade leaves
+it: same columns, same primary key, rows already in it. Built from the model's own column list
+rather than from a literal, because a copy that names columns is only safe while the two agree —
+a case that hard-coded them would keep passing on the release that makes them differ.
+
+`sqlite_sequence` behaves differently from a PostgreSQL sequence, so the case about the *sequence*
+lives with the integration suite and this file says what it can: what moves, what does not move
+twice, and what a stopped run does.
+"""
+
+from io import StringIO
+
+import pytest
+from django.core.management import CommandError, call_command
+from django.db import connection
+
+from django_aiogram.config.enums import EventKind
+from django_aiogram.eventlog.events import new_correlation_id
+from django_aiogram.eventlog.moving import OLD_TABLE, shared_columns
+from django_aiogram.models import TelegramEvent
+
+
+@pytest.fixture
+def old_table():
+    """The 3.x table, created as the rename left it and dropped afterwards."""
+    columns = ', '.join(f'"{name}"' for name in shared_columns() if name != 'id')
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f'CREATE TABLE {OLD_TABLE} AS SELECT * FROM {TelegramEvent._meta.db_table} WHERE 1 = 0'  # noqa: S608
+        )
+    yield columns
+    with connection.cursor() as cursor:
+        cursor.execute(f'DROP TABLE {OLD_TABLE}')
+
+
+def write_old_rows(count):
+    """Put `count` rows into the 3.x table, shaped exactly like the rows this app writes.
+
+    Written through the model and then moved across, rather than assembled column by column: a
+    literal row would need updating on the release that adds a column, and until somebody noticed
+    it would be wrong in the shape this command exists to prevent. Deleting them from the new table
+    afterwards leaves what an upgrade leaves — ids in the old table, none in the new one.
+
+    Returns the ids it wrote, because they are not `1..count`: a sequence does not roll back with
+    the transaction a test runs in, so on PostgreSQL each case continues where the last one
+    stopped. A case that spelled the ids out passed alone and failed in the file, which is the
+    same defect as asserting on a number nobody derived.
+    """
+    names = ', '.join(f'"{name}"' for name in shared_columns())
+    for _ in range(count):
+        TelegramEvent.objects.create(
+            kind=EventKind.OUTBOUND_SENT.value,
+            correlation_id=new_correlation_id(),
+            function='send_message',
+        )
+    # both table names are this package's own and no value is interpolated, so the rule has
+    # nothing to catch here — the values went in through the model above
+    statement = f'INSERT INTO {OLD_TABLE} ({names}) SELECT {names} FROM {TelegramEvent._meta.db_table}'  # noqa: S608
+    with connection.cursor() as cursor:
+        cursor.execute(statement)
+    written = sorted(TelegramEvent.objects.values_list('id', flat=True))
+    TelegramEvent.objects.all().delete()
+    return written
+
+
+def move(**options):
+    """Run the command and return what it printed."""
+    out = StringIO()
+    call_command('tgbot_move_events', stdout=out, sleep=0, **options)
+    return out.getvalue()
+
+
+@pytest.mark.django_db
+def test_nothing_to_move_when_the_old_table_is_gone():
+    """The common case, and the one that must not raise: a project that never ran 3.x."""
+    output = move()
+
+    assert 'nothing to move' in output, output
+    assert TelegramEvent.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_every_row_moves_once(old_table):
+    """The whole point, and the ids come across unchanged: they are the watermark."""
+    written = write_old_rows(5)
+
+    output = move(chunk=2)
+
+    assert TelegramEvent.objects.count() == 5, output
+    assert sorted(TelegramEvent.objects.values_list('id', flat=True)) == written, 'the ids changed on the way'
+    assert 'moved 5 events' in output, output
+
+
+@pytest.mark.django_db
+def test_a_second_run_moves_nothing(old_table):
+    """Idempotent, because the destination's highest id is what the next run starts above."""
+    write_old_rows(4)
+    move()
+
+    output = move()
+
+    assert TelegramEvent.objects.count() == 4, output
+    assert 'the move is finished' in output, output
+
+
+@pytest.mark.django_db
+def test_a_stopped_run_resumes_where_it_left_off(old_table):
+    """`--max-chunks` is the bound a nightly job runs under, so stopping is the normal case.
+
+    Asserted as two halves and a total: the first run copies what its bound allows, the second
+    picks up the rest, and no id arrives twice — which a `created_at` watermark would not give,
+    since rows share timestamps.
+    """
+    written = write_old_rows(6)
+
+    first = move(chunk=2, max_chunks=1)
+    assert TelegramEvent.objects.count() == 2, first
+    assert 'Stopped after 1 chunks' in first, first
+
+    second = move(chunk=2)
+
+    assert TelegramEvent.objects.count() == 6, second
+    assert sorted(TelegramEvent.objects.values_list('id', flat=True)) == written, 'a row moved twice or not at all'
+
+
+@pytest.mark.django_db
+def test_a_dry_run_reports_and_moves_nothing(old_table):
+    """The rehearsal an operator runs first, on a table they cannot afford to guess about."""
+    write_old_rows(3)
+
+    output = move(dry_run=True)
+
+    assert 'would move 3 events' in output, output
+    assert TelegramEvent.objects.count() == 0, 'a dry run wrote rows'
+
+
+@pytest.mark.django_db
+def test_an_alias_that_is_not_configured_is_refused_by_name(old_table):
+    """This runs from cron, where a Django traceback is the least useful thing to wake up to."""
+    with pytest.raises(CommandError, match='no database is configured'):
+        move(database='nowhere')
+
+
+@pytest.mark.django_db
+def test_the_check_reports_the_table_and_names_the_command(old_table):
+    """`I003` is what makes the command discoverable, so it has to fire on the upgrade's shape."""
+    from django_aiogram.config.checks import check_settings
+
+    found = [message for message in check_settings() if message.id == 'django_aiogram.I003']
+
+    assert len(found) == 1, [message.msg for message in found]
+    assert OLD_TABLE in found[0].msg, found[0].msg
+    assert 'tgbot_move_events' in (found[0].hint or ''), found[0].hint
+
+
+@pytest.mark.django_db
+def test_the_check_is_silent_without_the_old_table():
+    """And says nothing on a project that never ran 3.x, which is most of them."""
+    from django_aiogram.config.checks import check_settings
+
+    assert [message for message in check_settings() if message.id == 'django_aiogram.I003'] == []
+
+
+@pytest.mark.django_db
+@pytest.mark.skipif(connection.vendor != 'postgresql', reason='a sequence only behaves this way on a real one')
+def test_the_next_insert_after_a_move_succeeds(old_table):
+    """The step a hand-written `INSERT ... SELECT` leaves out, and the one SQLite cannot show.
+
+    Explicit ids do not advance a PostgreSQL sequence. So a table copied into with the sequence
+    still where `migrate` left it accepts every row of the copy and then refuses the *bot's* next
+    write with a duplicate key — at whatever hour the first message after the migration arrives,
+    with a traceback naming the primary key rather than the copy that caused it.
+
+    Asserted by writing a row the way the recorder does, which is the thing that would have
+    failed. `sqlite_sequence` follows an explicit id on its own, so this case is skipped there and
+    the suite says so rather than passing for a reason that does not hold anywhere else.
+    """
+    write_old_rows(3)
+    # where `migrate` leaves it on a table it has just created, and where the fixture above does
+    # *not* leave it: those rows went through the model first, so the sequence is already past
+    # them and the copy would look harmless. Set by hand rather than through the helper the
+    # command uses, so a broken helper cannot quietly establish the precondition it is judged on
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT setval(pg_get_serial_sequence(%s, 'id'), 1, false)", [TelegramEvent._meta.db_table])
+
+    move()
+
+    fresh = TelegramEvent.objects.create(
+        kind=EventKind.OUTBOUND_SENT.value,
+        correlation_id=new_correlation_id(),
+        function='send_message',
+    )
+
+    assert fresh.pk > max(TelegramEvent.objects.exclude(pk=fresh.pk).values_list('id', flat=True))
