@@ -390,9 +390,11 @@ that matters: "every id is present, nothing is left to copy" is what somebody re
 the old table, and it has to be followed by the rows that are only in it.
 
 The count is taken across the whole old table rather than the ranges being copied, because a
-destination that already holds low ids puts the resume point above them — no chunk would ever look.
-A row is told from a copy of itself by `created_at` and `kind`, which a copy carries across
-unchanged; two rows sharing an id and both of those to the microsecond are taken to be one row.
+destination that already holds low ids puts the resume point above them — no chunk would ever look —
+and it is taken after the copy, so a row that lands while a chunk is running is counted too. A row
+is told from a copy of itself by comparing every column: two rows can share an id, a timestamp and a
+kind and still differ in the payload or the chat, and the answer decides whether you can drop a
+table.
 
 Comparing them, and deciding what the history is worth, is yours: this will not renumber your rows
 to make a total tidy.

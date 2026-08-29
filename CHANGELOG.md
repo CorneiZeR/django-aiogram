@@ -237,7 +237,9 @@ Entries land here as the work does; nothing below is released.
   most likely to be lost: a destination already holding low ids puts the resume point above them, no
   chunk ever looks, the move reports a clean total, and every later run says every id is present —
   which is the state in which somebody drops the old table. A row is told from a copy of itself by
-  `created_at` and `kind`, which a copy carries across unchanged.
+  comparing every column — two rows can share an id, a timestamp and a kind and still differ in the
+  payload or the chat — and the count is taken *after* the copy, so a row that lands while a chunk
+  is running is counted too.
 
   Starting above the destination's *highest* id would be cheaper and silently wrong: the bot writes
   to the new table from the first message after `migrate`, so a destination that has been
