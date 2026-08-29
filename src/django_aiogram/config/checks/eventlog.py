@@ -7,7 +7,7 @@ whether the writer keeps up, the retention window, and the table 3.x left behind
 process that runs `manage.py`, including the ones that never touch a database.
 """
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 
 from django.conf import settings as django_settings
 from django.core.exceptions import ImproperlyConfigured
@@ -23,8 +23,8 @@ from django_aiogram.eventlog.events import known_kinds
 def _kinds_this_version_records(key: str) -> list[Problem]:
     """Warn about a kind nothing writes: a typo here silently records nothing."""
     value = _setting(key)
-    if not value or isinstance(value, (str, bytes)) or not isinstance(value, Collection):
-        return []  # E032 owns the shape complaint
+    if not value or isinstance(value, (str, bytes, Mapping)) or not isinstance(value, Collection):
+        return []  # E032 owns the shape complaint, mappings included
     known = known_kinds()
     unknown = sorted(repr(name) for name in value if isinstance(name, str) and name not in known)
     if not unknown:

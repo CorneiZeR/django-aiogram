@@ -296,10 +296,10 @@ entry naming a retired one is dead but harmless.
 | `E025` / `E026` | `WEBHOOK_URL` / `WEBHOOK_SECRET` is not a string |
 | `E027` | `WEBHOOK_URL` is set without a secret or is not https, or `MODE` is `webhook` with no URL |
 | `E028` | `MODE` is not `polling` or `webhook` |
-| `E029` | `WEBHOOK_ALLOWED_UPDATES` is not a list, or names an update type Telegram does not have |
+| `E029` | `WEBHOOK_ALLOWED_UPDATES` is not a list, or names an update type Telegram does not have. A mapping is refused with the rest: it is a collection *of its keys*, so it would register those and drop the values silently. A set is accepted — iterating one gives back what was written |
 | `E030` | `REDIS_TIMEOUT` is wrong or below 2 — the pop has to sit one second inside it |
 | `E031`, `E042` | `EVENT_LOG` / `EVENT_LOG_SYNC` cannot be read as true or false. `EVENT_LOG` is read while the app loads, so it too refuses the boot first |
-| `E032`, `E035` | `EVENT_LOG_KINDS` / `EVENT_LOG_REDACT_KEYS` is not a list or tuple of strings |
+| `E032`, `E035` | `EVENT_LOG_KINDS` / `EVENT_LOG_REDACT_KEYS` is not a list or tuple of strings. A mapping is refused for the reason `E029` gives, and a set is accepted for the same one |
 | `E033` | `EVENT_LOG_PAYLOAD` is not `none`, `summary` or `full` |
 | `E034`, `E039` | `EVENT_LOG_MAX_PAYLOAD_BYTES` / `EVENT_LOG_RETENTION_DAYS` is wrong or negative |
 | `E036`–`E038` | `EVENT_LOG_BUFFER_SIZE` / `EVENT_LOG_BATCH_SIZE` / `EVENT_LOG_FLUSH_INTERVAL` is wrong or below 1 |

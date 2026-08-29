@@ -1740,3 +1740,54 @@ def test_a_broken_database_backend_does_not_take_the_run_down(monkeypatch):
     # that the run answered at all is asserted by reaching this line; that the *rule* answered is
     # asserted here, since a rule which caught the error and returned nothing would also not raise
     assert 'django_aiogram.W005' in reported, reported
+
+
+@pytest.mark.parametrize(
+    ('key', 'identifier', 'value'),
+    [
+        ('WEBHOOK_ALLOWED_UPDATES', 'django_aiogram.E029', {'message': True}),
+        ('EVENT_LOG_KINDS', 'django_aiogram.E032', {'outbound.sent': True}),
+        ('EVENT_LOG_REDACT_KEYS', 'django_aiogram.E035', {'token': True}),
+    ],
+    ids=['allowed updates', 'kinds', 'redact keys'],
+)
+def test_a_mapping_is_refused_where_a_list_is_meant(key, identifier, value):
+    """A dict passes every other test these rules make, and means something else downstream.
+
+    It *is* a collection — of its keys — so `list()` on it produces the names and drops the values
+    without a word. `webhook_settings` registers those keys as the allowed updates; the log's two
+    settings become a frozenset of them. Somebody who wrote `{'message': True}` meant something,
+    and the package would do a different thing quietly.
+
+    A set is not refused: iterating one gives back what was written.
+    """
+    settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG': True, key: value}
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == identifier]
+
+    assert len(found) == 1, f'{identifier} reported {[message.msg for message in found]}'
+    assert 'dict' in found[0].msg, found[0].msg
+
+
+@pytest.mark.parametrize(
+    ('key', 'identifier'),
+    [
+        ('WEBHOOK_ALLOWED_UPDATES', 'django_aiogram.E029'),
+        ('EVENT_LOG_KINDS', 'django_aiogram.E032'),
+        ('EVENT_LOG_REDACT_KEYS', 'django_aiogram.E035'),
+    ],
+    ids=['allowed updates', 'kinds', 'redact keys'],
+)
+def test_a_set_is_still_a_collection(key, identifier):
+    """The other half, so the refusal above cannot quietly become "anything but a list or tuple"."""
+    values = {
+        'WEBHOOK_ALLOWED_UPDATES': {'message'},
+        'EVENT_LOG_KINDS': {'outbound.sent'},
+        'EVENT_LOG_REDACT_KEYS': {'token'},
+    }
+    settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG': True, key: values[key]}
+
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == identifier]
+
+    assert found == [], [message.msg for message in found]

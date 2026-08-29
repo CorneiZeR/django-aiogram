@@ -105,7 +105,13 @@ def _a_string(key: str, *, allowed: Collection[str] | None = None) -> list[Probl
 
 
 def _a_callable(key: str) -> list[Problem]:
-    """Require something callable."""
+    """Refuse a value the package will call, when calling it would be a `TypeError`.
+
+    The failure this prevents is late and confusing: the setting names a hook, nothing touches it
+    at startup, and the traceback arrives on the first message with the *hook's* name in it rather
+    than the setting's. Reported as the type that is there, since a dotted path somebody forgot to
+    resolve is the common way to get here.
+    """
     value = _setting(key)
     if callable(value):
         return []
@@ -113,7 +119,12 @@ def _a_callable(key: str) -> list[Problem]:
 
 
 def _a_mapping(key: str) -> list[Problem]:
-    """Require a mapping."""
+    """Refuse a value the package will read keys out of, when it has none.
+
+    A list of pairs and a JSON string both look close enough to a mapping to be written by
+    accident, and neither answers `.get`. Reported as the type that is there, before anything asks
+    it for a key it cannot have.
+    """
     value = _setting(key)
     if isinstance(value, Mapping):
         return []
@@ -125,7 +136,11 @@ def _a_collection_of_strings(key: str) -> list[Problem]:
     value = _setting(key)
     if not value:
         return []
-    if isinstance(value, (str, bytes)) or not isinstance(value, Collection):
+    # `Mapping` is refused by name, and it is the one collection that passes every other test
+    # here: a dict *is* a collection, of its keys, so `list(...)` downstream turns
+    # `{'message': True}` into `['message']` and the project's values vanish without a word. A
+    # set or a frozenset is accepted, because iterating one gives back what was written
+    if isinstance(value, (str, bytes, Mapping)) or not isinstance(value, Collection):
         return [Problem(f'must be a list or tuple, got {type(value).__name__}.')]
     # anything unhashable would raise out of a membership test later, so the
     # element type is settled here and reported through repr's eyes
