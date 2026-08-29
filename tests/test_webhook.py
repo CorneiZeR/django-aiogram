@@ -938,7 +938,7 @@ def test_forgetting_an_update_waits_for_the_shutdown_snapshot():
             # the interpreter simply had not started yet — which is the only other way
             # `done` stays unset for the whole wait
             entered.set()
-            instance._forget_update(finished)  # type: ignore[arg-type]
+            instance._forget_update(finished)  # type: ignore[arg-type] - the same stand-in as above
             done.set()
 
         with loop_lock(loop):

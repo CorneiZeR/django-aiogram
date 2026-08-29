@@ -15,7 +15,7 @@ from typing import Any, ClassVar
 from django_aiogram.broker.base import Broker
 from django_aiogram.broker.models import Liveness, Taken
 from django_aiogram.eventlog.events import worker_identity
-from django_aiogram.redis import aget_redis, as_bytes, get_redis, heartbeat_key, heartbeat_ttl
+from django_aiogram.redis import aget_redis, as_bytes, as_command_argument, get_redis, heartbeat_key, heartbeat_ttl
 
 logger = logging.getLogger('django_aiogram')
 
@@ -152,9 +152,7 @@ class RedisListBroker(Broker):
             # took the message off the queue and the in-flight list stayed empty
             return
         try:
-            # redis-py's stubs say str, but bytes round-trip identically
-            # redis-py's stubs say str, but bytes round-trip identically
-            get_redis().lrem(self._inflight(), 1, handle)  # type: ignore[arg-type]
+            get_redis().lrem(self._inflight(), 1, as_command_argument(handle))
         except Exception:
             # worst case the message is redelivered on the next start
             logger.exception('failed to acknowledge a delivered message', extra={'tg_key': self._inflight()})

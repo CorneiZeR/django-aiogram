@@ -505,3 +505,18 @@ def test_a_deadline_that_cannot_be_one_is_refused_by_name(path, value):
     assert broker.CALL_TIMEOUT_OPTION in str(refused.value), (
         f'{path} refused {value!r} without naming the setting: {refused.value}'
     )
+
+
+def test_a_handle_of_the_wrong_shape_is_refused_by_name(broker: Broker):
+    """Each transport names messages its own way, so a handle from another one is a mistake.
+
+    `Delivery` passes a handle back unread, and a broker cannot check that it issued this one --
+    but it can check the *shape*, because the shape is the transport's own: a payload, an entry id,
+    a `(channel, tag)` pair, a `(partition, offset, epoch)` triple. Three brokers said so and the
+    fourth handed whatever it got to redis-py, which complains about a type the caller never chose.
+
+    Asserted on the message rather than only the exception type, because "must be bytes or str" is
+    what tells the reader which broker they are actually holding.
+    """
+    with pytest.raises(TypeError, match='handle must be'):
+        broker.ack(object())
