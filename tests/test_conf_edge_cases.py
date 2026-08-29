@@ -88,7 +88,7 @@ def test_the_default_kwargs_protocol_is_positional():
 
     with pytest.raises(TypeError):
         # by its own name too: `/` is what makes the contract positional-only
-        no_default_kwargs(_function='send_message')  # type: ignore[call-arg]
+        no_default_kwargs(_function='send_message')  # type: ignore[call-arg] - the refusal is the point
 
 
 @pytest.mark.parametrize(('raw', 'expected'), [('0.5', 0.5), ('5', 5.0), ('30', 30.0)])

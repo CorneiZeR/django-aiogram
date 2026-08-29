@@ -264,7 +264,9 @@ class RedisStreamsBroker(Broker):
         """
         if self._recovered_upto is None:
             return None
-        page = connection.xreadgroup(  # type: ignore[attr-defined]
+        # `connection` is the sync client typed through a proxy, and redis-py's stubs put the
+        # stream commands on a class the proxy does not name
+        page = connection.xreadgroup(  # type: ignore[attr-defined]  # stream commands, see above
             self._group(), self._consumer(), {self._key(): self._recovered_upto}, count=_RECOVERY_PAGE
         )
         entries = self._entries(page)

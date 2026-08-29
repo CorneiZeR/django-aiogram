@@ -305,14 +305,16 @@ class KafkaBroker(Broker):
         """
         if message is None:
             return None
-        error = message.error()  # type: ignore[attr-defined]
+        # `message` is typed `object` on purpose: this signature must not name a class from a
+        # driver that is an extra, and these three are the driver's own documented methods
+        error = message.error()  # type: ignore[attr-defined]  # the parameter is `object`, see above
         if error is not None:
             logger.debug('kafka reported an event rather than a message', extra={'tg_error': str(error)})
             return None
-        payload = message.value()  # type: ignore[attr-defined]
+        payload = message.value()  # type: ignore[attr-defined]  # as above
         if payload is None:
             return None
-        partition, offset = message.partition(), message.offset()  # type: ignore[attr-defined]
+        partition, offset = message.partition(), message.offset()  # type: ignore[attr-defined]  # as above
         with self._lock:
             self._unsettled.setdefault(partition, set()).add(offset)
             epoch = self._rewound.get(partition, 0) + len(self._rewinds.get(partition, ()))
