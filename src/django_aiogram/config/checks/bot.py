@@ -6,6 +6,7 @@ importing aiogram -- which is what keeps `manage.py check` from paying most of a
 the cheap refusals have already returned.
 """
 
+import math
 from collections.abc import Collection, Mapping
 from dataclasses import fields
 
@@ -90,7 +91,10 @@ def _sane_rate_limits(key: str) -> list[Problem]:
         known = ', '.join(sorted(KNOWN_RATE_LIMIT_KEYS))
         return [Problem(f'has unknown keys: {", ".join(unknown)}. Known: {known}.')]
     for name, rate in value.items():
-        if isinstance(rate, bool) or not isinstance(rate, (int, float)) or rate < 0:
+        # `isfinite` before the bound, for the reason `_a_number` gives: every comparison against
+        # `nan` is false, so `rate < 0` passes it through -- and a budget of `nan` makes each of the
+        # limiter's own comparisons false in turn, which admits every message rather than none
+        if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not math.isfinite(rate) or rate < 0:
             return [Problem(f'{name} must be a non-negative number, got {rate!r}.')]
     return []
 

@@ -1791,3 +1791,64 @@ def test_a_set_is_still_a_collection(key, identifier):
         found = [message for message in check_settings() if message.id == identifier]
 
     assert found == [], [message.msg for message in found]
+
+
+@pytest.mark.parametrize('rate', [float('nan'), float('inf'), float('-inf')], ids=repr)
+def test_a_rate_limit_that_is_not_a_number_is_refused(rate):
+    """`nan` is a float and beats every comparison, which is how it passed a bound check.
+
+    And it does not stop there: the limiter compares against the budget too, and every comparison
+    against `nan` is false — so a budget of `nan` admits every message rather than none, which is
+    the opposite of what somebody configuring a rate limit wanted. The infinities are refused with
+    it: a bound nothing can exceed is a limiter that is not one.
+    """
+    settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'RATE_LIMIT': {'overall_per_second': rate}}
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.E020']
+
+    assert len(found) == 1, f'E020 reported {[message.msg for message in found]}'
+    assert 'non-negative number' in found[0].msg, found[0].msg
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'EVENT_LOG': True,
+        'EVENT_LOG_RETENTION_DAYS': float('inf'),
+    }
+)
+def test_an_infinite_retention_does_not_take_the_run_down():
+    """`int(float('inf'))` raises `OverflowError`, which is neither of the two that were caught.
+
+    Found by sweeping the same predicate as the `nan` rate limit rather than by meeting it: a
+    numeric guard that compares without asking whether the number is finite. Measured before the
+    fix — `manage.py check` ended with `OverflowError: cannot convert float infinity to integer`,
+    out of a rule that only warns, taking every other finding with it.
+    """
+    reported = [message.id for message in check_settings()]
+
+    assert 'django_aiogram.E039' in reported, reported
+
+
+def test_a_router_class_in_the_setting_is_not_a_router_in_use():
+    """Django uses a non-string entry as it stands, so a bare class there is not a router.
+
+    Its `db_for_read` would be called without an instance, which is a `TypeError` at the first
+    query rather than this app's log being routed. Reading it as installed silences the one warning
+    that would have said so.
+    """
+    settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG': True, 'EVENT_LOG_DATABASE': 'logs'}
+    with override_settings(TELEGRAM_BOT=settings, DATABASE_ROUTERS=[TelegramEventLogRouter]):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.I002']
+
+    assert len(found) == 1, f'I002 reported {[message.msg for message in found]}'
+
+
+def test_a_router_instance_in_the_setting_is_one():
+    """The other half: an instance is what Django calls, and this must not start refusing it."""
+    settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG': True, 'EVENT_LOG_DATABASE': 'logs'}
+    with override_settings(TELEGRAM_BOT=settings, DATABASE_ROUTERS=[TelegramEventLogRouter()]):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.I002']
+
+    assert found == [], [message.msg for message in found]

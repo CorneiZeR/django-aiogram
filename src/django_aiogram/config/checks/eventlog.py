@@ -168,13 +168,17 @@ def _a_routed_log_database(key: str) -> list[Problem]:
     from django_aiogram.eventlog.dbrouter import TelegramEventLogRouter  # noqa: PLC0415 - no django.db at import
 
     for entry in getattr(django_settings, 'DATABASE_ROUTERS', ()) or ():
-        candidate = entry
         if isinstance(entry, str):
             try:
-                candidate = import_string(entry)
+                # a path is Django's own to instantiate, so the class behind it is a router in use
+                if import_string(entry) is TelegramEventLogRouter:
+                    return []
             except ImportError:
                 continue  # a router Django itself will complain about
-        if candidate is TelegramEventLogRouter or isinstance(candidate, TelegramEventLogRouter):
+        # and anything else has to be an *instance*: Django uses a non-string entry as it stands,
+        # so a bare class there is a router whose `db_for_read` is called without a `self` -- not
+        # this app's log being routed, and saying it is would silence the one warning about it
+        elif isinstance(entry, TelegramEventLogRouter):
             return []
     return [
         Problem(
@@ -247,7 +251,9 @@ def _a_log_that_is_pruned(key: str) -> list[Problem]:
         return []
     try:
         days = int(_setting(key))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # `OverflowError` because `int(float('inf'))` raises that and not `ValueError`: measured,
+        # an infinite retention took `manage.py check` down out of this rule, which only warns
         return []  # E039 owns the type complaint
     if days > 0:
         return []
@@ -270,7 +276,7 @@ def _a_batch_the_buffer_can_hold(key: str) -> list[Problem]:
     try:
         batch = int(_setting(key))
         buffer = int(conf['EVENT_LOG_BUFFER_SIZE'])
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return []  # E036 and E037 own the type complaints
     if batch <= buffer:
         return []
