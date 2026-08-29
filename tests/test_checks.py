@@ -1852,3 +1852,29 @@ def test_a_router_instance_in_the_setting_is_one():
         found = [message for message in check_settings() if message.id == 'django_aiogram.I002']
 
     assert found == [], [message.msg for message in found]
+
+
+@pytest.mark.parametrize(
+    ('key', 'identifier'),
+    [
+        ('BLPOP_TIMEOUT', 'django_aiogram.E014'),
+        ('EVENT_LOG_RETENTION_DAYS', 'django_aiogram.E039'),
+        ('EVENT_LOG_BATCH_SIZE', 'django_aiogram.E037'),
+    ],
+    ids=['pop timeout', 'retention', 'batch size'],
+)
+def test_an_infinite_setting_is_reported_rather_than_raised(key, identifier):
+    """`int(float('inf'))` raises `OverflowError`, which is neither of the two usually caught.
+
+    Every rule that converts a setting has the same shape, and the consequence is the same in each:
+    a rule that only warns ends `manage.py check` and takes every other finding with it, on a
+    configuration one of those findings is about. The rule that owns the type reports it instead.
+
+    All three at once because this was found by sweeping the shape rather than by meeting it, and a
+    case per site is what keeps the next `int()` from arriving without the third exception.
+    """
+    settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG': True, key: float('inf')}
+    with override_settings(TELEGRAM_BOT=settings):
+        reported = [message.id for message in check_settings()]
+
+    assert identifier in reported, reported

@@ -94,7 +94,9 @@ def _setting_int(key: str) -> int:
     raw = conf[key]
     try:
         return int(raw)
-    except (TypeError, ValueError) as error:
+    except (TypeError, ValueError, OverflowError) as error:
+        # `OverflowError` for an infinity, which `int()` refuses with neither of the other two: a
+        # probe that raises where it means to report is a container restart loop with no message
         msg = f"{SETTINGS_NAME}['{key}'] is not a number: {raw!r}"
         raise _UnhealthyError(msg) from error
 

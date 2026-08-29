@@ -372,7 +372,9 @@ def _a_pop_inside_the_deadline(key: str) -> list[Problem]:
         # has not installed it. `E047` owns the driver, with the install line
         broker = _configured_broker()
         ceiling = take_ceiling(broker.CALL_TIMEOUT_OPTION, broker.call_timeout())
-    except (ImproperlyConfigured, TypeError, ValueError):
+    except (ImproperlyConfigured, TypeError, ValueError, OverflowError):
+        # `OverflowError` because `int(float('inf'))` raises that and neither of the other two: a
+        # rule about `BLPOP_TIMEOUT` must not be what ends the run, and `E014` owns the value
         return []  # E014, E023 and E030 own the type complaints
     except (_broker_error(), KeyError):
         # E047 owns every complaint about which transport is configured, including a broker that
