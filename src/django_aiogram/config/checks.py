@@ -397,7 +397,9 @@ def _a_usable_broker(key: str) -> list[Problem]:
     Neither is gated on `ENABLED`: both are arithmetic over settings that needs no driver, and a
     deadline the transport refuses is refused in every process that reaches it.
     """
-    from django_aiogram.broker.exceptions import (  # noqa: PLC0415 - as `_configured_broker`
+    # deferred like every other import of the broker package here: `manage.py check` runs on every
+    # `migrate`, and this module reaches a transport whose driver is an extra since 4.0
+    from django_aiogram.broker.exceptions import (  # noqa: PLC0415 - as above
         BrokerDependencyError,
         BrokerNotConfiguredError,
     )
@@ -651,7 +653,9 @@ def _configured_broker(*, verify_driver: bool = False) -> 'type[Broker]':
     "no such broker" on a machine one `pip install` short is how a whole page of findings went
     missing.
     """
-    from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - a transport module, and its driver
+    # deferred: `manage.py check` runs on every `migrate`, and the registry reaches a transport
+    # module whose driver is an extra since 4.0
+    from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
 
     return broker_class(verify_driver=verify_driver)
 
@@ -663,7 +667,8 @@ def _broker_error() -> type[Exception]:
     in is one a check must not import at module scope. The same idiom as `_response_error()` in the
     Redis list transport, and for the same reason.
     """
-    from django_aiogram.broker.exceptions import BrokerError  # noqa: PLC0415 - as `_configured_broker`
+    # deferred for the same reason: the broker package is not imported until a rule needs it
+    from django_aiogram.broker.exceptions import BrokerError  # noqa: PLC0415 - as above
 
     return BrokerError
 

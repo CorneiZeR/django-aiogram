@@ -306,7 +306,7 @@ class KafkaBroker(Broker):
         if message is None:
             return None
         # `message` is typed `object` on purpose: this signature must not name a class from a
-        # driver that is an extra, and these three are the driver's own documented methods
+        # driver that is an extra, and the calls on it are the driver's own documented methods
         error = message.error()  # type: ignore[attr-defined]  # the parameter is `object`, see above
         if error is not None:
             logger.debug('kafka reported an event rather than a message', extra={'tg_error': str(error)})
