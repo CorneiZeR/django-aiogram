@@ -37,11 +37,6 @@ def _reads_as_a_dotted_path(path: str) -> bool:
     return len(segments) > 1 and all(segment.isidentifier() for segment in segments)
 
 
-#: what a project reading `DELIVERY` from a 3.x settings file has in it, against the path that
-#: does the same thing. Imported from the consumer would cost aiogram at check time -- see
-#: `_a_usable_delivery` -- so the two copies are pinned against each other by the suite instead
-
-
 def _a_readable_boolean(key: str) -> list[Problem]:
     """Accept whatever ``coerce_bool`` accepts, and report what it would refuse.
 

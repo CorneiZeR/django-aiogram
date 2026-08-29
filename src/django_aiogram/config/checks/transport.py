@@ -27,6 +27,9 @@ if TYPE_CHECKING:  # the seam is a type here and nothing more: importing it at r
     from django_aiogram.broker.base import Broker
 
 
+#: what a project reading `DELIVERY` from a 3.x settings file has in it, against the path that
+#: does the same thing. Imported from the consumer would cost aiogram at check time -- see
+#: `_a_usable_delivery` -- so the two copies are pinned against each other by the suite instead
 THREE_X_DELIVERIES = {'blpop': 'django_aiogram.consumer.delivery.BlpopDelivery', 'keyspace': ''}
 
 
@@ -37,8 +40,8 @@ _DELIVERY_HINT = (
 )
 
 
+#: what Docker generates when a container is started without `hostname:`
 _EPHEMERAL_HOSTNAME = re.compile(r'[0-9a-f]{12}')
-#: the first letter of a check id decides how loudly it reports; see :class:`Check`
 
 
 def _the_deadline_the_broker_declares(resolved: 'type[Broker]', key: str) -> list[Problem]:

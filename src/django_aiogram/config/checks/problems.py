@@ -17,6 +17,7 @@ from django.core.checks import Warning as CheckWarning
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.settings import SETTINGS_NAME
 
+#: the first letter of a check id decides how loudly it reports; see :class:`Check`
 _LEVELS = {'E': Error, 'W': CheckWarning, 'I': Info}
 
 

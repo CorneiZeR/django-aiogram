@@ -35,7 +35,6 @@ PAYLOAD_CHOICES = choices(PayloadDetail)
 
 
 _STORAGE_CHOICES = choices(StorageKind)
-#: what Docker generates when a container is started without `hostname:`
 
 
 def _known_bot_properties(key: str) -> list[Problem]:
