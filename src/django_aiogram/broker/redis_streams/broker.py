@@ -27,7 +27,7 @@ from django_aiogram.broker.redis_streams.exceptions import (
     StreamLagUnknownError,
     StreamServerTooOldError,
 )
-from django_aiogram.redis import aget_redis, as_bytes, get_redis, heartbeat_ttl
+from django_aiogram.redis import aget_redis, as_bytes, as_command_argument, get_redis, heartbeat_ttl
 
 __all__ = ('RedisStreamsBroker',)
 
@@ -358,9 +358,27 @@ class RedisStreamsBroker(Broker):
         identifier, fields = entries[0]
         return cls._decode(identifier, fields)
 
+    @staticmethod
+    def _an_entry_id(handle: object) -> str:
+        """Read a handle as the entry id this transport settles by, or say what it is instead.
+
+        The other three brokers already refuse a handle of the wrong shape by name -- a payload, a
+        ``(channel, tag)`` pair, a ``(partition, offset, epoch)`` triple -- and this one handed
+        whatever it got to redis-py, which complains about a type the caller never chose. A handle
+        of another shape came from a different broker, and saying so is the answer.
+
+        ``bytes`` or ``str``, because which one arrives is a connection setting rather than a fact
+        about the entry: ``decode_responses`` on a shared ``REDIS_URL`` decides it and `_decode`
+        keeps whichever came back.
+        """
+        if not isinstance(handle, bytes | str):
+            msg = f'this broker settles by entry id, so a handle must be bytes or str, not {type(handle).__name__}'
+            raise TypeError(msg)
+        return as_command_argument(handle)
+
     def ack(self, handle: object) -> None:
         """``XACK`` the entry this handle names, which drops it from the pending list."""
-        get_redis().xack(self._key(), self._group(), handle)  # type: ignore[arg-type]
+        get_redis().xack(self._key(), self._group(), self._an_entry_id(handle))
         self._unsettled.discard(handle)
 
     def release(self, handle: object) -> None:
@@ -387,7 +405,7 @@ class RedisStreamsBroker(Broker):
             self._group(),
             self._consumer(),
             min_idle_time=0,
-            message_ids=[handle],  # type: ignore[list-item]
+            message_ids=[self._an_entry_id(handle)],
             idle=heartbeat_ttl() * 1000,
         )
         # given up, so it is no longer this consumer's to protect from recovery

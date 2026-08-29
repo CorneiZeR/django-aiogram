@@ -107,8 +107,12 @@ def _as_time(value: object) -> float:
     class too: `float()` accepts them, arithmetic on them produces more of them,
     and `nan` is not even valid JSON to a strict reader.
     """
+    # the same answer the `except TypeError` below gave, reached without asking `float` to refuse:
+    # these four are what it reads, and anything else was a `type: ignore` standing in for a check
+    if not isinstance(value, (int, float, str, bytes)):
+        return 0.0
     try:
-        seconds = float(value or 0.0)  # type: ignore[arg-type]
+        seconds = float(value or 0.0)
     except (TypeError, ValueError):
         return 0.0
     return seconds if math.isfinite(seconds) else 0.0

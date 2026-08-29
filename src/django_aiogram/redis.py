@@ -12,7 +12,7 @@ import asyncio
 import logging
 import threading
 import weakref
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from django.core.exceptions import ImproperlyConfigured
 from django.core.signals import setting_changed
@@ -406,6 +406,22 @@ def reset_redis() -> None:
 def as_bytes(value: bytes | str) -> bytes:
     """Redis hands back str when the URL enables decode_responses."""
     return value if isinstance(value, bytes) else value.encode('utf-8')
+
+
+def as_command_argument(value: bytes | str) -> str:
+    """Hand redis-py a value its stubs type as ``str`` and its driver takes either way.
+
+    The stubs are narrower than the library: redis-py encodes ``bytes``, ``str``, ``int`` and
+    ``float`` through the connection's encoder, and bytes go through it untouched. A message this
+    package settles by value therefore round-trips as bytes, and typing forbids what the driver
+    documents.
+
+    A named boundary rather than a `type: ignore` at each call, because three of them repeated the
+    same sentence -- one of them twice on consecutive lines, which is what a comment nobody reads
+    looks like. The narrowing to ``bytes | str`` is real and stays with the caller: this refuses to
+    launder anything else.
+    """
+    return cast('str', value)
 
 
 class RedisProxy:
