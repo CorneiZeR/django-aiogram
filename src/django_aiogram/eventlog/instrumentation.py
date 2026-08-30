@@ -28,7 +28,8 @@ from aiogram.types.update import UpdateTypeLookupError
 from django_aiogram.config.enums import EventKind
 from django_aiogram.context import correlation_scope, current_correlation_id
 from django_aiogram.eventlog.events import new_correlation_id
-from django_aiogram.eventlog.recorder import Event, recorder
+from django_aiogram.eventlog.recorder import recorder
+from django_aiogram.eventlog.records import Event
 from django_aiogram.wire.payloads import describe
 
 logger = logging.getLogger('django_aiogram')

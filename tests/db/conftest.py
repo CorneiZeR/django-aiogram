@@ -11,7 +11,8 @@ import pytest
 from django.conf import settings
 from django.db import connection, connections
 
-from django_aiogram.eventlog.recorder import WRITER_THREAD, recorder
+from django_aiogram.eventlog.pacing import WRITER_THREAD
+from django_aiogram.eventlog.recorder import recorder
 
 
 @pytest.fixture(autouse=True)

@@ -37,7 +37,8 @@ from django_aiogram.context import current_correlation_id
 from django_aiogram.db import DatabaseConnectionMiddleware
 from django_aiogram.eventlog.events import new_correlation_id, short_id
 from django_aiogram.eventlog.instrumentation import install_instrumentation, instrumented
-from django_aiogram.eventlog.recorder import Event, as_identifier, recorder
+from django_aiogram.eventlog.recorder import recorder
+from django_aiogram.eventlog.records import Event, as_identifier
 from django_aiogram.exceptions import LoopThreadNotStartedError, ShuttingDownError
 from django_aiogram.producer.throttling import RateLimiter, get_rate_limiter
 from django_aiogram.redis import aclose_redis, connection_kwargs

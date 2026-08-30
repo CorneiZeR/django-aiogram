@@ -222,3 +222,46 @@ def test_a_published_path_is_where_it_says_it_is(path):
     entry in `Upgrading.md`.
     """
     assert (SRC.parent / path).is_file(), f'{path} moved, and something out there names it'
+
+
+#: what the recorder was split into, each of which the recorder imports and none of which
+#: may import it back. Listed rather than discovered: a fifth module joining them is a
+#: decision about the layering, and this is where the decision gets written down
+BELOW_THE_RECORDER = ('records', 'pacing', 'bookkeeping', 'publishing')
+
+
+@pytest.mark.parametrize('module', BELOW_THE_RECORDER)
+def test_a_module_under_the_recorder_neither_reaches_back_up_nor_into_the_orm(module):
+    """The layering that makes the split worth having, rather than four files in a trench coat.
+
+    Each of these carries one part of what `recorder.py` used to hold, and each is imported
+    *by* it. So the two assertions below do different amounts of work, and it is worth
+    saying which is which.
+
+    **`django.db` is the one being measured.** These four are what a process that only
+    counts events imports, and the recorder's own docstring forbids the ORM for exactly
+    that reason: a module here reaching for it — directly, or through something that does
+    — undoes the property without touching the recorder at all. Falsified by adding
+    `from django.db import connections` to `bookkeeping`, which fails this.
+
+    **The recorder is checked for the case Python does not report.** While the recorder
+    imports a module, an import back the other way is a cycle and dies as an `ImportError`
+    long before this assertion — louder than anything here could be. What this covers is
+    the state that stays quiet: a module the recorder stopped importing, still reaching up
+    to it, and pulling the writer's path to the ORM within reach of a process that wanted
+    none of it.
+
+    A subprocess, because `sys.modules` in this one already holds the whole package: the
+    question is what *this* import pulls, and only a fresh interpreter can answer it.
+    """
+    code = (
+        'import sys\n'
+        f'import django_aiogram.eventlog.{module}\n'
+        "print('django_aiogram.eventlog.recorder' in sys.modules)\n"
+        "print('django.db' in sys.modules)\n"
+    )
+    finished = run_python(code, check=True)
+    pulled_recorder, pulled_orm = finished.stdout.strip().splitlines()
+
+    assert pulled_recorder == 'False', f'{module} imports the recorder it was split out of'
+    assert pulled_orm == 'False', f'{module} pulled django.db, which the recorder must never reach'

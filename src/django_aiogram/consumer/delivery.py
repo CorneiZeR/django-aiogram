@@ -45,7 +45,8 @@ from django_aiogram.broker.registry import get_broker
 from django_aiogram.config.enums import EventKind
 from django_aiogram.config.settings import conf, take_ceiling
 from django_aiogram.eventlog.events import new_correlation_id, worker_identity
-from django_aiogram.eventlog.recorder import Event, as_identifier, recorder
+from django_aiogram.eventlog.recorder import recorder
+from django_aiogram.eventlog.records import Event, as_identifier
 from django_aiogram.exceptions import DeliveryNotConfiguredError
 from django_aiogram.redis import (
     heartbeat_interval,

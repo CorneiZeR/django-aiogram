@@ -35,6 +35,21 @@ that reads it. Environment variables move from `DJANGO_REDIS_AIOGRAM_*` to
 ids from `django_redis_aiogram.EXXX` to `django_aiogram.EXXX` — so re-silence anything you
 had silenced by id.
 
+### One import inside the event log moved
+
+Only for a project that builds an `Event` itself — a custom recording seam, a test that
+asserts on one, a metrics receiver that names the type:
+
+```python
+from django_aiogram.eventlog.records import Event, as_identifier
+```
+
+They were in `django_aiogram.eventlog.recorder`, which is now the queue and the writer
+thread and nothing else. The shapes that cross that queue travel further than it does —
+every seam builds one, the writer reads one, receivers are handed one — so they live beside
+each other in their own module. Same objects, same fields; `recorder`, `EventRecorder` and
+`events_recorded` did not move.
+
 ### Two paths you wrote down yourself
 
 Everything above is inside your own imports, where a rename fails loudly the moment it is wrong.

@@ -556,6 +556,26 @@ Entries land here as the work does; nothing below is released.
 
 ### Changed
 
+- **`eventlog/recorder.py` is five modules.** It held the queue, the writer thread, the
+  shapes that cross between them, the settings the writer reads, two counters several
+  threads touch and the fan-out to `events_recorded` — 922 lines in which the hardest part
+  to reason about, the thread and its accounting, was the part with the least room of its
+  own.
+
+  What moved out says what it is: `records` (`Event`, `Wake`, `as_identifier` — the shapes,
+  which travel further than the recorder does), `pacing` (the writer's numbers and the
+  promise that reading one never raises on its thread), `bookkeeping` (the drop ledger and
+  the thread marks, one lock each) and `publishing` (the fan-out, and the promise that it
+  cannot raise). What stayed is the queue, the thread, the lifecycle around both and the
+  gap row.
+
+  **Import paths only, for a project that reached inside.** `Event` and `as_identifier` are
+  `django_aiogram.eventlog.records` now, and nothing else a project would name has moved:
+  `recorder`, `EventRecorder` and the `events_recorded` signal are where they were. The
+  drop count and the thread marks are objects rather than attributes on the recorder,
+  which makes the lock discipline structural — every path that changes a count is a method
+  that takes the lock, instead of a `+=` somebody has to remember to guard.
+
 - **Each setting belongs to one table: the package's, or the transport that reads it.** Four keys
   were in both, and the overlap made two rules quietly wrong. `W003` knows a key by the package-wide
   table plus whatever the configured transport declares, so `REDIS_MESSAGES_KEY` — being in the

@@ -138,22 +138,22 @@ def test_the_flush_interval_is_read_the_way_its_check_demands():
 
     Two rules for one setting is how a value passes `manage.py check` and then behaves in
     a way the check said was impossible. Asserted at the writer's own reader, not at the
-    helper below it — the first version of this test asked `_number` directly and passed
+    helper below it — the first version of this test asked `number()` directly and passed
     with the float read still in place.
     """
-    from django_aiogram.eventlog.recorder import EventRecorder
+    from django_aiogram.eventlog.pacing import flush_interval
 
     with override_settings(TELEGRAM_BOT={'EVENT_LOG_FLUSH_INTERVAL': 0.5}):
         assert 'django_aiogram.E038' in {str(m.id) for m in check_settings()}
-        assert EventRecorder.flush_interval() == 1, 'the writer honoured an interval the check refuses'
+        assert flush_interval() == 1, 'the writer honoured an interval the check refuses'
 
     with override_settings(TELEGRAM_BOT={'EVENT_LOG_FLUSH_INTERVAL': 3}):
-        assert EventRecorder.flush_interval() == 3
+        assert flush_interval() == 3
 
 
 @pytest.mark.parametrize('value', [float('inf'), float('-inf'), float('nan')])
 def test_a_writer_dial_that_cannot_be_read_falls_back_instead_of_ending_the_thread(value):
-    """`_number` runs on the writer thread, in a loop, past the net `_flush` provides.
+    """`pacing.number` runs on the writer thread, in a loop, past the net `_flush` provides.
 
     `int(float('inf'))` raises `OverflowError`, which is not a cast error the reader was
     catching — so a settings dict holding `inf` ended the writer and took the buffer with
@@ -162,10 +162,10 @@ def test_a_writer_dial_that_cannot_be_read_falls_back_instead_of_ending_the_thre
     `manage.py check` runs.
     """
     from django_aiogram.config.defaults import DEFAULTS
-    from django_aiogram.eventlog.recorder import EventRecorder
+    from django_aiogram.eventlog.pacing import flush_interval
 
     with override_settings(TELEGRAM_BOT={'EVENT_LOG_FLUSH_INTERVAL': value}):
-        assert EventRecorder.flush_interval() == DEFAULTS['EVENT_LOG_FLUSH_INTERVAL']
+        assert flush_interval() == DEFAULTS['EVENT_LOG_FLUSH_INTERVAL']
 
 
 def test_the_writer_waits_the_interval_its_reader_returns():
