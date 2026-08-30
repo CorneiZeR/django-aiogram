@@ -426,8 +426,9 @@ different order is accepted with every value one column to the side. Naming them
 and makes the second impossible.
 
 The names come from what the two tables share, asked of the database — the old one is frozen at
-3.x's shape while this one moves on. A column only 4.0 has takes the model's default, which for
-`short_id` is empty, so moved history arrives ready for `tgbot_backfill_short_ids` above.
+3.x's shape while this one moves on. A column introduced only in 4.0 is written with the model's
+default, which for `short_id` is empty, so moved history arrives ready for
+`tgbot_backfill_short_ids` above.
 
 **Stopping it is safe, and so is running it after the bot has been writing.** Both tables share the
 primary key, so an id already in the new table is either a row the command copied or a row this

@@ -41,6 +41,19 @@ def an_event(**kwargs):
     return TelegramEvent.objects.create(**fields)
 
 
+def thread_cell(row):
+    """The anchor the thread column renders — label, target and title in one string.
+
+    Asserted whole because each part alone passes on a page that is wrong: the code appears in the
+    body when it is only in the href and nothing is on screen, and `(not backfilled)` appears when
+    it is rendered in some other cell entirely. What the column promises is that what a reader can
+    read is what the link takes.
+    """
+    label = row.short_id or '(not backfilled)'
+    target = row.short_id or row.correlation_id
+    return f'<a href="?q={target}" title="{row.correlation_id}">{label}</a>'
+
+
 def a_reader(username, *codenames):
     user = User.objects.create_user(username=username, password='x', is_staff=True)
     for codename in codenames:
@@ -223,15 +236,15 @@ def test_a_search_the_columns_cannot_hold_is_refused_before_the_query(client):
 @override_settings(TELEGRAM_BOT=ON)
 def test_a_search_by_correlation_id_finds_the_row(client):
     identifier = new_correlation_id()
-    an_event(correlation_id=identifier)
+    row = an_event(correlation_id=identifier)
     other = an_event()
     client.force_login(a_reader('finder', 'view_telegramevent'))
 
     body = client.get(CHANGELIST, {'q': str(identifier)}).content.decode()
 
-    # on the code the row shows, since the id itself is in the page whether or not the search
+    # on the cell the row renders, since the id itself is in the page whether or not the search
     # narrowed anything; the second row is what says it did
-    assert short_id(identifier) in body
+    assert thread_cell(row) in body
     assert short_id(other.correlation_id) not in body, 'the search returned a row it was not asked for'
 
 
@@ -314,10 +327,7 @@ def test_the_column_shows_the_code_it_searches_by(client):
 
     body = client.get(CHANGELIST).content.decode()
 
-    code = short_id(identifier)
-    assert code in body, 'the changelist does not show the code'
-    assert f'?q={code}' in body, 'the cell links somewhere the search cannot follow'
-    assert str(row.correlation_id) in body, 'the full id is not reachable from the row'
+    assert thread_cell(row) in body, f'the thread column does not render the code and its link:\n{body}'
 
 
 @pytest.mark.django_db
@@ -326,12 +336,12 @@ def test_a_row_from_before_the_backfill_says_so(client):
     """The column is filled going forward and by a command going back, so both states are on the
     page at once until an operator finishes the walk. An empty cell would read as a missing thread
     rather than as work still to do."""
-    an_event(short_id='')
+    row = an_event(short_id='')
     client.force_login(a_reader('reader-of-history', 'view_telegramevent'))
 
     body = client.get(CHANGELIST).content.decode()
 
-    assert '(not backfilled)' in body
+    assert thread_cell(row) in body, f'the cell does not say the row is waiting for the backfill:\n{body}'
 
 
 @pytest.mark.django_db
