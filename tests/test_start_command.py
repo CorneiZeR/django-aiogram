@@ -192,6 +192,9 @@ def test_webhook_mode_consumes_without_calling_telegram(monkeypatch, mode):
     release.set()
     assert finished.wait(5)
 
+    # captured rather than raised on its own thread, so it has to be looked at: a `call_command`
+    # that failed during shutdown would otherwise leave every assertion below still true
+    assert not failure, failure
     assert handlers == [bot.send_raw], 'the consumer was given the wrong handler'
     assert 'POLLED' not in events, 'it polled Telegram in webhook mode'
     # `collected` last, and after `closed`: close() is what drains the in-flight sends,

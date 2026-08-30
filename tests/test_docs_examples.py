@@ -86,9 +86,22 @@ def documented_settings():
             yield path.name, settings
 
 
+SETTINGS_EXAMPLES = list(documented_settings())
+
+
+def test_there_is_a_documented_settings_block_to_check():
+    """An empty parametrize is a skipped test, and a skipped test is a guard that is not there.
+
+    The same reason the LOGGING examples have this above them: the block below asserts that a
+    documented spelling works, and a regex that stopped matching would take that assertion with it
+    without failing anything.
+    """
+    assert SETTINGS_EXAMPLES, 'no TELEGRAM_BOT example naming a published enum was found in the docs'
+
+
 @pytest.mark.parametrize(
     ('name', 'settings'),
-    list(documented_settings()),
+    SETTINGS_EXAMPLES,
     ids=lambda value: value if isinstance(value, str) else '',
 )
 def test_a_documented_settings_block_configures_what_it_says(name, settings):
