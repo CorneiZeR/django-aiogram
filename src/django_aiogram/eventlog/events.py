@@ -75,6 +75,62 @@ def failure_kinds() -> tuple[str, ...]:
     return tuple(spec.code for spec in _KINDS.values() if spec.failure)
 
 
+#: Crockford's base32, which drops `I`, `L`, `O` and `U`: a short id is read aloud, copied from a
+#: screenshot and typed into a ticket, and those four are where that goes wrong
+_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+
+#: how many of those a short id has. Twelve is 60 bits, and the arithmetic is the reason: with
+#: `n**2 / 2**61` expected collisions, a hundred million rows expect 0.004 of them and a billion
+#: expect 0.43. Ten characters would expect 4.4 at a hundred million, which is a number somebody
+#: would eventually meet
+SHORT_ID_LENGTH = 12
+
+#: what a person may type instead of the character the alphabet uses, all four of them from the
+#: pairs Crockford's alphabet exists to separate
+_CONFUSABLE = {'I': '1', 'L': '1', 'O': '0', 'U': 'V'}
+
+
+def short_id(correlation_id: uuid.UUID) -> str:
+    """Render a correlation id as something a person can read, say and search by.
+
+    **From the random bits, never a prefix.** The first 48 bits of a UUIDv7 are a millisecond
+    clock, so a prefix names the minute rather than the message: measured, 100 ids written in one
+    instant share their first *eight* hex characters, and 100 written over a minute produce two
+    distinct values. The low 60 bits are `rand_b` in version 7 and random in version 4 alike.
+
+    **Derived, not stored beside the id as a second identity.** A pure function means there is
+    nothing to keep in sync, nothing extra on the wire, and anyone holding an id -- a log pipeline,
+    a support script, a person with a traceback -- can compute it without the database.
+
+    Not reversible, and not unique: it names 60 of the 122 random bits, so two rows *can* share one.
+    The admin shows every row a code matches rather than pretending otherwise.
+    """
+    number = correlation_id.int & (2**60 - 1)
+    digits = []
+    for _ in range(SHORT_ID_LENGTH):
+        number, remainder = divmod(number, 32)
+        digits.append(_ALPHABET[remainder])
+    return ''.join(reversed(digits))
+
+
+def normalise_short_id(text: str) -> str:
+    """Read a short id the way a person wrote it down, or return ``''`` when it is not one.
+
+    Upper-cased, hyphens and spaces dropped, and the four confusable characters folded onto the
+    ones the alphabet uses -- somebody reading `0` aloud says "oh", and the ticket comes back with
+    an `O` in it. That is what Crockford's alphabet is for, and honouring it on input is the half
+    that makes it worth having on output.
+
+    An empty answer means "this is not a short id", which is how the admin's search tells it apart
+    from a chat id or a full UUID without guessing.
+    """
+    written = (character for character in text.strip().upper() if character not in ' -')
+    cleaned = ''.join(_CONFUSABLE.get(character, character) for character in written)
+    if len(cleaned) != SHORT_ID_LENGTH or any(character not in _ALPHABET for character in cleaned):
+        return ''
+    return cleaned
+
+
 def new_correlation_id() -> uuid.UUID:
     """Build a time-ordered identifier, so its index appends instead of scattering.
 

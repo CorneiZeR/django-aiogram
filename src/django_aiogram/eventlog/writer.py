@@ -22,6 +22,7 @@ from django.db import (
 from django.utils import timezone
 
 from django_aiogram.eventlog.dbrouter import event_log_database
+from django_aiogram.eventlog.events import short_id
 from django_aiogram.eventlog.recorder import Event
 from django_aiogram.exceptions import DjangoRedisAiogramError
 from django_aiogram.models import TelegramEvent
@@ -84,6 +85,9 @@ def to_row(
     return TelegramEvent(
         created_at=_moment(event.created_at),
         correlation_id=event.correlation_id,
+        # here and nowhere else: it is a pure function of the id above, so computing it in one
+        # place is what keeps the column and the id from ever disagreeing
+        short_id=short_id(event.correlation_id),
         kind=_text(event.kind, 48),
         function=_text(event.function, 64),
         chat_id=event.chat_id,

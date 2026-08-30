@@ -40,7 +40,7 @@ from django.core.management import BaseCommand, CommandError
 from django.core.management.color import no_style
 from django.db import IntegrityError, connections, transaction
 
-from django_aiogram.eventlog.moving import OLD_TABLE, old_table_is_present, shared_columns
+from django_aiogram.eventlog.moving import OLD_TABLE, added_since, old_table_is_present, shared_columns
 from django_aiogram.eventlog.writer import log_alias
 from django_aiogram.models import TelegramEvent
 
@@ -138,8 +138,11 @@ class Command(BaseCommand):
         still be different rows -- a chat id, a payload, an error apart -- and a comparison that
         stopped at three columns would call that a copy, skip it, and report nothing. Since the
         answer decides whether an operator can drop a table, the comparison is the whole row, and a
-        difference in any column is a difference. Built from the model's own column list, so it
-        covers a column added later without anybody remembering this query.
+        difference in any column is a difference. Built from the columns the two tables share, so it
+        covers one added later without anybody remembering this query -- and a column only this
+        release has cannot be a difference, since the old row has nothing there to differ from.
+        Counting one as a difference would report every old row as stranded on the release that
+        adds it.
         """
         connection = connections[alias]
         old = connection.ops.quote_name(OLD_TABLE)
@@ -150,7 +153,7 @@ class Command(BaseCommand):
             f'(n.{column} IS NULL AND o.{column} IS NOT NULL) '
             f'OR (o.{column} IS NULL AND n.{column} IS NOT NULL) '
             f'OR n.{column} <> o.{column}'
-            for column in (connection.ops.quote_name(name) for name in shared_columns() if name != 'id')
+            for column in (connection.ops.quote_name(name) for name in shared_columns(alias) if name != 'id')
         )
         statement = f'SELECT COUNT(*) FROM {old} o JOIN {new} n ON n.id = o.id WHERE {differs}'  # noqa: S608 - names quoted by the backend, no values at all
         with connection.cursor() as cursor:
@@ -230,18 +233,26 @@ class Command(BaseCommand):
         connection = connections[alias]
         old = connection.ops.quote_name(OLD_TABLE)
         new = connection.ops.quote_name(TelegramEvent._meta.db_table)  # noqa: SLF001 - _meta is Django's own API
-        columns = ', '.join(connection.ops.quote_name(name) for name in shared_columns())
-        picked = ', '.join(f'o.{connection.ops.quote_name(name)}' for name in shared_columns())
+        shared = shared_columns(alias)
+        # a column 3.x's table does not have takes the model's default, written as a bound value:
+        # `migrate` drops the default it adds the column with, so leaving that column out of the
+        # insert is refused by the database rather than filled in
+        added = added_since(alias)
+        names = (*shared, *(name for name, _ in added))
+        columns = ', '.join(connection.ops.quote_name(name) for name in names)
+        picked = ', '.join([*(f'o.{connection.ops.quote_name(name)}' for name in shared), *('%s' for _ in added)])
         # as in `_bounds`: names are this package's own and quoted, and the ids are bound
         window = f'FROM {old} o WHERE o.id >= %s AND o.id <= %s'
         missing = f'AND NOT EXISTS (SELECT 1 FROM {new} n WHERE n.id = o.id)'  # noqa: S608
         still_missing = f'SELECT COUNT(*) {window} {missing}'
         insert = f'INSERT INTO {new} ({columns}) SELECT {picked} {window} {missing}'
-        arguments = [low, high]
+        window_arguments = [low, high]
+        # the defaults sit in the select list, ahead of the range the window binds
+        insert_arguments = [*(value for _, value in added), *window_arguments]
 
         if dry_run:
             with connection.cursor() as cursor:
-                cursor.execute(still_missing, arguments)
+                cursor.execute(still_missing, window_arguments)
                 return int(cursor.fetchone()[0])
 
         # `NOT EXISTS` decides what to insert; it does not hold the ids it chose. A row this
@@ -254,7 +265,7 @@ class Command(BaseCommand):
         for attempt in range(1, _COLLISION_ATTEMPTS + 1):
             try:
                 with transaction.atomic(using=alias), connection.cursor() as cursor:
-                    cursor.execute(insert, arguments)
+                    cursor.execute(insert, insert_arguments)
                     return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             # three attempts, each one a database round trip: the setup cost this rule measures is
             # nanoseconds against a network hop, and moving the handler out of the loop would mean a

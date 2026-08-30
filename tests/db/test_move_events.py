@@ -1,9 +1,11 @@
 """Moving the rows 3.x wrote into the table 4.0 reads.
 
 The old table has no model any more, so every case here creates it the way a real upgrade leaves
-it: same columns, same primary key, rows already in it. Built from the model's own column list
-rather than from a literal, because a copy that names columns is only safe while the two agree —
-a case that hard-coded them would keep passing on the release that makes them differ.
+it: 3.x's columns, same primary key, rows already in it. From a literal list, because that is what
+the table is — frozen at the shape 3.x left it, while this one moves on. It was built from the
+model instead, which read as the safer choice and was the opposite: the old table then grew every
+column 4.0 added, the two could never disagree, and the case for copying between two shapes was
+the one thing this file could not express.
 
 `sqlite_sequence` behaves differently from a PostgreSQL sequence, so the case about the *sequence*
 lives with the integration suite and this file says what it can: what moves, what does not move
@@ -18,20 +20,42 @@ from django.db import connection
 from django.db.utils import IntegrityError, OperationalError
 
 from django_aiogram.config.enums import EventKind
-from django_aiogram.eventlog.events import new_correlation_id
-from django_aiogram.eventlog.moving import OLD_TABLE, shared_columns
+from django_aiogram.eventlog.events import new_correlation_id, short_id
+from django_aiogram.eventlog.moving import OLD_TABLE, added_since, model_columns, shared_columns
 from django_aiogram.models import TelegramEvent
+
+#: 3.x's columns, spelled out, because that table is history and does not follow this model. The
+#: fixture used to clone today's table instead, which handed the old table every column 4.0 has
+#: since added -- so the copy never met the shape it exists to handle, and the release that added
+#: one broke the command against a green suite.
+THREE_X_COLUMNS = (
+    'id',
+    'created_at',
+    'correlation_id',
+    'kind',
+    'function',
+    'chat_id',
+    'user_id',
+    'message_id',
+    'update_id',
+    'worker',
+    'attempt',
+    'duration_ms',
+    'error_code',
+    'error',
+    'detail',
+)
 
 
 @pytest.fixture
 def old_table():
-    """The 3.x table, created as the rename left it and dropped afterwards."""
-    columns = ', '.join(f'"{name}"' for name in shared_columns() if name != 'id')
+    """The 3.x table, created with 3.x's columns and dropped afterwards."""
+    kept = ', '.join(f'"{name}"' for name in THREE_X_COLUMNS)
     with connection.cursor() as cursor:
         cursor.execute(
-            f'CREATE TABLE {OLD_TABLE} AS SELECT * FROM {TelegramEvent._meta.db_table} WHERE 1 = 0'  # noqa: S608
+            f'CREATE TABLE {OLD_TABLE} AS SELECT {kept} FROM {TelegramEvent._meta.db_table} WHERE 1 = 0'  # noqa: S608
         )
-    yield columns
+    yield ', '.join(f'"{name}"' for name in THREE_X_COLUMNS if name != 'id')
     with connection.cursor() as cursor:
         cursor.execute(f'DROP TABLE {OLD_TABLE}')
 
@@ -49,7 +73,7 @@ def write_old_rows(count):
     stopped. A case that spelled the ids out passed alone and failed in the file, which is the
     same defect as asserting on a number nobody derived.
     """
-    names = ', '.join(f'"{name}"' for name in shared_columns())
+    names = ', '.join(f'"{name}"' for name in THREE_X_COLUMNS)
     for _ in range(count):
         TelegramEvent.objects.create(
             kind=EventKind.OUTBOUND_SENT.value,
@@ -231,6 +255,47 @@ def test_a_finished_run_still_names_what_it_could_not_copy(old_table):
 
     assert 'nothing is left to copy' in output, output
     assert 'have an id that a different row already holds' in output, output
+
+
+@pytest.mark.django_db
+def test_the_columns_to_copy_are_the_ones_both_tables_have(old_table):
+    """The split the copy rests on, asked of the database rather than of the model.
+
+    The model describes this release's table only. It described both while they agreed, and the
+    first column 4.0 added ended that: asking the old table for it is an error from the backend,
+    not a column of nulls.
+    """
+    shared = shared_columns('default')
+    added = dict(added_since('default'))
+
+    assert set(shared) == set(THREE_X_COLUMNS)
+    assert set(added) == set(model_columns()) - set(THREE_X_COLUMNS)
+    assert added, 'nothing has been added since 3.x, so the case below is not measuring the split'
+
+
+@pytest.mark.django_db
+def test_a_column_this_release_added_does_not_stop_the_copy(old_table):
+    """What the move does with a column the source has never heard of.
+
+    Both halves are failures, not degradations: selecting it from the old table is an error from
+    the backend, and leaving it out of the insert is a not-null violation — `migrate` adds the
+    column with a default and drops the default, which is how it avoids rewriting the table.
+
+    So the copy writes the model's default, and for a short id that is empty: the state the admin
+    shows as not backfilled and the state `tgbot_backfill_short_ids` looks for. History arrives in
+    a state the tool for it already understands.
+    """
+    write_old_rows(3)
+
+    move()
+
+    assert TelegramEvent.objects.count() == 3
+    assert list(TelegramEvent.objects.values_list('short_id', flat=True)) == ['', '', '']
+
+    call_command('tgbot_backfill_short_ids', sleep=0, stdout=StringIO())
+
+    for row in TelegramEvent.objects.all():
+        assert row.short_id == short_id(row.correlation_id)
 
 
 @pytest.mark.django_db

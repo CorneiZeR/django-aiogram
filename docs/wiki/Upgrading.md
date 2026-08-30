@@ -91,9 +91,9 @@ On an empty destination it takes two statements rather than one:
 
 ```sql
 INSERT INTO django_aiogram_event (id, created_at, correlation_id, kind, function, chat_id, user_id,
-    message_id, update_id, worker, attempt, duration_ms, error_code, error, detail)
+    message_id, update_id, worker, attempt, duration_ms, error_code, error, detail, short_id)
 SELECT id, created_at, correlation_id, kind, function, chat_id, user_id,
-    message_id, update_id, worker, attempt, duration_ms, error_code, error, detail
+    message_id, update_id, worker, attempt, duration_ms, error_code, error, detail, ''
 FROM django_redis_aiogram_event;
 
 -- PostgreSQL only, and not optional: explicit ids do not advance the sequence
@@ -101,15 +101,39 @@ SELECT setval(pg_get_serial_sequence('django_aiogram_event', 'id'),
               (SELECT MAX(id) FROM django_aiogram_event));
 ```
 
-The columns are unchanged from 3.1, which is what makes a column-wise copy safe — name them rather
-than writing `SELECT *`, which agrees with itself until either table changes: a mismatched count is
-rejected, and a matching count in a different order is accepted with every value one column to the
-side. And without the `setval`, PostgreSQL accepts the
+`short_id` is 4.0's and the old table does not have it, so the copy writes an empty one: those rows
+show as `(not backfilled)` in the admin until `manage.py tgbot_backfill_short_ids` fills them. It
+cannot simply be left out of the list — `migrate` adds the column with a default and then drops the
+default, so an `INSERT` that omits it is refused. Name every column rather than writing `SELECT *`,
+which agrees with itself until either table changes: a mismatched count is rejected, and a matching
+count in a different order is accepted with every value one column to the side. And without the `setval`, PostgreSQL accepts the
 copy and refuses the *bot's* next write with a duplicate key: the sequence is still where `migrate`
 left it. The command does this step for you, on whichever backend you run.
 
 Then drop the old table when you are satisfied — `DROP TABLE django_redis_aiogram_event` is yours
 to run, and this package will never run it for you.
+
+## Fill in the short id, or leave it
+
+`migrate` adds one column to the event log: `short_id`, twelve characters of the correlation id in
+an alphabet a person can read out. It is what the admin's thread column shows and what its search
+box takes — the column used to show the correlation id's first eight characters, which are a clock
+rather than an identifier and which the search refused when they were typed back.
+
+Rows written from now on carry their own. Rows already in the table have none until the backfill
+walks them, in bounded chunks, with the arguments the other jobs take:
+
+```shell
+python manage.py tgbot_backfill_short_ids --dry-run
+python manage.py tgbot_backfill_short_ids
+```
+
+Leaving it unrun is a legitimate choice and nothing breaks: those rows read `(not backfilled)` in
+the admin and still link to the rest of their thread. A run you stop resumes — a row with no code is
+a row still to do — and running it again after it finishes writes nothing.
+
+Rows moved from 3.x arrive with no code, whether the command copied them or you did, so run this
+after the move rather than before it.
 
 ## Choose the transport explicitly
 

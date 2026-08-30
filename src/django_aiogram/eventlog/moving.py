@@ -11,6 +11,8 @@ which alias, is the one being talked about. Neither empties it: the rows stay, a
 table is the operator's to do.
 """
 
+from typing import Any
+
 from django.db import connections
 
 from django_aiogram.models import TelegramEvent
@@ -42,16 +44,54 @@ def old_table_is_present(alias: str) -> bool:
         return OLD_TABLE in connections[alias].introspection.table_names(cursor)
 
 
-def shared_columns() -> tuple[str, ...]:
-    """Name the columns to copy, one by one, from the model itself.
-
-    Never ``SELECT *``. The two tables agree today, and would keep agreeing right up to the release
-    that changes either of them -- at which point a `SELECT *` breaks in whichever way the two
-    shapes make available: a column count that no longer matches is rejected outright by every
-    backend this package supports, and a count that still matches with the order changed is
-    *accepted*, putting each value in the wrong column. Named columns fail on the first kind and
-    make the second impossible, which is the answer a migration wants.
-    """
+def model_columns() -> tuple[str, ...]:
+    """Every column 4.0's table has, in the order the model declares them."""
     # `column` is `str | None` in the stubs because an abstract field has none; every field on a
     # concrete model has one, and an empty name would produce invalid SQL rather than wrong data
     return tuple(str(field.column) for field in TelegramEvent._meta.concrete_fields)  # noqa: SLF001 - _meta is Django's own API
+
+
+def _columns_of_the_old_table(alias: str) -> frozenset[str]:
+    """Ask the database what 3.x's table actually has, rather than assuming it."""
+    connection = connections[alias]
+    with connection.cursor() as cursor:
+        return frozenset(column.name for column in connection.introspection.get_table_description(cursor, OLD_TABLE))
+
+
+def shared_columns(alias: str) -> tuple[str, ...]:
+    """Name the columns to copy, one by one, from the two tables' agreement.
+
+    Never ``SELECT *``. The old table is frozen at 3.x's shape and this one moves on, so a `SELECT *`
+    breaks in whichever way the two shapes make available: a column count that no longer matches is
+    rejected outright by every backend this package supports, and a count that still matches with
+    the order changed is *accepted*, putting each value in the wrong column. Named columns fail on
+    the first kind and make the second impossible, which is the answer a migration wants.
+
+    **The model alone cannot name them.** It described both tables while they agreed, and the first
+    column 4.0 added ended that: asking the old table for ``short_id`` is an error from the backend,
+    not a column of nulls. So the list is the intersection, in model order, and what only this
+    release has is handled by :func:`added_since`.
+    """
+    present = _columns_of_the_old_table(alias)
+    return tuple(name for name in model_columns() if name in present)
+
+
+def added_since(alias: str) -> tuple[tuple[str, Any], ...]:
+    """Name the columns this release has and 3.x's table does not, each with the value to write.
+
+    A copy cannot leave them out. ``migrate`` adds a column with a default and then drops the
+    default, which is Django's way of not rewriting the table -- so the column ends up ``NOT NULL``
+    with nothing behind it, and an ``INSERT`` that names every *other* column is refused by the
+    database rather than filled in for you.
+
+    The value is the field's own default, which is what the model would have written. For
+    ``short_id`` that is empty, and empty is what the admin shows as ``(not backfilled)`` and what
+    ``manage.py tgbot_backfill_short_ids`` looks for -- so history arrives in the state the tool for
+    it already understands, rather than in one nothing knows how to finish.
+    """
+    present = _columns_of_the_old_table(alias)
+    return tuple(
+        (str(field.column), field.get_default())
+        for field in TelegramEvent._meta.concrete_fields  # noqa: SLF001 - _meta is Django's own API
+        if str(field.column) not in present
+    )

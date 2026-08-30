@@ -220,6 +220,38 @@ Entries land here as the work does; nothing below is released.
   broker's own doing. `Deployment` carries a compose recipe for each and `Troubleshooting` the
   duplicate each one produces.
 
+- **Every event log row carries a short id, and the admin searches by it.** Twelve characters of the
+  correlation id in Crockford's base32 — the alphabet without `I`, `L`, `O` and `U` — stored in a
+  new indexed `short_id` column and shown in the thread column of the changelist.
+
+  The column used to show the correlation id's first eight characters, which is a clock and not an
+  identifier: a UUIDv7 opens with a 48-bit millisecond, so a hundred messages sent in one instant
+  showed the same eight characters — measured — and typing them back found nothing, because Django
+  refuses a partial UUID before the query is built. The one thing the page invited a reader to do
+  was the one thing it could not answer.
+
+  Reading a code back ignores case, spaces and hyphens, and folds `I`, `L`, `O` and `U` onto the
+  characters they are heard as, so one read out over a call still lands. It is stored rather than
+  computed because base32 of a truncated id has no inverse a `WHERE` clause can use — a computed
+  code could only be searched by scanning the table. Sixty random bits make a collision unlikely
+  rather than impossible, so the column is not unique: the search returns every row a code matches,
+  and `correlation_id` stays the identifier. Measured at +57 bytes a row with its index.
+
+  `migrate` adds the column empty and **`manage.py tgbot_backfill_short_ids`** fills what is already
+  there, in bounded chunks with the same `--chunk`, `--sleep`, `--max-chunks`, `--database` and
+  `--dry-run` as the other jobs. A row with no code is a row still to do, so there is no watermark
+  to keep: a stopped run resumes, a finished table reports and writes nothing. Not a data migration,
+  for the reason the prune is not one — `migrate` runs inside a deploy, where a table sized by
+  traffic cannot be paced or stopped. Until it is run, rows from before it read `(not backfilled)`
+  and still link to the rest of their thread.
+
+  `tgbot_move_events` now names the columns the two tables **share**, asked of the database rather
+  than taken from the model, and writes the model's default for the ones only this release has. The
+  model described both tables while they agreed, and this is the release that ends that: selecting
+  `short_id` from the 3.x table is an error from the backend, and leaving it out of the insert is a
+  not-null violation, since `migrate` adds the column with a default and then drops it. Rows moved
+  from 3.x arrive with no code, which is what the backfill above looks for — run it after the move.
+
 - **`manage.py tgbot_move_events` copies the 3.x event log into this release's table**, and `I003`
   says it is there to be copied. The rename left `django_redis_aiogram_event` where it was, and the
   upgrade page offered one `INSERT ... SELECT` — honest, and the wrong shape on a table sized by

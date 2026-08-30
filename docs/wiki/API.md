@@ -290,6 +290,35 @@ TelegramEvent.objects.filter(correlation_id=identifier).order_by('id')
 TelegramEvent.objects.filter(chat_id=chat_id).order_by('-id')[:50]
 ```
 
+Each row also carries a **short id**: the same message in twelve characters a
+person can read out, which is what the admin's thread column shows and what its
+search box takes.
+
+```python
+import uuid
+
+from django_aiogram.eventlog.events import normalise_short_id, short_id
+
+short_id(uuid.UUID('a615799d-dce6-42bc-af47-22c6ccf2c525'))  # 'YHS2RV6F5H95'
+normalise_short_id('yhs2-rv6f 5h95')  # the same code
+normalise_short_id('hello')  # '', not a code
+```
+
+`short_id` is a pure function of the correlation id — the low 60 bits in
+Crockford's base32, the alphabet without `I`, `L`, `O` and `U` — so a log
+pipeline or a support script computes it without touching the database, and
+`TelegramEvent.short_id` holds the same value. `normalise_short_id` is the
+reading half: it ignores case, spaces and hyphens, folds the four confusable
+letters onto what they are heard as, and answers `''` for anything that is not a
+code.
+
+The column is stored rather than computed, because base32 of a truncated id has
+no inverse a `WHERE` clause could use. It is not unique: sixty random bits make a
+collision unlikely rather than impossible, so a search returns every row a code
+matches and `correlation_id` stays the identifier. Rows written before 4.0 have
+none until `manage.py tgbot_backfill_short_ids` walks them — see
+**[[Event-log|Event log]]**.
+
 `events_recorded` is the metrics seam: a `django.dispatch.Signal` fired once per
 batch with the `Event` objects in it, from the event writer's own thread — except
 under `EVENT_LOG_SYNC` and at shutdown, where there is no writer thread to run on:
