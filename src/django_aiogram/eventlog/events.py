@@ -86,8 +86,8 @@ _ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
 SHORT_ID_LENGTH = 12
 
 #: what a person may type instead of the character the alphabet uses. Crockford's three, and only
-#: those three: `U` is *not* here, because it is excluded to keep the alphabet from spelling things
-#: rather than because it looks like anything. Folding it onto `V` would turn a mistyped code into a
+#: those three: `U` is *not* here, because Crockford leaves it out to make an accidental obscenity
+#: less likely rather than because it looks like anything. Folding it onto `V` would turn a mistyped code into a
 #: different valid one -- `U00000000000` would go looking for `V00000000000`, and find somebody
 #: else's message instead of finding nothing
 _CONFUSABLE = {'I': '1', 'L': '1', 'O': '0'}

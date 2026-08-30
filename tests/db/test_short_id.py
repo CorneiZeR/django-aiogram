@@ -123,8 +123,8 @@ def test_a_u_is_refused_rather_than_read_as_a_v():
     """The one character the alphabet drops without giving it an alias.
 
     `I`, `L` and `O` are out because they look like `1`, `1` and `0`, so folding them on input
-    recovers what the writer meant. `U` is out for an unrelated reason -- Crockford drops it so a
-    code cannot spell anything -- and it stands for no other character.
+    recovers what the writer meant. `U` is out for an unrelated reason -- Crockford drops it to make
+    an accidental obscenity less likely -- and it stands for no other character.
 
     Folding it onto `V`, which this did, turns a code typed wrong into a *different* valid code:
     `U00000000000` went looking for `V00000000000` and would have found somebody else's message.

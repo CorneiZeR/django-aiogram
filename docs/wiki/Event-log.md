@@ -349,9 +349,9 @@ minute-and-a-bit it happened in; the code names the message.
 
 Reading one back is deliberately forgiving. Case, spaces and hyphens are ignored, and `I`, `L` and
 `O` fold onto `1`, `1` and `0`, so a code read out over a call still lands when somebody says "oh"
-for a zero. `U` is the one the alphabet drops without folding — Crockford leaves it out so codes
-cannot spell things, not because it looks like `V`, and folding it would turn a mistyped code into a
-different valid one instead of into nothing. A term that is not a code is not searched for as one: a number goes
+for a zero. `U` is the one the alphabet drops without folding — Crockford leaves it out to make an
+accidental obscenity less likely, not because it looks like `V` — and folding it would turn a
+mistyped code into a different valid one instead of into nothing. A term that is not a code is not searched for as one: a number goes
 to `chat_id`, a full UUID to `correlation_id`, and a term none of the three columns can hold is
 answered with nothing rather than handed to the database. A twelve-character term of nothing but
 digits is a legal code and a plausible chat id, and the chat id wins — codes of only digits are
