@@ -62,6 +62,10 @@ def drain_budget() -> float:
 
 #: latched once per process: a line per send would be noise nobody can act on
 _asend_mentioned = threading.Event()
+#: `Event` has no atomic test-and-set, and "once" is a claim about threads: two web
+#: threads sending at the same moment both read the latch down and both set it. One line
+#: is what this promises, so the claim and the set happen together
+_asend_guard = threading.Lock()
 
 
 def mention_asend(alternative: str) -> None:
@@ -80,14 +84,26 @@ def mention_asend(alternative: str) -> None:
     Not from :meth:`send_raw`: there the caller is the worker's own consumer, which
     has no async alternative to move to, and a warning on a healthy path is how
     people learn to stop reading them.
+
+    **Once means once, including under threads.** The cheap read comes first and the guard
+    only wraps the claim, so a process that has already said it pays a set-membership test
+    per send and no lock at all.
     """
     if _asend_mentioned.is_set():
         return
     try:
         asyncio.get_running_loop()
     except RuntimeError:
+        # before the latch is spent, not after: a call from outside a loop has nothing to
+        # say, and spending the one line on it would silence the call that does
         return
-    _asend_mentioned.set()
+    with _asend_guard:
+        if _asend_mentioned.is_set():
+            # somebody else took it between the read above and this lock
+            return
+        _asend_mentioned.set()
+    # outside the guard: a logging handler is a project's code and may do anything,
+    # including block, and nothing here is worth holding a lock across it
     logger.warning(
         'a synchronous send was called from a running event loop',
         extra={'tg_alternative': alternative},

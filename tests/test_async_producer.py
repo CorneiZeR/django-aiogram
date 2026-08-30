@@ -27,6 +27,7 @@ from django_aiogram import TelegramBot
 from django_aiogram import redis as redis_module
 from django_aiogram.context import correlation_scope
 from django_aiogram.exceptions import UnknownApiMethodError
+from django_aiogram.producer import looping
 from django_aiogram.redis import aget_redis, as_bytes
 from django_aiogram.wire.envelope import unpack
 from django_aiogram.wire.serializers import SerializationError, loads
@@ -241,6 +242,35 @@ def test_the_ids_come_back_in_the_order_the_chats_were_given(redis_server, bulk)
 
     assert [envelope.kwargs['chat_id'] for envelope in queued] == chats
     assert [envelope.correlation_id for envelope in queued] == identifiers, 'the ids do not line up with the chats'
+
+
+def test_the_latch_is_taken_under_its_guard(monkeypatch):
+    """Saying it once is a claim about threads, and `Event` has no atomic test-and-set.
+
+    Two web threads sending at the same moment both read the latch down, both find a
+    running loop and both set it — one line becomes two, from the code that promises one.
+    A racing test would pass most runs, so this records whether the guard was held at the
+    moment the latch was taken, which is the invariant itself.
+    """
+    held: list[bool] = []
+
+    class Watching(threading.Event):
+        """An `Event` that says whether the guard was held when it was set."""
+
+        def set(self):
+            """Record the guard, then latch."""
+            held.append(looping._asend_guard.locked())
+            super().set()
+
+    monkeypatch.setattr('django_aiogram.producer.looping._asend_mentioned', Watching())
+
+    async def mention():
+        looping.mention_asend('asend')
+
+    asyncio.run(mention())
+
+    assert held, 'the latch was never taken, so nothing is being tested'
+    assert all(held), 'the latch was taken without the guard, so two threads can both take it'
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
