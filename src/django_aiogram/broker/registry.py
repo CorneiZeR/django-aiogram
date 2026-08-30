@@ -69,7 +69,9 @@ def broker_class(*, verify_driver: bool = True) -> type[Broker]:
         _require(path, module, extra)
     try:
         resolved = import_string(path)
-    except ImportError as error:
+    # `ValueError` for a path with an empty module part, which `import_module('')` raises rather
+    # than `ImportError` -- see `producer.client` for the same catch and the same reason
+    except (ImportError, ValueError) as error:
         msg = f"{SETTINGS_NAME}['BROKER'] is {path!r}, which cannot be imported: {error}"
         raise BrokerNotConfiguredError(msg) from error
     if not (isinstance(resolved, type) and issubclass(resolved, Broker)):

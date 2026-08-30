@@ -342,7 +342,10 @@ def build_storage() -> BaseStorage:
 
     try:
         storage_class = import_string(name)
-    except ImportError as error:
+    # `ValueError` alongside it: a path whose module part is empty -- `'.Storage'`, which is what a
+    # copied path or a half-written relative import looks like -- reaches `import_module('')` and
+    # raises that instead. Measured on Django 6.1
+    except (ImportError, ValueError) as error:
         msg = f"{SETTINGS_NAME}['FSM_STORAGE'] cannot be imported: {error}"
         raise ImproperlyConfigured(msg) from error
     if not (isinstance(storage_class, type) and issubclass(storage_class, BaseStorage)):

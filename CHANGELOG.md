@@ -291,6 +291,13 @@ Entries land here as the work does; nothing below is released.
 
 ### Fixed
 
+- **A dotted path with an empty module part is refused by this package rather than by Django.**
+  `'.Storage'` — what a copied path, an autocomplete or a half-written relative import produces —
+  reaches `import_module('')`, which raises `ValueError` and not the `ImportError` the three
+  resolvers caught. So `BROKER`, `DELIVERY` and `FSM_STORAGE` each handed back Django's
+  `Empty module name` where they had a sentence ready naming the setting. Measured on Django 6.1;
+  the two rules in `config/checks/` had the same gap and were fixed with the split.
+
 - **A setting written as the enum member this package publishes is read as one.** `API.md` tells a
   project to write `'MODE': UpdateMode.POLLING`, and that raised `ImproperlyConfigured` at startup
   naming `'updatemode.polling'` — a value nobody typed. These enums mix in `str`, so a member
