@@ -338,10 +338,12 @@ until the backfill below fills them, which is the one exception to everything th
 the alphabet without `I`, `L`, `O` and `U`, so nothing on screen is confusable with anything else
 on screen.
 
-That column used to show the correlation id's first eight characters. Those are a clock: a UUIDv7
-opens with a 48-bit millisecond, so a hundred messages sent in one instant show the same eight
-characters — measured — and typing them back found nothing, because Django refuses a partial UUID
-before the query is built. The prefix named the minute; the code names the message.
+That column used to show the correlation id's first eight characters. Those are a clock, and a
+coarse one: a UUIDv7 opens with a 48-bit millisecond, and eight hex characters are that clock's
+top 32 bits — `ms >> 16`, measured on a real id — so they step once every 2**16 ms, 65.5 seconds.
+Every message inside one of those steps wore the same label, and typing it back found nothing,
+because Django refuses a partial UUID before the query is built. The prefix named the
+minute-and-a-bit it happened in; the code names the message.
 
 Reading one back is deliberately forgiving. Case, spaces and hyphens are ignored, and `I`, `L`, `O`
 and `U` fold onto the characters they are heard as, so a code read out over a call still lands when

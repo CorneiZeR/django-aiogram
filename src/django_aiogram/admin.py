@@ -362,9 +362,9 @@ class TelegramEventAdmin(ModelAdminBase):
         """Link a row to the rest of its message, and show something worth reading.
 
         The label was the correlation id's first eight characters, which is the clock: a UUIDv7
-        opens with a 48-bit millisecond, so every row in about a minute showed the same eight —
-        measured, 100 ids written in one instant share them. It looked like an identifier and named
-        the minute.
+        opens with a 48-bit millisecond, and those eight are its top 32 bits — `ms >> 16`, measured
+        — so they change once every 2**16 ms, 65.5 seconds, and every row inside one of those steps
+        showed the same label. It looked like an identifier and named the minute it happened in.
 
         A row written before the backfill has no short id, and says so rather than showing an empty
         link. The href carries the code where there is one, so what is on screen is what the search

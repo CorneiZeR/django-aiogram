@@ -1,7 +1,7 @@
 """The short id: what it is, where it comes from, and what fills the rows that predate it.
 
 The correlation id is a UUIDv7, whose first 48 bits are a clock — so the eight characters the admin
-used to show named the minute rather than the message. These cases are about the answer: twelve
+used to show named the 65-second step they fell in rather than the message. These cases are about the answer: twelve
 characters of the *random* bits, in an alphabet a person can read aloud.
 """
 
@@ -32,12 +32,13 @@ def test_a_prefix_names_the_clock_and_the_short_id_does_not():
 
     Version 7 opens with a 48-bit millisecond, and the eight characters the column used to show are
     its top 32 bits -- measured, that prefix is exactly `ms >> 16`. So the label changed once every
-    2**16 ms, a little over a minute, and every message in between wore the same one. The short id
-    reads the random half instead, and tells all hundred apart.
+    2**16 ms, 65.5 seconds, and every message in between wore the same one. The short id reads the
+    random half instead, and tells all hundred apart.
 
-    The bound is arithmetic rather than a guess about how fast the loop runs: however long the run
-    takes, it can cross at most one step of that clock per 65.536 seconds. A slow machine widens the
-    bound instead of failing the case.
+    The bound is arithmetic rather than a guess about how fast the loop runs, and the `+ 2` is the
+    part that has to be there: an interval of any length can still straddle one step boundary, so
+    even an instant run may see two. Beyond that it is one more per 65.536 seconds elapsed, which
+    means a slow machine or a suspended one widens the bound instead of reddening the suite.
     """
     started = time.monotonic()
     ids = [new_correlation_id() for _ in range(100)]
@@ -46,7 +47,7 @@ def test_a_prefix_names_the_clock_and_the_short_id_does_not():
     prefixes = {str(identifier).replace('-', '')[:8] for identifier in ids}
     codes = {short_id(identifier) for identifier in ids}
 
-    allowed = int(spanned / 65.536) + 1
+    allowed = int(spanned / 65.536) + 2
     assert len(prefixes) <= allowed, (
         f'a prefix distinguished {len(prefixes)} of 100 over {spanned:.3f}s, so it is not the clock '
         f'this case says it is'
