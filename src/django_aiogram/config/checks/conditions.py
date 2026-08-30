@@ -11,7 +11,7 @@ not about it.
 
 from django.core.exceptions import ImproperlyConfigured
 
-from django_aiogram.config.enums import StorageKind
+from django_aiogram.config.enums import StorageKind, as_member
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 
 
@@ -71,10 +71,7 @@ def _redis_fsm_storage() -> bool:
     nothing, so a project passing the enum this package publishes — which `API.md` documents
     it for — had its warning suppressed and then needed ``REDIS_URL`` at runtime anyway.
     """
-    storage = conf.get('FSM_STORAGE')
-    if isinstance(storage, StorageKind):
-        return storage is StorageKind.REDIS
-    return str(storage or '').strip().lower() == StorageKind.REDIS.value
+    return as_member(conf.get('FSM_STORAGE'), StorageKind) is StorageKind.REDIS
 
 
 def _identity_matters() -> bool:

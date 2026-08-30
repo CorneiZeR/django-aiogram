@@ -291,6 +291,23 @@ Entries land here as the work does; nothing below is released.
 
 ### Fixed
 
+- **A setting written as the enum member this package publishes is read as one.** `API.md` tells a
+  project to write `'MODE': UpdateMode.POLLING`, and that raised `ImproperlyConfigured` at startup
+  naming `'updatemode.polling'` — a value nobody typed. These enums mix in `str`, so a member
+  compares equal to its own value, which is why `SERIALIZER` and `FSM_STORAGE` happened to work;
+  but since 3.11 `str()` on a member gives its *name*, so every reader that normalised the text
+  matched nothing.
+
+  `EVENT_LOG_PAYLOAD` was the quiet one: `PayloadDetail.FULL` read as unreadable and fell back to
+  summaries, so a project asking for full payloads got less than it configured with nothing said.
+
+  Both go through `config.enums.as_member` now, with the checks' own copy of the idiom replaced by
+  it, so the two spellings are one setting everywhere. And the documented block is executed by the
+  suite: every `TELEGRAM_BOT = {...}` in the pages that names one of these enums is resolved and
+  driven through the readers, so a page that documents a spelling the package cannot read fails
+  here rather than in somebody's deployment.
+
+
 - **The cap on a blocking take comes from the transport that is being read, and `W004` names it.**
   The consumer weighs `BLPOP_TIMEOUT` against `HEARTBEAT_INTERVAL` and a whole second inside the
   floored call deadline — and that deadline was `REDIS_TIMEOUT` whichever transport was configured. So a setting

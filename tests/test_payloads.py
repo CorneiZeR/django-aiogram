@@ -13,6 +13,7 @@ from enum import Enum
 import pytest
 from django.test import override_settings
 
+from django_aiogram.config.enums import PayloadDetail
 from django_aiogram.wire.payloads import (
     MAX_DEPTH,
     MAX_ITEMS,
@@ -20,6 +21,7 @@ from django_aiogram.wire.payloads import (
     MAX_STRING,
     bounded,
     describe,
+    detail_level,
     redact_keys,
     redact_text,
     redact_values,
@@ -318,3 +320,27 @@ def test_a_string_without_a_colon_never_reaches_the_token_regex(monkeypatch):
     # and it still reaches the regex when it could possibly match
     payloads.redact_text('a second bot: 999999:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
     assert len(scanned) == 1, scanned
+
+
+@pytest.mark.parametrize(
+    ('value', 'expected'),
+    [
+        (PayloadDetail.FULL, PayloadDetail.FULL),
+        ('full', PayloadDetail.FULL),
+        (PayloadDetail.NONE, PayloadDetail.NONE),
+        ('nonsense', PayloadDetail.SUMMARY),
+    ],
+    ids=['the member', 'the string', 'the member again', 'unreadable'],
+)
+def test_the_detail_level_reads_a_member_as_well_as_a_string(value, expected):
+    """`str()` on a member gives its name, so `PayloadDetail.FULL` read as unreadable.
+
+    And the fallback made it silent: a project asking for full payloads got summaries, with nothing
+    said and no way to tell from the rows. `API.md` publishes these enums for settings, so the
+    spelling it documents has to be the one the reader takes.
+
+    The last case is the fallback itself, which is still right for a value nobody can read.
+    """
+    settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG_PAYLOAD': value}
+    with override_settings(TELEGRAM_BOT=settings):
+        assert detail_level() is expected

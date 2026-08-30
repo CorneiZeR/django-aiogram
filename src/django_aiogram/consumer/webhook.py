@@ -22,7 +22,7 @@ from django.views.decorators.csrf import csrf_exempt
 from pydantic import ValidationError
 
 from django_aiogram import bot
-from django_aiogram.config.enums import UpdateMode, choices
+from django_aiogram.config.enums import UpdateMode, as_member, choices
 from django_aiogram.config.settings import SETTINGS_NAME, conf
 from django_aiogram.exceptions import LoopUnavailableError
 
@@ -35,12 +35,19 @@ MODES = choices(UpdateMode)
 
 
 def current_mode() -> str:
-    """Which of the two ways of receiving updates this deployment uses."""
-    mode = str(conf['MODE'] or '').strip().lower()
-    if mode not in MODES:
-        msg = f"{SETTINGS_NAME}['MODE'] must be one of {sorted(MODES)}, got {mode!r}."
+    """Which of the two ways of receiving updates this deployment uses.
+
+    Read through `as_member`, so `UpdateMode.WEBHOOK` and `'webhook'` are the same setting. They
+    were not: `str()` on a member gives its *name*, so the spelling `API.md` documents --
+    ``'MODE': UpdateMode.POLLING`` -- raised here at startup, naming a value nobody typed.
+
+    The refusal quotes what the project wrote rather than the normalised form, for the same reason.
+    """
+    member = as_member(conf['MODE'], UpdateMode)
+    if member is None:
+        msg = f"{SETTINGS_NAME}['MODE'] must be one of {sorted(MODES)}, got {conf['MODE']!r}."
         raise ImproperlyConfigured(msg)
-    return mode
+    return member.value
 
 
 def webhook_secret() -> str:

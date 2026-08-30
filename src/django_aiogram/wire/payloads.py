@@ -20,7 +20,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any
 
-from django_aiogram.config.enums import PayloadDetail
+from django_aiogram.config.enums import PayloadDetail, as_member
 from django_aiogram.config.settings import conf
 
 logger = logging.getLogger('django_aiogram')
@@ -39,12 +39,16 @@ _TOKEN_RE = re.compile(r'\b\d{5,}:[A-Za-z0-9_-]{30,}\b')
 
 
 def detail_level() -> PayloadDetail:
-    """How much of a call's arguments to keep, defaulting to the safe answer."""
-    try:
-        return PayloadDetail(str(conf['EVENT_LOG_PAYLOAD']))
-    except ValueError:
-        # E033 reports this at boot; at runtime the quiet answer is the safe one
-        return PayloadDetail.SUMMARY
+    """How much of a call's arguments to keep, defaulting to the safe answer.
+
+    Through `as_member`, because `str()` on a member gives its name: a project writing
+    ``PayloadDetail.FULL`` -- the spelling `API.md` documents -- got summaries instead, and nothing
+    said so. Falling back quietly is right for a value nobody can read; it was wrong for one this
+    package published.
+    """
+    level = as_member(conf['EVENT_LOG_PAYLOAD'], PayloadDetail)
+    # E033 reports an unreadable one at boot; at runtime the quiet answer is the safe one
+    return level if level is not None else PayloadDetail.SUMMARY
 
 
 class _Unhandled:

@@ -8,6 +8,7 @@ it names, which is what keeps existing settings and payloads readable as-is.
 """
 
 from enum import Enum, unique
+from typing import TypeVar
 
 
 @unique
@@ -89,9 +90,39 @@ class PayloadDetail(str, Enum):
     FULL = 'full'
 
 
+#: any of the enums above, for the reader that takes a member or the string beside it
+_MemberT = TypeVar('_MemberT', bound=Enum)
+
+
 def choices(kind: type[Enum]) -> frozenset[str]:
     """Return the values of ``kind`` as a frozenset, for membership checks."""
     return frozenset(member.value for member in kind)
+
+
+def as_member(value: object, kind: type[_MemberT]) -> '_MemberT | None':
+    """Read a setting that names one of ``kind``'s members, written either way, or ``None``.
+
+    **A member is not readable with ``str()``.** These enums mix in ``str``, so a member compares
+    equal to its own value -- which is why `SERIALIZER` and `FSM_STORAGE` happened to work -- but
+    since 3.11 ``str(UpdateMode.POLLING)`` is ``'UpdateMode.POLLING'``, not ``'polling'``. A reader
+    that normalises the text gets ``'updatemode.polling'`` and matches nothing.
+
+    That is not a hypothetical spelling: **API.md** tells a project to write
+    ``'MODE': UpdateMode.POLLING``, and doing so raised `ImproperlyConfigured` at startup naming a
+    value nobody typed. Every reader of a choice setting goes through here now, so the two ways of
+    writing one are the same thing to all of them.
+
+    Returns ``None`` rather than raising or guessing, because what an unreadable value means
+    differs by caller: `current_mode` refuses it, `detail_level` falls back to the safe answer, and
+    the checks report it.
+    """
+    if isinstance(value, kind):
+        return value
+    text = str(value or '').strip().lower()
+    for member in kind:
+        if member.value == text:
+            return member
+    return None
 
 
 #: here rather than beside the limiter that enforces them: `config.checks` needs the names
