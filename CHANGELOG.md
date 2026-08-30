@@ -220,7 +220,8 @@ Entries land here as the work does; nothing below is released.
   broker's own doing. `Deployment` carries a compose recipe for each and `Troubleshooting` the
   duplicate each one produces.
 
-- **Every event log row carries a short id, and the admin searches by it.** Twelve characters of the
+- **Every event log row written since the column arrived carries a short id, and the admin searches
+  by it.** Twelve characters of the
   correlation id in Crockford's base32 — the alphabet without `I`, `L`, `O` and `U` — stored in a
   new indexed `short_id` column and shown in the thread column of the changelist.
 

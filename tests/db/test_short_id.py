@@ -5,6 +5,7 @@ used to show named the minute rather than the message. These cases are about the
 characters of the *random* bits, in an alphabet a person can read aloud.
 """
 
+import time
 import uuid
 from io import StringIO
 
@@ -29,17 +30,26 @@ def an_event(**kwargs):
 def test_a_prefix_names_the_clock_and_the_short_id_does_not():
     """The measurement the whole change rests on, kept as a case.
 
-    A hundred ids written in one instant share the first eight characters of their UUID — the
-    millisecond prefix version 7 puts there — so the old label was the same for every row in about
-    a minute. The short id reads the random half instead.
+    Version 7 opens with a 48-bit millisecond, and the eight characters the column used to show are
+    its top 32 bits -- measured, that prefix is exactly `ms >> 16`. So the label changed once every
+    2**16 ms, a little over a minute, and every message in between wore the same one. The short id
+    reads the random half instead, and tells all hundred apart.
+
+    The bound is arithmetic rather than a guess about how fast the loop runs: however long the run
+    takes, it can cross at most one step of that clock per 65.536 seconds. A slow machine widens the
+    bound instead of failing the case.
     """
+    started = time.monotonic()
     ids = [new_correlation_id() for _ in range(100)]
+    spanned = time.monotonic() - started
 
     prefixes = {str(identifier).replace('-', '')[:8] for identifier in ids}
     codes = {short_id(identifier) for identifier in ids}
 
-    assert len(prefixes) <= 2, (
-        f'a prefix distinguished {len(prefixes)} of 100, so this case is not measuring what it says'
+    allowed = int(spanned / 65.536) + 1
+    assert len(prefixes) <= allowed, (
+        f'a prefix distinguished {len(prefixes)} of 100 over {spanned:.3f}s, so it is not the clock '
+        f'this case says it is'
     )
     assert len(codes) == 100, f'the short id distinguished only {len(codes)} of 100'
 

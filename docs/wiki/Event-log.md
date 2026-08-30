@@ -29,7 +29,7 @@ not the flag is on; nothing reads or writes it until you turn it on.
 | ------ | ------------- |
 | `created_at` | when the event happened, stamped by whoever recorded it |
 | `correlation_id` | ties the stages of one message together |
-| `short_id` | the same thread in twelve characters a person can read out — see below |
+| `short_id` | the same thread in twelve characters a person can read out — empty on rows that predate the column, see below |
 | `kind` | which of the kinds below |
 | `function` | the aiogram method, when there is one |
 | `chat_id`, `user_id`, `message_id`, `update_id` | the identifiers Telegram issued |
@@ -332,8 +332,9 @@ a row weighs. The detail page asks for them back.
 
 ### The short id
 
-Every row carries a twelve-character code in `short_id`, and that is what the thread column shows
-and what the search box takes. It is the low 60 bits of the correlation id in Crockford's base32 —
+A row written since the column arrived carries a twelve-character code in `short_id`, and that is
+what the thread column shows and what the search box takes. Rows older than the column hold `''`
+until the backfill below fills them, which is the one exception to everything this section says. It is the low 60 bits of the correlation id in Crockford's base32 —
 the alphabet without `I`, `L`, `O` and `U`, so nothing on screen is confusable with anything else
 on screen.
 

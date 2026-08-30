@@ -290,9 +290,10 @@ TelegramEvent.objects.filter(correlation_id=identifier).order_by('id')
 TelegramEvent.objects.filter(chat_id=chat_id).order_by('-id')[:50]
 ```
 
-Each row also carries a **short id**: the same message in twelve characters a
-person can read out, which is what the admin's thread column shows and what its
-search box takes.
+A row written since the column arrived also carries a **short id**: the same
+message in twelve characters a person can read out, which is what the admin's
+thread column shows and what its search box takes. Rows already in the table when
+it arrived hold `''` until the backfill named below walks them.
 
 ```python
 import uuid
