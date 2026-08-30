@@ -35,6 +35,21 @@ that reads it. Environment variables move from `DJANGO_REDIS_AIOGRAM_*` to
 ids from `django_redis_aiogram.EXXX` to `django_aiogram.EXXX` — so re-silence anything you
 had silenced by id.
 
+### One import inside the event log moved
+
+Only for a project that builds an `Event` itself — a custom recording seam, a test that
+asserts on one, a metrics receiver that names the type:
+
+```python
+from django_aiogram.eventlog.records import Event, as_identifier
+```
+
+They were in `django_aiogram.eventlog.recorder`, which is now the queue and the writer
+thread and nothing else. The shapes that cross that queue travel further than it does —
+every seam builds one, the writer reads one, receivers are handed one — so they live beside
+each other in their own module. Same objects, same fields; `recorder`, `EventRecorder` and
+`events_recorded` did not move.
+
 ### Two paths you wrote down yourself
 
 Everything above is inside your own imports, where a rename fails loudly the moment it is wrong.
@@ -250,7 +265,6 @@ importable from the module that owns it.
 | `await bot.asend_redis(...)` | `await bot.aenqueue(...)` | the same, on the awaiting half |
 | `bot.redis_conn` | `from django_aiogram.redis import redis_conn` | a client that can carry any of four transports should not answer for one |
 | `from django_aiogram import get_redis, redis_conn` | `from django_aiogram.redis import get_redis, redis_conn` | the package stopped exporting one transport's client from its front door |
-| `from django_aiogram.eventlog.recorder import Event, as_identifier` | `from django_aiogram.eventlog.records import Event, as_identifier` | the shapes that cross the queue travel further than the recorder does, and now live beside each other |
 
 The last two are moves rather than removals: the objects are the same, they are as lazy as they
 were, and there is still one connection behind them. Only the shortcut through the package is
