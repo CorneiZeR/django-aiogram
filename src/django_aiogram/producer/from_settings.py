@@ -44,8 +44,19 @@ def build_default_properties() -> DefaultBotProperties:
 
 
 def build_storage() -> BaseStorage:
-    """Build the FSM storage: 'redis', 'memory', or a dotted path to a BaseStorage."""
-    name: str = conf['FSM_STORAGE']
+    """Build the FSM storage: 'redis', 'memory', or a dotted path to a BaseStorage.
+
+    The type is checked before anything is done with the value. ``E011`` already refuses a
+    non-string at ``manage.py check``, but a project that boots without running the checks
+    reached ``import_string(None)`` and got ``AttributeError: 'NoneType' object has no
+    attribute 'rsplit'`` out of Django's internals -- a traceback that names neither this
+    package nor the setting that caused it, from a module whose whole remit is that every
+    refusal names its key.
+    """
+    name = conf['FSM_STORAGE']
+    if not isinstance(name, str):
+        msg = f"{SETTINGS_NAME}['FSM_STORAGE'] must be 'redis', 'memory', or a dotted path, got {type(name).__name__}."
+        raise ImproperlyConfigured(msg)
     if name == StorageKind.MEMORY:
         return instrumented(MemoryStorage())
     if name == StorageKind.REDIS:

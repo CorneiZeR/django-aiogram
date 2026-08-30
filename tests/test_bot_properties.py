@@ -128,6 +128,24 @@ def test_unimportable_storage_is_reported_as_configuration():
         build_storage()
 
 
+@pytest.mark.parametrize('value', [None, 42, ['aiogram.fsm.storage.memory.MemoryStorage']], ids=repr)
+def test_a_storage_that_is_not_a_string_is_refused_in_this_package_words(value):
+    """`E011` refuses this at `manage.py check`, and a project that boots without running
+    the checks used to meet it as `AttributeError: 'NoneType' object has no attribute
+    'rsplit'` — raised by `import_string` out of Django's internals, naming neither this
+    package nor the setting.
+
+    An explicit `None` is the one a project reaches by accident: the settings resolver keeps
+    it rather than falling back to the default, so `FSM_STORAGE: None` is a value and not an
+    absence.
+    """
+    with override_settings(TELEGRAM_BOT={'FSM_STORAGE': value}), pytest.raises(ImproperlyConfigured) as refusal:
+        build_storage()
+
+    assert 'FSM_STORAGE' in str(refusal.value)
+    assert type(value).__name__ in str(refusal.value), 'the refusal does not say what was written'
+
+
 @override_settings(
     TELEGRAM_BOT={
         'TOKEN': '42:x',
