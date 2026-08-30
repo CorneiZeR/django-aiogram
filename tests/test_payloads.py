@@ -344,3 +344,20 @@ def test_the_detail_level_reads_a_member_as_well_as_a_string(value, expected):
     settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG_PAYLOAD': value}
     with override_settings(TELEGRAM_BOT=settings):
         assert detail_level() is expected
+
+
+@pytest.mark.parametrize('cap', [float('inf'), float('-inf')], ids=repr)
+def test_an_unreadable_cap_costs_an_empty_payload_and_not_a_traceback(cap):
+    """`bounded` runs once per event, and `describe` logs whatever escapes it.
+
+    `int(float('inf'))` raises `OverflowError`, which the guard did not catch — so an infinite cap
+    cost a traceback in the log and an `undescribable` payload on **every** message, where `E034`
+    already reports the setting and the empty payload is the answer this function has.
+
+    Asserted through `describe`, because that is where the cost was paid: the exception never
+    reached a caller, it reached the logger.
+    """
+    settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG_MAX_PAYLOAD_BYTES': cap}
+    with override_settings(TELEGRAM_BOT=settings):
+        assert bounded({'chat_id': 1}) == {}
+        assert describe({'chat_id': 1}) == {}

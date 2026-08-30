@@ -94,7 +94,10 @@ def _setting_int(key: str) -> int:
     raw = conf[key]
     try:
         return int(raw)
-    except (TypeError, ValueError) as error:
+    # `OverflowError` with them: `int(float('inf'))` raises that and neither of the other two, and
+    # this probe's whole contract is to report -- a traceback out of a container health check is a
+    # restart loop with nothing to read, on a value it has a sentence ready for
+    except (TypeError, ValueError, OverflowError) as error:
         msg = f"{SETTINGS_NAME}['{key}'] is not a number: {raw!r}"
         raise _UnhealthyError(msg) from error
 
