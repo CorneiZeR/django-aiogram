@@ -351,11 +351,14 @@ Reading one back is deliberately forgiving. Case, spaces and hyphens are ignored
 `O` fold onto `1`, `1` and `0`, so a code read out over a call still lands when somebody says "oh"
 for a zero. `U` is the one the alphabet drops without folding — Crockford leaves it out to make an
 accidental obscenity less likely, not because it looks like `V` — and folding it would turn a
-mistyped code into a different valid one instead of into nothing. A term that is not a code is not searched for as one: a number goes
-to `chat_id`, a full UUID to `correlation_id`, and a term none of the three columns can hold is
-answered with nothing rather than handed to the database. A twelve-character term of nothing but
-digits is a legal code and a plausible chat id, and the chat id wins — codes of only digits are
-about one in a million, while chat ids that long are ordinary.
+mistyped code into a different valid one instead of into nothing.
+
+A term that is not a code is not searched for as one. A number a `BIGINT` can hold goes to
+`chat_id`, a full UUID to `correlation_id`, and everything else — a longer number among them, since
+asking for one is an error from the backend rather than an empty page — is answered with nothing
+rather than handed to the database. A twelve-character term of nothing but digits is a legal code
+and a plausible chat id, and the chat id wins: codes of only digits are about one in a million,
+while chat ids that long are ordinary.
 
 It is **stored rather than computed**, which is the whole reason the column exists: base32 of a
 truncated id has no inverse a `WHERE` clause can use, so a computed code could only be searched by
