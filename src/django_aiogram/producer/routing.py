@@ -1,15 +1,18 @@
 """The handler decorators, which are the only part of the bot that is only about the router.
 
-Seventeen one-line methods and the builder they share. They read one attribute -- the
+Fifteen one-line methods and the builder they share. They read one attribute -- the
 router -- and touch nothing else the client holds: not the loop, not the in-flight sends,
 not the shutdown state. That is what makes them safe to lift out of a file whose subject is
 those things, and why they are a mixin rather than a second object: ``bot.message(...)`` is
 what every project writes, and a decorator that arrived through an attribute would be a
 different API for the same thing.
 
-The list is aiogram's, one method per observer on a ``Router``. A version of aiogram that
-adds an observer adds a name here; one that removes an observer breaks the method that
-names it, which is the failure a project should get.
+**Fifteen is not all of them, and that is the honest shape.** A ``Router`` carries 27
+observers on aiogram 3.x -- the business-account ones, message reactions, chat boosts and
+more -- and these fifteen are what this package has published since 2.x and what
+``tests/test_public_surface.py`` pins. Everything else is reached through ``bot.router``,
+which is public for exactly that reason, so nothing is out of reach; adding a name here is
+a decision about this package's surface rather than bookkeeping about aiogram's.
 """
 
 from typing import Any

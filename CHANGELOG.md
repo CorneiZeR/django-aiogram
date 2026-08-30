@@ -558,7 +558,7 @@ Entries land here as the work does; nothing below is released.
 
 - **`producer/client.py` is six modules.** It held the facade, the loop it drives, every
   route out of the process, the shutdown that has to hold the at-least-once guarantee
-  across all of them, and — in the middle of that — seventeen one-line decorators and the
+  across all of them, and — in the middle of that — fifteen one-line decorators and the
   helpers that name a send.
 
   What moved out says what it is: `outbound` (what names one send in flight and what
@@ -573,7 +573,7 @@ Entries land here as the work does; nothing below is released.
   The decorators are the exception because they read one attribute and touch nothing else.
 
   Nothing a project names moved: `TelegramBot` and every method on it are where they were,
-  including all seventeen decorators, which arrive through a mixin.
+  including all fifteen handler decorators, which arrive through a mixin.
 
 - **`eventlog/recorder.py` is five modules.** It held the queue, the writer thread, the
   shapes that cross between them, the settings the writer reads, two counters several
