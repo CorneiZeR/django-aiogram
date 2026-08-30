@@ -983,3 +983,23 @@ def test_a_queue_key_with_glob_characters_is_still_swept(redis_server, key, deco
             redis_server.rpush(f'{decoy}:processing:gone', b'{}')
 
         assert _stranded(redis_server) == (1, True), f'the sweep answered wrongly under {key!r}'
+
+
+@pytest.mark.parametrize('value', [float('inf'), float('nan'), 'nine', {}], ids=repr)
+def test_a_setting_that_is_not_a_number_is_reported_not_raised(value):
+    """The probe's whole contract is to report, and `int()` has three ways to refuse.
+
+    `TypeError` and `ValueError` were caught; `int(float('inf'))` raises `OverflowError`, which is
+    neither -- so a container health check ended in a traceback rather than the sentence it has
+    ready, and an operator reading `docker logs` saw a crash where the message names the setting.
+
+    `nan` is in the cases because it is the one that gets *through* `int()`: it raises `ValueError`
+    there, which was already caught, and the case is here so the widened clause cannot quietly
+    become "catch everything and hope".
+    """
+    with override_settings(TELEGRAM_BOT={**SETTINGS, 'HEARTBEAT_INTERVAL': value}):
+        report = check(max_age=None, max_queue=None, guarantee=False, stranded=False)
+
+    assert report.ok is False, report
+    assert 'HEARTBEAT_INTERVAL' in report.message, report.message
+    assert 'is not a number' in report.message, report.message

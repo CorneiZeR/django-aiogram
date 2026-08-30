@@ -291,6 +291,13 @@ Entries land here as the work does; nothing below is released.
 
 ### Fixed
 
+- **The two readers whose contract is to *report* survive a setting `int()` cannot read.**
+  `int(float('inf'))` raises `OverflowError`, which neither guard caught: the container health check
+  ended in a traceback instead of the `is not a number` it has ready — a restart loop with nothing
+  to read — and the payload cap cost a logged traceback and an `undescribable` row on every event,
+  where `E034` already reports the setting. Both catch it now; the readers that raise on an
+  unreadable setting still do, because the checks refuse that configuration at startup.
+
 - **A dotted path with an empty module part is refused by this package rather than by Django.**
   `'.Storage'` — what a copied path, an autocomplete or a half-written relative import produces —
   reaches `import_module('')`, which raises `ValueError` and not the `ImportError` the three
