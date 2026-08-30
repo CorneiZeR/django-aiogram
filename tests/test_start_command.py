@@ -12,6 +12,7 @@ from django.test import override_settings
 
 from django_aiogram import bot
 from django_aiogram.broker.redis_list import RedisListBroker
+from django_aiogram.config.enums import UpdateMode
 from django_aiogram.management.commands.start_tgbot import Command
 
 
@@ -138,9 +139,16 @@ class _NoDelivery:
         pass
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'MODE': 'webhook'})
-def test_webhook_mode_consumes_without_calling_telegram(monkeypatch):
-    """Webhook mode: updates arrive over HTTP, but the queue still needs a worker."""
+@pytest.mark.parametrize('mode', ['webhook', UpdateMode.WEBHOOK], ids=['the string', 'the enum member'])
+def test_webhook_mode_consumes_without_calling_telegram(monkeypatch, mode):
+    """Webhook mode: updates arrive over HTTP, but the queue still needs a worker.
+
+    Both spellings, and the member is the point: `API.md` documents writing `UpdateMode.WEBHOOK`,
+    and `str()` on a member gives its *name* since 3.11 -- so the command refused to start at all,
+    quoting `'updatemode.webhook'`. Driving the command rather than the reader is what says the
+    process does the right thing with it, which is what a page promises.
+    """
+    settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'MODE': mode}
     events = []
 
     class Delivery:
@@ -169,13 +177,18 @@ def test_webhook_mode_consumes_without_calling_telegram(monkeypatch):
 
     out = StringIO()
     finished = threading.Event()
+    failure = []
 
     def run():
-        call_command('start_tgbot', stdout=out)
+        try:
+            with override_settings(TELEGRAM_BOT=settings):
+                call_command('start_tgbot', stdout=out)
+        except Exception as error:  # reported below, where the assertion can name it
+            failure.append(error)
         finished.set()
 
     threading.Thread(target=run, daemon=True).start()
-    assert not finished.wait(0.4), 'it returned instead of consuming'
+    assert not finished.wait(0.4), f'it returned instead of consuming: {failure}'
     release.set()
     assert finished.wait(5)
 

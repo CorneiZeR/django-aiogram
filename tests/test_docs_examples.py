@@ -108,12 +108,19 @@ def test_a_documented_settings_block_configures_what_it_says(name, settings):
     from django_aiogram.wire.payloads import detail_level
     from django_aiogram.wire.serializers import get_serializer
 
+    readers = {
+        'MODE': lambda value: current_mode() == UpdateMode(value).value,
+        'EVENT_LOG_PAYLOAD': lambda value: detail_level() is PayloadDetail(value),
+        'FSM_STORAGE': lambda value: _redis_fsm_storage() is (StorageKind(value) is StorageKind.REDIS),
+        # pickle is excluded below rather than here: reading it needs `ALLOW_PICKLE`, which is a
+        # different rule's subject and not what this case is about
+        'SERIALIZER': lambda value: get_serializer().name == SerializerKind(value).value,
+    }
+    driven = [key for key in settings if key in readers and settings[key] != SerializerKind.PICKLE]
+
+    # a block naming an enum on a key nothing here drives would otherwise skip every assertion and
+    # pass -- a case that cannot fail, about a page that promises behaviour
+    assert driven, f'{name} names an enum but sets nothing this drives; add the setting to `readers`'
     with override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', **settings}):
-        if 'MODE' in settings:
-            assert current_mode() == UpdateMode(settings['MODE']).value, name
-        if 'EVENT_LOG_PAYLOAD' in settings:
-            assert detail_level() is PayloadDetail(settings['EVENT_LOG_PAYLOAD']), name
-        if 'FSM_STORAGE' in settings:
-            assert _redis_fsm_storage() is (StorageKind(settings['FSM_STORAGE']) is StorageKind.REDIS), name
-        if 'SERIALIZER' in settings and settings['SERIALIZER'] != SerializerKind.PICKLE:
-            assert get_serializer().name == SerializerKind(settings['SERIALIZER']).value, name
+        for key in driven:
+            assert readers[key](settings[key]), f'{name}: {key}'
