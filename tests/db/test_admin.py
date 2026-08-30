@@ -202,7 +202,8 @@ def test_the_stages_of_one_message_are_shown_together(client):
 def test_a_search_the_columns_cannot_hold_is_refused_before_the_query(client):
     """Typed equality raises while the query is built — `ValidationError` for
     the uuid column, `ValueError` for the integer one, on every backend — so a
-    term neither column can hold has to be answered before it is used.
+    term none of the three columns can hold has to be answered before it is
+    used. `hello` is one: not digits, not a code, not a UUID.
 
     Asserted on the refusal itself rather than on a 200, which the changelist
     would return either way.

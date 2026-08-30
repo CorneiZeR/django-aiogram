@@ -345,8 +345,11 @@ before the query is built. The prefix named the minute; the code names the messa
 
 Reading one back is deliberately forgiving. Case, spaces and hyphens are ignored, and `I`, `L`, `O`
 and `U` fold onto the characters they are heard as, so a code read out over a call still lands when
-somebody says "oh" for a zero. Anything that is not a code — a chat id, a full correlation id, a
-word — is refused before the query rather than searched for.
+somebody says "oh" for a zero. A term that is not a code is not searched for as one: a number goes
+to `chat_id`, a full UUID to `correlation_id`, and a term none of the three columns can hold is
+answered with nothing rather than handed to the database. A twelve-character term of nothing but
+digits is a legal code and a plausible chat id, and the chat id wins — codes of only digits are
+about one in a million, while chat ids that long are ordinary.
 
 It is **stored rather than computed**, which is the whole reason the column exists: base32 of a
 truncated id has no inverse a `WHERE` clause can use, so a computed code could only be searched by
