@@ -13,7 +13,6 @@ Rows written after the migration carry their own short id, so this is only ever 
 Nothing here computes an id differently from the writer: both call `events.short_id`.
 """
 
-import logging
 import time
 from argparse import ArgumentParser
 from typing import Any
@@ -24,8 +23,6 @@ from django.db import connections, transaction
 from django_aiogram.eventlog.events import short_id
 from django_aiogram.eventlog.writer import log_alias
 from django_aiogram.models import TelegramEvent
-
-logger = logging.getLogger('django_aiogram')
 
 
 class Command(BaseCommand):

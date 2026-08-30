@@ -287,7 +287,7 @@ class TelegramEventAdmin(ModelAdminBase):
         queryset: QuerySet[TelegramEvent],
         search_term: str,
     ) -> tuple[QuerySet[TelegramEvent], bool]:
-        """Match the two typed columns exactly, each on its own index.
+        """Match the three typed columns exactly, each on its own index.
 
         Django's own search cannot: even the `=` prefix builds `iexact`, which
         renders as `UPPER(correlation_id::text) = ...` — a function on the
@@ -295,8 +295,8 @@ class TelegramEventAdmin(ModelAdminBase):
         a table sized by traffic. Typed equality is what the indexes are for.
 
         The cost of typed equality is that a term the column cannot hold raises
-        while the query is built, which is why anything neither column can hold
-        is answered with nothing rather than handed to the database.
+        while the query is built, which is why a term no column can hold is
+        answered with nothing rather than handed to the database.
         """
         term = search_term.strip()
         if not term:
@@ -310,7 +310,12 @@ class TelegramEventAdmin(ModelAdminBase):
             return queryset.none(), False
         # before the UUID, because a short id is what a person has: it is what the thread column
         # shows and what a ticket carries. `normalise_short_id` answers '' for anything that is not
-        # one, which is how this tells the two apart without guessing at the length
+        # one, which is how this tells the two apart without guessing at the length.
+        #
+        # after the digits, though, and that ambiguity is decided rather than stumbled into: a
+        # twelve-character term of nothing but digits is a legal code *and* a plausible chat id.
+        # Chat ids that long are ordinary; a code drawn entirely from ten of the thirty-two
+        # characters is about one in a million
         code = normalise_short_id(term)
         if code:
             return queryset.filter(short_id=code), False
@@ -364,6 +369,10 @@ class TelegramEventAdmin(ModelAdminBase):
         A row written before the backfill has no short id, and says so rather than showing an empty
         link. The href carries the code where there is one, so what is on screen is what the search
         takes — copying the cell used to return nothing.
+
+        No `ordering`: the column is not in `sortable_by`, so the header is not a link and an `?o=`
+        naming it is dropped — and a code is random, so ordering by one answers nothing anybody
+        asked.
         """
         if not obj.short_id:
             missing = '(not backfilled)'

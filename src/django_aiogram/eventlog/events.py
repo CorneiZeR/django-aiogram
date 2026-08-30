@@ -102,7 +102,8 @@ def short_id(correlation_id: uuid.UUID) -> str:
     nothing to keep in sync, nothing extra on the wire, and anyone holding an id -- a log pipeline,
     a support script, a person with a traceback -- can compute it without the database.
 
-    Not reversible, and not unique: it names 60 of the 122 random bits, so two rows *can* share one.
+    Not reversible, and not unique: a UUIDv7 carries 74 random bits and this names 60 of them, so
+    two rows *can* share one.
     The admin shows every row a code matches rather than pretending otherwise.
     """
     number = correlation_id.int & (2**60 - 1)

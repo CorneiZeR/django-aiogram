@@ -362,6 +362,23 @@ def test_a_search_by_chat_id_finds_the_rows(client):
     assert client.get(CHANGELIST, {'q': '42'}).status_code == 200
 
 
+@pytest.mark.django_db
+@override_settings(TELEGRAM_BOT=ON)
+def test_a_term_that_could_be_either_is_read_as_a_chat_id(client):
+    """Twelve digits are a legal code and a plausible chat id, and only one of those is common.
+
+    Chat ids that long are ordinary; a code drawn entirely from ten of the thirty-two characters is
+    about one in a million. So the digits are asked about first, and this pins that order rather
+    than leaving it to whichever branch happens to come first in the file.
+    """
+    an_event(chat_id=123456789012)
+    admin_instance = TelegramEventAdmin(TelegramEvent, None)
+
+    narrowed, _ = admin_instance.get_search_results(None, TelegramEvent.objects.all(), '123456789012')
+
+    assert [row.chat_id for row in narrowed] == [123456789012]
+
+
 def test_the_admin_module_pulls_no_aiogram():
     """`admin.autodiscover` imports this module on every boot of any project
     with the admin installed, so what it imports is paid by processes that
