@@ -54,10 +54,15 @@ class DropLedger:
         with self._lock:
             self._dropped += count
             dropped = self._dropped
-        now = time.monotonic()
-        if now - self._reported_at < DROP_REPORT_INTERVAL:
-            return
-        self._reported_at = now
+            # inside the lock, because "at most once a minute" is a claim about threads:
+            # read outside it, two of them see the same report time before either writes
+            # one, and both log the backlog line inside a single interval -- on the one
+            # line an operator watches for a real backlog. The logging itself stays out
+            # here: a handler is a project's code and may do anything, including block
+            now = time.monotonic()
+            if now - self._reported_at < DROP_REPORT_INTERVAL:
+                return
+            self._reported_at = now
         logger.error(
             'the event log is falling behind; events are being dropped',
             extra={'tg_dropped': dropped},

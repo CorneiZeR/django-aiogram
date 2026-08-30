@@ -593,6 +593,51 @@ def test_the_drop_counter_is_only_ever_touched_under_its_own_lock():
     )
 
 
+def test_the_report_time_is_read_and_written_under_the_ledgers_lock():
+    """Saying it at most once a minute is a claim about threads, and the check used to sit
+    outside the lock — carried over unchanged from where this code lived before.
+
+    Two of them could read the same report time before either wrote one, and both then
+    logged `the event log is falling behind` inside a single interval: the line an operator
+    watches for a real backlog, doubled by the code that promises to rate-limit it.
+
+    Asserted on the lock rather than by racing threads, for the reason the count's own case
+    gives above: a lost update is a read-modify-write interleaving, so a timing test passes
+    most runs and fails some. This records whether the lock was held at every read and
+    every write of the report time, which is the invariant itself.
+    """
+    seen: list[bool] = []
+
+    class Watching(DropLedger):
+        """A `DropLedger` that reports the lock state at each touch of the report time."""
+
+        def __init__(self):
+            """Build first, then watch: construction has no other thread to race with."""
+            super().__init__()
+            self.__dict__['watching'] = True
+
+        @property
+        def _reported_at(self):
+            """Read the report time, noting whether the lock was held."""
+            if self.__dict__.get('watching'):
+                seen.append(self._lock.locked())
+            return self.__dict__.get('reported_value', 0.0)
+
+        @_reported_at.setter
+        def _reported_at(self, value):
+            """Store the report time, noting whether the lock was held."""
+            if self.__dict__.get('watching'):
+                seen.append(self._lock.locked())
+            self.__dict__['reported_value'] = value
+
+    ledger = Watching()
+
+    ledger.lost(1)
+
+    assert seen, 'the report time was never touched, so nothing is being tested'
+    assert all(seen), f'the report time was touched unguarded {seen.count(False)} of {len(seen)} times'
+
+
 @override_settings(TELEGRAM_BOT=SETTINGS)
 def test_the_last_events_before_shutdown_still_reach_a_receiver(redis_server, collected):
     """A queue the writer never drained is published by whoever calls `stop()`.
