@@ -22,7 +22,7 @@ from aiogram.dispatcher.event.handler import CallbackType
 
 
 class RouterShortcuts:
-    """``bot.message(...)`` and its sixteen siblings, on whatever holds a router."""
+    """``bot.message(...)`` and its fourteen siblings, on whatever holds a router."""
 
     #: provided by the class this is mixed into. Declared rather than assigned: this is a
     #: statement about what the methods below require, not a second place that builds one
