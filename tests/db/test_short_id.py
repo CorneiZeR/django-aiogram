@@ -45,9 +45,16 @@ def test_a_prefix_names_the_clock_and_the_short_id_does_not():
 
 
 def test_the_short_id_is_the_same_for_the_same_id():
-    """A pure function, which is what lets it be stored in one place and computed anywhere else."""
+    """A pure function, which is what lets it be stored in one place and computed anywhere else.
+
+    The literal is the point of the case. The encoding is data on disk now: a release that changed
+    which bits it reads, the alphabet's order or the width would leave every stored code disagreeing
+    with the one this function computes for the same id, and nothing else in the suite would notice —
+    both sides would move together.
+    """
     identifier = uuid.UUID('a615799d-dce6-42bc-af47-22c6ccf2c525')
 
+    assert short_id(identifier) == 'YHS2RV6F5H95'
     assert short_id(identifier) == short_id(identifier)
     assert len(short_id(identifier)) == SHORT_ID_LENGTH
     assert set(short_id(identifier)) <= set('0123456789ABCDEFGHJKMNPQRSTVWXYZ')
