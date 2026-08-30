@@ -355,9 +355,9 @@ returns every row a code matches, and `correlation_id` stays the identifier.
 
 ### Filling it in on history
 
-`migrate` adds the column empty. Filling it is a command and not a data migration, for the reason
-the prune is one: `migrate` runs inside a deploy, and a table sized by traffic cannot be paced,
-stopped or resumed there.
+`migrate` adds the column empty. Filling it is a command rather than a data migration, for the
+same reason the prune is a command: `migrate` runs inside a deploy, and a table sized by traffic
+cannot be paced, stopped or resumed there.
 
 ```shell
 python manage.py tgbot_backfill_short_ids

@@ -104,11 +104,13 @@ SELECT setval(pg_get_serial_sequence('django_aiogram_event', 'id'),
 `short_id` is 4.0's and the old table does not have it, so the copy writes an empty one: those rows
 show as `(not backfilled)` in the admin until `manage.py tgbot_backfill_short_ids` fills them. It
 cannot simply be left out of the list — `migrate` adds the column with a default and then drops the
-default, so an `INSERT` that omits it is refused. Name every column rather than writing `SELECT *`,
-which agrees with itself until either table changes: a mismatched count is rejected, and a matching
-count in a different order is accepted with every value one column to the side. And without the `setval`, PostgreSQL accepts the
-copy and refuses the *bot's* next write with a duplicate key: the sequence is still where `migrate`
-left it. The command does this step for you, on whichever backend you run.
+default, so an `INSERT` that omits it is refused.
+
+Name every column rather than writing `SELECT *`, which agrees with itself until either table
+changes: a mismatched count is rejected, and a matching count in a different order is accepted with
+every value one column to the side. And without the `setval`, PostgreSQL accepts the copy and
+refuses the *bot's* next write with a duplicate key: the sequence is still where `migrate` left it.
+The command does this step for you, on whichever backend you run.
 
 Then drop the old table when you are satisfied — `DROP TABLE django_redis_aiogram_event` is yours
 to run, and this package will never run it for you.

@@ -315,9 +315,9 @@ code.
 The column is stored rather than computed, because base32 of a truncated id has
 no inverse a `WHERE` clause could use. It is not unique: sixty random bits make a
 collision unlikely rather than impossible, so a search returns every row a code
-matches and `correlation_id` stays the identifier. Rows written before 4.0 have
-none until `manage.py tgbot_backfill_short_ids` walks them — see
-**[[Event-log|Event log]]**.
+matches and `correlation_id` stays the identifier. Rows already in the table when
+the column arrives have none until `manage.py tgbot_backfill_short_ids` walks
+them — see **[[Event-log|Event log]]**.
 
 `events_recorded` is the metrics seam: a `django.dispatch.Signal` fired once per
 batch with the `Event` objects in it, from the event writer's own thread — except
