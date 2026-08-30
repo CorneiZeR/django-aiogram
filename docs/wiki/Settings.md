@@ -288,7 +288,7 @@ entry naming a retired one is dead but harmless.
 | `E015` / `E016` | `DEFAULT_KWARGS` not callable / `DEFAULT_BOT_PROPERTIES` not a mapping |
 | `E018` | unknown key in `DEFAULT_BOT_PROPERTIES` |
 | `E019` | `FSM_STORAGE` is not `redis`, `memory` or a dotted path |
-| `E020` | `RATE_LIMIT` is malformed |
+| `E020` | `RATE_LIMIT` is malformed: an unknown budget name, or one holding something that is not a finite non-negative number. `nan` is refused although it is a float — every comparison against it is false, so it would pass a bound here and then admit every message in the limiter |
 | `E021` | `WORKER_NAME` is not a string |
 | `E022` | `SERIALIZER` is `pickle` while `ALLOW_PICKLE` is `False` |
 | `E023` | `HEARTBEAT_INTERVAL` is wrong or below 1 |
@@ -296,10 +296,10 @@ entry naming a retired one is dead but harmless.
 | `E025` / `E026` | `WEBHOOK_URL` / `WEBHOOK_SECRET` is not a string |
 | `E027` | `WEBHOOK_URL` is set without a secret or is not https, or `MODE` is `webhook` with no URL |
 | `E028` | `MODE` is not `polling` or `webhook` |
-| `E029` | `WEBHOOK_ALLOWED_UPDATES` is not a list, or names an update type Telegram does not have |
+| `E029` | `WEBHOOK_ALLOWED_UPDATES` is not a collection of update types — a list, a tuple or a set, and any other collection of strings that is not a mapping — or names one Telegram does not have. A mapping is refused although it is a collection — empty ones included — because it is a collection *of its keys*, so it would register those and drop the values silently |
 | `E030` | `REDIS_TIMEOUT` is wrong or below 2 — the pop has to sit one second inside it |
 | `E031`, `E042` | `EVENT_LOG` / `EVENT_LOG_SYNC` cannot be read as true or false. `EVENT_LOG` is read while the app loads, so it too refuses the boot first |
-| `E032`, `E035` | `EVENT_LOG_KINDS` / `EVENT_LOG_REDACT_KEYS` is not a list or tuple of strings |
+| `E032`, `E035` | `EVENT_LOG_KINDS` / `EVENT_LOG_REDACT_KEYS` is not a collection of strings — a list, a tuple or a set, and any other that is not a mapping. A mapping is refused for the reason `E029` gives |
 | `E033` | `EVENT_LOG_PAYLOAD` is not `none`, `summary` or `full` |
 | `E034`, `E039` | `EVENT_LOG_MAX_PAYLOAD_BYTES` / `EVENT_LOG_RETENTION_DAYS` is wrong or negative |
 | `E036`–`E038` | `EVENT_LOG_BUFFER_SIZE` / `EVENT_LOG_BATCH_SIZE` / `EVENT_LOG_FLUSH_INTERVAL` is wrong or below 1 |
@@ -313,7 +313,7 @@ entry naming a retired one is dead but harmless.
 | `E048` | `DATABASE_ROUTERS` names any `django_redis_aiogram.` path, which 4.0 renamed. The router we shipped is named against its replacement, `django_aiogram.eventlog.dbrouter.TelegramEventLogRouter`; any other path from that distribution is reported as gone, since this cannot invent a replacement for something it never had |
 | `I001` | `WORKER_NAME` is empty **and** the hostname is one Docker generated, so a replacement container gets a different name — which strands whatever the old container was sending. Information rather than a warning because a check cannot tell a consumer from a web process, and every container without `hostname:` matches; `start_tgbot` warns for itself at startup |
 | `I003` | `django_redis_aiogram_event` — the table 3.x wrote to — is still on whichever database the log resolves to, holding rows this release does not read. Information because leaving them there is a legitimate choice and a check cannot tell it from an oversight; always on, because it is what makes `manage.py tgbot_move_events` discoverable. Asked of the log's alias rather than the default, so a project with `EVENT_LOG_DATABASE` set is not the one that hears nothing |
-| `I002` | `EVENT_LOG_DATABASE` names an alias and nothing in `DATABASE_ROUTERS` that this check can read sends this app there, so a plain `migrate` may not create the table — `migrate --database=<alias>` still would. Information rather than a warning: a router of your own returning that alias is equally correct, and this cannot see inside one |
+| `I002` | `EVENT_LOG_DATABASE` names an alias and nothing in `DATABASE_ROUTERS` that this check can read sends this app there — a dotted path counts, and so does an instance, but a bare class does not: Django uses a non-string entry as it stands, so its `db_for_read` would be called without one. So a plain `migrate` may not create the table — `migrate --database=<alias>` still would. Information rather than a warning: a router of your own returning that alias is equally correct, and this cannot see inside one |
 | `W005` | the log is on while its database has no engine, so every event is dropped |
 | `W006` | the log is on with `EVENT_LOG_RETENTION_DAYS` at 0, so nothing ever deletes a row |
 | `W007` | `EVENT_LOG_BATCH_SIZE` is above `EVENT_LOG_BUFFER_SIZE`, so the batch can never fill |

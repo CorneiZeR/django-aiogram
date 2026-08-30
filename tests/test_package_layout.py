@@ -116,7 +116,7 @@ def test_the_django_owned_packages_stay_empty_of_exports(package):
 def test_configuration_does_not_import_what_it_configures():
     """`config/__init__.py` says it may not reach into `producer`, `consumer` or `broker`.
 
-    It said so while `checks.py` imported `KNOWN_RATE_LIMIT_KEYS` from
+    It said so while the checks imported `KNOWN_RATE_LIMIT_KEYS` from
     `producer.throttling` at module scope — and `checks` is imported from `apps.ready()`,
     so every boot that registers checks paid for whatever the limiter pulls. The names now
     live in `config.enums`, beside the enum they come from.

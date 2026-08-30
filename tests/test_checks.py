@@ -3,6 +3,7 @@ was only ever set inside an `isinstance` branch that a wrong type never entered.
 """
 
 import builtins
+import importlib
 import pathlib
 import re
 
@@ -20,7 +21,7 @@ from django_aiogram.broker.redis_list import RedisListBroker
 from django_aiogram.broker.registry import SHIPPED
 from django_aiogram.config.checks import CHECKS, check_settings, worker_name_problems
 from django_aiogram.config.defaults import DEFAULTS
-from django_aiogram.config.enums import StorageKind
+from django_aiogram.config.enums import StorageKind, UpdateMode
 from django_aiogram.config.settings import take_ceiling
 from django_aiogram.eventlog.dbrouter import TelegramEventLogRouter
 from django_aiogram.eventlog.events import worker_identity
@@ -840,7 +841,7 @@ def test_the_worker_name_rule_is_information_and_the_consumer_warns_for_itself(m
     Being the consumer is knowable in the command and not in a check, and this is the
     one place the same rule is asked twice — so it is asked of one function.
     """
-    monkeypatch.setattr('django_aiogram.config.checks.socket.gethostname', lambda: 'ba333cb79e00')
+    monkeypatch.setattr('django_aiogram.config.checks.transport.socket.gethostname', lambda: 'ba333cb79e00')
     monkeypatch.delenv('HOSTNAME', raising=False)
 
     reported = [message for message in check_settings() if str(message.id).endswith('I001')]
@@ -1207,10 +1208,18 @@ def test_e009_accepts_a_path_it_cannot_resolve_and_says_where_it_will_be(monkeyp
         msg = 'mined'
         raise ImportError(msg)
 
-    # `checks.py` binds `import_string` at module import, so patching it where it is *defined*
-    # leaves the name this module calls pointing at the real one -- the mine would sit beside the
-    # road. Measured: with the wrong target, a rule restored to resolving passed this case
-    monkeypatch.setattr('django_aiogram.config.checks.import_string', record)
+    # Each rules module binds `import_string` at import, so patching it where it is *defined*
+    # leaves every name they call pointing at the real one -- the mine would sit beside the road.
+    # Measured: with the wrong target, a rule restored to resolving passed this case.
+    #
+    # Planted in every module of the package that holds the name rather than in a list of two:
+    # what this asserts is that *no* rule resolves the path, and a module added later that binds
+    # it would otherwise be the one place the mine is missing
+    package = importlib.import_module('django_aiogram.config.checks')
+    for name in sorted(pathlib.Path(str(package.__path__[0])).glob('*.py')):
+        module = importlib.import_module(f'django_aiogram.config.checks.{name.stem}')
+        if hasattr(module, 'import_string'):
+            monkeypatch.setattr(f'{module.__name__}.import_string', record)
     monkeypatch.setattr('django_aiogram.consumer.delivery.delivery_class', record)
 
     reported = [message for message in check_settings() if message.id == 'django_aiogram.E009']
@@ -1226,7 +1235,7 @@ def test_e009_accepts_a_path_it_cannot_resolve_and_says_where_it_will_be(monkeyp
 def test_the_two_lists_of_3x_delivery_names_agree():
     """The consumer and the checks each carry the table, and they must not drift.
 
-    Two copies on purpose: `checks.py` cannot import the consumer without paying aiogram, which
+    Two copies on purpose: the checks cannot import the consumer without paying aiogram, which
     is the whole reason `E009` stops at the shape. So the copies are pinned against each other
     here -- the cheapest place to notice, and the only one that fails when a name is added to one.
     """
@@ -1677,3 +1686,264 @@ def test_w004_reads_a_fractional_transport_deadline(timeout, cap):
 
     assert len(found) == 1, f'W004 said nothing about KAFKA_TIMEOUT={timeout!r}'
     assert f'caps at {cap}.' in found[0].msg, found[0].msg
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'EVENT_LOG': True,
+        'EVENT_LOG_RETENTION_DAYS': -7,
+    }
+)
+def test_the_retention_warning_quotes_the_value_that_is_set():
+    """A negative retention reaches the same branch as zero, and is not zero.
+
+    The rule said "is 0" whatever the value was, so an operator who had written `-7` was told
+    about a setting that says something else and went looking for the one that says `0`. The
+    branch is right — nothing deletes a row either way — and the sentence has to name what it read.
+    """
+    found = [message for message in check_settings() if message.id == 'django_aiogram.W006']
+
+    assert len(found) == 1, [message.msg for message in found]
+    assert 'is -7' in found[0].msg, found[0].msg
+
+
+def test_a_broken_database_backend_does_not_take_the_run_down(monkeypatch):
+    """W005 is a warning, and a warning may not be the thing that stops `manage.py check`.
+
+    Reading the engine through `connections[alias]` builds the wrapper, which imports the backend
+    module — and an alias naming one that cannot be imported raises `ImproperlyConfigured` from
+    inside a rule whose finding is advice. `connections.settings` is the same values without the
+    machinery.
+
+    The backend is made unimportable rather than a real broken one configured, because what is on
+    trial is the rule's reach: any `ENGINE` Django cannot load produces this.
+    """
+    from django.db import connections
+
+    def refuse(_alias):
+        msg = 'the backend could not be imported'
+        raise ImproperlyConfigured(msg)
+
+    monkeypatch.setattr(type(connections), '__getitem__', lambda _self, alias: refuse(alias))
+    settings = {
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'EVENT_LOG': True,
+        'EVENT_LOG_DATABASE': 'default',
+    }
+
+    with override_settings(TELEGRAM_BOT=settings):
+        reported = [message.id for message in check_settings()]
+
+    # that the run answered at all is asserted by reaching this line; that the *rule* answered is
+    # asserted here, since a rule which caught the error and returned nothing would also not raise
+    assert 'django_aiogram.W005' in reported, reported
+
+
+@pytest.mark.parametrize(
+    ('key', 'identifier', 'value'),
+    [
+        ('WEBHOOK_ALLOWED_UPDATES', 'django_aiogram.E029', {'message': True}),
+        ('EVENT_LOG_KINDS', 'django_aiogram.E032', {'outbound.sent': True}),
+        ('EVENT_LOG_REDACT_KEYS', 'django_aiogram.E035', {'token': True}),
+    ],
+    ids=['allowed updates', 'kinds', 'redact keys'],
+)
+def test_a_mapping_is_refused_where_a_list_is_meant(key, identifier, value):
+    """A dict passes every other test these rules make, and means something else downstream.
+
+    It *is* a collection — of its keys — so `list()` on it produces the names and drops the values
+    without a word. `webhook_settings` registers those keys as the allowed updates; the log's two
+    settings become a frozenset of them. Somebody who wrote `{'message': True}` meant something,
+    and the package would do a different thing quietly.
+
+    A set is not refused: iterating one gives back what was written.
+    """
+    settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG': True, key: value}
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == identifier]
+
+    assert len(found) == 1, f'{identifier} reported {[message.msg for message in found]}'
+    assert 'dict' in found[0].msg, found[0].msg
+
+
+@pytest.mark.parametrize(
+    ('key', 'identifier'),
+    [
+        ('WEBHOOK_ALLOWED_UPDATES', 'django_aiogram.E029'),
+        ('EVENT_LOG_KINDS', 'django_aiogram.E032'),
+        ('EVENT_LOG_REDACT_KEYS', 'django_aiogram.E035'),
+    ],
+    ids=['allowed updates', 'kinds', 'redact keys'],
+)
+def test_a_set_is_still_a_collection(key, identifier):
+    """The other half, so the refusal above cannot quietly become "anything but a list or tuple"."""
+    values = {
+        'WEBHOOK_ALLOWED_UPDATES': {'message'},
+        'EVENT_LOG_KINDS': {'outbound.sent'},
+        'EVENT_LOG_REDACT_KEYS': {'token'},
+    }
+    settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG': True, key: values[key]}
+
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == identifier]
+
+    assert found == [], [message.msg for message in found]
+
+
+@pytest.mark.parametrize('rate', [float('nan'), float('inf'), float('-inf')], ids=repr)
+def test_a_rate_limit_that_is_not_a_number_is_refused(rate):
+    """`nan` is a float and beats every comparison, which is how it passed a bound check.
+
+    And it does not stop there: the limiter compares against the budget too, and every comparison
+    against `nan` is false — so a budget of `nan` admits every message rather than none, which is
+    the opposite of what somebody configuring a rate limit wanted. The infinities are refused with
+    it: a bound nothing can exceed is a limiter that is not one.
+    """
+    settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'RATE_LIMIT': {'overall_per_second': rate}}
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.E020']
+
+    assert len(found) == 1, f'E020 reported {[message.msg for message in found]}'
+    assert 'non-negative number' in found[0].msg, found[0].msg
+
+
+@override_settings(
+    TELEGRAM_BOT={
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'EVENT_LOG': True,
+        'EVENT_LOG_RETENTION_DAYS': float('inf'),
+    }
+)
+def test_an_infinite_retention_does_not_take_the_run_down():
+    """`int(float('inf'))` raises `OverflowError`, which is neither of the two that were caught.
+
+    Found by sweeping the same predicate as the `nan` rate limit rather than by meeting it: a
+    numeric guard that compares without asking whether the number is finite. Measured before the
+    fix — `manage.py check` ended with `OverflowError: cannot convert float infinity to integer`,
+    out of a rule that only warns, taking every other finding with it.
+    """
+    reported = [message.id for message in check_settings()]
+
+    assert 'django_aiogram.E039' in reported, reported
+
+
+def test_a_router_class_in_the_setting_is_not_a_router_in_use():
+    """Django uses a non-string entry as it stands, so a bare class there is not a router.
+
+    Its `db_for_read` would be called without an instance, which is a `TypeError` at the first
+    query rather than this app's log being routed. Reading it as installed silences the one warning
+    that would have said so.
+    """
+    settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG': True, 'EVENT_LOG_DATABASE': 'logs'}
+    with override_settings(TELEGRAM_BOT=settings, DATABASE_ROUTERS=[TelegramEventLogRouter]):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.I002']
+
+    assert len(found) == 1, f'I002 reported {[message.msg for message in found]}'
+
+
+def test_a_router_instance_in_the_setting_is_one():
+    """The other half: an instance is what Django calls, and this must not start refusing it."""
+    settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG': True, 'EVENT_LOG_DATABASE': 'logs'}
+    with override_settings(TELEGRAM_BOT=settings, DATABASE_ROUTERS=[TelegramEventLogRouter()]):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.I002']
+
+    assert found == [], [message.msg for message in found]
+
+
+@pytest.mark.parametrize(
+    ('key', 'identifier'),
+    [
+        ('BLPOP_TIMEOUT', 'django_aiogram.E014'),
+        ('EVENT_LOG_RETENTION_DAYS', 'django_aiogram.E039'),
+        ('EVENT_LOG_BATCH_SIZE', 'django_aiogram.E037'),
+    ],
+    ids=['pop timeout', 'retention', 'batch size'],
+)
+def test_an_infinite_setting_is_reported_rather_than_raised(key, identifier):
+    """`int(float('inf'))` raises `OverflowError`, which is neither of the two usually caught.
+
+    Every rule that converts a setting has the same shape, and the consequence is the same in each:
+    a rule that only warns ends `manage.py check` and takes every other finding with it, on a
+    configuration one of those findings is about. The rule that owns the type reports it instead.
+
+    All three at once because this was found by sweeping the shape rather than by meeting it, and a
+    case per site is what keeps the next `int()` from arriving without the third exception.
+    """
+    settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG': True, key: float('inf')}
+    with override_settings(TELEGRAM_BOT=settings):
+        reported = [message.id for message in check_settings()]
+
+    assert identifier in reported, reported
+
+
+@pytest.mark.parametrize('mode', [UpdateMode.WEBHOOK, 'webhook'], ids=['the enum member', 'the string'])
+def test_a_webhook_without_a_url_is_reported_however_the_mode_is_written(mode):
+    """`UpdateMode` mixes in `str`, and since 3.11 `str()` on a member gives its *name*.
+
+    So `str(UpdateMode.WEBHOOK).lower()` reads `'updatemode.webhook'` and matches nothing — and a
+    project passing the enum this package publishes, which `API.md` documents it for, had the
+    required-URL finding dropped without a word. Measured before the fix: no finding at all where
+    the string form reports one.
+
+    Both spellings, because either alone is a case that cannot see this.
+    """
+    with override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'MODE': mode}):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.E027']
+
+    assert len(found) == 1, f'E027 reported {[message.msg for message in found]}'
+    assert 'required when MODE' in found[0].msg, found[0].msg
+
+
+def test_a_frozenset_is_a_collection_too():
+    """The rules take any collection but a mapping, and the pages say so rather than a list of three."""
+    settings = {
+        'TOKEN': '42:x',
+        'REDIS_URL': 'redis://localhost',
+        'EVENT_LOG': True,
+        'EVENT_LOG_REDACT_KEYS': frozenset({'token'}),
+    }
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == 'django_aiogram.E035']
+
+    assert found == [], [message.msg for message in found]
+
+
+@pytest.mark.parametrize(
+    ('key', 'identifier'),
+    [
+        ('WEBHOOK_ALLOWED_UPDATES', 'django_aiogram.E029'),
+        ('EVENT_LOG_KINDS', 'django_aiogram.E032'),
+        ('EVENT_LOG_REDACT_KEYS', 'django_aiogram.E035'),
+    ],
+    ids=['allowed updates', 'kinds', 'redact keys'],
+)
+def test_an_empty_mapping_is_refused_like_any_other(key, identifier):
+    """`{}` is falsy, so it reached the empty-value return before the rule looked at its type.
+
+    The refusal and the pages both say a mapping is refused, without a footnote about which ones —
+    and somebody who wrote `{}` meant a mapping, so the answer that helps is the one that names the
+    type rather than the silence an empty list would get.
+    """
+    settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG': True, key: {}}
+    with override_settings(TELEGRAM_BOT=settings):
+        found = [message for message in check_settings() if message.id == identifier]
+
+    assert len(found) == 1, f'{identifier} reported {[message.msg for message in found]}'
+    assert 'dict' in found[0].msg, found[0].msg
+
+
+@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'FSM_STORAGE': '.Storage'})
+def test_a_path_with_an_empty_module_part_is_reported_not_raised():
+    """`import_string('.Storage')` reaches `import_module('')`, which raises `ValueError`.
+
+    Neither `ImportError` nor anything else the rule caught, so a settings typo ended
+    `manage.py check` with Django's own `Empty module name` and took every other finding with it.
+    Measured on Django 6.1 before the fix.
+    """
+    reported = [message.id for message in check_settings()]
+
+    assert 'django_aiogram.E019' in reported, reported

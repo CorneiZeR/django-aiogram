@@ -26,7 +26,10 @@ src/django_aiogram/
         settings.py     lazy settings with an environment fallback
         defaults.py     the only place a default lives
         enums.py        the values a setting accepts
-        checks.py       system checks E001-E046, W001-W009, I001-I002
+        checks/         system checks E001-E048, W001-W009, I001-I003:
+                        the registry in __init__, rules beside their subject
+                        (bot, transport, eventlog), shapes for what a value
+                        must look like, conditions for what a rule asks first
     broker/         one transport per package, and the contract they answer
     producer/
         client.py       TelegramBot: bot/dispatcher/loop, send, send_raw
