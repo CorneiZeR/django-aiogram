@@ -173,7 +173,7 @@ def test_the_payload_is_not_summarized_for_a_receiver(redis_server, collected, m
     about — the cost, not the value.
     """
     called = []
-    monkeypatch.setattr('django_aiogram.producer.client.describe', lambda kwargs: called.append(kwargs) or {})
+    monkeypatch.setattr('django_aiogram.producer.queueing.describe', lambda kwargs: called.append(kwargs) or {})
 
     TelegramBot().enqueue(chat_id=7, text='hi')
     recorder.flush(timeout=5)

@@ -15,7 +15,7 @@ from django.test import override_settings
 
 from django_aiogram import TelegramBot
 from django_aiogram.config.checks import check_settings
-from django_aiogram.producer.client import build_default_properties, build_storage
+from django_aiogram.producer.from_settings import build_default_properties, build_storage
 
 
 @override_settings(TELEGRAM_BOT={'DEFAULT_BOT_PROPERTIES': {'parse_mode': 'HTML'}})

@@ -265,3 +265,49 @@ def test_a_module_under_the_recorder_neither_reaches_back_up_nor_into_the_orm(mo
 
     assert pulled_recorder == 'False', f'{module} imports the recorder it was split out of'
     assert pulled_orm == 'False', f'{module} pulled django.db, which the recorder must never reach'
+
+
+#: what `client.py` was split into, and what importing each is allowed to cost. The client
+#: imports all five and none of them imports it back. The aiogram column is the part worth
+#: writing down: two of these are free of it, and that is a decision rather than an accident
+BELOW_THE_CLIENT = (
+    ('outbound', False),
+    ('looping', False),
+    # through `wire.serializers`, which encodes aiogram models
+    ('queueing', True),
+    # building aiogram objects from settings is its whole remit
+    ('from_settings', True),
+    # the observers it wraps are aiogram's
+    ('routing', True),
+)
+
+
+@pytest.mark.parametrize(('module', 'expects_aiogram'), BELOW_THE_CLIENT)
+def test_a_module_under_the_client_costs_what_it_says_it_costs(module, expects_aiogram):
+    """The layering the split rests on, and the price list that goes with it.
+
+    `client.py` imports all five; an import back the other way would make them unusable on
+    their own, and Python would report it as a cycle before this assertion — the same shape
+    the recorder's case above describes.
+
+    The aiogram column is the one being measured. `outbound` and `looping` hold what a send
+    is called and who may drive the loop, neither of which is an aiogram idea, and an import
+    that pulled the library into them would go unnoticed in a package that imports it three
+    modules over. The other three declare the cost with the reason beside it, so a `True`
+    that stops being true is a stale entry rather than a silent one.
+
+    A subprocess, because `sys.modules` in this one already holds the whole package.
+    """
+    code = (
+        'import sys\n'
+        f'import django_aiogram.producer.{module}\n'
+        "print('django_aiogram.producer.client' in sys.modules)\n"
+        "print('aiogram' in sys.modules)\n"
+    )
+    finished = run_python(code, check=True)
+    pulled_client, pulled_aiogram = finished.stdout.strip().splitlines()
+
+    assert pulled_client == 'False', f'{module} imports the client it was split out of'
+    assert pulled_aiogram == str(expects_aiogram), (
+        f'{module} pulls aiogram: {pulled_aiogram}, and the table above says {expects_aiogram}'
+    )

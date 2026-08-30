@@ -19,7 +19,7 @@ from django.test import override_settings
 from django_aiogram.broker.exceptions import BrokerNotConfiguredError
 from django_aiogram.broker.registry import broker_class
 from django_aiogram.consumer.delivery import DeliveryNotConfiguredError, delivery_class
-from django_aiogram.producer.client import build_storage
+from django_aiogram.producer.from_settings import build_storage
 
 SETTINGS = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'}
 

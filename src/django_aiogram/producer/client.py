@@ -3,360 +3,65 @@
 One facade over an aiogram ``Bot``, ``Dispatcher`` and ``Router``, built lazily
 so that importing the package costs nothing in the processes — web workers, cron
 jobs, the test suite — that only ever queue a message.
+
+What is here is the object and its lifetime: the lazy aiogram parts, the loop it drives,
+every route a message can take out of this process, and the shutdown that has to hold the
+at-least-once guarantee across all of them. That guarantee is why the class is not cut
+further into mixins — it is a property of state that ``send``, ``_schedule``, ``_drain``
+and ``close`` share, and spreading that state across files would leave no file answerable
+for it.
+
+Five modules carry the parts that are *not* about that state, and each says what belongs
+in it:
+
+* :mod:`~django_aiogram.producer.outbound` — what names one send in flight, and what says
+  it is finished.
+* :mod:`~django_aiogram.producer.looping` — who may drive the loop, and for how long.
+* :mod:`~django_aiogram.producer.queueing` — everything a queue write does except the
+  write, shared by the synchronous producer and the awaiting one.
+* :mod:`~django_aiogram.producer.from_settings` — the aiogram objects a project's settings
+  describe, and the refusals they earn.
+* :mod:`~django_aiogram.producer.routing` — the handler decorators, which read the router
+  and nothing else.
 """
 
 import asyncio
 import contextlib
 import logging
-import math
 import threading
 import time
 import uuid
-import weakref
 from asyncio import AbstractEventLoop
-from collections.abc import Callable, Coroutine, Iterable, Iterator, Mapping
+from collections.abc import Callable, Coroutine, Iterable
 from concurrent import futures
-from dataclasses import dataclass
 from typing import Any
 
 from aiogram import Bot, Dispatcher, Router, exceptions
-from aiogram.client.default import DefaultBotProperties
-from aiogram.dispatcher.event.handler import CallbackType
-from aiogram.fsm.storage.base import BaseStorage
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Update
 from django.core.exceptions import ImproperlyConfigured
-from django.utils.module_loading import import_string
 
 from django_aiogram.api import check_function
 from django_aiogram.broker.registry import close_broker, get_broker
-from django_aiogram.config.defaults import DEFAULTS
-from django_aiogram.config.enums import EventKind, StorageKind
+from django_aiogram.config.enums import EventKind
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
-from django_aiogram.context import current_correlation_id
 from django_aiogram.db import DatabaseConnectionMiddleware
-from django_aiogram.eventlog.events import new_correlation_id, short_id
-from django_aiogram.eventlog.instrumentation import install_instrumentation, instrumented
+from django_aiogram.eventlog.events import short_id
+from django_aiogram.eventlog.instrumentation import install_instrumentation
 from django_aiogram.eventlog.recorder import recorder
 from django_aiogram.eventlog.records import Event, as_identifier
 from django_aiogram.exceptions import LoopThreadNotStartedError, ShuttingDownError
+from django_aiogram.producer.from_settings import build_default_properties, build_storage
+from django_aiogram.producer.looping import LOOP_THREAD, RUNNER_TIMEOUT, drain_budget, loop_lock, mention_asend
+from django_aiogram.producer.outbound import TASK_PREFIX, Outbound, completion, resolve_correlation_id, settle
+from django_aiogram.producer.queueing import chunks, queueing
+from django_aiogram.producer.routing import RouterShortcuts
 from django_aiogram.producer.throttling import RateLimiter, get_rate_limiter
-from django_aiogram.redis import aclose_redis, connection_kwargs
-from django_aiogram.wire.envelope import pack
-from django_aiogram.wire.payloads import describe
-from django_aiogram.wire.serializers import get_serializer
+from django_aiogram.redis import aclose_redis
 
 logger = logging.getLogger('django_aiogram')
 
-#: how a scheduled send carries its correlation id, so shutdown can name what
-#: it canceled without threading an argument through asyncio
-TASK_PREFIX = 'tgbot:'
 
-#: the loop thread a web process starts, so a log line or a test can name it
-LOOP_THREAD = 'tgbot-loop'
-#: how long starting or stopping that thread may take before it is worth saying so
-RUNNER_TIMEOUT = 5.0
-
-
-def resolve_correlation_id(supplied: uuid.UUID | str | None) -> uuid.UUID:
-    """Pick the identifier this send belongs to.
-
-    An explicit argument wins, then whatever update is being handled here, then
-    a fresh one. Reading the context variable happens synchronously, before any
-    scheduling: _hand_off creates its task from a call_soon_threadsafe callback
-    whose context belongs to the loop, so a read from in there is empty.
-    """
-    if isinstance(supplied, uuid.UUID):
-        return supplied
-    if isinstance(supplied, str) and supplied:
-        try:
-            return uuid.UUID(supplied)
-        except ValueError:
-            msg = f'correlation_id must be a UUID, got {supplied!r}.'
-            raise ValueError(msg) from None
-    return current_correlation_id() or new_correlation_id()
-
-
-@dataclass(frozen=True)
-class Outbound:
-    """What every stage of one outbound send needs to name itself."""
-
-    correlation_id: uuid.UUID
-    function: str
-    call_kwargs: dict[str, Any]
-
-
-def task_correlation_id(task: 'asyncio.Task[Any]') -> uuid.UUID:
-    """Recover the id a scheduled send was named with, or mint one to say so."""
-    name = task.get_name()
-    if name.startswith(TASK_PREFIX):
-        try:
-            return uuid.UUID(name.removeprefix(TASK_PREFIX))
-        except ValueError:
-            pass
-    return new_correlation_id()
-
-
-# run_until_complete is not reentrant, and the loop — not the bot — is what
-# cannot be entered twice. Two bots handed the same loop must share one lock.
-_loop_locks: 'weakref.WeakKeyDictionary[AbstractEventLoop, threading.Lock]' = weakref.WeakKeyDictionary()
-_loop_locks_guard = threading.Lock()
-
-
-def _completion(on_complete: Callable[[], None]) -> 'Callable[[asyncio.Task[None]], None]':
-    """Turn a completion callback into a task done-callback.
-
-    Cancellation is not completion. A send drained away at shutdown never reached
-    Telegram, so the consumer must *not* acknowledge it — leaving it in the
-    in-flight list is exactly what lets the next start pick it up again, and is
-    what makes the at-least-once guarantee true rather than documented.
-
-    Everything else counts as finished, including a send that was refused or that
-    gave up: redelivering those would only fail again, which is the contract
-    `Delivery.dispatch` has always had.
-    """
-
-    def done(task: 'asyncio.Task[None]') -> None:
-        """Settle unless the task was canceled, which is the one case that must not.
-
-        Cancellation says the task did not finish, and nothing about what Telegram saw:
-        the request may already have been sent, or even acted on, when the cancel landed
-        on the await. So the message stays unacknowledged and will be redelivered — which
-        can duplicate it, and is the trade this release makes deliberately, because the
-        alternative is acknowledging a send whose outcome nobody ever learned.
-
-        This is not a rare path: it is what ``_drain`` does to whatever outlasts
-        ``DRAIN_TIMEOUT`` at shutdown.
-        """
-        if task.cancelled():
-            return
-        _settle(on_complete)
-
-    return done
-
-
-def _settle(on_complete: Callable[[], None] | None) -> None:
-    """Say the send is finished, without letting that break anything.
-
-    The callback runs on the loop's callback path, where an exception would be
-    reported against the task rather than against whatever the callback does —
-    and the send itself is over either way.
-    """
-    if on_complete is None:
-        return
-    try:
-        on_complete()
-    except Exception:
-        logger.exception('could not acknowledge a completed send')
-
-
-@dataclass
-class Queueing:
-    """One write a producer is about to make, and what it stands for.
-
-    Carries the ids so a failure can be recorded against the messages that were
-    actually lost: a variadic ``RPUSH`` fails for its whole chunk, not one entry.
-    """
-
-    payloads: list[bytes]
-    messages: list[tuple[uuid.UUID, dict[str, Any]]]
-    queued_at: float
-
-
-@contextlib.contextmanager
-def queueing(function: str, messages: list[tuple[uuid.UUID, dict[str, Any]]]) -> 'Iterator[Queueing]':
-    """Everything a queue write does, except the write.
-
-    The one step that cannot be shared between a synchronous producer and an
-    asynchronous one is the ``await`` — the language will not allow it. Everything
-    around it can be, and is: the serialization, the key, and both event rows,
-    including the rule that a message lost on the way to the broker records a drop
-    rather than letting silence imply it was queued. Resolving the serializer and
-    the key sits outside that guard on purpose — a misconfigured ``SERIALIZER``
-    fails identically for every send ever made, and the exception is where that
-    belongs, not a drop row per message for as long as it stays misconfigured.
-
-    So each transport is the two lines that write, and nothing else. The consumer
-    knows one payload shape and the event log has one definition of ``queued``;
-    neither can drift between the two paths, because neither path owns them.
-
-    The two ways a message is lost here are **not** the same, and the ``stage`` on
-    the drop row is what tells them apart. ``serialising`` — spelled as the value is
-    written, since a consumer filters on it — means the payload never
-    left this process, so re-sending it is safe. ``queueing`` means the publish raised, and a
-    publish that raised may still have been applied — the reply is what went missing, and a
-    variadic ``RPUSH`` or a confirmed AMQP publish can both fail that way — so re-sending may
-    duplicate. A broadcast makes
-    that distinction the only one available, because the ids go with the exception.
-    """
-    queued_at = time.time()
-    serializer = get_serializer()
-
-    def dropped(stage: str, error: Exception) -> None:
-        """Record every message this failure lost, and where it lost them."""
-        for identifier, kwargs in messages:
-            recorder.record(
-                Event(
-                    kind=EventKind.OUTBOUND_DROPPED.value,
-                    correlation_id=identifier,
-                    function=function,
-                    chat_id=as_identifier(kwargs.get('chat_id')),
-                    error_code=type(error).__name__,
-                    error=str(error),
-                    detail={'stage': stage},
-                )
-            )
-
-    try:
-        # guarded, not left to the caller: a payload that cannot be serialized
-        # loses its message exactly as a refused write does, and for a chunk the
-        # ids go with the exception — so these rows are the only record of which
-        # messages were lost
-        write = Queueing(
-            payloads=[
-                serializer.dumps(pack(function, kwargs, identifier, queued_at)) for identifier, kwargs in messages
-            ],
-            messages=messages,
-            queued_at=queued_at,
-        )
-    except Exception as error:
-        dropped('serialising', error)
-        raise
-    try:
-        yield write
-    except Exception as error:
-        dropped('queueing', error)
-        raise
-    if not recorder.active:
-        # nothing keeps the table and nothing listens, so there is no event to make
-        return
-    # two gates, not one: whether to record at all is a different question from
-    # whether to summarize the arguments, and describing them is the expensive
-    # half. A metrics receiver counts sends; it does not read message bodies
-    described = recorder.wants_payload
-    for identifier, kwargs in messages:
-        recorder.record(
-            Event(
-                kind=EventKind.OUTBOUND_QUEUED.value,
-                correlation_id=identifier,
-                created_at=queued_at,
-                function=function,
-                chat_id=as_identifier(kwargs.get('chat_id')),
-                detail=describe(kwargs) if described else None,
-            )
-        )
-
-
-#: latched once per process: a line per send would be noise nobody can act on
-_asend_mentioned = threading.Event()
-
-
-def _mention_asend(alternative: str) -> None:
-    """Say once that there is a version of this that does not block the loop.
-
-    Deliberately not a ``DeprecationWarning``: calling the synchronous method from
-    async code is *correct* and nothing about it will stop working. It writes to a
-    socket on the thread the loop is running on, which is worth knowing once and is
-    not worth an exception.
-
-    From every synchronous route that publishes, which is three of them —
-    :meth:`send`, :meth:`enqueue` and :meth:`send_many`. Naming only the first
-    left the two a web tier is most likely to reach for silent, and the fan-out is
-    the one that holds the loop longest.
-
-    Not from :meth:`send_raw`: there the caller is the worker's own consumer, which
-    has no async alternative to move to, and a warning on a healthy path is how
-    people learn to stop reading them.
-    """
-    if _asend_mentioned.is_set():
-        return
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    _asend_mentioned.set()
-    logger.warning(
-        'a synchronous send was called from a running event loop',
-        extra={'tg_alternative': alternative},
-    )
-
-
-def loop_lock(loop: AbstractEventLoop) -> threading.Lock:
-    """Return the one lock that everything driving ``loop`` has to hold."""
-    with _loop_locks_guard:
-        lock = _loop_locks.get(loop)
-        if lock is None:
-            lock = _loop_locks[loop] = threading.Lock()
-        return lock
-
-
-def drain_budget() -> float:
-    """How long :meth:`TelegramBot.close` may spend draining.
-
-    Falls back rather than raising: check E044 reports an unreadable value at boot,
-    and shutdown is the worst moment to refuse — the drain sits between stopping
-    the consumer and flushing the event log, so an exception here costs the rows
-    that describe what the drain just did.
-    """
-    try:
-        budget = float(conf['DRAIN_TIMEOUT'])
-    except (ImproperlyConfigured, TypeError, ValueError):
-        # `ImproperlyConfigured` too: `conf[...]` resolves the whole settings dict on a
-        # cold cache, so a non-mapping `TELEGRAM_BOT` or a non-finite value from the
-        # environment raises here — and this function exists not to raise
-        budget = float(DEFAULTS['DRAIN_TIMEOUT'])
-    return budget if math.isfinite(budget) and budget >= 0 else float(DEFAULTS['DRAIN_TIMEOUT'])
-
-
-def build_default_properties() -> DefaultBotProperties:
-    """Build the bot-wide defaults such as parse_mode.
-
-    aiogram applies these to every call, which is why unset fields carry a
-    ``Default`` sentinel rather than None.
-    """
-    properties: Mapping[str, Any] = conf['DEFAULT_BOT_PROPERTIES']
-    try:
-        return DefaultBotProperties(**properties)
-    except TypeError as error:
-        msg = f"{SETTINGS_NAME}['DEFAULT_BOT_PROPERTIES']: {error}"
-        raise ImproperlyConfigured(msg) from None
-
-
-def build_storage() -> BaseStorage:
-    """Build the FSM storage: 'redis', 'memory', or a dotted path to a BaseStorage."""
-    name: str = conf['FSM_STORAGE']
-    if name == StorageKind.MEMORY:
-        return instrumented(MemoryStorage())
-    if name == StorageKind.REDIS:
-        url = str(conf['REDIS_URL'] or '').strip()
-        if not url:
-            msg = f"{SETTINGS_NAME}['REDIS_URL'] is required for the redis FSM storage."
-            raise ImproperlyConfigured(msg)
-        # imported here, not at module scope: aiogram's Redis storage imports the driver,
-        # which is an extra since 4.0 — and a project on `memory` or another transport must
-        # be able to import this module at all. `django_aiogram.redis` does the same
-        from aiogram.fsm.storage.redis import RedisStorage  # noqa: PLC0415 - as above
-
-        # the same deadlines the shared client gets: every update reads FSM state,
-        # so a half-open Redis here wedges the whole bot rather than one send
-        return instrumented(RedisStorage.from_url(url, connection_kwargs=connection_kwargs()))
-
-    try:
-        storage_class = import_string(name)
-    # `ValueError` alongside it: a path whose module part is empty -- `'.Storage'`, which is what a
-    # copied path or a half-written relative import looks like -- reaches `import_module('')` and
-    # raises that instead. Measured on Django 6.1
-    except (ImportError, ValueError) as error:
-        msg = f"{SETTINGS_NAME}['FSM_STORAGE'] cannot be imported: {error}"
-        raise ImproperlyConfigured(msg) from error
-    if not (isinstance(storage_class, type) and issubclass(storage_class, BaseStorage)):
-        msg = f"{SETTINGS_NAME}['FSM_STORAGE'] must point to a BaseStorage subclass, got {name!r}."
-        raise ImproperlyConfigured(msg)
-    # wrapped last, so the project's own class is validated before it is hidden
-    return instrumented(storage_class())
-
-
-class TelegramBot:
+class TelegramBot(RouterShortcuts):
     """Facade over an aiogram bot, dispatcher and router.
 
     Everything expensive — the aiogram ``Bot``, the ``Dispatcher`` and the event
@@ -784,7 +489,7 @@ class TelegramBot:
             # was spent. Cheap to do twice -- the registry caches per process, so the call
             # inside `enqueue` is a hit. `aenqueue` was fixed first and this is its twin
             get_broker()
-            _mention_asend('asend')
+            mention_asend('asend')
         return self.enqueue(function, correlation_id=identifier, **kwargs)
 
     async def asend(
@@ -934,7 +639,7 @@ class TelegramBot:
             # the same slot-return as the refusals below: `ENABLED` is read live, so a
             # consumer that took a slot can reach this branch after the setting changed,
             # and without this the bound closes one message at a time until a restart
-            _settle(on_refused)
+            settle(on_refused)
             return identifier
 
         async def send() -> None:
@@ -1074,7 +779,7 @@ class TelegramBot:
         task.add_done_callback(self._sends.pop)
         task.add_done_callback(self._log_task_failure)
         if on_complete is not None:
-            task.add_done_callback(_completion(on_complete))
+            task.add_done_callback(completion(on_complete))
 
     @staticmethod
     def _log_task_failure(task: 'asyncio.Task[None]') -> None:
@@ -1108,7 +813,7 @@ class TelegramBot:
             logger.error('send refused: the bot is shutting down')
             # the slot back, not the acknowledgement: the message was not sent, so it
             # stays in flight for a redelivery, but the consumer must stop counting it
-            _settle(on_refused)
+            settle(on_refused)
             return
 
         try:
@@ -1146,7 +851,7 @@ class TelegramBot:
                 coroutine.close()
                 self._record_drop(outbound, 'the event loop was closed')
                 logger.error('send refused: the event loop was closed')
-                _settle(on_refused)
+                settle(on_refused)
                 return
             if loop.is_running():
                 # decided under the lock: seen from outside it, a loop another
@@ -1183,7 +888,7 @@ class TelegramBot:
             #
             # Driven to completion right here, so there is no task to hang a
             # done-callback on — webhook mode takes this path for every send
-            _settle(on_complete)
+            settle(on_complete)
 
     def _hand_off(
         self,
@@ -1211,7 +916,7 @@ class TelegramBot:
                 self._record_drop(outbound, 'the bot started shutting down')
                 logger.error('send dropped: the bot started shutting down')
                 # the slot back, not the acknowledgement — as in `_schedule`'s refusals
-                _settle(on_refused)
+                settle(on_refused)
                 return
             self._register(self._start(coroutine, loop, outbound), outbound, on_complete)
 
@@ -1223,7 +928,7 @@ class TelegramBot:
             logger.exception('send dropped: the event loop is closed')
             # the same slot-return as `start`'s own refusal above: the loop closed between
             # the check under `loop_lock` and this call, so nothing will ever run it
-            _settle(on_refused)
+            settle(on_refused)
 
     @staticmethod
     def _start(
@@ -1340,7 +1045,7 @@ class TelegramBot:
         # that is about to raise on a misconfigured `BROKER` would otherwise spend it and leave
         # the first caller who could have acted on the advice hearing nothing. Same reasoning as
         # `check_function` in `send`, one failure mode further along
-        _mention_asend('aenqueue')
+        mention_asend('aenqueue')
         with queueing(function, [(identifier, kwargs)]) as write:
             broker.publish(write.payloads)
         return identifier
@@ -1418,9 +1123,9 @@ class TelegramBot:
         # a chunk that failed to write
         broker = get_broker() if writing else None
         if writing:
-            _mention_asend('asend_many')
+            mention_asend('asend_many')
         identifiers: list[uuid.UUID] = []
-        for chunk in self._chunks(chat_ids, chunk_size, kwargs):
+        for chunk in chunks(chat_ids, chunk_size, kwargs):
             if broker is not None:
                 with queueing(function, chunk) as write:
                     broker.publish(write.payloads)
@@ -1447,37 +1152,12 @@ class TelegramBot:
         # configured at all, and resolving one would raise where the point is to do nothing
         broker = get_broker() if writing else None
         identifiers: list[uuid.UUID] = []
-        for chunk in self._chunks(chat_ids, chunk_size, kwargs):
+        for chunk in chunks(chat_ids, chunk_size, kwargs):
             if broker is not None:
                 with queueing(function, chunk) as write:
                     await broker.apublish(write.payloads)
             identifiers.extend(identifier for identifier, _ in chunk)
         return identifiers
-
-    def _chunks(
-        self,
-        chat_ids: 'Iterable[int | str]',
-        chunk_size: int,
-        kwargs: dict[str, Any],
-    ) -> 'Iterator[list[tuple[uuid.UUID, dict[str, Any]]]]':
-        """Group the chats into the batches one write covers.
-
-        Serialization happens inside :func:`queueing`, one chunk at a time, which
-        is what keeps peak memory bounded: a ``BufferedInputFile`` payload times
-        fifty thousand chats would otherwise all exist at once.
-
-        The method is validated by :meth:`_accept_bulk` before either caller gets
-        here, so a refused one never reaches this generator.
-        """
-        size = max(1, int(chunk_size))
-        chunk: list[tuple[uuid.UUID, dict[str, Any]]] = []
-        for chat_id in chat_ids:
-            chunk.append((new_correlation_id(), {**kwargs, 'chat_id': chat_id}))
-            if len(chunk) >= size:
-                yield chunk
-                chunk = []
-        if chunk:
-            yield chunk
 
     async def aclose(self) -> None:
         """Release the async Redis client this loop was using.
@@ -1529,81 +1209,6 @@ class TelegramBot:
     async def ainflight_depth(self, worker: str | None = None) -> int:
         """:meth:`inflight_depth` without blocking the loop this coroutine runs on."""
         return await get_broker().ainflight_depth(worker)
-
-    def message(self, *args: Any, **kwargs: Any) -> CallbackType:
-        """Return a decorator registering a handler for the 'message' observer."""
-        return self._add_router(*args, event_name='message', **kwargs)
-
-    def edited_message(self, *args: Any, **kwargs: Any) -> CallbackType:
-        """Return a decorator registering a handler for the 'edited_message' observer."""
-        return self._add_router(*args, event_name='edited_message', **kwargs)
-
-    def channel_post(self, *args: Any, **kwargs: Any) -> CallbackType:
-        """Return a decorator registering a handler for the 'channel_post' observer."""
-        return self._add_router(*args, event_name='channel_post', **kwargs)
-
-    def edited_channel_post(self, *args: Any, **kwargs: Any) -> CallbackType:
-        """Return a decorator registering a handler for the 'edited_channel_post' observer."""
-        return self._add_router(*args, event_name='edited_channel_post', **kwargs)
-
-    def inline_query(self, *args: Any, **kwargs: Any) -> CallbackType:
-        """Return a decorator registering a handler for the 'inline_query' observer."""
-        return self._add_router(*args, event_name='inline_query', **kwargs)
-
-    def chosen_inline_result(self, *args: Any, **kwargs: Any) -> CallbackType:
-        """Return a decorator registering a handler for the 'chosen_inline_result' observer."""
-        return self._add_router(*args, event_name='chosen_inline_result', **kwargs)
-
-    def callback_query(self, *args: Any, **kwargs: Any) -> CallbackType:
-        """Return a decorator registering a handler for the 'callback_query' observer."""
-        return self._add_router(*args, event_name='callback_query', **kwargs)
-
-    def shipping_query(self, *args: Any, **kwargs: Any) -> CallbackType:
-        """Return a decorator registering a handler for the 'shipping_query' observer."""
-        return self._add_router(*args, event_name='shipping_query', **kwargs)
-
-    def pre_checkout_query(self, *args: Any, **kwargs: Any) -> CallbackType:
-        """Return a decorator registering a handler for the 'pre_checkout_query' observer."""
-        return self._add_router(*args, event_name='pre_checkout_query', **kwargs)
-
-    def poll(self, *args: Any, **kwargs: Any) -> CallbackType:
-        """Return a decorator registering a handler for the 'poll' observer."""
-        return self._add_router(*args, event_name='poll', **kwargs)
-
-    def poll_answer(self, *args: Any, **kwargs: Any) -> CallbackType:
-        """Return a decorator registering a handler for the 'poll_answer' observer."""
-        return self._add_router(*args, event_name='poll_answer', **kwargs)
-
-    def my_chat_member(self, *args: Any, **kwargs: Any) -> CallbackType:
-        """Return a decorator registering a handler for the 'my_chat_member' observer."""
-        return self._add_router(*args, event_name='my_chat_member', **kwargs)
-
-    def chat_member(self, *args: Any, **kwargs: Any) -> CallbackType:
-        """Return a decorator registering a handler for the 'chat_member' observer."""
-        return self._add_router(*args, event_name='chat_member', **kwargs)
-
-    def chat_join_request(self, *args: Any, **kwargs: Any) -> CallbackType:
-        """Return a decorator registering a handler for the 'chat_join_request' observer."""
-        return self._add_router(*args, event_name='chat_join_request', **kwargs)
-
-    def error(self, *args: Any, **kwargs: Any) -> CallbackType:
-        """Return a decorator registering a handler for the 'error' observer."""
-        return self._add_router(*args, event_name='error', **kwargs)
-
-    def _add_router(self, *args: Any, event_name: str, **kwargs: Any) -> CallbackType:
-        """Build the decorator every observer method above returns."""
-
-        def wrapper(callback: CallbackType) -> CallbackType:
-            """Register the handler and hand it back unchanged.
-
-            Returning the callback rather than a wrapper is what lets these decorators
-            stack, and what keeps the handler directly callable from a test.
-            """
-            observer = self._router.observers[event_name]
-            observer.register(callback, *args, **kwargs)
-            return callback
-
-        return wrapper
 
     def __repr__(self) -> str:
         """Say whether the aiogram bot behind this facade has been built yet."""

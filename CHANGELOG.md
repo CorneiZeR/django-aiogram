@@ -556,6 +556,25 @@ Entries land here as the work does; nothing below is released.
 
 ### Changed
 
+- **`producer/client.py` is six modules.** It held the facade, the loop it drives, every
+  route out of the process, the shutdown that has to hold the at-least-once guarantee
+  across all of them, and — in the middle of that — seventeen one-line decorators and the
+  helpers that name a send.
+
+  What moved out says what it is: `outbound` (what names one send in flight and what
+  settles it), `looping` (who may drive the loop and for how long), `queueing` (everything
+  a queue write does except the write, plus the chunking that feeds it), `from_settings`
+  (the aiogram objects a project's settings describe) and `routing` (the decorators, which
+  read the router and nothing else). 1610 lines to 1195.
+
+  **The class is not cut further, and that is the decision.** The shutdown guarantee is a
+  property of state that `send`, `_schedule`, `_drain` and `close` share; splitting it into
+  mixins would scatter that state across files and leave none of them answerable for it.
+  The decorators are the exception because they read one attribute and touch nothing else.
+
+  Nothing a project names moved: `TelegramBot` and every method on it are where they were,
+  including all seventeen decorators, which arrive through a mixin.
+
 - **`eventlog/recorder.py` is five modules.** It held the queue, the writer thread, the
   shapes that cross between them, the settings the writer reads, two counters several
   threads touch and the fan-out to `events_recorded` — 922 lines in which the hardest part
