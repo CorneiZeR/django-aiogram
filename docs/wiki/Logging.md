@@ -41,6 +41,7 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_mode` | `polling` or `webhook` |
 | `tg_update` | the update id being handled |
 | `tg_correlation_id` | the id every event about one message carries |
+| `tg_short_id` | that id as the admin shows it: twelve characters to paste into the log's search box |
 | `tg_alternative` | the awaitable method a synchronous send from a loop should move to |
 | `tg_pending` | work still in flight at shutdown: sends, or the updates a webhook process is answering |
 | `tg_low` | the first id of the range a copy is retrying, when a row landed under an id it was about to move |

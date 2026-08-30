@@ -16,7 +16,7 @@ from django_aiogram.admin import (
     register_event_log_admin,
 )
 from django_aiogram.config.enums import EventKind
-from django_aiogram.eventlog.events import new_correlation_id
+from django_aiogram.eventlog.events import new_correlation_id, short_id
 from django_aiogram.models import TelegramEvent
 from tests.db.conftest import sorts, sorts_beyond_a_tie, uses
 from tests.support import run_python
@@ -35,7 +35,23 @@ def an_event(**kwargs):
         'error': 'boom',
     }
     fields.update(kwargs)
+    # the writer fills this on the way in, and these rows go around the writer; a row without it is
+    # history from before the column, which one case asks for by name
+    fields.setdefault('short_id', short_id(fields['correlation_id']))
     return TelegramEvent.objects.create(**fields)
+
+
+def thread_cell(row):
+    """The anchor the thread column renders — label, target and title in one string.
+
+    Asserted whole because each part alone passes on a page that is wrong: the code appears in the
+    body when it is only in the href and nothing is on screen, and `(not backfilled)` appears when
+    it is rendered in some other cell entirely. What the column promises is that what a reader can
+    read is what the link takes.
+    """
+    label = row.short_id or '(not backfilled)'
+    target = row.short_id or row.correlation_id
+    return f'<a href="?q={target}" title="{row.correlation_id}">{label}</a>'
 
 
 def a_reader(username, *codenames):
@@ -199,7 +215,8 @@ def test_the_stages_of_one_message_are_shown_together(client):
 def test_a_search_the_columns_cannot_hold_is_refused_before_the_query(client):
     """Typed equality raises while the query is built — `ValidationError` for
     the uuid column, `ValueError` for the integer one, on every backend — so a
-    term neither column can hold has to be answered before it is used.
+    term none of the three columns can hold has to be answered before it is
+    used. `hello` is one: not digits, not a code, not a UUID.
 
     Asserted on the refusal itself rather than on a 200, which the changelist
     would return either way.
@@ -219,13 +236,16 @@ def test_a_search_the_columns_cannot_hold_is_refused_before_the_query(client):
 @override_settings(TELEGRAM_BOT=ON)
 def test_a_search_by_correlation_id_finds_the_row(client):
     identifier = new_correlation_id()
-    an_event(correlation_id=identifier)
-    an_event()
+    row = an_event(correlation_id=identifier)
+    other = an_event()
     client.force_login(a_reader('finder', 'view_telegramevent'))
 
     body = client.get(CHANGELIST, {'q': str(identifier)}).content.decode()
 
-    assert '1 result' in body or str(identifier)[:8] in body
+    # on the cell the row renders, since the id itself is in the page whether or not the search
+    # narrowed anything; the second row is what says it did
+    assert thread_cell(row) in body
+    assert short_id(other.correlation_id) not in body, 'the search returned a row it was not asked for'
 
 
 @pytest.mark.django_db
@@ -262,12 +282,66 @@ def test_a_search_asks_the_column_and_not_a_function_of_it(client):
 
     by_id, _ = admin_instance.get_search_results(None, TelegramEvent.objects.all(), str(new_correlation_id()))
     by_chat, _ = admin_instance.get_search_results(None, TelegramEvent.objects.all(), '42')
+    # the same rule for the third column, whose whole reason to be stored rather than computed is
+    # that an index can answer it
+    by_code, _ = admin_instance.get_search_results(None, TelegramEvent.objects.all(), short_id(new_correlation_id()))
 
-    for sql in (str(by_id.query), str(by_chat.query)):
+    for sql in (str(by_id.query), str(by_chat.query), str(by_code.query)):
         where = sql.upper().split('WHERE', 1)[1]
         assert 'UPPER' not in where, sql
         assert '::TEXT' not in where, sql
         assert 'LIKE' not in where, sql
+
+
+@pytest.mark.django_db
+@override_settings(TELEGRAM_BOT=ON)
+def test_a_search_by_short_id_finds_the_whole_thread(client):
+    """What the column now shows is what the search takes.
+
+    The cell used to carry the correlation id's first eight characters, and typing those back
+    returned nothing — Django refuses a partial UUID before the query. So the one thing the page
+    invited a reader to do was the one thing it could not answer.
+    """
+    identifier = new_correlation_id()
+    an_event(correlation_id=identifier, kind=EventKind.OUTBOUND_QUEUED.value)
+    an_event(correlation_id=identifier, kind=EventKind.OUTBOUND_SENT.value)
+    an_event()
+    admin_instance = TelegramEventAdmin(TelegramEvent, None)
+
+    narrowed, _ = admin_instance.get_search_results(None, TelegramEvent.objects.all(), short_id(identifier))
+
+    assert {row.correlation_id for row in narrowed} == {identifier}
+    assert narrowed.count() == 2, 'the search found some stages of the message and not others'
+
+    client.force_login(a_reader('by-code', 'view_telegramevent'))
+    assert client.get(CHANGELIST, {'q': short_id(identifier)}).status_code == 200
+
+
+@pytest.mark.django_db
+@override_settings(TELEGRAM_BOT=ON)
+def test_the_column_shows_the_code_it_searches_by(client):
+    """Copying what is on screen has to be enough — a support reader has no other route in."""
+    identifier = new_correlation_id()
+    row = an_event(correlation_id=identifier)
+    client.force_login(a_reader('reader-of-codes', 'view_telegramevent'))
+
+    body = client.get(CHANGELIST).content.decode()
+
+    assert thread_cell(row) in body, f'the thread column does not render the code and its link:\n{body}'
+
+
+@pytest.mark.django_db
+@override_settings(TELEGRAM_BOT=ON)
+def test_a_row_from_before_the_backfill_says_so(client):
+    """The column is filled going forward and by a command going back, so both states are on the
+    page at once until an operator finishes the walk. An empty cell would read as a missing thread
+    rather than as work still to do."""
+    row = an_event(short_id='')
+    client.force_login(a_reader('reader-of-history', 'view_telegramevent'))
+
+    body = client.get(CHANGELIST).content.decode()
+
+    assert thread_cell(row) in body, f'the cell does not say the row is waiting for the backfill:\n{body}'
 
 
 @pytest.mark.django_db
@@ -297,6 +371,23 @@ def test_a_search_by_chat_id_finds_the_rows(client):
 
     assert [row.chat_id for row in narrowed] == [42]
     assert client.get(CHANGELIST, {'q': '42'}).status_code == 200
+
+
+@pytest.mark.django_db
+@override_settings(TELEGRAM_BOT=ON)
+def test_a_term_that_could_be_either_is_read_as_a_chat_id(client):
+    """Twelve digits are a legal code and a plausible chat id, and only one of those is common.
+
+    Chat ids that long are ordinary; a code drawn entirely from ten of the thirty-two characters is
+    about one in a million. So the digits are asked about first, and this pins that order rather
+    than leaving it to whichever branch happens to come first in the file.
+    """
+    an_event(chat_id=123456789012)
+    admin_instance = TelegramEventAdmin(TelegramEvent, None)
+
+    narrowed, _ = admin_instance.get_search_results(None, TelegramEvent.objects.all(), '123456789012')
+
+    assert [row.chat_id for row in narrowed] == [123456789012]
 
 
 def test_the_admin_module_pulls_no_aiogram():
@@ -407,7 +498,12 @@ def test_the_detail_page_still_fetches_them_in_one_query(client):
 @pytest.mark.django_db
 @override_settings(TELEGRAM_BOT=ON)
 def test_only_indexed_columns_are_sortable():
-    """One click on an unindexed header sorts a table sized by traffic."""
+    """One click on an unindexed header sorts a table sized by traffic.
+
+    Sortable is narrower than indexed, and deliberately: `short_id` carries an index too, for the
+    exact search, and stays out of this set because ordering messages by a random code answers
+    nothing anybody asked.
+    """
     from django_aiogram.admin import TelegramEventAdmin
 
     assert set(TelegramEventAdmin.sortable_by) == {'created_at', 'kind', 'chat_id'}

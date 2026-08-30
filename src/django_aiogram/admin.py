@@ -21,7 +21,7 @@ from django.utils.functional import cached_property
 from django.utils.html import format_html, format_html_join
 
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
-from django_aiogram.eventlog.events import failure_kinds, kind_choices
+from django_aiogram.eventlog.events import failure_kinds, kind_choices, normalise_short_id
 from django_aiogram.eventlog.writer import log_alias
 from django_aiogram.models import TelegramEvent
 
@@ -145,8 +145,8 @@ class TelegramEventAdmin(ModelAdminBase):
     list_display = ('created_at', 'kind', 'function', 'chat_id', 'thread', 'worker', 'error_code')
     list_filter = (KindFilter, OutcomeFilter)
     # what makes the box appear; the lookup itself is get_search_results below
-    search_fields = ('correlation_id', 'chat_id')
-    search_help_text = 'An exact correlation id, or an exact chat id.'
+    search_fields = ('short_id', 'correlation_id', 'chat_id')
+    search_help_text = 'A short id, an exact correlation id, or an exact chat id.'
     show_full_result_count = False
     paginator = BoundedPaginator
     list_per_page = 50
@@ -287,7 +287,7 @@ class TelegramEventAdmin(ModelAdminBase):
         queryset: QuerySet[TelegramEvent],
         search_term: str,
     ) -> tuple[QuerySet[TelegramEvent], bool]:
-        """Match the two typed columns exactly, each on its own index.
+        """Match the three typed columns exactly, each on its own index.
 
         Django's own search cannot: even the `=` prefix builds `iexact`, which
         renders as `UPPER(correlation_id::text) = ...` — a function on the
@@ -295,8 +295,8 @@ class TelegramEventAdmin(ModelAdminBase):
         a table sized by traffic. Typed equality is what the indexes are for.
 
         The cost of typed equality is that a term the column cannot hold raises
-        while the query is built, which is why anything neither column can hold
-        is answered with nothing rather than handed to the database.
+        while the query is built, which is why a term no column can hold is
+        answered with nothing rather than handed to the database.
         """
         term = search_term.strip()
         if not term:
@@ -308,6 +308,17 @@ class TelegramEventAdmin(ModelAdminBase):
             if -(2**63) <= number < 2**63:
                 return queryset.filter(chat_id=number), False
             return queryset.none(), False
+        # before the UUID, because a short id is what a person has: it is what the thread column
+        # shows and what a ticket carries. `normalise_short_id` answers '' for anything that is not
+        # one, which is how this tells the two apart without guessing at the length.
+        #
+        # after the digits, though, and that ambiguity is decided rather than stumbled into: a
+        # twelve-character term of nothing but digits is a legal code *and* a plausible chat id.
+        # Chat ids that long are ordinary; a code drawn entirely from ten of the thirty-two
+        # characters is about one in a million
+        code = normalise_short_id(term)
+        if code:
+            return queryset.filter(short_id=code), False
         try:
             identifier = uuid.UUID(term)
         except ValueError:
@@ -346,10 +357,27 @@ class TelegramEventAdmin(ModelAdminBase):
             )
         return format_html('<table>{}</table>', body)
 
-    @admin.display(description='thread', ordering='correlation_id')
+    @admin.display(description='thread')
     def thread(self, obj: TelegramEvent) -> str:
-        """Link a row to the rest of its message, through the exact search."""
-        return format_html('<a href="?q={}">{}</a>', obj.correlation_id, str(obj.correlation_id)[:8])
+        """Link a row to the rest of its message, and show something worth reading.
+
+        The label was the correlation id's first eight characters, which is the clock: a UUIDv7
+        opens with a 48-bit millisecond, and those eight are its top 32 bits — `ms >> 16`, measured
+        — so they change once every 2**16 ms, 65.5 seconds, and every row inside one of those steps
+        showed the same label. It looked like an identifier and named the minute it happened in.
+
+        A row written before the backfill has no short id, and says so rather than showing an empty
+        link. The href carries the code where there is one, so what is on screen is what the search
+        takes — copying the cell used to return nothing.
+
+        No `ordering`: the column is not in `sortable_by`, so the header is not a link and an `?o=`
+        naming it is dropped — and a code is random, so ordering by one answers nothing anybody
+        asked.
+        """
+        if not obj.short_id:
+            missing = '(not backfilled)'
+            return format_html('<a href="?q={}" title="{}">{}</a>', obj.correlation_id, obj.correlation_id, missing)
+        return format_html('<a href="?q={}" title="{}">{}</a>', obj.short_id, obj.correlation_id, obj.short_id)
 
     def has_add_permission(self, _request: HttpRequest) -> bool:
         """Refuse: the feed is append-only, and only this package appends."""

@@ -35,7 +35,7 @@ from django_aiogram.config.enums import EventKind, StorageKind
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 from django_aiogram.context import current_correlation_id
 from django_aiogram.db import DatabaseConnectionMiddleware
-from django_aiogram.eventlog.events import new_correlation_id
+from django_aiogram.eventlog.events import new_correlation_id, short_id
 from django_aiogram.eventlog.instrumentation import install_instrumentation, instrumented
 from django_aiogram.eventlog.recorder import Event, as_identifier, recorder
 from django_aiogram.exceptions import LoopThreadNotStartedError, ShuttingDownError
@@ -1125,7 +1125,11 @@ class TelegramBot:
                 # learn to stop reading them
                 logger.warning(
                     'scheduling a send on a loop nothing in this process runs',
-                    extra={'tg_function': outbound.function, 'tg_correlation_id': str(outbound.correlation_id)},
+                    extra={
+                        'tg_function': outbound.function,
+                        'tg_correlation_id': str(outbound.correlation_id),
+                        'tg_short_id': short_id(outbound.correlation_id),
+                    },
                 )
             self._register(self._start(coroutine, loop, outbound), outbound, on_complete)
             return

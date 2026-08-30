@@ -29,6 +29,7 @@ not the flag is on; nothing reads or writes it until you turn it on.
 | ------ | ------------- |
 | `created_at` | when the event happened, stamped by whoever recorded it |
 | `correlation_id` | ties the stages of one message together |
+| `short_id` | the same thread in twelve characters a person can read out — empty on rows that predate the column, see below |
 | `kind` | which of the kinds below |
 | `function` | the aiogram method, when there is one |
 | `chat_id`, `user_id`, `message_id`, `update_id` | the identifiers Telegram issued |
@@ -309,9 +310,11 @@ app, and dragging `auth` along would move your users with it.
 
 What the admin deliberately does not do, because the table is sized by traffic:
 no full result count, no date drilldown (its truncation is a scan no index can
-serve), and no substring search — the two searchable columns are matched
-exactly, so both use their index. Sorting is limited to the three indexed columns:
-`created_at`, `kind` and `chat_id`. The other headers are not links, and an `?o=`
+serve), and no substring search — the three searchable columns are matched
+exactly, so each uses its index. Sorting is limited to three columns:
+`created_at`, `kind` and `chat_id`. Sortable, not merely indexed: `short_id` has an index too, for
+the exact search, and is deliberately not sortable because ordering messages by a random code
+answers nothing. The other headers are not links, and an `?o=`
 naming one of them — from a bookmark, or a link shared before this restriction — is
 dropped rather than honoured, because ordering the whole table by `worker` is a
 sequential scan and a sort on every page.
@@ -328,6 +331,59 @@ kind index is on `(kind, -id)` — the same `-id` the changelist orders by. Befo
 b-tree first and the bound above was not true. The list also leaves `error` and
 `detail` in the table: it renders neither, and between them they are most of what
 a row weighs. The detail page asks for them back.
+
+### The short id
+
+A row written since the column arrived carries a twelve-character code in `short_id`, and that is
+what the thread column shows and what the search box takes. Rows older than the column hold `''`
+until the backfill below fills them, which is the one exception to everything this section says. It is the low 60 bits of the correlation id in Crockford's base32 —
+the alphabet without `I`, `L`, `O` and `U`, so nothing on screen is confusable with anything else
+on screen.
+
+That column used to show the correlation id's first eight characters. Those are a clock, and a
+coarse one: a UUIDv7 opens with a 48-bit millisecond, and eight hex characters are that clock's
+top 32 bits — `ms >> 16`, measured on a real id — so they step once every 2**16 ms, 65.5 seconds.
+Every message inside one of those steps wore the same label, and typing it back found nothing,
+because Django refuses a partial UUID before the query is built. The prefix named the
+minute-and-a-bit it happened in; the code names the message.
+
+Reading one back is deliberately forgiving. Case, spaces and hyphens are ignored, and `I`, `L` and
+`O` fold onto `1`, `1` and `0`, so a code read out over a call still lands when somebody says "oh"
+for a zero. `U` is the one the alphabet drops without folding — Crockford leaves it out to make an
+accidental obscenity less likely, not because it looks like `V` — and folding it would turn a
+mistyped code into a different valid one instead of into nothing.
+
+A term that is not a code is not searched for as one. A number a `BIGINT` can hold goes to
+`chat_id`, a full UUID to `correlation_id`, and everything else — a longer number among them, since
+asking for one is an error from the backend rather than an empty page — is answered with nothing
+rather than handed to the database. A twelve-character term of nothing but digits is a legal code
+and a plausible chat id, and the chat id wins: codes of only digits are about one in a million,
+while chat ids that long are ordinary.
+
+It is **stored rather than computed**, which is the whole reason the column exists: base32 of a
+truncated id has no inverse a `WHERE` clause can use, so a computed code could only be searched by
+scanning the table. Twelve indexed bytes, measured at +57 bytes a row with the index. Sixty random
+bits make a collision unlikely rather than impossible, so the column is not unique — the search
+returns every row a code matches, and `correlation_id` stays the identifier.
+
+### Filling it in on history
+
+`migrate` adds the column empty. Filling it is a command rather than a data migration, for the
+same reason the prune is a command: `migrate` runs inside a deploy, and a table sized by traffic
+cannot be paced, stopped or resumed there.
+
+```shell
+python manage.py tgbot_backfill_short_ids
+```
+
+The same arguments as the others — `--chunk`, `--sleep`, `--max-chunks`, `--database`, `--dry-run`
+— and one chunk per transaction. A row with no code is a row still to do, so there is no watermark
+to keep: a run you stop leaves the rows it committed done and the next one continues, and a run
+over a finished table reports that and writes nothing.
+
+Until it finishes both states are on the page at once. Rows written since `migrate` carry their
+code; older ones read `(not backfilled)` and still link to the rest of their thread by correlation
+id.
 
 ## Growth, and the job that bounds it
 
@@ -368,10 +424,14 @@ python manage.py tgbot_move_events
 
 The same shape as the prune above, and the same arguments: `--chunk`, `--sleep`, `--max-chunks`,
 `--database`, `--dry-run`. It copies by primary-key range, one transaction per chunk, naming every
-column rather than `SELECT *` — the two tables agree today, and would keep agreeing right up to the
-release that changes either of them. A mismatched column count is rejected; a matching count in a
-different order is accepted, with every value one column to the side. Naming them fails on the
-first and makes the second impossible.
+column rather than `SELECT *`: a mismatched column count is rejected, while a matching count in a
+different order is accepted with every value one column to the side. Naming them fails on the first
+and makes the second impossible.
+
+The names come from what the two tables share, asked of the database — the old one is frozen at
+3.x's shape while this one moves on. A column introduced only in 4.0 is written with the model's
+default, which for `short_id` is empty, so moved history arrives ready for
+`tgbot_backfill_short_ids` above.
 
 **Stopping it is safe, and so is running it after the bot has been writing.** Both tables share the
 primary key, so an id already in the new table is either a row the command copied or a row this

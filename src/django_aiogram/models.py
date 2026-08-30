@@ -14,7 +14,7 @@ insert-only, which is also what keeps pruning cheap and the table shardable.
 from django.db import models
 from django.utils import timezone
 
-from django_aiogram.eventlog.events import MAX_KIND_LENGTH
+from django_aiogram.eventlog.events import MAX_KIND_LENGTH, SHORT_ID_LENGTH
 
 
 class TelegramEvent(models.Model):
@@ -26,6 +26,12 @@ class TelegramEvent(models.Model):
     created_at = models.DateTimeField(default=timezone.now)
     # time-ordered (UUIDv7), so this index appends rather than scattering
     correlation_id = models.UUIDField()
+    # the same id, in twelve characters a person can read aloud and type back. Stored rather than
+    # derived on the way out, because the point of it is the *search*: the code names 60 of the
+    # random bits and cannot be turned back into a UUID, so without a column there is nothing to
+    # filter an indexed column by. Indexed and not unique -- see `events.short_id` for why two rows
+    # may share one, and the admin shows both rather than pretending
+    short_id = models.CharField(max_length=SHORT_ID_LENGTH, blank=True, db_index=True)
     # no choices: see events.kind_choices for why the registry stays in Python
     kind = models.CharField(max_length=MAX_KIND_LENGTH)
 
