@@ -488,7 +488,12 @@ def test_the_detail_page_still_fetches_them_in_one_query(client):
 @pytest.mark.django_db
 @override_settings(TELEGRAM_BOT=ON)
 def test_only_indexed_columns_are_sortable():
-    """One click on an unindexed header sorts a table sized by traffic."""
+    """One click on an unindexed header sorts a table sized by traffic.
+
+    Sortable is narrower than indexed, and deliberately: `short_id` carries an index too, for the
+    exact search, and stays out of this set because ordering messages by a random code answers
+    nothing anybody asked.
+    """
     from django_aiogram.admin import TelegramEventAdmin
 
     assert set(TelegramEventAdmin.sortable_by) == {'created_at', 'kind', 'chat_id'}

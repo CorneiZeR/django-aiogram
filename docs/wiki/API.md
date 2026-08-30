@@ -309,9 +309,9 @@ normalise_short_id('hello')  # '', not a code
 Crockford's base32, the alphabet without `I`, `L`, `O` and `U` — so a log
 pipeline or a support script computes it without touching the database, and
 `TelegramEvent.short_id` holds the same value. `normalise_short_id` is the
-reading half: it ignores case, spaces and hyphens, folds the four confusable
-letters onto what they are heard as, and answers `''` for anything that is not a
-code.
+reading half: it ignores case, spaces and hyphens, folds `I`, `L` and `O` onto
+what they are heard as, and answers `''` for anything that is not a code —
+including a `U`, which the alphabet drops without giving it an alias.
 
 The column is stored rather than computed, because base32 of a truncated id has
 no inverse a `WHERE` clause could use. It is not unique: sixty random bits make a

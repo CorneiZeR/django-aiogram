@@ -98,7 +98,8 @@ FROM django_redis_aiogram_event;
 
 -- PostgreSQL only, and not optional: explicit ids do not advance the sequence
 SELECT setval(pg_get_serial_sequence('django_aiogram_event', 'id'),
-              (SELECT MAX(id) FROM django_aiogram_event));
+              coalesce(max(id), 1), max(id) IS NOT null)
+FROM django_aiogram_event;
 ```
 
 `short_id` is 4.0's and the old table does not have it, so the copy writes an empty one: those rows
@@ -110,7 +111,13 @@ Name every column rather than writing `SELECT *`, which agrees with itself until
 changes: a mismatched count is rejected, and a matching count in a different order is accepted with
 every value one column to the side. And without the `setval`, PostgreSQL accepts the copy and
 refuses the *bot's* next write with a duplicate key: the sequence is still where `migrate` left it.
-The command does this step for you, on whichever backend you run.
+
+The three-argument form is deliberate, and it is the one Django's own `sequence_reset_sql` emits —
+which is what the command runs, so the two say the same thing. On a destination that ended up empty
+the two-argument version is handed `NULL`, and `setval` is strict: measured on PostgreSQL 17.11 it
+returns `NULL` and moves nothing, leaving the sequence wherever it already was. `coalesce` supplies
+the 1 instead, and the third argument says that 1 has not been handed out yet, so an empty table is
+left about to issue 1 rather than silently keeping an older position.
 
 Then drop the old table when you are satisfied — `DROP TABLE django_redis_aiogram_event` is yours
 to run, and this package will never run it for you.

@@ -311,8 +311,10 @@ app, and dragging `auth` along would move your users with it.
 What the admin deliberately does not do, because the table is sized by traffic:
 no full result count, no date drilldown (its truncation is a scan no index can
 serve), and no substring search — the three searchable columns are matched
-exactly, so each uses its index. Sorting is limited to the three indexed columns:
-`created_at`, `kind` and `chat_id`. The other headers are not links, and an `?o=`
+exactly, so each uses its index. Sorting is limited to three columns:
+`created_at`, `kind` and `chat_id`. Sortable, not merely indexed: `short_id` has an index too, for
+the exact search, and is deliberately not sortable because ordering messages by a random code
+answers nothing. The other headers are not links, and an `?o=`
 naming one of them — from a bookmark, or a link shared before this restriction — is
 dropped rather than honoured, because ordering the whole table by `worker` is a
 sequential scan and a sort on every page.
@@ -345,9 +347,11 @@ Every message inside one of those steps wore the same label, and typing it back 
 because Django refuses a partial UUID before the query is built. The prefix named the
 minute-and-a-bit it happened in; the code names the message.
 
-Reading one back is deliberately forgiving. Case, spaces and hyphens are ignored, and `I`, `L`, `O`
-and `U` fold onto the characters they are heard as, so a code read out over a call still lands when
-somebody says "oh" for a zero. A term that is not a code is not searched for as one: a number goes
+Reading one back is deliberately forgiving. Case, spaces and hyphens are ignored, and `I`, `L` and
+`O` fold onto `1`, `1` and `0`, so a code read out over a call still lands when somebody says "oh"
+for a zero. `U` is the one the alphabet drops without folding — Crockford leaves it out so codes
+cannot spell things, not because it looks like `V`, and folding it would turn a mistyped code into a
+different valid one instead of into nothing. A term that is not a code is not searched for as one: a number goes
 to `chat_id`, a full UUID to `correlation_id`, and a term none of the three columns can hold is
 answered with nothing rather than handed to the database. A twelve-character term of nothing but
 digits is a legal code and a plausible chat id, and the chat id wins — codes of only digits are

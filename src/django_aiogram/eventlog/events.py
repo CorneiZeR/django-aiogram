@@ -85,9 +85,12 @@ _ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
 #: would eventually meet
 SHORT_ID_LENGTH = 12
 
-#: what a person may type instead of the character the alphabet uses, all four of them from the
-#: pairs Crockford's alphabet exists to separate
-_CONFUSABLE = {'I': '1', 'L': '1', 'O': '0', 'U': 'V'}
+#: what a person may type instead of the character the alphabet uses. Crockford's three, and only
+#: those three: `U` is *not* here, because it is excluded to keep the alphabet from spelling things
+#: rather than because it looks like anything. Folding it onto `V` would turn a mistyped code into a
+#: different valid one -- `U00000000000` would go looking for `V00000000000`, and find somebody
+#: else's message instead of finding nothing
+_CONFUSABLE = {'I': '1', 'L': '1', 'O': '0'}
 
 
 def short_id(correlation_id: uuid.UUID) -> str:
@@ -117,10 +120,14 @@ def short_id(correlation_id: uuid.UUID) -> str:
 def normalise_short_id(text: str) -> str:
     """Read a short id the way a person wrote it down, or return ``''`` when it is not one.
 
-    Upper-cased, hyphens and spaces dropped, and the four confusable characters folded onto the
+    Upper-cased, hyphens and spaces dropped, and the three confusable characters folded onto the
     ones the alphabet uses -- somebody reading `0` aloud says "oh", and the ticket comes back with
     an `O` in it. That is what Crockford's alphabet is for, and honouring it on input is the half
     that makes it worth having on output.
+
+    `U` is dropped from the alphabet but not folded: it stands for nothing else, so a code with one
+    in it is a code that was typed wrong, and the honest answer is nothing rather than a different
+    message's rows.
 
     An empty answer means "this is not a short id", which is how the admin's search tells it apart
     from a chat id or a full UUID without guessing.

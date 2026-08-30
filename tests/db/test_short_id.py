@@ -79,9 +79,9 @@ def test_the_short_id_is_the_same_for_the_same_id():
 def test_a_short_id_is_read_the_way_a_person_writes_it_down(written):
     """Copied from a screen, typed from a ticket, or read over a call and typed back.
 
-    The last is why the alphabet drops `I`, `L`, `O` and `U`: somebody saying `0` says "oh", and
-    what comes back has an `O` in it. Folding those on input is the half that makes the alphabet
-    worth having on output.
+    The last is why the alphabet drops `I`, `L` and `O`: somebody saying `0` says "oh", and what
+    comes back has an `O` in it. Folding those on input is the half that makes the alphabet worth
+    having on output. `U` is dropped for a different reason and is not folded -- see below.
     """
     # built backwards from a code carrying both characters people mispronounce, because an id whose
     # code happens to hold neither leaves the read-aloud case asserting on unchanged text — which is
@@ -117,6 +117,25 @@ def test_what_is_not_a_short_id_reads_as_nothing(text):
     for something that cannot exist.
     """
     assert normalise_short_id(text) == ''
+
+
+def test_a_u_is_refused_rather_than_read_as_a_v():
+    """The one character the alphabet drops without giving it an alias.
+
+    `I`, `L` and `O` are out because they look like `1`, `1` and `0`, so folding them on input
+    recovers what the writer meant. `U` is out for an unrelated reason -- Crockford drops it so a
+    code cannot spell anything -- and it stands for no other character.
+
+    Folding it onto `V`, which this did, turns a code typed wrong into a *different* valid code:
+    `U00000000000` went looking for `V00000000000` and would have found somebody else's message.
+    Finding nothing is the honest answer, and it is the one the admin can tell apart.
+    """
+    tail = short_id(uuid.UUID(int=0))[1:]
+
+    assert normalise_short_id(f'U{tail}') == ''
+    # and the character it was being folded onto still reads as itself, so this is a refusal and
+    # not the alphabet losing a letter
+    assert normalise_short_id(f'V{tail}') == f'V{tail}'
 
 
 @pytest.mark.django_db

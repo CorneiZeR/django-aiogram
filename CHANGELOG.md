@@ -231,8 +231,10 @@ Entries land here as the work does; nothing below is released.
   refuses a partial UUID before the query is built. The one thing the page invited a reader to do
   was the one thing it could not answer.
 
-  Reading a code back ignores case, spaces and hyphens, and folds `I`, `L`, `O` and `U` onto the
-  characters they are heard as, so one read out over a call still lands. It is stored rather than
+  Reading a code back ignores case, spaces and hyphens, and folds `I`, `L` and `O` onto the
+  characters they are heard as, so one read out over a call still lands. `U` is dropped from the
+  alphabet without being folded: Crockford leaves it out so a code cannot spell anything, and
+  aliasing it onto `V` would turn a mistyped code into a different valid one. It is stored rather than
   computed because base32 of a truncated id has no inverse a `WHERE` clause can use — a computed
   code could only be searched by scanning the table. Sixty random bits make a collision unlikely
   rather than impossible, so the column is not unique: the search returns every row a code matches,
