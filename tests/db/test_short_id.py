@@ -15,7 +15,7 @@ from django.test import override_settings
 
 from django_aiogram.config.enums import EventKind
 from django_aiogram.eventlog.events import SHORT_ID_LENGTH, new_correlation_id, normalise_short_id, short_id
-from django_aiogram.eventlog.recorder import Event
+from django_aiogram.eventlog.records import Event
 from django_aiogram.eventlog.writer import write_batch
 from django_aiogram.models import TelegramEvent
 

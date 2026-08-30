@@ -250,6 +250,7 @@ importable from the module that owns it.
 | `await bot.asend_redis(...)` | `await bot.aenqueue(...)` | the same, on the awaiting half |
 | `bot.redis_conn` | `from django_aiogram.redis import redis_conn` | a client that can carry any of four transports should not answer for one |
 | `from django_aiogram import get_redis, redis_conn` | `from django_aiogram.redis import get_redis, redis_conn` | the package stopped exporting one transport's client from its front door |
+| `from django_aiogram.eventlog.recorder import Event, as_identifier` | `from django_aiogram.eventlog.records import Event, as_identifier` | the shapes that cross the queue travel further than the recorder does, and now live beside each other |
 
 The last two are moves rather than removals: the objects are the same, they are as lazy as they
 were, and there is still one connection behind them. Only the shortcut through the package is

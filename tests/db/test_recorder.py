@@ -19,7 +19,9 @@ from django.test.utils import CaptureQueriesContext
 
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import EventKind
-from django_aiogram.eventlog.recorder import FAILURE_LIMIT, Event, EventRecorder
+from django_aiogram.eventlog.pacing import FAILURE_LIMIT
+from django_aiogram.eventlog.recorder import EventRecorder
+from django_aiogram.eventlog.records import Event
 from django_aiogram.eventlog.signals import events_recorded
 from django_aiogram.eventlog.writer import ROW_BY_ROW, EventLogRefusedError, write_batch
 from django_aiogram.models import TelegramEvent
@@ -61,7 +63,7 @@ def test_the_gap_is_recorded_in_the_feed_not_only_in_the_log(paused_writer):
     """An append-only feed has to be honest about its own holes: a silent gap
     reads as 'nothing happened'."""
     recorder = EventRecorder()
-    recorder._dropped = 3
+    recorder._drops._dropped = 3
     recorder.record(an_event(chat_id=1))
     recorder.drain_once()
 
@@ -186,7 +188,7 @@ def test_a_writer_that_cannot_start_counts_the_event_it_loses(caplog):
         patch.setattr(threading.Thread, 'start', refuse_to_start)
         recorder.record(an_event(chat_id=1))
 
-    assert recorder._dropped == 1, 'the lost event was not counted'
+    assert recorder._drops.total() == 1, 'the lost event was not counted'
     assert recorder._queue is None, 'a half-built writer was left behind'
 
 
@@ -461,12 +463,11 @@ def test_stopping_the_writer_does_not_leave_the_stopper_marked():
     recorder = EventRecorder()
     recorder.record(an_event(chat_id=41))  # starts the writer and gives it something
     recorder.flush()
-    with recorder._counter:
-        recorder._touched_database.add(threading.get_ident())  # as `_abandon` would leave it
+    recorder._marks.mark()  # as `_abandon` would leave it
 
     recorder.stop()
 
-    assert threading.get_ident() not in recorder._touched_database, 'the thread that stopped it stayed marked'
+    assert threading.get_ident() not in recorder._marks._idents, 'the thread that stopped it stayed marked'
     assert TelegramEvent.objects.filter(chat_id=41).exists(), 'nothing was written, so nothing is on trial'
 
 
@@ -584,13 +585,12 @@ def test_a_caller_that_wrote_does_not_stay_marked():
     `eventlog`, and `django.db` with it, on the one path that must not need them.
     """
     recorder = EventRecorder()
-    with recorder._counter:
-        recorder._touched_database.discard(threading.get_ident())
+    recorder._marks.forget()
 
     recorder.record(an_event(chat_id=99))
 
     assert TelegramEvent.objects.filter(chat_id=99).exists(), 'nothing was written, so nothing is on trial'
-    assert threading.get_ident() not in recorder._touched_database, 'the calling thread stayed marked'
+    assert threading.get_ident() not in recorder._marks._idents, 'the calling thread stayed marked'
 
 
 @pytest.mark.django_db(transaction=True)
@@ -855,11 +855,11 @@ def test_a_gap_reported_keeps_what_was_dropped_while_it_was_reported(paused_writ
     """`_record_gap` used to assign zero, so anything dropped during the write it
     was reporting disappeared with it — and no later flush ever mentioned it."""
     recorder = EventRecorder()
-    recorder._dropped = 5
+    recorder._drops._dropped = 5
 
     recorder._record_gap(3)
 
-    assert recorder._dropped == 2
+    assert recorder._drops.total() == 2
 
 
 @pytest.mark.django_db(transaction=True)
@@ -984,7 +984,7 @@ def test_rows_the_database_refuses_one_at_a_time_are_counted(paused_writer, capl
     """A partial refusal was indistinguishable from a clean write.
 
     The ladder returns how many rows landed, and that number decided only whether to
-    raise. So a batch of forty that lost one left `_dropped` at zero, produced no
+    raise. So a batch of forty that lost one left the drop count at zero, produced no
     `log.dropped` row, and the feed read as complete coverage of a period that had lost
     a row. `write_batch` reports the loss now and the recorder counts it, which the next
     successful flush turns into a gap row — the same route a producer's drop takes.
@@ -1010,14 +1010,14 @@ def test_rows_the_database_refuses_one_at_a_time_are_counted(paused_writer, capl
         recorder._flush([an_event(chat_id=chat_id) for chat_id in (1, 2, 3)], failures=0)
 
     assert TelegramEvent.objects.count() == 2, 'the wrong rows were lost'
-    assert recorder._dropped == 1, f'the refused row was not counted: {recorder._dropped}'
+    assert recorder._drops.total() == 1, f'the refused row was not counted: {recorder._drops.total()}'
     assert 'refused part of an event batch' in caplog.text
 
     # the next successful flush turns the count into the gap row
     recorder._flush([an_event(chat_id=4)], failures=0)
     gap = TelegramEvent.objects.get(kind=EventKind.LOG_DROPPED.value)
     assert gap.detail == {'dropped': 1}
-    assert recorder._dropped == 0
+    assert recorder._drops.total() == 0
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1045,7 +1045,7 @@ def test_a_row_refused_on_the_callers_thread_is_counted(monkeypatch):
         patch.setattr(TelegramEvent, 'save', refuse_one_row)
         recorder.record(an_event(chat_id=999))
 
-    assert recorder._dropped == 1, f'the refused row was counted as {recorder._dropped}'
+    assert recorder._drops.total() == 1, f'the refused row was counted as {recorder._drops.total()}'
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1075,4 +1075,4 @@ def test_rows_a_stopping_writer_leaves_that_are_refused_are_counted(monkeypatch)
         patch.setattr(TelegramEvent, 'save', refuse_the_second)
         recorder._abandon(buffer)
 
-    assert recorder._dropped == 1, f'the refused row was counted as {recorder._dropped}'
+    assert recorder._drops.total() == 1, f'the refused row was counted as {recorder._drops.total()}'

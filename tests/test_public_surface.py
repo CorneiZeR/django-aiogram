@@ -415,7 +415,7 @@ def test_the_event_fields_a_receiver_reads_are_all_there():
     """Receivers get `Event` objects, so its field names are public API now."""
     import dataclasses
 
-    from django_aiogram.eventlog.recorder import Event
+    from django_aiogram.eventlog.records import Event
 
     present = tuple(field.name for field in dataclasses.fields(Event))
     assert present == EVENT_FIELDS, f'the Event shape changed: {present}'
@@ -429,7 +429,7 @@ def test_every_event_field_has_a_column_to_land_in():
     """
     import dataclasses
 
-    from django_aiogram.eventlog.recorder import Event
+    from django_aiogram.eventlog.records import Event
     from django_aiogram.models import TelegramEvent
 
     columns = {field.name for field in TelegramEvent._meta.get_fields()}

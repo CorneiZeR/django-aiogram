@@ -24,7 +24,8 @@ from django_aiogram.config.enums import EventKind
 from django_aiogram.consumer.delivery import BlpopDelivery
 from django_aiogram.context import correlation_scope
 from django_aiogram.eventlog.events import new_correlation_id
-from django_aiogram.eventlog.recorder import as_identifier, recorder
+from django_aiogram.eventlog.recorder import recorder
+from django_aiogram.eventlog.records import as_identifier
 from django_aiogram.models import TelegramEvent
 from django_aiogram.producer.client import resolve_correlation_id, task_correlation_id
 from django_aiogram.wire.serializers import JsonSerializer

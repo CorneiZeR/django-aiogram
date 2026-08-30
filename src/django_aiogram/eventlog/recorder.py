@@ -21,6 +21,20 @@ This module must not import ``django.db``. :mod:`django_aiogram.eventlog.writer`
 does, and the writer thread imports it on its first flush — on its *first write*,
 more precisely, because since 3.1.0 the writer also runs with the log off, for
 ``events_recorded`` receivers alone, and such a process never reaches it at all.
+
+What is left here is the queue, the one thread that drains it, and the lifecycle around
+both: when the writer starts, what it does with a batch, what a fork or a ``stop()``
+leaves behind, and the gap row that says how much was lost. Four neighbours carry the
+parts that are not about that thread, and each states its own rule:
+
+* :mod:`~django_aiogram.eventlog.records` — the shapes that cross the queue, which
+  travel further than the recorder does.
+* :mod:`~django_aiogram.eventlog.pacing` — the numbers, and the promise that reading one
+  never raises on this thread.
+* :mod:`~django_aiogram.eventlog.bookkeeping` — the two counts more than one thread
+  touches, each behind its own lock.
+* :mod:`~django_aiogram.eventlog.publishing` — the fan-out to ``events_recorded``, and
+  the promise that it cannot raise.
 """
 
 import asyncio
@@ -31,122 +45,28 @@ import os
 import queue
 import threading
 import time
-import uuid
-from collections.abc import Callable
-from dataclasses import dataclass, field, replace
-from typing import Any
+from dataclasses import replace
 
-from django.core.exceptions import ImproperlyConfigured
 from django.core.signals import setting_changed
 
-from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import EventKind
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
-from django_aiogram.eventlog.events import known_kinds, new_correlation_id, worker_identity
+from django_aiogram.eventlog.bookkeeping import DropLedger, ThreadMarks
+from django_aiogram.eventlog.events import known_kinds, worker_identity
+from django_aiogram.eventlog.pacing import (
+    FAILURE_BACKOFF,
+    FAILURE_LIMIT,
+    STOP_TIMEOUT,
+    WRITER_THREAD,
+    batch_size,
+    buffer_size,
+    flush_interval,
+)
+from django_aiogram.eventlog.publishing import publish
+from django_aiogram.eventlog.records import Event, Wake
 from django_aiogram.eventlog.signals import events_recorded
 
 logger = logging.getLogger('django_aiogram')
-
-#: the writer's thread name, so a log line or a test can name it
-WRITER_THREAD = 'tgbot-event-writer'
-
-
-#: what a signed BIGINT holds, which is the width of every id column here
-ID_RANGE = range(-(2**63), 2**63)
-
-
-def as_identifier(value: object) -> int | None:
-    """Keep what a BIGINT column can hold, and nothing else.
-
-    A Telegram chat_id may be a `@username`, which is a valid destination and
-    not a number; `True` is an int to Python and not an id to anyone; and a
-    Python integer has no width, so one off an untrusted queue can be wider
-    than the column and cost the row it was meant to describe.
-    """
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    return value if value in ID_RANGE else None
-
-
-#: how long stop() waits for the writer before giving up on what it holds
-STOP_TIMEOUT = 5.0
-#: consecutive failed flushes after which the writer stops trying for a while
-FAILURE_LIMIT = 5
-#: how long it drains and discards before probing the database again
-FAILURE_BACKOFF = 60.0
-#: how often the drop counter is allowed to reach the log
-DROP_REPORT_INTERVAL = 60.0
-
-
-@dataclass(frozen=True)
-class Wake:
-    """A marker that ends the writer's current wait.
-
-    ``done`` is what makes :meth:`EventRecorder.flush` honest: the queue going
-    empty means the writer has *taken* the batch, not that it has written it.
-    """
-
-    done: threading.Event | None = None
-
-
-@dataclass(frozen=True)
-class Event:
-    """One thing that happened. Indexed columns first, the rest in ``detail``."""
-
-    kind: str
-    correlation_id: uuid.UUID = field(default_factory=new_correlation_id)
-    created_at: float = field(default_factory=time.time)
-    function: str = ''
-    chat_id: int | None = None
-    user_id: int | None = None
-    message_id: int | None = None
-    update_id: int | None = None
-    worker: str = ''
-    attempt: int = 0
-    duration_ms: int | None = None
-    error_code: str = ''
-    error: str = ''
-    #: already JSON-safe by the time it arrives: encoding aiogram objects is the
-    #: caller's job, because this module must stay free of aiogram
-    detail: dict[str, Any] | None = None
-
-
-def _number(key: str, cast: Callable[[Any], float]) -> float:
-    """Read one of the writer's own dials, falling back to its default.
-
-    Checks E036-E038 report a value that cannot be read, at boot and once. This
-    runs on the writer thread, in a loop, on the far side of `_flush`'s net — a
-    raise here ends the writer and takes the whole buffer with it, which is a
-    steep price for a typo in a batch size.
-    """
-    try:
-        return cast(conf[key])
-    except (ImproperlyConfigured, KeyError, TypeError, OverflowError, ValueError):
-        # ImproperlyConfigured from resolving the settings, the rest from the cast.
-        # OverflowError is the one that is not a typo: `int(float('inf'))` raises it, and a
-        # settings dict can hold `inf` directly — the environment cannot, it is refused
-        # there — so without this the writer thread ends on a value E044 only reports
-        return cast(DEFAULTS[key])
-
-
-def _receiver_name(receiver: object) -> str:
-    """Name a signal receiver for a log line, without calling anything that can raise.
-
-    ``repr()`` is deliberately not the fallback. Python evaluates every argument
-    before the call, so ``getattr(receiver, '__qualname__', repr(receiver))``
-    evaluates ``repr`` *even when the attribute is there* — and a receiver whose
-    ``__repr__`` raises would then take this line, and with it the rest of the batch's
-    receivers, out through :meth:`EventRecorder._flush`'s ``except``, where it would
-    be counted as a failed write. That is the failure this whole method exists to
-    contain, arriving through the code that reports it.
-
-    ``type(receiver).__name__`` is the last resort because reading it runs nothing.
-    """
-    for attribute in ('__qualname__', '__name__'):
-        name = getattr(receiver, attribute, None)
-        if isinstance(name, str) and name:
-            return name
-    return type(receiver).__name__
 
 
 def _acknowledge(wakes: list[Wake]) -> None:
@@ -170,19 +90,11 @@ class EventRecorder:
         self._worker: str | None = None
         self._owner_pid = os.getpid()
         self._fork_hook = False
-        self._dropped = 0
-        # which threads have handed a batch to the ORM, and so have a connection to
-        # close on the way out. Per thread rather than one flag: this object is
-        # process-wide, `close_old_connections()` acts on the calling thread, and two
-        # writers can overlap — a `stop()` whose join times out leaves the old one
-        # running while a replacement starts
-        self._touched_database: set[int] = set()
-        # its own lock, not _guard: _guard is held across starting a thread, and the
-        # counter and the touch set are reached from paths that must not wait on that
-        self._counter = threading.Lock()
-        # far enough back that the first drop always reports: monotonic() is
-        # time since boot on Linux, so a fresh container starts it near zero
-        self._reported_at = -DROP_REPORT_INTERVAL
+        # each with its own lock, and neither is `_guard`: that one is held across
+        # starting a thread, and both of these are reached from paths that must not wait
+        # on it. What they hold and who reaches them is in `eventlog.bookkeeping`
+        self._drops = DropLedger()
+        self._marks = ThreadMarks()
 
     @property
     def enabled(self) -> bool:
@@ -272,7 +184,7 @@ class EventRecorder:
                 try:
                     self._deliver([event])
                 except Exception:
-                    self._drop(1)
+                    self._drops.lost(1)
                     logger.exception('could not record an event on the calling thread', extra={'tg_kind': event.kind})
                 finally:
                     # this thread wrote, and this thread is not the one that closes: the
@@ -280,7 +192,7 @@ class EventRecorder:
                     # outlives the caller. Thread idents are reused, so a receiver-only
                     # writer could inherit one and close a connection it never opened —
                     # importing `eventlog`, and `django.db` with it
-                    self._forget_touch()
+                    self._marks.forget()
                 return
             buffer = self._buffer()
             buffer.put_nowait(event)
@@ -289,7 +201,7 @@ class EventRecorder:
                 # nothing will ever drain a detached one again
                 self._rehome(buffer)
         except queue.Full:
-            self._drop(1)
+            self._drops.lost(1)
         except Exception:
             # the recorder failing is not the caller's problem to handle
             logger.exception('could not record an event', extra={'tg_kind': event.kind})
@@ -318,7 +230,7 @@ class EventRecorder:
                 if isinstance(item, Wake):
                     _acknowledge([item])
                     continue
-                self._drop(1)
+                self._drops.lost(1)
 
     def _write_here(self) -> bool:
         """Whether to write on this thread instead of handing it to the writer.
@@ -343,31 +255,6 @@ class EventRecorder:
             return True
         return False
 
-    def _drop(self, count: int) -> None:
-        """Count lost events, and say so at most once a minute.
-
-        The counter is guarded because more than one thread reaches it: producers
-        on a full queue, the writer on a failed flush, and whichever thread called
-        stop() draining what the writer left. `+=` is a read and a write, so
-        without this a drop is silently swallowed by a concurrent one.
-        """
-        if not count:
-            # callers pass the refused count straight through, and that is zero on every
-            # successful write — reporting "the event log is falling behind" for a batch
-            # that landed in full is a false alarm on the line people watch for real ones
-            return
-        with self._counter:
-            self._dropped += count
-            dropped = self._dropped
-        now = time.monotonic()
-        if now - self._reported_at < DROP_REPORT_INTERVAL:
-            return
-        self._reported_at = now
-        logger.error(
-            'the event log is falling behind; events are being dropped',
-            extra={'tg_dropped': dropped},
-        )
-
     def _buffer(self) -> queue.Queue[Event | Wake]:
         """Return the queue, starting the writer the first time anything is recorded."""
         if self._owner_pid != os.getpid():
@@ -382,7 +269,7 @@ class EventRecorder:
                 self._install_fork_hook()
                 self._stopping.clear()
                 self._owner_pid = os.getpid()
-                buffer = queue.Queue(maxsize=max(1, int(_number('EVENT_LOG_BUFFER_SIZE', int))))
+                buffer = queue.Queue(maxsize=buffer_size())
                 thread = threading.Thread(target=self._run, args=(buffer,), name=WRITER_THREAD, daemon=True)
                 self._queue, self._thread = buffer, thread
                 try:
@@ -391,7 +278,7 @@ class EventRecorder:
                     # out of threads: leave nothing half-built for the next call,
                     # and count the event this loses so the gap row still says so
                     self._queue = self._thread = None
-                    self._drop(1)
+                    self._drops.lost(1)
                     raise
                 # CPython runs atexit callbacks while daemon threads are still
                 # alive, so the writer is still joinable from one
@@ -407,15 +294,14 @@ class EventRecorder:
 
     def _forget(self) -> None:
         """Drop everything a fork invalidated, so the next event starts fresh."""
-        # a new lock: the parent may have held this one at the moment of the fork
+        # new locks throughout: the parent may have held any of them at the moment of the
+        # fork, and a lock inherited held is a lock nothing in this process can release
         self._guard = threading.Lock()
-        self._counter = threading.Lock()
+        self._drops = DropLedger()
+        self._marks = ThreadMarks()
         self._queue = None
         self._thread = None
         self._owner_pid = os.getpid()
-        self._touched_database = set()
-        self._dropped = 0
-        self._reported_at = -DROP_REPORT_INTERVAL
 
     def _run(self, buffer: queue.Queue[Event | Wake]) -> None:
         """Drain the queue into the database until stopped.
@@ -434,7 +320,7 @@ class EventRecorder:
                         if time.monotonic() < blocked_until:
                             # the database has been refusing us; keep draining so
                             # producers never fill up, but do not hammer it
-                            self._drop(len(batch))
+                            self._drops.lost(len(batch))
                         else:
                             failures, blocked_until = self._flush(batch, failures=failures)
                 finally:
@@ -466,42 +352,11 @@ class EventRecorder:
             # again: without this, everything still in it disappears with no row
             # and no counter, and the gap reads as quiet traffic
             self._abandon(buffer)
-            if self._took_the_touch():
+            if self._marks.take():
                 # a process that only has receivers never opened one, and importing
                 # `eventlog` to close it would pull in `django.db` — the one import
                 # this module exists to keep out of a process that does not need it
                 self._close_connections()
-
-    def _forget_touch(self) -> None:
-        """Drop this thread's mark without acting on it, for a thread that does not close.
-
-        Only the writer's exit closes connections. `record()` under ``EVENT_LOG_SYNC`` and
-        `drain_once()` write on their caller's thread, and Django owns that thread's
-        connection — so their marks are bookkeeping nobody reads, and idents get reused.
-        """
-        with self._counter:
-            self._touched_database.discard(threading.get_ident())
-
-    def _took_the_touch(self) -> bool:
-        """Whether *this* thread handed a batch to the ORM, clearing the mark as it answers.
-
-        Read and cleared together, because the mark describes this writer: left set it
-        outlives the thread that earned it, and a later writer with only receivers closes
-        a connection it never opened — importing `eventlog`, and with it `django.db`, into
-        the one process this module exists to keep it out of. Only a fork cleared it before,
-        so a process that wrote once and then had the log turned off carried it for good.
-
-        Per thread, because one flag was not enough either: `stop()` detaches the queue
-        before joining, so a join that times out leaves the old writer running while a
-        replacement starts, and the old one's exit cleared the new one's flag — the
-        replacement then skipped closing the connection it had opened. It is also what the
-        mark always meant, since `close_old_connections()` acts on the calling thread.
-        """
-        ident = threading.get_ident()
-        with self._counter:
-            touched = ident in self._touched_database
-            self._touched_database.discard(ident)
-        return touched
 
     @staticmethod
     def _empty(buffer: 'queue.Queue[Event | Wake]') -> tuple[list[Event], list[Wake]]:
@@ -544,28 +399,16 @@ class EventRecorder:
         except Exception:
             logger.exception('could not write the events a stopping writer left behind')
         else:
-            self._drop(refused)
+            self._drops.lost(refused)
             return
         # counted, not silent: the next flush that succeeds turns this into a
         # log.dropped row, which is the only place the gap becomes visible
-        self._drop(len(leftover))
-
-    @staticmethod
-    def flush_interval() -> int:
-        """Seconds before a partial batch is written anyway, as ``E038`` defines it.
-
-        An integer, matching the check and the settings page. Read as a float this
-        honoured a fractional interval the check refuses, so a value could pass
-        ``manage.py check`` and then behave in a way the check called impossible — one
-        setting with two rules. Named rather than inline so the rule has one reader and a
-        test can ask it directly.
-        """
-        return int(max(1, _number('EVENT_LOG_FLUSH_INTERVAL', int)))
+        self._drops.lost(len(leftover))
 
     def _collect(self, buffer: queue.Queue[Event | Wake]) -> tuple[list[Event], list[Wake]]:
         """Gather up to one batch, with any wake-ups that ended the wait."""
-        interval = self.flush_interval()
-        limit = max(1, int(_number('EVENT_LOG_BATCH_SIZE', int)))
+        interval = flush_interval()
+        limit = batch_size()
         deadline = time.monotonic() + interval
         batch: list[Event] = []
         wakes: list[Wake] = []
@@ -588,8 +431,8 @@ class EventRecorder:
 
         Both happen inside :meth:`_deliver`, which writes first and publishes in a
         ``finally`` — so a failing database costs rows and not metrics, and nothing
-        reaching the ``except`` here came from a receiver: :meth:`_publish` cannot
-        raise.
+        reaching the ``except`` here came from a receiver:
+        :func:`~django_aiogram.eventlog.publishing.publish` cannot raise.
 
         Which means **receivers run on whatever thread calls this**, and that is not
         only the writer's: :meth:`drain_once` calls it on the caller's, which is what
@@ -597,19 +440,12 @@ class EventRecorder:
         the rule that way round rather than listing the threads, so a fourth one does
         not make it wrong.
         """
-        # under the counter's lock, both of them: `_drop`'s docstring already names
-        # "the writer on a failed flush" among the threads it protects against, and
-        # this was the one place that read and wrote the count without taking it —
-        # so a producer's drop landing between this `+=`'s read and its write was
-        # silently discarded, and the `log.dropped` row then under-reported the gap
-        with self._counter:
-            dropped_before = self._dropped
+        dropped_before = self._drops.total()
         try:
             refused = self._deliver(batch)
         except Exception:
             failures += 1
-            with self._counter:
-                self._dropped += len(batch)
+            self._drops.lost_quietly(len(batch))
             # one line per failure, not two: the suspension is a different
             # sentence about the same exception, not a second thing that broke
             if failures >= FAILURE_LIMIT:
@@ -627,8 +463,7 @@ class EventRecorder:
             # rows this very batch lost, one at a time, on the ladder below `write_batch`.
             # Counted rather than reported now: the gap row belongs to the *next*
             # successful flush, the same way a producer's drop does
-            with self._counter:
-                self._dropped += refused
+            self._drops.lost_quietly(refused)
             logger.warning(
                 'the database refused part of an event batch',
                 extra={'tg_count': refused, 'tg_batch': len(batch)},
@@ -661,28 +496,21 @@ class EventRecorder:
         The failure stays suppressed either way: the batch this follows did land, and a
         gap row that cannot be written must not turn a successful flush into a failed one.
         """
-        with self._counter:
-            claimed = min(dropped, self._dropped)
-            self._dropped -= claimed
+        claimed = self._drops.claim(dropped)
         if not claimed:
             return
         try:
             refused = self._deliver([Event(kind=EventKind.LOG_DROPPED.value, detail={'dropped': claimed})])
         except Exception:
-            self._reclaim(claimed)
+            self._drops.give_back(claimed)
             logger.exception('could not record the gap; keeping the count for the next flush')
             return
         if refused:
-            self._reclaim(claimed)
+            self._drops.give_back(claimed)
             logger.error(
                 'the database refused the gap row; keeping the count for the next flush',
                 extra={'tg_dropped': claimed},
             )
-
-    def _reclaim(self, claimed: int) -> None:
-        """Put a claim back, so a gap nobody could record survives to be recorded."""
-        with self._counter:
-            self._dropped += claimed
 
     @staticmethod
     def _write(batch: list[Event]) -> int:
@@ -693,66 +521,6 @@ class EventRecorder:
         from django_aiogram.eventlog.writer import write_batch  # noqa: PLC0415 - the point: no django.db above
 
         return write_batch(batch)
-
-    def _publish(self, batch: list[Event]) -> None:
-        """Hand a batch to whoever connected to :data:`events_recorded`.
-
-        ``send_robust``, so one broken receiver neither loses the batch for the
-        others nor stops the writer, and it is logged here because a receiver that
-        fails silently is a metric that reads as zero traffic. Django logs it too, on
-        its own ``django.dispatch`` logger; the line here is on the logger a project
-        configures for this package, which is where it will actually be seen.
-
-        **Wrapped anyway, because ``send_robust`` does not contain everything.**
-        Django's own failure logging reads ``receiver.__qualname__`` unguarded, and a
-        callable *instance* — an ordinary shape for a metrics collector — has no such
-        attribute. So a receiver like that raising makes ``send_robust`` itself raise
-        ``AttributeError``, measured on Django 6.1, and without this ``try`` it would
-        land in :meth:`_flush`'s ``except`` and be counted as a failed *write*: the
-        other receivers lose the batch, a ``log.dropped`` row appears, and the log
-        blames the database for something a receiver did. Containing it here makes
-        this method's promise true whatever Django does with it, on any supported
-        version.
-
-        The upshot is a method that **cannot raise**, which is the property the rest
-        of the writer needs from it rather than a defensive habit.
-
-        One limit worth stating, because it is Django's and not ours: when
-        ``send_robust`` raises on that unnamed receiver it abandons **its own loop**, so
-        receivers connected after the offending one do not run for that batch at all.
-        Containing it here keeps the write and every earlier receiver whole; it cannot
-        reach past Django into a dispatch that already stopped. Calling receivers
-        ourselves would need ``Signal._live_receivers``, a private API, which is a worse
-        trade than one documented sentence. A collector written as a callable instance
-        can close the gap on its side by defining ``__qualname__``; one written as a
-        function or a bound method has it already, and is the shape every recipe uses.
-
-        A tuple rather than the list itself: receivers run one after another with
-        the same argument, so one of them sorting or clearing a list would decide
-        what the next one sees.
-        """
-        if not events_recorded.receivers:
-            return
-        # the reporting loop is inside the guard as well as the dispatch, because
-        # `getattr(..., None)` absorbs only `AttributeError` — a receiver whose
-        # `__getattr__` raises anything else makes naming it raise, and the whole
-        # point is that nothing about a receiver reaches `_flush`'s failure counter
-        try:
-            for receiver, outcome in events_recorded.send_robust(sender=self, events=tuple(batch)):
-                if isinstance(outcome, BaseException):
-                    logger.error(
-                        'an events_recorded receiver raised',
-                        exc_info=outcome,
-                        extra={'tg_receiver': _receiver_name(receiver), 'tg_count': len(batch)},
-                    )
-        except Exception:
-            # even this is suppressed: `logger.exception` is `logger.error` with
-            # `exc_info`, so a project whose handler or formatter raises would take
-            # the fallback out too — and the whole purpose here is that **nothing**
-            # about publishing reaches `_flush`'s failure counter, where it would be
-            # reported as a database refusing a batch it never saw
-            with contextlib.suppress(Exception):
-                logger.exception('publishing recorded events failed', extra={'tg_count': len(batch)})
 
     def _deliver(self, batch: list[Event]) -> int:
         """Write a batch if this process keeps the table, then publish it either way.
@@ -778,11 +546,10 @@ class EventRecorder:
         refused = 0
         try:
             if self.enabled:
-                with self._counter:
-                    self._touched_database.add(threading.get_ident())
+                self._marks.mark()
                 refused = self._write(batch)
         finally:
-            self._publish(batch)
+            publish(self, batch)
         return refused
 
     @staticmethod
@@ -827,7 +594,7 @@ class EventRecorder:
         finally:
             # same reason as the synchronous `record()` path: this thread wrote, and it is
             # not the thread whose exit closes connections
-            self._forget_touch()
+            self._marks.forget()
             _acknowledge(wakes)
         return len(batch)
 
@@ -894,7 +661,7 @@ class EventRecorder:
             # `test_a_receiver_that_stops_the_log_does_not_strand_the_writer` covers both
             # halves and fails without either
             if threading.current_thread() is not thread:
-                self._forget_touch()
+                self._marks.forget()
 
     def reset(self) -> None:
         """Re-read the settings next time; used by override_settings.

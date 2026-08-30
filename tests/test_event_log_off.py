@@ -22,7 +22,9 @@ from django_aiogram.eventlog.events import (
     new_correlation_id,
     register_kind,
 )
-from django_aiogram.eventlog.recorder import WRITER_THREAD, Event, EventRecorder
+from django_aiogram.eventlog.pacing import WRITER_THREAD
+from django_aiogram.eventlog.recorder import EventRecorder
+from django_aiogram.eventlog.records import Event
 from django_aiogram.models import TelegramEvent
 from tests.support import run_python
 
@@ -88,7 +90,8 @@ def test_the_model_module_never_imports_aiogram():
 
         django.setup()
 
-        from django_aiogram.eventlog.recorder import Event, recorder
+        from django_aiogram.eventlog.recorder import recorder
+        from django_aiogram.eventlog.records import Event
 
         recorder.record(Event(kind='outbound.sent'))
 

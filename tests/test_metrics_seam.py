@@ -31,14 +31,11 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 
 from django_aiogram import TelegramBot
 from django_aiogram.eventlog import recorder as recorder_module
+from django_aiogram.eventlog.bookkeeping import DROP_REPORT_INTERVAL, DropLedger
 from django_aiogram.eventlog.instrumentation import install_instrumentation, instrumented
-from django_aiogram.eventlog.recorder import (
-    DROP_REPORT_INTERVAL,
-    WRITER_THREAD,
-    Event,
-    EventRecorder,
-    recorder,
-)
+from django_aiogram.eventlog.pacing import WRITER_THREAD
+from django_aiogram.eventlog.recorder import EventRecorder, recorder
+from django_aiogram.eventlog.records import Event
 from django_aiogram.eventlog.signals import events_recorded
 
 
@@ -79,8 +76,9 @@ def collected(clean_counters):
     exactly like a gate that never fired.
 
     Takes `clean_counters` rather than repeating a subset of it: this fixture used to
-    clear `_dropped` alone, which left the two things that page below it describes —
-    the touch marks and `_reported_at` — surviving a test that had a writer running.
+    clear the drop count alone, which left the two things that page below it describes —
+    the thread marks and the ledger's report time — surviving a test that had a writer
+    running.
     Thread idents are reused, so a mark left behind makes a later receiver-only test
     close a connection it never opened, and only in some orders.
     """
@@ -104,33 +102,31 @@ def collected(clean_counters):
 def clean_counters():
     """Leave the process-wide recorder's counters as they were found.
 
-    `recorder` is a singleton, so a test that drives a failed write and leaves `_dropped`
-    set hands a real gap to whichever test runs next — which then correctly reports it, in
-    the wrong place, and reads as a defect in something unrelated. The same for
-    `_touched_database`, which decides whether a stopping writer closes a database
-    connection and is only otherwise cleared on a fork — a set of thread idents now, so a
-    test that wrote on this thread must not leave this thread marked.
+    `recorder` is a singleton, so a test that drives a failed write and leaves the drop
+    ledger set hands a real gap to whichever test runs next — which then correctly reports
+    it, in the wrong place, and reads as a defect in something unrelated. The same for the
+    thread marks, which decide whether a stopping writer closes a database connection and
+    are only otherwise cleared on a fork — a set of thread idents, so a test that wrote on
+    this thread must not leave this thread marked.
 
-    `_reported_at` goes with them: a test that pushes it into the past to reach the
-    once-a-minute report leaves the next drop reporting immediately, which is a log line
-    appearing where the code says it should be suppressed.
+    The ledger's report time goes with them: a test that pushes it into the past to reach
+    the once-a-minute report leaves the next drop reporting immediately, which is a log
+    line appearing where the code says it should be suppressed.
 
     The `collected` fixture above does this for its own users; this is for the tests that
     do not need a receiver.
     """
-    reported_at = recorder._reported_at
-    with recorder._counter:
-        recorder._dropped = 0
-        # under the same lock `_deliver` and `_took_the_touch` use: clearing outside it
-        # can erase a live writer's mark, or lose one it adds mid-clear
-        recorder._touched_database.clear()
+    reported_at = recorder._drops._reported_at
+    # each takes its own lock inside: clearing the marks outside one can erase a live
+    # writer's mark, or lose one it adds mid-clear
+    recorder._drops.reset()
+    recorder._marks.clear()
     try:
         yield
     finally:
-        with recorder._counter:
-            recorder._dropped = 0
-            recorder._touched_database.clear()
-        recorder._reported_at = reported_at
+        recorder._drops.reset()
+        recorder._marks.clear()
+        recorder._drops._reported_at = reported_at
 
 
 def kinds(events):
@@ -354,17 +350,17 @@ def test_one_writers_exit_does_not_clear_another_writers_mark(clean_counters):
     Driven at the seam rather than through two real threads: what is being asserted is
     that taking the mark takes only this thread's.
     """
-    marks = recorder._touched_database
-    with recorder._counter:
-        marks.clear()
-        marks.update({threading.get_ident(), -1})  # -1 stands in for the other writer
+    marks = recorder._marks
+    marks.clear()
+    marks.mark()
+    with marks._lock:
+        marks._idents.add(-1)  # -1 stands in for the other writer
 
-    assert recorder._took_the_touch() is True, 'this thread had written and was told otherwise'
-    assert -1 in marks, "the other writer's mark went with it"
-    assert recorder._took_the_touch() is False, 'the mark survived being taken'
+    assert marks.take() is True, 'this thread had written and was told otherwise'
+    assert -1 in marks._idents, "the other writer's mark went with it"
+    assert marks.take() is False, 'the mark survived being taken'
 
-    with recorder._counter:
-        marks.clear()
+    marks.clear()
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
@@ -480,7 +476,7 @@ def test_the_gap_row_reaches_a_receiver_even_when_the_kinds_exclude_it(redis_ser
     for this row too. Receivers are exempt with it, so the two stay one answer.
     """
     monkeypatch.setattr(recorder, '_write', lambda batch: None)
-    recorder._dropped = 3
+    recorder._drops._dropped = 3
     recorder._record_gap(3)
 
     assert kinds(collected) == ['log.dropped'], f'the receiver saw {kinds(collected)}'
@@ -546,13 +542,23 @@ def test_the_drop_counter_is_only_ever_touched_under_its_own_lock():
 
     Asserted on the lock rather than by racing threads: a lost update is a
     read-modify-write interleaving, so a timing test would pass most runs and fail
-    some, which is worse than no test. This records whether `_counter` was held at
-    every write of `_dropped`, which is the invariant itself.
+    some, which is worse than no test. This records whether the lock was held at every
+    write of the count, which is the invariant itself.
+
+    Watched on the ledger, because that is where the count lives now: every path that
+    changes it is a method there, so the discipline is structural — and "structural" is a
+    claim about code, which is what this checks. Still driven through `_flush`, since the
+    unguarded write it used to make is the one that mattered.
     """
     held: list[bool] = []
 
-    class Watching(EventRecorder):
-        """An `EventRecorder` that reports the lock state at each write."""
+    class Watching(DropLedger):
+        """A `DropLedger` that reports the lock state at each write of the count."""
+
+        def __init__(self):
+            """Build first, then watch: construction has no other thread to race with."""
+            super().__init__()
+            self.__dict__['watching'] = True
 
         @property
         def _dropped(self):
@@ -561,14 +567,13 @@ def test_the_drop_counter_is_only_ever_touched_under_its_own_lock():
 
         @_dropped.setter
         def _dropped(self, value):
-            """Record whether the counter lock was held, then store the value."""
-            counter = self.__dict__.get('_counter')
-            if counter is not None:
-                # __init__ sets the count before it builds the lock
-                held.append(counter.locked())
+            """Record whether the ledger's lock was held, then store the value."""
+            if self.__dict__.get('watching'):
+                held.append(self._lock.locked())
             self.__dict__['dropped_value'] = value
 
-    watcher = Watching()
+    watcher = EventRecorder()
+    watcher._drops = Watching()
 
     def refuse(batch):
         """Fail every write, so the failure branch of `_flush` runs."""
@@ -578,12 +583,14 @@ def test_the_drop_counter_is_only_ever_touched_under_its_own_lock():
     watcher._write = refuse
     watcher._enabled = True
 
-    watcher._drop(2)
+    watcher._drops.lost(2)
     watcher._flush([Event(kind='outbound.queued')], failures=0)
 
     assert held, 'nothing wrote the counter, so nothing is being tested'
     assert all(held), f'the counter was written unguarded {held.count(False)} of {len(held)} times'
-    assert watcher._dropped == 3, f'the count came out as {watcher._dropped} for two drops and one failed batch'
+    assert watcher._drops.total() == 3, (
+        f'the count came out as {watcher._drops.total()} for two drops and one failed batch'
+    )
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
@@ -748,7 +755,7 @@ def test_a_failure_while_reporting_a_receiver_costs_nobody_their_batch(redis_ser
 
     assert calls, 'the reporting line never ran, so nothing is being tested'
     assert kinds(collected) == ['outbound.queued'], 'the working receiver lost its batch'
-    assert recorder._dropped == 0, f'a broken log line was counted as {recorder._dropped} dropped events'
+    assert recorder._drops.total() == 0, f'a broken log line was counted as {recorder._drops.total()} dropped events'
 
 
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': True})
@@ -756,7 +763,7 @@ def test_a_gap_row_that_cannot_be_written_keeps_its_count(redis_server, monkeypa
     """The hole outlives the row that failed to describe it.
 
     The count was subtracted *before* the write and the write's failure suppressed, so a
-    gap row the database refused took the hole with it: `_dropped` was already zero, no
+    gap row the database refused took the hole with it: the count was already zero, no
     later flush would report those events, and the feed then read as complete coverage of
     a period that had lost rows. Subtracted after the write now, and the count stays for
     the next flush to report.
@@ -766,11 +773,11 @@ def test_a_gap_row_that_cannot_be_written_keeps_its_count(redis_server, monkeypa
         raise OperationalError('no such table: django_aiogram_event')
 
     monkeypatch.setattr(recorder, '_write', refuse)
-    recorder._dropped = 7
+    recorder._drops._dropped = 7
 
     recorder._record_gap(7)
 
-    assert recorder._dropped == 7, 'the gap was forgotten with the row that could not report it'
+    assert recorder._drops.total() == 7, 'the gap was forgotten with the row that could not report it'
 
 
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': True})
@@ -779,11 +786,11 @@ def test_a_gap_row_that_lands_clears_its_count(redis_server, monkeypatch, clean_
     # 0 refused, which is what `write_batch` returns on a clean write: a double returning
     # None would be a shape no real path produces
     monkeypatch.setattr(recorder, '_write', lambda batch: 0)
-    recorder._dropped = 7
+    recorder._drops._dropped = 7
 
     recorder._record_gap(7)
 
-    assert recorder._dropped == 0, 'a reported gap was reported twice'
+    assert recorder._drops.total() == 0, 'a reported gap was reported twice'
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
@@ -857,7 +864,7 @@ def test_two_overlapping_flushes_report_one_gap_between_them(redis_server, monke
         return 0
 
     monkeypatch.setattr(recorder, '_write', blocking_write)
-    recorder._dropped = 7
+    recorder._drops._dropped = 7
     first = threading.Thread(target=recorder._record_gap, args=(7,), daemon=True)
     first.start()
 
@@ -867,7 +874,7 @@ def test_two_overlapping_flushes_report_one_gap_between_them(redis_server, monke
     first.join(timeout=5)
 
     assert rows == [7], f'the same hole was reported {len(rows)} times: {rows}'
-    assert recorder._dropped == 0, f'the count went to {recorder._dropped}'
+    assert recorder._drops.total() == 0, f'the count went to {recorder._drops.total()}'
 
 
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': True})
@@ -887,12 +894,12 @@ def test_a_gap_row_the_database_refuses_one_at_a_time_keeps_its_count(
         return len(batch)
 
     monkeypatch.setattr(recorder, '_write', refuse_every_row)
-    recorder._dropped = 5
+    recorder._drops._dropped = 5
 
     with caplog.at_level('ERROR', logger='django_aiogram'):
         recorder._record_gap(5)
 
-    assert recorder._dropped == 5, 'the gap was lost to a refusal nobody checked'
+    assert recorder._drops.total() == 5, 'the gap was lost to a refusal nobody checked'
     assert 'refused the gap row' in caplog.text
 
 
@@ -904,13 +911,13 @@ def test_dropping_nothing_says_nothing(redis_server, caplog, clean_counters):
     and logged `the event log is falling behind` — a false alarm on the one line an
     operator watches for real ones, emitted by the successful path.
 
-    `_reported_at` is pushed into the past on purpose: the interval is what would otherwise
+    The ledger's report time is pushed into the past on purpose: the interval is what would otherwise
     hide the defect, and a test that relied on it would pass either way.
     """
-    recorder._reported_at = time.monotonic() - DROP_REPORT_INTERVAL - 1
+    recorder._drops._reported_at = time.monotonic() - DROP_REPORT_INTERVAL - 1
 
     with caplog.at_level('ERROR', logger='django_aiogram'):
-        recorder._drop(0)
+        recorder._drops.lost(0)
 
-    assert recorder._dropped == 0
+    assert recorder._drops.total() == 0
     assert 'falling behind' not in caplog.text, 'a batch that lost nothing reported a backlog'

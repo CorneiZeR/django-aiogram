@@ -44,10 +44,15 @@ src/django_aiogram/
         payloads.py     summarize, redact, cap — in that order, and never lossless
     eventlog/
         recorder.py     the bounded queue and the writer thread; no django.db here
+        records.py      Event and Wake: the shapes that cross the queue
+        pacing.py       the writer's numbers, and the promise that reading one never raises
+        bookkeeping.py  the drop ledger and the thread marks, one lock each
+        publishing.py   the fan-out to events_recorded, which cannot raise
         writer.py       the only module that touches the ORM
         events.py       the event-kind registry and the correlation id
         instrumentation.py  the update middleware and the storage wrapper
         signals.py      events_recorded, the metrics seam; imports only django.dispatch
+        moving.py       what 3.x's table was, and what the two tables share
         dbrouter.py     optional routing of the log to its own database
 docs/wiki/          the wiki, published from main
 tests/              pytest, fakeredis, no network
@@ -166,7 +171,10 @@ Packaging-only work does not need the Redis suite, and vice versa.
   transitively. `tests/test_lazy_init.py` proves it with a settings module whose app
   writes a file from `ready()`, and asserts the file is absent — plus a control that
   the file appears under `django.setup()`, so its absence means something.
-- **`recorder.py` imports no `django.db`.** Only `eventlog/writer.py` does, and the
+- **`recorder.py` imports no `django.db`, and neither does anything it was split into.**
+  `records.py`, `pacing.py`, `bookkeeping.py` and `publishing.py` sit below it and import it
+  back never; `tests/test_package_layout.py` runs each in a fresh interpreter and asserts
+  both. Only `eventlog/writer.py` reaches the ORM, and the
   writer thread imports it on its first *write* — not its first flush, which since
   3.1.0 are different things. That is what makes a disabled log
   cost nothing and what makes `record()` legal from a coroutine — `put_nowait`
@@ -177,10 +185,10 @@ Packaging-only work does not need the Redis suite, and vice versa.
   Such a process writes no rows, so `EventRecorder._run` must not call
   `_close_connections()` on its way out: that imports `eventlog/writer.py`, which imports
   `django.db`, to close a connection nothing ever opened. It is gated on
-  `_touched_database`, set only where a batch is actually handed to the ORM and
-  **read and cleared when the writer stops** — the recorder is a process-wide
-  singleton, so a flag left set outlives the writer that set it and the next one
-  closes a connection it never opened. `tests/test_metrics_seam.py` pins both
+  the thread marks in `eventlog/bookkeeping.py`, set only where a batch is actually handed
+  to the ORM and **read and cleared when the writer stops** — the recorder is a
+  process-wide singleton, so a mark left set outlives the writer that earned it and the
+  next one closes a connection it never opened. `tests/test_metrics_seam.py` pins both
   directions, and pins them in either order: run that file reversed before
   believing it.
 - **The feed is append-only.** No updates, no foreign keys, no
