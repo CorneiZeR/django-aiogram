@@ -697,6 +697,12 @@ a new table, so the old one is left where it is — see **Upgrading** for moving
   **Installation** said `redis 6.2+` flatly, where the floor now belongs to the transport — 6.2
   for the list, 7.0 for Streams, and nothing at all for a project on the other two.
 
+  And the gate that exists for exactly this class of sentence — `test_broker_neutral_prose.py`,
+  which pins the surfaces whose subject is the queue in general — could not see the one on the
+  front page: it looks for Redis named as *the* queue, and "pushes the call onto a Redis list"
+  matched none of its patterns. It does now, and the wiki's own front page joined the surfaces
+  it covers.
+
 - **`producer/client.py` is six modules.** It held the facade, the loop it drives, every
   route out of the process, the shutdown that has to hold the at-least-once guarantee
   across all of them, and — in the middle of that — fifteen one-line decorators and the

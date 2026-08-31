@@ -37,6 +37,9 @@ NEUTRAL_SURFACES = (
     'src/django_aiogram/producer/client.py',
     'docs/wiki/Sending-messages.md',
     'docs/wiki/Installation.md',
+    # the wiki's own front page, added for the same reason the README is here: it is read
+    # before any transport page and its subject is the queue in general
+    'docs/wiki/Home.md',
 )
 
 #: `config/defaults.py` is deliberately absent: it is the file that *names* the default
@@ -48,6 +51,10 @@ NEUTRAL_SURFACES = (
 #: Redis presented as *the* queue rather than as one of the four. Each of these was a real
 #: sentence in one of the files above, and each was reported by review rather than by a test
 THE_ONLY_TRANSPORT = (
+    # a call handed *to* a Redis list, which is where the README's first paragraph left the
+    # reader for the whole of 4.0's development: every pattern below matched nothing there,
+    # and it took the project's owner reading the published front page to see it
+    r'(?:onto|to|on) a Redis list',
     r'the Redis list',
     r'Redis queue',
     r'the Redis behind',
