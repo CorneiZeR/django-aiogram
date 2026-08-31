@@ -340,8 +340,10 @@ Entries land here as the work does; nothing below is released.
   The split the fix leans on was already in the code — the verdict comes from
   `broker.liveness()` and `broker.depth()`, both transport-neutral, and only `--guarantee`
   and `--stranded` are Redis-shaped. Those two build a client of their own, and where there
-  is no driver they report `unknown` and log the reason as `tg_reason` instead of refusing:
-  neither could ever change the verdict. **Deployment** now has a table of what the probe
+  is no driver each says so in its own way instead of refusing — `--guarantee` reads
+  `unknown` in the line, and `--stranded` warns that the sweep did not finish, both logging
+  the reason as `tg_reason`. On the three transports that key no in-flight work on a worker
+  name, the sweep is not attempted at all. Neither could ever change the verdict. **Deployment** now has a table of what the probe
   can see on each of the four, because "stranded in-flight lists" means nothing on Kafka.
 
   Three more things came out of it, all in the same class:
