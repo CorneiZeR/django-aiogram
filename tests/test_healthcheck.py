@@ -897,6 +897,45 @@ def test_a_settings_module_whose_parent_package_is_missing_is_still_ours(monkeyp
     assert capsys.readouterr().err == "cannot read the settings: No module named 'coree'\n"
 
 
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_every_way_the_guarantee_reads_unknown_says_why(redis_server, monkeypatch, caplog):
+    """`unknown` in the probe's line raises exactly one question, and the log has to answer it.
+
+    Three paths reach it -- no client, a server error that is not `unknown command`, and any
+    other driver failure -- and only the first carried `tg_reason`. The other two logged the
+    same sentence with nothing in it, so an operator comparing two containers could not tell
+    a read-only replica from an unreachable one. **Logging** documents the field as carried by
+    every path that cannot answer, and this is what makes that true.
+    """
+    from django_aiogram.healthcheck import _guarantee
+
+    class Refuses:
+        def lmove(self, *args, **kwargs):
+            raise ResponseError('READONLY You cannot write against a read only replica')
+
+        def __getattr__(self, name):
+            return getattr(redis_server, name)
+
+    class Drops:
+        def lmove(self, *args, **kwargs):
+            raise RedisConnectionError(RESET)
+
+        def __getattr__(self, name):
+            return getattr(redis_server, name)
+
+    reasons = []
+    for client in (Refuses, Drops):
+        caplog.clear()
+        monkeypatch.setattr('django_aiogram.healthcheck.get_redis', client)
+        with caplog.at_level('WARNING'):
+            assert _guarantee() == 'unknown'
+        reasons.append([getattr(record, 'tg_reason', None) for record in caplog.records])
+
+    assert all(any(entry for entry in found) for found in reasons), reasons
+    assert 'READONLY' in str(reasons[0]), reasons[0]
+    assert RESET in str(reasons[1]), reasons[1]
+
+
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
 def test_a_key_that_cannot_be_decoded_does_not_abort_the_sweep(redis_server, caplog):
     """The sweep is the one part that must never fail the container over what it found.
@@ -913,6 +952,10 @@ def test_a_key_that_cannot_be_decoded_does_not_abort_the_sweep(redis_server, cap
     assert report.ok, report.message
     assert 'healthy' in report.message, report.message
     assert 'could not scan for stranded in-flight lists' in caplog.text
+    # and the sweep says it did not finish, with the reason: an undecodable key stops the
+    # walk, so a zero from here is a floor and not an answer
+    assert any('did not finish' in warning for warning in report.warnings), report.warnings
+    assert any(getattr(record, 'tg_reason', None) for record in caplog.records), caplog.records
 
 
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})

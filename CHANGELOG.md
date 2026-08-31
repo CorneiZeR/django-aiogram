@@ -363,8 +363,9 @@ Entries land here as the work does; nothing below is released.
     unreachable: …`**. Up to 3.1 the probe pinged Redis before every check and could name it;
     it opens no client of its own now, so the transport is asked and the first thing it cannot
     do is what gets reported. A refused connection keeps that line rather than sliding into
-    `could not read the consumer liveness`, which is reserved for a broker that answered and
-    said no. **Upgrading** and **Troubleshooting** carry the change for anyone who greps it.
+    `could not read the consumer liveness`, which is what a broker that *was* reached and then
+    failed the read gets — a failover mid-probe, a replica that cannot serve the key, a
+    refusal, or any other error out of the call. **Upgrading** and **Troubleshooting** carry the change for anyone who greps it.
 
   A test hides `redis` from a fresh interpreter's `sys.modules` and asserts the probe still
   reports, because no venv in CI can show this: the dev environment installs every extra and

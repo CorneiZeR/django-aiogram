@@ -406,10 +406,19 @@ def _guarantee() -> str:
     except ResponseError as error:
         if 'unknown command' in str(error).lower():
             return 'at-most-once'
-        logger.warning('could not establish which delivery guarantee is in force')
+        # every path that answers `unknown` names its reason, not only the one that could
+        # not build a client: an operator reading `unknown` in the line has one question,
+        # and a log entry without the answer sends them to a second tool
+        logger.warning(
+            'could not establish which delivery guarantee is in force',
+            extra={'tg_reason': str(error)},
+        )
         return 'unknown'
-    except _RedisError:
-        logger.warning('could not establish which delivery guarantee is in force')
+    except _RedisError as error:
+        logger.warning(
+            'could not establish which delivery guarantee is in force',
+            extra={'tg_reason': str(error)},
+        )
         return 'unknown'
     return 'at-least-once'
 
@@ -463,7 +472,12 @@ def _stranded() -> _Sweep:
         # the decode too: a foreign key on a shared Redis can match this pattern and hold
         # bytes that are not UTF-8, and aborting the whole probe over a warning nobody
         # acts on is the opposite of what this sweep is for
-        logger.warning('could not scan for stranded in-flight lists', extra={'tg_key': pattern})
+        # both fields: the pattern says which keyspace was being walked, and the reason is
+        # what the caller puts in the warning the operator actually reads
+        logger.warning(
+            'could not scan for stranded in-flight lists',
+            extra={'tg_key': pattern, 'tg_reason': str(error)},
+        )
         return _Sweep(found=total, complete=False, unavailable=str(error))
     return _Sweep(found=total, complete=False)
 

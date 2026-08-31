@@ -144,7 +144,7 @@ Grepping one out of `docker inspect` should land here.
 | The line | What it is telling you |
 | --- | --- |
 | `the broker is unreachable: …` | The transport could not be addressed or refused the connection. Covers a missing or malformed `REDIS_URL`, an unreadable `REDIS_TIMEOUT`, and a broker that is genuinely down or has dropped the connection mid-probe. This line was `redis is unreachable` up to 3.1 — it moved when the probe stopped pinging Redis before every check, which is what lets it run at all on a transport that is not Redis. The old wording survives in one place: `--guarantee` and `--stranded` build a Redis client of their own, and when that fails they log `redis is unreachable` as `tg_reason` and report `unknown` rather than refusing |
-| `… needs the '…' package, which is not installed. Install it with: pip install "django-aiogram[…]" ` | `BROKER` names a transport whose driver this image does not carry. Every driver is an extra since 4.0, so an image built for one transport and pointed at another gets this — the line names the extra that fixes it. Both forms of the probe report it; neither tracebacks |
+| `… needs the '…' package, which is not installed. Install it with: pip install "django-aiogram[…]"` | `BROKER` names a transport whose driver this image does not carry. Every driver is an extra since 4.0, so an image built for one transport and pointed at another gets this — the line names the extra that fixes it. Both forms of the probe report it; neither tracebacks |
 | `TELEGRAM_BOT['…'] is not a number: …` | `HEARTBEAT_INTERVAL` or `HEALTHCHECK_MAX_QUEUE` holds something `int()` refuses. `manage.py check` reports these as `E023`/`E024`, but the container form never runs it — that is the point of it — so it says so itself |
 | `cannot read the settings: …` | `DJANGO_SETTINGS_MODULE` is missing from the container's environment, or names a module that does not import. See the section above |
 | `no heartbeat has been written: nothing within Ns, or the consumer never started` | Redis list: the key is absent — the consumer never ran, died before its first beat, or has been silent longer than the key's TTL. If the line adds that a limit over the TTL cannot be observed, `--max-age` is set above `3 × HEARTBEAT_INTERVAL` and is doing nothing |
@@ -153,14 +153,14 @@ Grepping one out of `docker inspect` should land here.
 | `the heartbeat is not a timestamp` | Redis list: something else writes to that key. Give the worker its own `REDIS_MESSAGES_KEY`, or its own database |
 | `could not read the consumer liveness: …` | `PING` answered and the next command did not: a failover in between, a replica that cannot serve the key, or `decode_responses` in a URL shared with a cache backend meeting bytes it cannot decode |
 | `could not read the queue length: …` | The same, one command later |
-| `the scan for stranded in-flight lists did not finish: …` | A warning, not a verdict: `--stranded` was asked for and the sweep could not walk the whole keyspace — no client (an install with no redis-py, or an unusable `REDIS_URL`), a key it could not decode, or the twenty-`SCAN`-round bound. The count on the line above, if any, is a floor rather than a total |
 | `N messages are queued, over the limit of N` | Work is backing up. `HEALTHCHECK_MAX_QUEUE` or `--max-queue` is what set that number; see **Messages pile up in the queue** above |
 
-Two lines are not refusals and do not change the exit code:
+Three lines are not refusals and do not change the exit code:
 
 | The line | What it is telling you |
 | --- | --- |
-| `N message(s) are in flight under other worker names …` | Written to stderr while still exiting 0, and only with `--stranded`. Another worker may be sending them this second; if it is gone, `manage.py tgbot_reclaim --worker <name>` requeues them. `at least N` means the bounded sweep stopped early, so the count is a floor |
+| `N message(s) are in flight under other worker names …` | Written to stderr while still exiting 0, and only with `--stranded`. Another worker may be sending them this second; if it is gone, `manage.py tgbot_reclaim --worker <name>` requeues them. `at least N` means the bounded sweep stopped early, so the count is a floor — and the next line says why |
+| `the scan for stranded in-flight lists did not finish: …` | The sweep was asked for and could not walk the whole keyspace: no client (an install with no redis-py, or an unusable `REDIS_URL`), a key it could not decode, or the twenty-`SCAN`-round bound. Without this line a zero would be indistinguishable from a sweep that never ran. Where the transport keys no in-flight work on a worker name at all — Redis Streams, RabbitMQ, Kafka — the sweep is not attempted and nothing is written |
 | `disabled in this process; nothing to check` | `ENABLED` is off here, so nothing is meant to be running and nothing is wrong. Exit 0, and deliberately not colored as a success |
 
 Two more reach the log rather than the output — both mean the probe declined to answer
