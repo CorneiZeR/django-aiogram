@@ -401,7 +401,7 @@ def test_the_probe_with_no_settings_module_refuses_in_one_line():
     healthcheck is a different process. The unit test for this covers `main()`'s handler
     with a raise of its own; only a subprocess can show that the real path arrives there,
     which matters because anything that made the settings layer fall back to defaults
-    would answer `redis is unreachable` instead and never name the variable at fault.
+    would answer `the broker is unreachable` instead and never name the variable at fault.
     """
     environment = {key: value for key, value in os.environ.items() if key != 'DJANGO_SETTINGS_MODULE'}
     probe = subprocess.run(
@@ -455,7 +455,7 @@ def test_the_healthcheck_probe_does_not_populate_the_app_registry(tmp_path):
     # a refusal is expected: nothing is listening on port 1. What matters is that it
     # got far enough to try, and that it never booted the app registry to do so
     assert probe.returncode == 1, f'the probe did not run at all: {probe.stderr}'
-    assert 'redis is unreachable' in probe.stderr, probe.stderr
+    assert 'the broker is unreachable' in probe.stderr, probe.stderr
     assert not marker.exists(), 'the probe populated the app registry'
 
     control = subprocess.run(

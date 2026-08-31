@@ -18,6 +18,7 @@ from typing import Any
 
 from django.core.management import BaseCommand, CommandError
 
+from django_aiogram.broker.exceptions import BrokerDependencyError
 from django_aiogram.healthcheck import add_limit_flags, check
 
 
@@ -42,12 +43,19 @@ class Command(BaseCommand):
         container-facing entry point leaves both off, since neither can alter the
         verdict and both are the expensive part of the probe.
         """
-        report = check(
-            max_queue=options['max_queue'],
-            max_age=options['max_age'],
-            stranded=True,
-            guarantee=True,
-        )
+        try:
+            report = check(
+                max_queue=options['max_queue'],
+                max_age=options['max_age'],
+                stranded=True,
+                guarantee=True,
+            )
+        except BrokerDependencyError as error:
+            # same refusal as the module form, in the shape a command reports with: BROKER
+            # names a transport whose driver this install does not carry. A CommandError keeps
+            # the install line on one line and the exit code non-zero, where a traceback out
+            # of a probe says "unhealthy" without saying what to do about it
+            raise CommandError(str(error)) from error
         if not report.ok:
             raise CommandError(report.message)
         # plain when nothing was examined: a disabled process is not a healthy bot, and

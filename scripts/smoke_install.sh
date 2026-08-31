@@ -144,6 +144,22 @@ grep -q 'django_aiogram.E047' "$work/base.out" || { echo '    E047 was not repor
 grep -q 'pip install "django-aiogram\[redis\]"' "$work/base.out" ||
     { echo '    the hint did not carry the install line'; exit 1; }
 
+# and the probe, in the same window, because this is the only place an install with no
+# driver at all exists: 4.0.0 named `redis` at module scope here, so on a Kafka or RabbitMQ
+# image `python -m django_aiogram.healthcheck` -- the command Deployment puts in a compose
+# healthcheck -- could not start, and the container was unhealthy for ever with a
+# ModuleNotFoundError as its only explanation
+echo "--- the healthcheck reports on an install with no driver"
+probe_status=0
+DJANGO_SETTINGS_MODULE=settings "$work/venv/bin/python" -m django_aiogram.healthcheck \
+    > "$work/nodriver.out" 2> "$work/nodriver.err" || probe_status=$?
+! grep -q 'ModuleNotFoundError' "$work/nodriver.err" ||
+    { echo '    the probe could not start at all:'; sed 's/^/      /' "$work/nodriver.err"; exit 1; }
+grep -q 'pip install "django-aiogram\[redis\]"' "$work/nodriver.err" ||
+    { echo '    the refusal did not name the extra:'; sed 's/^/      /' "$work/nodriver.err"; exit 1; }
+[ "$probe_status" = 1 ] || { echo "    expected exit 1 with no driver, got $probe_status"; exit 1; }
+echo "    it named the extra and exited 1, rather than failing to import"
+
 echo "--- installing the extra the hint asked for"
 "$work/venv/bin/pip" install -q "$wheel[redis]"
 "$work/venv/bin/python" -c "import redis; print('    redis', redis.__version__)"
@@ -169,10 +185,10 @@ echo "--- the healthcheck runs from an install, without django.setup()"
 DJANGO_SETTINGS_MODULE=settings DJANGO_AIOGRAM_REDIS_URL=redis://127.0.0.1:1/0 \
     "$work/venv/bin/python" -m django_aiogram.healthcheck > "$work/probe.out" 2> "$work/probe.err" \
     && probe_status=0 || probe_status=$?
-grep -q 'redis is unreachable' "$work/probe.err" \
-    || { echo "    the probe did not reach Redis at all:"; sed 's/^/      /' "$work/probe.err"; exit 1; }
+grep -q 'the broker is unreachable' "$work/probe.err" \
+    || { echo "    the probe did not reach the broker at all:"; sed 's/^/      /' "$work/probe.err"; exit 1; }
 [ "$probe_status" = 1 ] || { echo "    expected exit 1 from an unreachable Redis, got $probe_status"; exit 1; }
-echo "    python -m django_aiogram.healthcheck refused an unreachable Redis with exit 1"
+echo "    python -m django_aiogram.healthcheck refused an unreachable broker with exit 1"
 
 # and the path a healthy container takes, which is the one compose depends on: a probe
 # that only ever answered "unreachable" would pass the check above while returning

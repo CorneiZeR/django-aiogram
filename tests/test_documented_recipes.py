@@ -410,7 +410,9 @@ def test_every_published_healthcheck_carries_the_settings_module(page_name):
 #: well as in the source and on the page on purpose: rewording a refusal has to touch all
 #: three, which is the only thing that keeps the catalogue on Troubleshooting true
 PROBE_REFUSALS = (
+    'the broker is unreachable',
     'redis is unreachable',
+    'which is not installed',
     'is not a number',
     'cannot read the settings',
     'or the consumer never started',
@@ -423,6 +425,7 @@ PROBE_REFUSALS = (
     'message(s) are in flight under',
     'disabled in this process; nothing to check',
     'could not scan for stranded in-flight lists',
+    'the scan for stranded in-flight lists did not finish',
     'could not establish which delivery guarantee is in force',
 )
 
@@ -536,7 +539,13 @@ def test_every_line_the_probe_prints_is_catalogued(fragment):
     # the probe's vocabulary is no longer its own file's: since liveness became a question for
     # the transport, part of what it prints is a broker's `Liveness.detail`, composed into the
     # refusal. Scanning only `healthcheck.py` would call those lines gone the moment they moved
-    sources = [package / 'healthcheck.py', *sorted((package / 'broker').rglob('broker.py'))]
+    sources = [
+        package / 'healthcheck.py',
+        # and the transport family's own refusals: a driver that is not installed is reported
+        # by the exception the registry raises, which `main` prints as the probe's own line
+        package / 'broker' / 'exceptions.py',
+        *sorted((package / 'broker').rglob('broker.py')),
+    ]
     source = '\n'.join(path.read_text(encoding='utf-8') for path in sources)
     page = (root / 'docs' / 'wiki' / 'Troubleshooting.md').read_text(encoding='utf-8')
 

@@ -5,8 +5,10 @@ thread, and `tgbot_healthcheck` is what reads it.
 """
 
 import re
+import textwrap
 import time
 from io import StringIO
+from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
@@ -20,9 +22,11 @@ from django.test import override_settings
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import RedisError, ResponseError
 
+from django_aiogram.broker.exceptions import BrokerDependencyError
 from django_aiogram.consumer.delivery import BlpopDelivery
 from django_aiogram.healthcheck import build_parser, check, main
 from django_aiogram.management.commands.tgbot_healthcheck import Command as TgbotHealthcheck
+from tests.support import run_python
 
 QUEUE = 'TELEGRAM_BOT_MESSAGE'
 WORKER = 'tests'
@@ -115,14 +119,31 @@ def test_unhealthy_when_the_heartbeat_is_stale(redis_server):
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
-def test_unhealthy_when_redis_is_unreachable(monkeypatch):
+def test_unhealthy_when_the_transport_cannot_be_reached(monkeypatch):
+    """The probe pings nothing now, so the first broker call is what finds a transport that
+    is down -- and it has to report it rather than raise.
+
+    Patched where the broker reads rather than where the probe used to ping: since the driver
+    became an extra the probe opens no client of its own, which is what lets it start on a
+    deployment that carries messages some other way.
+
+    The wording is 3.x's, and deliberately: `redis is unreachable` is the line operators grep
+    out of `docker inspect` for the commonest failure there is, and dropping the ping must not
+    turn a Redis that is down into a report about one question it would not answer. Only the
+    subject moved -- see the case below for the other side of that split.
+    """
+
     class Down:
-        def ping(self):
+        def get(self, *args, **kwargs):
             raise RedisConnectionError(REFUSED)
 
-    monkeypatch.setattr('django_aiogram.healthcheck.get_redis', Down)
+        def __getattr__(self, name):
+            msg = f'reached for {name} on a Redis that is down'
+            raise RedisConnectionError(msg)
 
-    with pytest.raises(CommandError, match='redis is unreachable'):
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', Down)
+
+    with pytest.raises(CommandError, match='the broker is unreachable'):
         healthcheck()
 
 
@@ -199,24 +220,28 @@ def test_a_long_blocking_read_cannot_outlast_the_heartbeat(redis_server, monkeyp
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
-def test_a_heartbeat_read_that_fails_after_ping_is_reported(redis_server, monkeypatch):
-    """A failover between the two commands must not surface as a traceback."""
+def test_a_heartbeat_read_that_fails_is_reported(redis_server, monkeypatch):
+    """A transport that answers one command and not the next must not surface as a traceback.
+
+    A `ResponseError`, which is what redis-py raises for this: the server answered, and what
+    it said was no. That is what separates this line from `the broker is unreachable` above --
+    a refused connection is a transport that is not there, and a replica refusing a read is
+    one that is.
+    """
 
     class FailsTheRead:
         def ping(self):
             return True
 
         def get(self, *args, **kwargs):
-            raise RedisConnectionError(READONLY)
+            raise ResponseError(READONLY)
 
         def __getattr__(self, name):
             return getattr(redis_server, name)
 
-    # both names: the probe's own `ping` goes through `healthcheck.get_redis`, and the
-    # liveness read goes through the broker, because a heartbeat key is one transport's
-    # answer. Patching only the first left the broker reading the real fake, which has no
-    # heartbeat in it — so the test passed on "none has been written" while the failing
-    # read it set up was never called
+    # the broker's name is the one that matters: the liveness read goes through it, because a
+    # heartbeat key is one transport's answer. `healthcheck.get_redis` is patched too, since
+    # the two Redis-only reports still build a client from it
     monkeypatch.setattr('django_aiogram.healthcheck.get_redis', FailsTheRead)
     monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', FailsTheRead)
 
@@ -226,7 +251,40 @@ def test_a_heartbeat_read_that_fails_after_ping_is_reported(redis_server, monkey
 
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'HEALTHCHECK_MAX_QUEUE': 5})
 def test_a_queue_read_that_fails_is_reported(redis_server, monkeypatch):
+    """The heartbeat read got through and the count did not, which is its own line."""
+
     class FailsTheCount:
+        def ping(self):
+            return True
+
+        def get(self, *args, **kwargs):
+            return str(int(time.time())).encode()
+
+        def llen(self, *args, **kwargs):
+            raise ResponseError(READONLY)
+
+        def __getattr__(self, name):
+            return getattr(redis_server, name)
+
+    # as above: the count is the broker's answer now, so the failure has to be arranged
+    # where the broker looks
+    monkeypatch.setattr('django_aiogram.healthcheck.get_redis', FailsTheCount)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', FailsTheCount)
+
+    with pytest.raises(CommandError, match='could not read the queue length'):
+        healthcheck()
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'HEALTHCHECK_MAX_QUEUE': 5})
+def test_a_queue_read_on_a_dropped_connection_reads_as_unreachable(redis_server, monkeypatch):
+    """The depth read splits the same way the liveness read does, and both halves are pinned.
+
+    Without this case the depth clause could report a connection that dropped mid-probe as one
+    question the broker would not answer -- the wording 3.x reserved for a server that is
+    there. The heartbeat is fresh here on purpose: the count is the only thing that fails.
+    """
+
+    class DropsTheCount:
         def ping(self):
             return True
 
@@ -239,12 +297,10 @@ def test_a_queue_read_that_fails_is_reported(redis_server, monkeypatch):
         def __getattr__(self, name):
             return getattr(redis_server, name)
 
-    # as above: the count is the broker's answer now, so the failure has to be arranged
-    # where the broker looks
-    monkeypatch.setattr('django_aiogram.healthcheck.get_redis', FailsTheCount)
-    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', FailsTheCount)
+    monkeypatch.setattr('django_aiogram.healthcheck.get_redis', DropsTheCount)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', DropsTheCount)
 
-    with pytest.raises(CommandError, match='could not read the queue length'):
+    with pytest.raises(CommandError, match='the broker is unreachable'):
         healthcheck()
 
 
@@ -387,7 +443,7 @@ def test_a_sweep_that_stops_partway_reports_what_it_did_see(redis_server, monkey
 
 
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': 'localhost:6379/0'})
-def test_a_url_with_no_scheme_reads_as_an_unreachable_redis():
+def test_a_url_with_no_scheme_reads_as_an_unreachable_broker():
     """The other half of the empty-URL case, and the one the narrowing missed.
 
     `Redis.from_url` rejects a URL without a scheme with a plain `ValueError`, so
@@ -398,19 +454,19 @@ def test_a_url_with_no_scheme_reads_as_an_unreachable_redis():
     report = check()
 
     assert not report.ok
-    assert report.message.startswith('redis is unreachable: '), report.message
+    assert report.message.startswith('the broker is unreachable: '), report.message
 
-    with pytest.raises(CommandError, match='redis is unreachable'):
+    with pytest.raises(CommandError, match='the broker is unreachable'):
         healthcheck()
 
 
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_TIMEOUT': 'soon'})
-def test_an_unreadable_timeout_reads_as_an_unreachable_redis():
+def test_an_unreadable_timeout_reads_as_an_unreachable_broker():
     """`read_timeout()` coerces the setting while the client is being built."""
     report = check()
 
     assert not report.ok
-    assert report.message.startswith('redis is unreachable: '), report.message
+    assert report.message.startswith('the broker is unreachable: '), report.message
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
@@ -655,22 +711,27 @@ def test_the_management_command_still_scans_and_reports_the_guarantee(redis_serv
 
 
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': ''})
-def test_a_missing_redis_url_reads_as_an_unreachable_redis():
-    """A connection that cannot be built is a Redis this probe cannot reach.
+def test_a_missing_redis_url_reads_as_an_unreachable_broker():
+    """A client that cannot be built is a transport this probe cannot reach.
 
     `build_client` raises `ImproperlyConfigured` on an empty `REDIS_URL`, which is not a
     `RedisError` — so narrowing the guard from `except Exception` turned a readable line
     into a traceback, and turned the command's `CommandError` into an
-    `ImproperlyConfigured`. The old wording is what this asserts, because it is what a
-    consumer's compose logs have shown for three releases.
+    `ImproperlyConfigured`.
+
+    The sentence is the one compose logs have shown for three releases; only its subject
+    changed. `redis is unreachable` became `the broker is unreachable` in 4.0, because the
+    client is built on the liveness call now and a deployment on another transport has no
+    Redis to name — so a log line matching on `unreachable` still matches, and one matching
+    on `redis is` does not. That is in `Upgrading.md`.
     """
     report = check()
 
     assert not report.ok
-    assert report.message.startswith('redis is unreachable: '), report.message
+    assert report.message.startswith('the broker is unreachable: '), report.message
     assert 'REDIS_URL' in report.message
 
-    with pytest.raises(CommandError, match='redis is unreachable'):
+    with pytest.raises(CommandError, match='the broker is unreachable'):
         healthcheck()
 
 
@@ -836,6 +897,45 @@ def test_a_settings_module_whose_parent_package_is_missing_is_still_ours(monkeyp
     assert capsys.readouterr().err == "cannot read the settings: No module named 'coree'\n"
 
 
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_every_way_the_guarantee_reads_unknown_says_why(redis_server, monkeypatch, caplog):
+    """`unknown` in the probe's line raises exactly one question, and the log has to answer it.
+
+    Three paths reach it -- no client, a server error that is not `unknown command`, and any
+    other driver failure -- and only the first carried `tg_reason`. The other two logged the
+    same sentence with nothing in it, so an operator comparing two containers could not tell
+    a read-only replica from an unreachable one. **Logging** documents the field as carried by
+    every path that cannot answer, and this is what makes that true.
+    """
+    from django_aiogram.healthcheck import _guarantee
+
+    class Refuses:
+        def lmove(self, *args, **kwargs):
+            raise ResponseError('READONLY You cannot write against a read only replica')
+
+        def __getattr__(self, name):
+            return getattr(redis_server, name)
+
+    class Drops:
+        def lmove(self, *args, **kwargs):
+            raise RedisConnectionError(RESET)
+
+        def __getattr__(self, name):
+            return getattr(redis_server, name)
+
+    reasons = []
+    for client in (Refuses, Drops):
+        caplog.clear()
+        monkeypatch.setattr('django_aiogram.healthcheck.get_redis', client)
+        with caplog.at_level('WARNING'):
+            assert _guarantee() == 'unknown'
+        reasons.append([getattr(record, 'tg_reason', None) for record in caplog.records])
+
+    assert all(any(entry for entry in found) for found in reasons), reasons
+    assert 'READONLY' in str(reasons[0]), reasons[0]
+    assert RESET in str(reasons[1]), reasons[1]
+
+
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
 def test_a_key_that_cannot_be_decoded_does_not_abort_the_sweep(redis_server, caplog):
     """The sweep is the one part that must never fail the container over what it found.
@@ -852,6 +952,10 @@ def test_a_key_that_cannot_be_decoded_does_not_abort_the_sweep(redis_server, cap
     assert report.ok, report.message
     assert 'healthy' in report.message, report.message
     assert 'could not scan for stranded in-flight lists' in caplog.text
+    # and the sweep says it did not finish, with the reason: an undecodable key stops the
+    # walk, so a zero from here is a floor and not an answer
+    assert any('did not finish' in warning for warning in report.warnings), report.warnings
+    assert any(getattr(record, 'tg_reason', None) for record in caplog.records), caplog.records
 
 
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
@@ -948,6 +1052,52 @@ def test_the_sweep_matches_the_keys_workers_actually_write(redis_server):
     assert '1 message(s) are in flight' in report.warnings[0], report.warnings
 
 
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+def test_a_sweep_that_could_not_run_says_so_rather_than_reporting_a_clean_zero(redis_server, monkeypatch):
+    """A sweep that never happened must not read like one that found nothing.
+
+    The two are the same line otherwise: the caller warns on a non-zero count, so a client
+    that could not be built returned zero, warned nobody, and left the report saying the
+    healthy thing about a question nothing had asked. Which is the failure this whole change
+    is about, one layer in -- the driver being an extra is exactly how the client stops
+    being available.
+
+    Arranged one-sided on purpose: the broker's own accessor keeps working, so the verdict
+    is reached and the report is healthy. Only the Redis-shaped extra is unavailable, and
+    the reason travels into the warning where an operator reads it.
+    """
+    redis_server.set(f'{QUEUE}:heartbeat:mine', str(int(time.time())))
+
+    def cannot_build():
+        raise ImproperlyConfigured('REDIS_URL is empty')
+
+    monkeypatch.setattr('django_aiogram.healthcheck.get_redis', cannot_build)
+
+    report = check(stranded=True)
+
+    assert report.ok, report.message
+    assert len(report.warnings) == 1, report.warnings
+    assert 'did not finish' in report.warnings[0], report.warnings
+    # the reason, not just the fact: `--stranded` on an install with no driver is the case
+    # this exists for, and "something went wrong" would send the operator to the logs
+    assert 'REDIS_URL is empty' in report.warnings[0], report.warnings
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+def test_a_sweep_that_finished_adds_no_second_warning(redis_server):
+    """The control, and it is the one that keeps the case above from being free.
+
+    A warning appended unconditionally would satisfy every assertion up there while adding
+    a line to every healthy probe on the list transport -- twice a minute, for nothing.
+    """
+    redis_server.set(f'{QUEUE}:heartbeat:mine', str(int(time.time())))
+
+    report = check(stranded=True)
+
+    assert report.ok, report.message
+    assert report.warnings == (), report.warnings
+
+
 # one key per metacharacter `_escaped` quotes, and a decoy for the two that would
 # otherwise match their own literal: unescaped, `TG?one` and `TG*all` are patterns that
 # also select the decoy, and only a second list makes that visible
@@ -982,7 +1132,9 @@ def test_a_queue_key_with_glob_characters_is_still_swept(redis_server, key, deco
         if decoy:
             redis_server.rpush(f'{decoy}:processing:gone', b'{}')
 
-        assert _stranded(redis_server) == (1, True), f'the sweep answered wrongly under {key!r}'
+        sweep = _stranded()
+
+        assert (sweep.found, sweep.complete) == (1, True), f'the sweep answered wrongly under {key!r}'
 
 
 @pytest.mark.parametrize('value', [float('inf'), float('nan'), 'nine', {}], ids=repr)
@@ -1003,3 +1155,78 @@ def test_a_setting_that_is_not_a_number_is_reported_not_raised(value):
     assert report.ok is False, report
     assert 'HEARTBEAT_INTERVAL' in report.message, report.message
     assert 'is not a number' in report.message, report.message
+
+
+def test_the_probe_still_runs_on_an_install_with_no_driver():
+    """The probe a container runs on a timer, on a deployment that has no redis-py.
+
+    `redis-py` became an extra in 4.0, so a RabbitMQ or Kafka install carries none of it — and
+    this module named `redis` at import time, which meant `python -m django_aiogram.healthcheck`
+    could not start there at all. Measured before the fix, with `redis` hidden:
+    `ModuleNotFoundError` out of `healthcheck.py`, at the `from redis import Redis` line, before
+    a single check ran. The one thing that would have said why the container was unhealthy was
+    the thing that crashed.
+
+    A subprocess with `redis` hidden from `sys.modules`, because assigning `None` there makes
+    `import redis` raise the way a missing distribution does. The suite cannot arrange it any
+    other way: the dev venv installs every extra, and the `[redis]`-only leg in CI installs that
+    one.
+
+    Asserted through `main`, which is what the container calls, and on the report rather than on
+    the import alone — starting and then failing to say anything is the same outage with a
+    tidier traceback. The settings here name the Redis transport, so the honest report is the
+    refusal that names the missing extra; a transport whose driver *is* present reports a real
+    verdict, measured on a Kafka-only install: `healthy: consumer not observable from outside`.
+    """
+    script = textwrap.dedent("""
+        import sys
+
+        sys.modules['redis'] = None
+        sys.modules['redis.exceptions'] = None
+
+        import django
+
+        django.setup()
+
+        from django_aiogram.healthcheck import main
+
+        code = main([])
+        print('exit', code)
+    """)
+    finished = run_python(script, env={'DJANGO_SETTINGS_MODULE': 'tests.settings'})
+
+    assert finished.returncode == 0, finished.stderr
+    assert 'Traceback' not in finished.stderr, finished.stderr
+    # the refusal names the package and the extra that installs it, which is the whole point of
+    # reporting instead of crashing: the container log says what to do. On stderr, where every
+    # unhealthy verdict this module writes goes
+    assert "needs the 'redis' package" in finished.stderr, finished.stderr
+    assert 'django-aiogram[redis]' in finished.stderr, finished.stderr
+    # and it is a verdict rather than a crash: the code came back from `main`, so the container
+    # sees the same exit status an unreachable broker gives it
+    assert 'exit 1' in finished.stdout, finished.stdout + finished.stderr
+
+
+def test_the_command_reports_a_missing_driver_instead_of_tracebacking():
+    """The same refusal, in the shape a management command reports with.
+
+    The class the module form fixed is not the module's alone: `manage.py tgbot_healthcheck`
+    calls the same `check`, so a `BROKER` whose driver this install does not carry gave it a
+    bare `BrokerDependencyError` and a traceback — from a command whose whole output is a
+    diagnosis. A `CommandError` keeps the install line on one line and the exit status
+    non-zero.
+
+    The exception is raised rather than arranged for real, because arranging it means hiding
+    `redis` from a running interpreter and this suite needs it for the next case. What it
+    stands in for is measured in the case above.
+    """
+    refusal = BrokerDependencyError('KafkaBroker', 'aiokafka', 'kafka')
+
+    with (
+        patch('django_aiogram.management.commands.tgbot_healthcheck.check', side_effect=refusal),
+        pytest.raises(CommandError) as caught,
+    ):
+        call_command('tgbot_healthcheck')
+
+    assert "needs the 'aiokafka' package" in str(caught.value)
+    assert 'django-aiogram[kafka]' in str(caught.value)

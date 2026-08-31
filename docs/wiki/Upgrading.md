@@ -289,6 +289,32 @@ everywhere else, and `enqueue` is what it calls when it queues.
 Nothing is renamed in the settings: `REDIS_URL` and the rest still say Redis because they *are*
 Redis's, and a project that runs the list transport writes exactly what it wrote before.
 
+### One healthcheck refusal says broker where it said redis
+
+If you grep the container probe's output — an alert on `docker inspect`, a log filter, a
+runbook — one line changed:
+
+| 3.x | 4.0 |
+| --- | --- |
+| `redis is unreachable: …` | `the broker is unreachable: …` |
+
+Up to 3.1 the probe pinged Redis before every check, so it could name Redis in the refusal.
+It no longer opens a client of its own: the driver is an extra now, and a probe that needed
+redis-py could not run at all on a deployment carrying its messages through Kafka or RabbitMQ.
+The transport is asked instead, and the first thing it cannot do is what the probe reports.
+
+The refusal is the same failure, with the same driver text after the colon, and it still exits
+1 — only the noun moved. **[[Troubleshooting]]** catalogues every line the probe writes.
+
+Two things follow from the same change, neither of which needs anything from you:
+
+* `python -m django_aiogram.healthcheck` now runs on an install with no redis-py at all.
+  Measured on a Kafka-only image: `healthy: consumer not observable from outside, 0 queued`,
+  where 4.0.0 up to this point could not start the probe.
+* A `BROKER` whose driver is missing is reported rather than raised, by both forms:
+  `RedisListBroker needs the 'redis' package, which is not installed. Install it with: pip
+  install "django-aiogram[redis]"`.
+
 ## Verifying the upgrade
 
 ```shell
