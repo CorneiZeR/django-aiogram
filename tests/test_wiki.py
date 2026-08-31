@@ -21,9 +21,13 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 WIKI = ROOT / 'docs' / 'wiki'
 MKDOCS = ROOT / 'mkdocs.yml'
-#: `[label](Target.md)` and `[label](Target.md#anchor)`, which is every internal link now.
-#: External ones start with a scheme and are somebody else's to keep
-LINK = re.compile(r'\]\(([^):#]+\.md)(#[^)]+)?\)')
+#: `[label](Target.md)`, `[label](Target.md#anchor)` and the same-page `[label](#anchor)`.
+#: External links start with a scheme and are somebody else's to keep.
+#:
+#: The third form is the one the corpus actually has -- its only anchor points at a heading on
+#: its own page -- so a pattern that required a file name checked every link except that one.
+#: Found in review, after the anchor case had been written and had passed against nothing
+LINK = re.compile(r'\]\(([^):#]*\.md)?(#[^)]+)?\)')
 #: the syntax the wiki used. It renders literally in Markdown, so it may not survive anywhere
 WIKI_LINK = re.compile(r'\[\[')
 
@@ -64,7 +68,9 @@ def test_every_link_resolves(path):
     case used to work and now 404s, which is a failure no reader can diagnose.
     """
     known = page_files()
-    broken = [target for target, _ in LINK.findall(path.read_text(encoding='utf-8')) if target not in known]
+    broken = [
+        target for target, _ in LINK.findall(path.read_text(encoding='utf-8')) if target and target not in known
+    ]
     assert not broken, f'{path.name} links to missing pages: {broken}'
 
 
@@ -78,9 +84,13 @@ def test_every_anchor_resolves(path):
     """
     dangling = []
     for target, fragment in LINK.findall(path.read_text(encoding='utf-8')):
-        if not fragment or target not in page_files():
+        if not fragment:
             continue
-        if fragment.lstrip('#') not in headings_of(WIKI / target):
+        if target and target not in page_files():
+            continue
+        # no file name means the anchor is on this page, which is the form the corpus uses
+        page = WIKI / target if target else path
+        if fragment.lstrip('#') not in headings_of(page):
             dangling.append(f'{target}{fragment}')
     assert not dangling, f'{path.name} links to headings that do not exist: {dangling}'
 

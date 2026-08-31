@@ -181,8 +181,7 @@ repositories. `.coderabbit.yaml` points it at the invariants above.
 ## Documentation
 
 Pages live in `docs/wiki/`. Edit them there, in the same pull request as the code
-they describe; a push to `master` publishes them to the documentation site. Links
-between pages are relative paths — `[Delivery](Delivery.md)`, or with a fragment,
+they describe. Links between pages are relative paths — `[Delivery](Delivery.md)`, or with a fragment,
 `[Delivery](Delivery.md#crash-safety)` — and both halves are checked, by
 `tests/test_wiki.py` on every leg and by `mkdocs build --strict` in the `docs` job.
 Spell the file name exactly: the site is static files, and unlike the wiki it
