@@ -267,7 +267,12 @@ def test_the_sidebar_lists_every_page():
 
 #: the README is a front page, not the documentation. It was 351 lines of
 #: material the wiki already carried, and it drifted from those pages.
-README_BUDGET = 140
+#:
+#: Raised from 140 in 4.0.0 for the transport table, which is the one thing a front page
+#: has to carry that no wiki page can: four rows saying what `BROKER`, the extra and the
+#: required settings are for each transport. Routing, not prose — the number is here to
+#: refuse a second copy of the documentation, and it still does.
+README_BUDGET = 148
 #: `## Title`, with the three leading spaces markdown still renders as a heading
 ATX = re.compile(r'^ {0,3}#{1,6}\s+(.+?)\s*$', re.MULTILINE)
 #: `Title` underlined with `===` or `---`, which renders as one too

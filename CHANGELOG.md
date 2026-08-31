@@ -675,6 +675,28 @@ a new table, so the old one is left where it is — see **Upgrading** for moving
 
 ### Changed
 
+- **The README says there are four transports, in the first screen.** It opened on one — a
+  diagram with a Redis list in the middle, a single `pip install 'django-aiogram[redis]'`, and
+  prose about pushing a call onto a list — so the page that decides whether anybody reads
+  further described the default as the design. `BROKER` had been a setting for the whole
+  release and the landing page never said so.
+
+  It now names all four where the diagram was, with a table of what to write in `BROKER`, which
+  extra installs the driver, and which settings that transport requires on top of the two in the
+  block below it. Then the sentence that matters to somebody choosing: the code does not change
+  with the row — same `bot.send()`, same handlers, same event log, same `manage.py start_tgbot` —
+  what changes is what becomes of a message whose worker was killed mid-send.
+
+  Three cases hold the table to the package: every transport in `broker/` has a row, every row's
+  `BROKER` value imports and its extra exists in `pyproject.toml`, and the row marked default is
+  the one `DEFAULTS['BROKER']` names. Resolving all four is also what pins the release's promise
+  that no module reaches its driver at import time — measured on a venv with `redis` installed
+  and neither `pika` nor `confluent-kafka`, where all four classes import.
+
+  Two pages stated the requirements as though redis were still one: **Home** and
+  **Installation** said `redis 6.2+` flatly, where the floor now belongs to the transport — 6.2
+  for the list, 7.0 for Streams, and nothing at all for a project on the other two.
+
 - **`producer/client.py` is six modules.** It held the facade, the loop it drives, every
   route out of the process, the shutdown that has to hold the at-least-once guarantee
   across all of them, and — in the middle of that — fifteen one-line decorators and the

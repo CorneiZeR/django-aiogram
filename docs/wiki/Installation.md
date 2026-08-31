@@ -4,8 +4,9 @@
 pip install 'django-aiogram[redis]'
 ```
 
-Requires Python 3.10–3.14, Django 5.2+, aiogram 3.30+, and — for the Redis
-transport — redis 6.2+.
+Requires Python 3.10–3.14, Django 5.2+ and aiogram 3.30+. Each transport adds its own
+floor: redis 6.2 for the list and 7.0 for Streams, which needs `XINFO GROUPS`'s `lag`
+field to answer a depth exactly.
 
 **The transport driver is an extra**, so a deployment downloads the one it uses and
 not the other three. `BROKER` names the transport and nothing is inferred from what

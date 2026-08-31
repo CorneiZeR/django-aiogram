@@ -10,29 +10,44 @@ ordinary Django app code, and send Telegram messages from anywhere in the
 project.
 
 One container runs the bot. Every other process — web, Celery, a management
-command — pushes the call onto a Redis list and returns, so a request never
-waits on Telegram.
+command — hands the call to a broker and returns, so a request never waits on
+Telegram. **Four transports can carry it**, and `BROKER` says which:
 
 ```text
-  web, celery  ──bot.send()──▶  Redis list  ──▶  start_tgbot  ──▶  Telegram
+                              ┌─ Redis list ────┐
+  web, celery ──bot.send()──▶ ├─ Redis Streams ─┤ ──▶ start_tgbot ──▶ Telegram
+                              ├─ RabbitMQ ──────┤
+                              └─ Kafka ─────────┘
 ```
+
+| transport | `BROKER` | extra | its own required settings |
+| --- | --- | --- | --- |
+| Redis list *(default)* | `django_aiogram.broker.redis_list.RedisListBroker` | `[redis]` | — |
+| Redis Streams | `django_aiogram.broker.redis_streams.RedisStreamsBroker` | `[redis]` | `REDIS_STREAM_KEY` |
+| RabbitMQ | `django_aiogram.broker.rabbitmq.RabbitMQBroker` | `[rabbitmq]` | `RABBITMQ_URL`, `RABBITMQ_QUEUE` |
+| Kafka | `django_aiogram.broker.kafka.KafkaBroker` | `[kafka]` | `KAFKA_BOOTSTRAP`, `KAFKA_TOPIC` |
+
+Your code does not change with the row: the same `bot.send()`, handlers, event log and
+`manage.py start_tgbot`. What differs is what becomes of a message whose worker was
+killed mid-send, and what recovery is — a command, a clock, or the broker's own doing.
+[Delivery](https://github.com/CorneiZeR/django-aiogram/wiki/Delivery) compares them;
+each transport has a page of its own below.
 
 ## Install
 
 ```shell
-pip install 'django-aiogram[redis]'
+pip install 'django-aiogram[redis]'        # Redis list, the default, or Redis Streams
+pip install 'django-aiogram[rabbitmq]'     # RabbitMQ
+pip install 'django-aiogram[kafka]'        # Kafka
 ```
 
-The transport driver is an extra, so a deployment downloads only the one it uses.
-`[redis]` is the default transport, the one this README shows.
-
-A base `pip install django-aiogram` is a valid install: it imports, and `manage.py`
-runs. What it cannot do is carry a message, and `manage.py check` says so — `E047`,
-with the `pip install` line for whichever `BROKER` you named. A process with
-`ENABLED` off is not asked for a driver, because it sends nothing, so a web container
-that only records the event log needs no extra. One that reads `queue_depth()` does
-need it — those reads reach the broker regardless of `ENABLED`. A `BROKER` naming
-something that is not a transport is reported either way.
+One extra per transport, so a deployment downloads only the driver it uses — a project
+on Kafka has no reason to carry `redis`. Nothing is inferred from what happens to be
+installed: `BROKER` names the transport, and a base `pip install django-aiogram`
+imports and runs `manage.py` but carries no message. `manage.py check` says which
+extra is missing, with the `pip install` line, in the processes that send;
+[Installation](https://github.com/CorneiZeR/django-aiogram/wiki/Installation) has the
+exceptions.
 
 ```python
 # settings.py
@@ -42,13 +57,15 @@ INSTALLED_APPS = [..., 'django_aiogram']
 
 TELEGRAM_BOT = {
     'TOKEN': os.environ.get('TELEGRAM_BOT_TOKEN', ''),
+    # unset, BROKER resolves to RedisListBroker; the table above has the other three,
+    # and each transport reads its own settings on top of these two
     'REDIS_URL': os.environ.get('REDIS_URL', ''),
 }
 ```
 
-Both may be empty. Nothing connects or validates credentials at import time, so
-tests and migrations run without them. Requires Python 3.10–3.14, Django 5.2+,
-aiogram 3.30+, redis 6.2+.
+Both may be empty: nothing connects or validates credentials at import time, so tests and
+migrations run without them. Requires Python 3.10–3.14, Django 5.2+ and aiogram 3.30+, plus
+the transport's own floor — Redis 6.2 for the list, 7.0 for Streams.
 
 ## Use it
 
@@ -76,15 +93,15 @@ python manage.py start_tgbot
 ```
 
 A router module, a call, and one process running the bot. That process gets Django's
-between-requests connection handling without having any requests: every update is bracketed with
-`close_old_connections()`, so a database that restarts under a long-running bot does not leave
-every handler raising `InterfaceError` until somebody notices. Nothing to configure, and
-[Deployment](https://github.com/CorneiZeR/django-aiogram/wiki/Deployment) says what the healthcheck
-can and cannot see about it.
+between-requests connection handling without having any requests — every update is bracketed
+with `close_old_connections()`, so a database that restarts under a long-running bot does not
+leave every handler raising `InterfaceError` until somebody notices. Nothing to configure;
+[Deployment](https://github.com/CorneiZeR/django-aiogram/wiki/Deployment) says what the
+healthcheck can and cannot see about it.
 
-Everything else — rate limits, per-process opt-out, healthchecks — is configuration, and it is
-documented rather than required. Webhook mode is the one alternative that also
-asks for a URL route; [Webhook](https://github.com/CorneiZeR/django-aiogram/wiki/Webhook) has the four steps.
+Everything else — rate limits, per-process opt-out, healthchecks — is configuration, documented
+rather than required. Webhook mode is the one alternative that also asks for a URL route:
+[Webhook](https://github.com/CorneiZeR/django-aiogram/wiki/Webhook) has the four steps.
 
 ## Documentation
 
@@ -115,9 +132,9 @@ the same pull request as the code they describe and published from `master`.
 | [Upgrading](https://github.com/CorneiZeR/django-aiogram/wiki/Upgrading) | what each major release changed, and what you must do |
 | [AI assistants](https://github.com/CorneiZeR/django-aiogram/wiki/AI-assistants) | the brief to hand a coding agent |
 
-Upgrading to 3.0: the deprecated `telegram_bot` package name is gone, so
-`INSTALLED_APPS` and imports have to name `django_aiogram`. The upgrading
-page lists everything else that needs attention.
+Upgrading from 3.x: the distribution and import path are `django-aiogram`, the driver is
+an extra you now name, and the event log has a table of its own. The upgrading page walks
+it in order, `migrate` included.
 
 ## Contributing
 
