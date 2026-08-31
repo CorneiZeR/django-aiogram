@@ -97,7 +97,7 @@ def accepts_keyword(handler: Handler, name: str) -> bool:
 
 
 class Delivery(ABC):
-    """Consumes the Redis queue until stopped."""
+    """Consumes whichever transport `BROKER` names, until stopped."""
 
     def __init__(self, handler: Handler) -> None:
         """Take what each decoded message is handed to once it arrives."""
@@ -633,7 +633,8 @@ def delivery_class() -> type[Delivery]:
         raise DeliveryNotConfiguredError(path, f'a name 4.0 replaced with a dotted path -- {instead}.')
     try:
         resolved = import_string(path)
-    # `ValueError` for a path with an empty module part, as in `producer.client` and the registry
+    # `ValueError` for a path with an empty module part, as in `producer.from_settings` and the
+    # registry
     except (ImportError, ValueError) as error:
         raise DeliveryNotConfiguredError(path, f'which cannot be imported: {error}') from error
     if not (isinstance(resolved, type) and issubclass(resolved, Delivery)):

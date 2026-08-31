@@ -3,7 +3,7 @@
 Two Redis lists per worker: one queue everybody reads, and one in-flight list named after
 the worker that took the message. The pair exists because a Redis list cannot say which
 consumer holds an entry — which is why this is the one broker that answers True to
-:attr:`~django_aiogram.broker.Broker.needs_identity`.
+:attr:`~django_aiogram.broker.base.Broker.needs_identity`.
 """
 
 import logging
