@@ -66,7 +66,19 @@ rabbitmq = ["pika>=1.3"]
 # faster one: 166-295us against 351-492us, each run paired against itself. A single earlier run
 # showed parity (479 against 502) on a cold broker and that reading did not survive repetition. The plan's other argument was
 # false and is recorded so it is not reopened: aiokafka ships no py3-none-any wheel either
-kafka = ["confluent-kafka>=2.3"]
+#
+# the floor is a wheel question rather than an API one, and it differs by interpreter: this
+# driver compiles librdkafka, so a version without a wheel for the running Python tries to
+# build from source and fails on a machine with no `librdkafka/rdkafka.h`. Measured on PyPI and
+# then on real interpreters -- the first cp313 wheel is 2.6.0 and the first cp314 wheel is
+# 2.12.1, and `pip install confluent-kafka==2.6.0` on Python 3.14.6 asks for that header. A flat
+# `>=2.3` said this package supports a pair it cannot install, on two of the five Pythons it
+# claims. 2.6.0 passes the whole Kafka integration suite against a real broker, so the API asks
+# for nothing newer than the wheels do
+kafka = [
+    "confluent-kafka>=2.6; python_version < '3.14'",
+    "confluent-kafka>=2.12.1; python_version >= '3.14'",
+]
 # not a runtime dependency: redis-py parses the protocol in C when this is
 # present. Worth it on a busy consumer, pointless on a web tier that only ever
 # pushes, which is why it is opt-in rather than pulled in for everybody

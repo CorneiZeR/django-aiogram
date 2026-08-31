@@ -64,8 +64,9 @@ TELEGRAM_BOT = {
 ```
 
 Both may be empty: nothing connects or validates credentials at import time, so tests and
-migrations run without them. Requires Python 3.10–3.14, Django 5.2+ and aiogram 3.30+, plus
-the transport's own floor — Redis 6.2 for the list, 7.0 for Streams.
+migrations run without them. Requires Python 3.10–3.14, Django 5.2+ and aiogram 3.30+; each
+transport then pins its own driver and asks for its own server —
+[Installation](https://github.com/CorneiZeR/django-aiogram/wiki/Installation) has both, per row.
 
 ## Use it
 

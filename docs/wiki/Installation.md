@@ -4,9 +4,24 @@
 pip install 'django-aiogram[redis]'
 ```
 
-Requires Python 3.10–3.14, Django 5.2+ and aiogram 3.30+. Each transport adds its own
-floor: redis 6.2 for the list and 7.0 for Streams, which needs `XINFO GROUPS`'s `lag`
-field to answer a depth exactly.
+Requires Python 3.10–3.14, Django 5.2+ and aiogram 3.30+. Every pair in that range runs in
+CI, and one leg pins the floors themselves — `django==5.2.0 aiogram==3.30.0 redis==6.2.0` on
+Python 3.10 — because a floor nothing installs is a floor nobody has tried.
+
+Then the transport you name adds two of its own, and they are different questions: the
+**driver** is a Python package this project pins, and the **server** is what you run.
+
+| transport | driver | server |
+| --- | --- | --- |
+| Redis list | `redis>=6.2` | any, but `BLMOVE` — Redis 6.2 — is what makes delivery at-least-once. Below it the consumer says so in the log and drops to at-most-once rather than refusing |
+| Redis Streams | `redis>=6.2` | **7.0 or newer, enforced.** `depth()` reads `lag` from `XINFO GROUPS`, a field that arrived in 7.0, and the transport refuses rather than reporting a number a healthcheck would act on |
+| RabbitMQ | `pika>=1.3` | RabbitMQ 4 in CI; 1.3.0 of the driver runs the whole integration suite against it |
+| Kafka | `confluent-kafka>=2.6`, and `confluent-kafka>=2.12.1` on Python 3.14 | Apache Kafka 4 in CI |
+
+The Kafka floor is two numbers because that driver compiles librdkafka: the first wheel for
+Python 3.13 is 2.6.0 and the first for 3.14 is 2.12.1, so an older pin does not fail to *work*
+there — it fails to install, asking for a C header. The API needs nothing newer than the wheels
+do, measured: 2.6.0 passes every Kafka case against a real broker.
 
 **The transport driver is an extra**, so a deployment downloads the one it uses and
 not the other three. `BROKER` names the transport and nothing is inferred from what
@@ -26,8 +41,9 @@ event log needs no extra. A process that reads the queue depth does need one eve
 disabled: those reads are not gated on `ENABLED`, and `manage.py check` cannot tell
 which processes make them.
 
-The redis floor is 6.2 because aiogram's `RedisStorage` asks for it, and
-`FSM_STORAGE: 'redis'` is the default. On redis-py below 5.0.1 the storage
+The redis *driver* floor is 6.2 because aiogram's `RedisStorage` asks for exactly that —
+`redis[hiredis]>=6.2.0` in its own metadata — and `FSM_STORAGE: 'redis'` is the default, so
+every transport can reach the storage even when the queue itself is somewhere else. On redis-py below 5.0.1 the storage
 raises `AttributeError: 'Redis' object has no attribute 'aclose'`. redis-py 8 is
 tested here and works, though aiogram's own optional extra stops at 7.
 

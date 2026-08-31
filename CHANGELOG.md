@@ -675,6 +675,33 @@ a new table, so the old one is left where it is — see **Upgrading** for moving
 
 ### Changed
 
+- **The Kafka extra declared a driver floor that cannot be installed on two of the five
+  Pythons this package claims.** `confluent-kafka>=2.3` against `requires-python = ">=3.10,
+  <3.15"`, and that driver compiles librdkafka: measured on PyPI and then on real
+  interpreters, the first wheel for Python 3.13 is **2.6.0** and the first for 3.14 is
+  **2.12.1**, so `pip install confluent-kafka==2.6.0` on Python 3.14.6 goes looking for
+  `librdkafka/rdkafka.h` and stops. Nobody met it, because a resolver takes the newest — but a
+  lockfile pinning the floor, or `--resolution lowest-direct`, met it immediately.
+
+  It is two specifiers now, by marker: `>=2.6` below Python 3.14 and `>=2.12.1` from it.
+  Verified by resolving the lowest allowed version on three interpreters — 2.6.0 on 3.10 and
+  3.13, 2.12.1 on 3.14 — and the API asks for nothing newer than the wheels do: 2.6.0 passes
+  every Kafka case against a real broker, as does `pika==1.3.0`, the RabbitMQ floor, which
+  nothing had run either.
+
+  Every other floor was checked the same way and holds: `django==5.2.0`, `aiogram==3.30.0`,
+  `redis==6.2.0` and `redis[hiredis]==6.2.0` all install on Python 3.14, and the redis floor is
+  aiogram's own — `redis[hiredis]>=6.2.0` in its metadata.
+
+  **Installation** states each transport's two floors in a table, because they are two
+  questions and the page used to run them together: the *driver* is a package this project
+  pins, the *server* is what you run. Redis Streams needs server 7.0 and refuses below it; the
+  list runs on any server and gives at-least-once from 6.2, saying so in the log when it
+  cannot. `tests/test_dependency_floors.py` ties the numbers together — the floors leg pins
+  what `pyproject.toml` declares, the classifiers and the CI matrix cover exactly what
+  `requires-python` allows, the three pages that state the Python range state the same one, and
+  every extra's floor appears in the wiki. Five claims, each falsified.
+
 - **The README says there are four transports, in the first screen.** It opened on one — a
   diagram with a Redis list in the middle, a single `pip install 'django-aiogram[redis]'`, and
   prose about pushing a call onto a list — so the page that decides whether anybody reads
