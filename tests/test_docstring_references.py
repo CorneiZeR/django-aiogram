@@ -25,6 +25,7 @@ catches the reference that leads nowhere, which is the one a reader cannot recov
 
 import ast
 import re
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -33,7 +34,12 @@ SOURCE = Path(__file__).resolve().parent.parent / 'src'
 MODULES = sorted(SOURCE.rglob('*.py'))
 PACKAGE = 'django_aiogram'
 #: the roles that name something inside a module. `:doc:` and `:ref:` name pages, not code
-REFERENCE = re.compile(r':(mod|class|meth|func|attr|data|exc):`~?([A-Za-z_][\w.]*)`')
+ROLES = ('mod', 'class', 'meth', 'func', 'attr', 'data', 'exc')
+#: the ones this package actually writes, which is what the control below can insist on. `exc`
+#: stays in the pattern so it is resolved the day somebody writes one, and is not required to
+#: appear: demanding a hit for a role nobody uses would fail on a codebase that is perfectly fine
+ROLES_IN_USE = ('mod', 'class', 'meth', 'func', 'attr', 'data')
+REFERENCE = re.compile(rf':({"|".join(ROLES)}):`~?([A-Za-z_][\w.]*)`')
 
 
 def module_file(dotted: str) -> Path | None:
@@ -112,11 +118,24 @@ def unresolved(path: Path) -> list[str]:
     return missing
 
 
-def test_there_are_references_to_resolve():
-    """The control: a regex that stopped matching would report a clean package for ever."""
-    total = sum(len(REFERENCE.findall(path.read_text(encoding='utf-8'))) for path in MODULES)
+def test_every_role_is_still_being_read():
+    """The control, and it counts per role rather than in total.
 
-    assert total > 100, f'only {total} references found, so the pattern has stopped reading them'
+    A total alone is the wrong shape: `:attr:` could stop matching entirely and the other hundred
+    and forty would hold the number up, leaving those references unchecked by the case below with
+    nothing to show it. So every role this package writes has to keep finding something, and the
+    pattern is built from the same tuple, so a role dropped from one is dropped from both.
+    """
+    text = '\n'.join(path.read_text(encoding='utf-8') for path in MODULES)
+    # counted through the pattern the other case uses, not through a second regex: a control that
+    # reads the source its own way passes while the pattern is blind, which is the failure it is
+    # here to prevent
+    counted = Counter(role for role, _ in REFERENCE.findall(text))
+    per_role = {role: counted[role] for role in ROLES_IN_USE}
+
+    silent = [role for role, count in per_role.items() if not count]
+    assert not silent, f'these roles matched nothing, so their references go unchecked: {silent}'
+    assert sum(per_role.values()) > 100, f'only {per_role} found, so the pattern has stopped reading'
 
 
 @pytest.mark.parametrize('path', MODULES, ids=lambda path: str(path.relative_to(SOURCE)))
