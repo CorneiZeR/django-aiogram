@@ -326,6 +326,44 @@ Entries land here as the work does; nothing below is released.
 
 ### Fixed
 
+- **`migrate` no longer fails on every upgrade from 3.x.** The new table declared the four index
+  names the old one already has — `drai_event_correlation`, `drai_event_recent`,
+  `drai_event_kind_id`, `drai_event_chat` — and index names are unique per *schema*, not per
+  table. So a project that followed **Upgrading**, which says to leave `django_redis_aiogram_event`
+  where it is, met `relation "drai_event_correlation" already exists` at `0001_initial` and could
+  go no further.
+
+  They are `dja_event_*` now, which is also the honest prefix: `drai_` was
+  *django-**r**edis-**ai**ogram*. **On PostgreSQL and SQLite** index names are unique per schema
+  rather than per table — measured: PostgreSQL 17 refuses with `ProgrammingError`, SQLite with
+  `index drai_event_chat already exists`. MySQL scopes them per table and never saw this. Found
+  by running the documented upgrade on a real project, which is the only place it shows: every
+  suite builds a database that has this app and nothing else in it.
+
+  An installation of `4.0.0.dev0` that already migrated has the indexes under the old names, and
+  **nothing reads an index by name at runtime**. Nothing will report it either: `makemigrations`
+  compares the model with the migration files and never looks at the database — measured, it says
+  `No changes detected` on exactly that database — so the names stay as they are until somebody
+  renames them. To do that without touching a row:
+
+  ```sql
+  ALTER INDEX drai_event_correlation RENAME TO dja_event_correlation;  -- PostgreSQL
+  ALTER INDEX drai_event_recent      RENAME TO dja_event_recent;
+  ALTER INDEX drai_event_kind_id     RENAME TO dja_event_kind_id;
+  ALTER INDEX drai_event_chat        RENAME TO dja_event_chat;
+  ```
+
+  MySQL spells the same rename `ALTER TABLE django_aiogram_event RENAME INDEX <old> TO <new>`,
+  once for each of the four; SQLite has no rename at all, so there each is dropped and created
+  again.
+
+  One narrower state, measured rather than assumed: a `4.0.0.dev0` whose `migrate` stopped
+  *between* `0001` and `0002` finishes on PostgreSQL without complaint — Django's PostgreSQL
+  editor drops indexes with `IF EXISTS` — but leaves `drai_event_kind_recent` behind, an index
+  nothing will ever drop and every insert pays for. `DROP INDEX drai_event_kind_recent;` is the
+  whole cleanup. A fresh install is unaffected, and no released version ever created these
+  names.
+
 - **The two readers whose contract is to *report* survive a setting `int()` cannot read.**
   `int(float('inf'))` raises `OverflowError`, which neither guard caught: the container health check
   ended in a traceback instead of the `is not a number` it has ready — a restart loop with nothing

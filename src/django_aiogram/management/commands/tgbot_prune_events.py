@@ -91,7 +91,7 @@ class Command(BaseCommand):
         rows = TelegramEvent.objects.using(alias)
 
         # where the walk stops: nothing older than the cutoff lives above this id.
-        # `drai_event_recent` covers the cutoff range, so neither form touches the
+        # `dja_event_recent` covers the cutoff range, so neither form touches the
         # table — but ordering by id still sorts that range, and `EXPLAIN QUERY PLAN`
         # gives this and `Min(id)` the same two steps: the covering search and one
         # `USE TEMP B-TREE FOR ORDER BY`. Written as a limit rather than an aggregate
