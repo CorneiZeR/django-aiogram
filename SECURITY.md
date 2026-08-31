@@ -10,9 +10,14 @@ rather than opening a public issue.
 
 | Version | Supported |
 |---------|-----------|
+| 4.x     | yes       |
 | 3.x     | yes       |
 | 2.x     | no        |
 | 1.x     | no        |
+
+4.0 renamed the distribution: `django-aiogram` is 4.x and `django-redis-aiogram` is 3.x, and a
+report against either reaches the same place. Whether 3.x keeps a line here past 4.0 is a decision
+that has not been made yet; until it is, it keeps the answer it had.
 
 ## The event log stores what the bot did
 
