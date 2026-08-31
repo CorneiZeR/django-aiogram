@@ -680,8 +680,9 @@ a new table, so the old one is left where it is — see **Upgrading** for moving
   redis-py — so a project that installed its own transport's extra, left the setting alone and
   set a `REDIS_URL` passed every check and then died building the dispatcher. Measured on a
   `[kafka]`-only install: `System check identified no issues`, followed by
-  `ModuleNotFoundError: No module named 'redis'` out of `start_tgbot`. Which is the failure
-  `E047` exists to prevent, arriving through the storage door instead of the broker's.
+  `ModuleNotFoundError: No module named 'redis'` out of `start_tgbot`. A missing driver
+  reaching a project as a traceback is the shape `E047` exists to prevent for the *broker*,
+  and this was the same shape arriving through the storage door, where no rule was watching.
 
   The install lines follow it: the README and **Installation** show
   `pip install 'django-aiogram[kafka,redis]'` and the RabbitMQ equivalent, because one extra
