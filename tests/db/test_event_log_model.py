@@ -110,3 +110,51 @@ def test_correlation_ids_sort_across_milliseconds():
     later = new_correlation_id()
 
     assert earlier < later, 'the correlation id is not time-ordered'
+
+
+#: the index names 3.x created, spelled out because they are history and do not follow this
+#: model. A project that upgrades keeps `django_redis_aiogram_event` — the upgrade page says to
+#: leave it — and its indexes keep these names for as long as it is there
+THREE_X_INDEX_NAMES = frozenset(
+    {
+        'drai_event_correlation',
+        'drai_event_recent',
+        'drai_event_kind_recent',
+        'drai_event_kind_id',
+        'drai_event_chat',
+    }
+)
+
+
+def test_no_index_is_named_the_way_3_x_named_one():
+    """Index names are unique per *schema*, not per table, so 4.0 cannot reuse them.
+
+    Both releases declared `drai_event_correlation` and three more, and the 3.x table keeps
+    them: `migrate` on an upgrading project therefore died at `0001_initial` with
+    `relation "drai_event_correlation" already exists` on PostgreSQL and
+    `index drai_event_chat already exists` on SQLite. MySQL scopes index names per table and
+    survived, which is why two of the three backends is the honest count.
+
+    Asserted here rather than by migrating a second database, because the question is about
+    names and not about a backend: this fails the moment a name is reused, in the suite that
+    runs everywhere, and needs no 3.x table to exist.
+    """
+    declared = {index.name for index in TelegramEvent._meta.indexes}
+
+    assert declared, 'the model declares no named index, so this case is not measuring anything'
+    reused = declared & THREE_X_INDEX_NAMES
+    assert not reused, f'these names are still on the 3.x table an upgrade leaves in place: {sorted(reused)}'
+
+
+@pytest.mark.django_db
+def test_every_index_this_release_declares_is_created_under_that_name():
+    """The other half: the names above are the ones the database actually has.
+
+    A test that only reads `_meta` passes on a migration that names its indexes differently —
+    and the collision that started this is a fact about the database, not about the model.
+    """
+    with connection.cursor() as cursor:
+        existing = set(connection.introspection.get_constraints(cursor, TelegramEvent._meta.db_table))
+
+    for index in TelegramEvent._meta.indexes:
+        assert index.name in existing, f'{index.name} is declared by the model and absent from the table'

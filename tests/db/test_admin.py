@@ -535,7 +535,7 @@ def test_a_kind_filtered_changelist_needs_no_sort(client, query_plan):
         # and the index by name. Without this the assertion above passes with no index at all —
         # a plan with no sort and a full scan reads exactly like the fixed one, at the cost the
         # index was added to remove
-        assert uses(plan, 'drai_event_kind_id'), f'the kind filter no longer uses its index\n{plan}'
+        assert uses(plan, 'dja_event_kind_id'), f'the kind filter no longer uses its index\n{plan}'
 
 
 @pytest.mark.django_db
@@ -551,7 +551,7 @@ def test_the_created_at_headers_sort_at_most_a_tie(order, query_plan):
     each direction, which is two more writes per row on a table whose whole design
     is cheap inserts.
 
-    Falsified by dropping `drai_event_recent` from the database directly, where
+    Falsified by dropping `dja_event_recent` from the database directly, where
     both directions become a full `USE TEMP B-TREE FOR ORDER BY` — editing
     `models.py` does not do it, because the test database is built from the
     migrations.
@@ -561,7 +561,7 @@ def test_the_created_at_headers_sort_at_most_a_tie(order, query_plan):
 
     plan = query_plan(sql, params)
 
-    assert uses(plan, 'drai_event_recent'), plan
+    assert uses(plan, 'dja_event_recent'), plan
     # a tie is allowed and is what the name says: the index gives the order, and rows sharing a
     # timestamp are settled by the second term. Sorting the whole result is the index not being
     # used for the order at all
@@ -638,4 +638,4 @@ def test_the_outcome_filters_count_is_served_by_the_index(client, query_plan):
     for sql in counts:
         plan = query_plan(sql)
         assert not sorts(plan), f'the bounded count still sorts: {plan}'
-        assert uses(plan, 'drai_event_kind_id'), f'the count no longer uses the kind index: {plan}'
+        assert uses(plan, 'dja_event_kind_id'), f'the count no longer uses the kind index: {plan}'

@@ -23,10 +23,10 @@ class Migration(migrations.Migration):
     operations: ClassVar[list[migrations.operations.base.Operation]] = [
         migrations.AddIndex(
             model_name='telegramevent',
-            index=models.Index(fields=['kind', '-id'], name='drai_event_kind_id'),
+            index=models.Index(fields=['kind', '-id'], name='dja_event_kind_id'),
         ),
         migrations.RemoveIndex(
             model_name='telegramevent',
-            name='drai_event_kind_recent',
+            name='dja_event_kind_recent',
         ),
     ]

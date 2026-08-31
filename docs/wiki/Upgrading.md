@@ -334,8 +334,8 @@ flag for it: the old behavior lost messages.
 ## Run migrate
 
 `0002_kind_id_index` swaps the index the event log's admin page and its pruning read:
-`AddIndex` for `drai_event_kind_id` on `(kind, -id)`, then `RemoveIndex` for the old
-`drai_event_kind_recent`. In that order, so the table is never without an index on
+`AddIndex` for `dja_event_kind_id` on `(kind, -id)`, then `RemoveIndex` for the old
+`dja_event_kind_recent`. In that order, so the table is never without an index on
 `kind`. It ships whether or not you turn the log on.
 
 `AddIndex` issues a plain `CREATE INDEX` — no `IF NOT EXISTS`, and no adoption of one
@@ -344,8 +344,8 @@ wants `CONCURRENTLY`, creating it by hand ahead of `migrate` makes the migration
 rather than saving it work. Do the whole swap by hand and then tell Django it is done:
 
 ```sql
-CREATE INDEX CONCURRENTLY drai_event_kind_id ON django_redis_aiogram_event (kind, id DESC);
-DROP INDEX CONCURRENTLY drai_event_kind_recent;
+CREATE INDEX CONCURRENTLY dja_event_kind_id ON django_redis_aiogram_event (kind, id DESC);
+DROP INDEX CONCURRENTLY dja_event_kind_recent;
 ```
 
 ```shell
