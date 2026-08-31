@@ -341,8 +341,10 @@ Entries land here as the work does; nothing below is released.
   suite builds a database that has this app and nothing else in it.
 
   An installation of `4.0.0.dev0` that already migrated has the indexes under the old names, and
-  **nothing reads an index by name at runtime** — leaving them is a cosmetic mismatch that only a
-  future `makemigrations` would notice. To align them without touching a row:
+  **nothing reads an index by name at runtime**. Nothing will report it either: `makemigrations`
+  compares the model with the migration files and never looks at the database — measured, it says
+  `No changes detected` on exactly that database — so the names stay as they are until somebody
+  renames them. To do that without touching a row:
 
   ```sql
   ALTER INDEX drai_event_correlation RENAME TO dja_event_correlation;  -- PostgreSQL

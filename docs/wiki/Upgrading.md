@@ -166,6 +166,14 @@ a row still to do — and running it again after it finishes writes nothing.
 Rows moved from 3.x arrive with no code, whether the command copied them or you did, so run this
 after the move rather than before it.
 
+**`0003_short_id` builds an index**, and on a table sized by traffic that build holds a lock for
+its duration. The column itself is cheap — PostgreSQL adds it without rewriting the table — so it
+is the index that decides whether this migration wants a window. There is no
+`CREATE INDEX CONCURRENTLY` recipe here on purpose: Django generates that index's name, and a
+hand-built one has to match it exactly. `python manage.py sqlmigrate django_aiogram 0003` prints
+the statements this release will run, name included, which is the honest source for anyone
+building it by hand.
+
 ## Choose the transport explicitly
 
 Nothing is detected from what happens to be installed. Name the broker you want, and the
