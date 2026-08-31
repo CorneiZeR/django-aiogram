@@ -752,8 +752,10 @@ a new table, so the old one is left where it is — see **Upgrading** for moving
   and neither `pika` nor `confluent-kafka`, where all four classes import.
 
   Two pages stated the requirements as though redis were still one: **Home** and
-  **Installation** said `redis 6.2+` flatly, where the floor now belongs to the transport — 6.2
-  for the list, 7.0 for Streams, and nothing at all for a project on the other two.
+  **Installation** said `redis 6.2+` flatly, where the *server* floor now belongs to the
+  transport — 6.2 for the list, 7.0 for Streams, and no Redis server at all for a project whose
+  queue is RabbitMQ or Kafka. The driver is a separate question on those two, and the answer is
+  usually still yes: `FSM_STORAGE` defaults to aiogram's Redis store.
 
   And the gate that exists for exactly this class of sentence — `test_broker_neutral_prose.py`,
   which pins the surfaces whose subject is the queue in general — could not see the one on the

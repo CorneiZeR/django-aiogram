@@ -16,7 +16,7 @@ Then the transport you name adds two of its own, and they are different question
 | Redis list | `redis>=6.2` | any, but `BLMOVE` — Redis 6.2 — is what makes delivery at-least-once. Below it the consumer says so in the log and drops to at-most-once rather than refusing |
 | Redis Streams | `redis>=6.2` | **7.0 or newer, enforced.** `depth()` reads `lag` from `XINFO GROUPS`, a field that arrived in 7.0, and the transport refuses rather than reporting a number a healthcheck would act on |
 | RabbitMQ | `pika>=1.3` | RabbitMQ 4 in CI; 1.3.0 of the driver runs the whole integration suite against it |
-| Kafka | `confluent-kafka>=2.6`, and `confluent-kafka>=2.12.1` on Python 3.14 | Apache Kafka 4 in CI |
+| Kafka | `confluent-kafka>=2.6` below Python 3.14, `confluent-kafka>=2.12.1` on Python 3.14 and newer | Apache Kafka 4 in CI |
 
 **One extra is not always enough, and the default is why.** `FSM_STORAGE` defaults to
 `'redis'`, and that store is aiogram's — it imports redis-py. So a project on RabbitMQ or

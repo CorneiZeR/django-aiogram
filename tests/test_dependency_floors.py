@@ -29,6 +29,16 @@ WORKFLOW = (ROOT / '.github' / 'workflows' / 'ci.yml').read_text(encoding='utf-8
 #: the three the floors leg pins, which are the three every install resolves
 PINNED_IN_CI = ('django', 'aiogram', 'redis')
 
+#: how each marker direction may be written in prose. A floor that applies from an
+#: interpreter upwards and one that applies below it are each other's opposite, and a page
+#: that swaps them is worse than one that omits both -- so the words are pinned, loosely
+DIRECTIONS = {
+    '>=': ('on python', 'from python', 'and newer', 'or newer'),
+    '>': ('above python', 'after python'),
+    '<': ('below python', 'under python', 'before python'),
+    '<=': ('up to python', 'through python'),
+}
+
 #: pages that state the supported Python range in prose. The README and Home are read
 #: before anything else, and Installation is where somebody checks before upgrading
 PAGES_STATING_THE_RANGE = ('README.md', 'docs/wiki/Home.md', 'docs/wiki/Installation.md')
@@ -140,18 +150,31 @@ def test_a_floor_that_depends_on_the_interpreter_is_documented_against_it():
     an older pin cannot be installed on a newer Python, so a reader given the pair backwards
     hits the failure the marker was added to prevent.
 
-    So each marked specifier is looked for within a stretch of prose that also names its
-    Python. The window is generous on purpose — the table writes them a few words apart, and
-    the point is that they are stated together rather than in the same file.
+    So each marked specifier is read with what follows it, and what follows has to say the
+    direction the marker means. **Read forward from the number rather than around it**, which is
+    the correction that made this case work at all: the two floors sit in one table cell a few
+    words apart, so a window wide enough to reach either Python contained *both* directions --
+    and swapping them, which is the failure being guarded, passed. The first direction phrase
+    after the number is the one that qualifies it.
     """
     extras = PYPROJECT.split('[project.optional-dependencies]')[1].split('\n[')[0]
     marked = re.findall(r'"([\w-]+)>=([\d.]+); python_version ([<>=]+) \'([\d.]+)\'"', extras)
     assert marked, 'no floor depends on the interpreter any more; drop this case with the marker'
 
     pages = wiki()
+    phrases = {phrase: operator for operator, group in DIRECTIONS.items() for phrase in group}
     for name, floor, operator, python in marked:
         specifier = f'{name}>={floor}'
-        stated = [
-            window for window in re.findall(rf'.{{0,160}}{re.escape(specifier)}.{{0,160}}', pages) if python in window
-        ]
-        assert stated, f'{specifier} applies {operator} Python {python} and no page says so within reach of the number'
+        following = [after.lower() for after in re.findall(rf'{re.escape(specifier)}`?(.{{0,48}})', pages)]
+        assert following, f'{specifier} appears on no page'
+
+        qualified = False
+        for after in following:
+            nearest = sorted((after.index(phrase), phrase) for phrase in phrases if phrase in after)
+            if nearest and phrases[nearest[0][1]] == operator and python in after:
+                qualified = True
+                break
+        assert qualified, (
+            f'{specifier} applies {operator} Python {python}; no page says so right after the '
+            f'number, in words ({" / ".join(DIRECTIONS[operator])})'
+        )

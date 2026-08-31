@@ -1964,10 +1964,25 @@ def test_the_default_fsm_store_needs_a_driver_and_says_so(monkeypatch):
     The driver is present in this suite, so its absence is arranged at the one call that asks:
     hiding `redis` from `sys.modules` would not do it, because `find_spec` reads the path rather
     than the module table.
+
+    The stand-in records what it was asked for and refuses only that, rather than answering
+    `None` to everything: a rule that probed the wrong module -- or probed nothing and returned
+    a finding anyway -- would satisfy a blanket `lambda name: None` exactly as the right one
+    does.
     """
-    monkeypatch.setattr('django_aiogram.config.checks.bot.importlib.util.find_spec', lambda name: None)
+    asked = []
+
+    def absent(name):
+        asked.append(name)
+        return None if name == 'redis' else object()
+
+    monkeypatch.setattr('django_aiogram.config.checks.bot.importlib.util.find_spec', absent)
 
     found = [message for message in check_settings() if message.id == 'django_aiogram.E019']
+
+    # a set: the rule runs once per `check_settings()` call and this case makes two, so the
+    # claim is *which* module it asks about rather than how often
+    assert set(asked) == {'redis'}, f'the rule probed {asked}'
 
     assert len(found) == 1, [message.msg for message in check_settings()]
     assert 'whose driver is not installed' in found[0].msg, found[0].msg
