@@ -334,14 +334,26 @@ Entries land here as the work does; nothing below is released.
   go no further.
 
   They are `dja_event_*` now, which is also the honest prefix: `drai_` was
-  *django-**r**edis-**ai**ogram*. Measured on both backends that scope names this way —
-  PostgreSQL 17 refused with `ProgrammingError`, SQLite with
-  `index drai_event_chat already exists`; MySQL scopes per table and survived. Found by running
-  the documented upgrade on a real project, which is the only place it shows: every suite builds
-  a database that has this app and nothing else in it.
+  *django-**r**edis-**ai**ogram*. **On PostgreSQL and SQLite** index names are unique per schema
+  rather than per table — measured: PostgreSQL 17 refuses with `ProgrammingError`, SQLite with
+  `index drai_event_chat already exists`. MySQL scopes them per table and never saw this. Found
+  by running the documented upgrade on a real project, which is the only place it shows: every
+  suite builds a database that has this app and nothing else in it.
 
-  An installation of `4.0.0.dev0` that already migrated should drop `django_aiogram_event` and
-  migrate again. A fresh install is unaffected, and no released version created these names.
+  An installation of `4.0.0.dev0` that already migrated has the indexes under the old names, and
+  **nothing reads an index by name at runtime** — leaving them is a cosmetic mismatch that only a
+  future `makemigrations` would notice. To align them without touching a row:
+
+  ```sql
+  ALTER INDEX drai_event_correlation RENAME TO dja_event_correlation;  -- PostgreSQL
+  ALTER INDEX drai_event_recent      RENAME TO dja_event_recent;
+  ALTER INDEX drai_event_kind_id     RENAME TO dja_event_kind_id;
+  ALTER INDEX drai_event_chat        RENAME TO dja_event_chat;
+  ```
+
+  MySQL spells it `ALTER TABLE django_aiogram_event RENAME INDEX drai_event_chat TO
+  dja_event_chat`; SQLite has no rename, so there each is dropped and created again. A fresh
+  install is unaffected, and no released version ever created these names.
 
 - **The two readers whose contract is to *report* survive a setting `int()` cannot read.**
   `int(float('inf'))` raises `OverflowError`, which neither guard caught: the container health check
