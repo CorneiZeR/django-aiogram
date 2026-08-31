@@ -700,8 +700,18 @@ a new table, so the old one is left where it is — see **Upgrading** for moving
   And the gate that exists for exactly this class of sentence — `test_broker_neutral_prose.py`,
   which pins the surfaces whose subject is the queue in general — could not see the one on the
   front page: it looks for Redis named as *the* queue, and "pushes the call onto a Redis list"
-  matched none of its patterns. It does now, and the wiki's own front page joined the surfaces
-  it covers.
+  matched none of its patterns. It does now, and four more surfaces joined the ones it covers,
+  each with a sentence of this release's own to fix:
+
+  * **Home**, the wiki's front page, read before any transport page.
+  * **Serialization**, where the trust boundary was Redis's: *whoever can write to the queue*
+    runs code in the bot container, and that is true on all four. Three sentences, including
+    the one under `ALLOW_PICKLE`.
+  * **AI assistants**, the brief handed to a coding agent — so the surface that propagates. It
+    told one to watch `redis-cli llen TELEGRAM_BOT_MESSAGE` grow, which answers on one
+    transport; `bot.queue_depth()` asks whichever `BROKER` names.
+  * **Event log**, whose kinds table said `outbound.queued` meant "written to the Redis list"
+    and `outbound.consumed` "took it off the list". Both fire on four transports.
 
 - **`producer/client.py` is six modules.** It held the facade, the loop it drives, every
   route out of the process, the shutdown that has to hold the at-least-once guarantee

@@ -40,6 +40,14 @@ NEUTRAL_SURFACES = (
     # the wiki's own front page, added for the same reason the README is here: it is read
     # before any transport page and its subject is the queue in general
     'docs/wiki/Home.md',
+    # the trust boundary is stated on this page, and it was stated as Redis's: whoever can
+    # write to *the queue* runs code in the bot container, and that is true of all four
+    'docs/wiki/Serialization.md',
+    # the brief handed to a coding agent, which is the surface that propagates: it taught a
+    # `redis-cli llen` as the way to read a depth, where `queue_depth()` asks any transport
+    'docs/wiki/AI-assistants.md',
+    # the kinds fire on four transports, and two rows of the table named one
+    'docs/wiki/Event-log.md',
 )
 
 #: `config/defaults.py` is deliberately absent: it is the file that *names* the default

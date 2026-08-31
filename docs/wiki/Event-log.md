@@ -50,8 +50,8 @@ gives you `sent` rows with no `queued` rows to match. That is not a bug.
 
 | Kind | When |
 | ---- | ---- |
-| `outbound.queued` | a send was written to the Redis list |
-| `outbound.consumed` | the bot container took it off the list |
+| `outbound.queued` | a send was written to the queue — a Redis list or stream, an AMQP queue, a Kafka topic |
+| `outbound.consumed` | the bot container took it off the queue |
 | `outbound.sent` | Telegram accepted it |
 | `outbound.retried` | Telegram refused it with a rate limit; backing off |
 | `outbound.failed` | the call raised |
@@ -137,7 +137,7 @@ What is lost: on `SIGKILL`, a worker timeout or `os._exit()`, whatever is in the
 queue and in the current batch. At the defaults that is under a second of events
 plus up to 200 rows. A clean `SIGTERM` loses nothing. This is an event feed, not
 a ledger — if you need durability across a kill, the thing that already gives it
-to you is the Redis queue.
+to you is the queue itself.
 
 ## Metrics, without the table
 
