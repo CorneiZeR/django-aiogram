@@ -326,6 +326,50 @@ Entries land here as the work does; nothing below is released.
 
 ### Fixed
 
+- **The container healthcheck could not start without redis-py, so two transports had no
+  probe at all.** `healthcheck.py` named `redis` at import time, which was right when the
+  driver was a hard dependency and wrong the moment it became an extra: on a `[kafka]`-only
+  or `[rabbitmq]`-only install, `python -m django_aiogram.healthcheck` answered
+  `ModuleNotFoundError: No module named 'redis'`. **Deployment** documents that command as
+  the container healthcheck, so the bot container was unhealthy for ever and the one thing
+  that would have said why was the thing that crashed.
+
+  Measured after, on a Kafka-only and a RabbitMQ-only venv built from the wheel, neither
+  carrying redis-py: `healthy: consumer not observable from outside, 0 queued`, exit 0.
+
+  The split the fix leans on was already in the code — the verdict comes from
+  `broker.liveness()` and `broker.depth()`, both transport-neutral, and only `--guarantee`
+  and `--stranded` are Redis-shaped. Those two build a client of their own, and where there
+  is no driver they report `unknown` and log the reason as `tg_reason` instead of refusing:
+  neither could ever change the verdict. **Deployment** now has a table of what the probe
+  can see on each of the four, because "stranded in-flight lists" means nothing on Kafka.
+
+  Two more things came out of it, both in the same class:
+
+  - **A `BROKER` whose driver is missing is now reported rather than raised.** Both forms of
+    the probe print `RedisListBroker needs the 'redis' package, which is not installed.
+    Install it with: pip install "django-aiogram[redis]"` and exit non-zero — an image built
+    for one transport and pointed at another used to get a traceback out of a probe whose
+    whole output is a diagnosis.
+  - **One refusal changed wording:** `redis is unreachable: …` is **`the broker is
+    unreachable: …`**. Up to 3.1 the probe pinged Redis before every check and could name it;
+    it opens no client of its own now, so the transport is asked and the first thing it cannot
+    do is what gets reported. A refused connection keeps that line rather than sliding into
+    `could not read the consumer liveness`, which is reserved for a broker that answered and
+    said no. **Upgrading** and **Troubleshooting** carry the change for anyone who greps it.
+
+  A test hides `redis` from a fresh interpreter's `sys.modules` and asserts the probe still
+  reports, because no venv in CI can show this: the dev environment installs every extra and
+  the `[redis]`-only leg installs that one.
+
+- **The suite's Redis fixture never put the real accessor back.** `tests/conftest.py` patches
+  `get_redis` at five paths, and `monkeypatch.setattr` imports a module named by string — so a
+  broker module first imported *there* bound the fake the first path had already installed, and
+  monkeypatch recorded that fake as the original to restore. Measured: after one test that used
+  `redis_server`, `broker.redis_list.broker.get_redis` was still a fixture lambda, so three
+  healthcheck cases with an unusable `REDIS_URL` read a working fake and passed only when run
+  alone. The targets are imported once at conftest import time now, before any patch.
+
 - **The package described itself as Redis-only, on PyPI.** `description` said "send Telegram
   messages from Django **through Redis**" and `keywords` had no `rabbitmq`, no `kafka`, no
   `redis-streams` — the first sentence anybody reads on the project page, and the words people

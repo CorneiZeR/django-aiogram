@@ -25,18 +25,19 @@ which is the whole saving. ``tests/test_lazy_init.py`` asserts the registry is s
 unpopulated after ``main()`` returns.
 """
 
+from __future__ import annotations
+
 import argparse
 import logging
 import os
 import sys
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from django.core.exceptions import ImproperlyConfigured
-from redis import Redis
-from redis.exceptions import RedisError, ResponseError
 
 from django_aiogram.broker.base import Broker
-from django_aiogram.broker.exceptions import BrokerError
+from django_aiogram.broker.exceptions import BrokerDependencyError, BrokerError
 from django_aiogram.broker.registry import get_broker
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 from django_aiogram.redis import (
@@ -46,6 +47,37 @@ from django_aiogram.redis import (
     processing_pattern,
     queue_key,
 )
+
+if TYPE_CHECKING:
+    from redis import Redis
+
+try:  # redis-py is an extra since 4.0: a Kafka or RabbitMQ deployment installs none of it
+    from redis.exceptions import ConnectionError as _RedisConnectionError
+    from redis.exceptions import RedisError as _RedisError
+except ImportError:
+
+    class _RedisError(Exception):  # type: ignore[no-redef]
+        """Stand-in for the driver's error class where there is no driver.
+
+        Naming ``redis`` at import time meant `python -m django_aiogram.healthcheck` could
+        not start at all on a deployment that carries messages some other way -- measured,
+        ``ModuleNotFoundError: No module named 'redis'`` out of the probe a container runs on
+        a timer, so the container was unhealthy for ever and the one thing that would say why
+        was the thing that crashed.
+
+        Nothing raises this, so every ``except`` clause below reads the same on both installs
+        and matches nothing where there is no Redis to fail.
+        """
+
+    class _RedisConnectionError(_RedisError):  # type: ignore[no-redef]
+        """The same, for the one driver failure this module reports differently.
+
+        A subclass of the stand-in above, so the clauses keep the order they have with the
+        real classes: redis-py's ``ConnectionError`` derives from ``RedisError`` and nothing
+        else -- measured, its MRO is ``ConnectionError -> RedisError -> Exception`` -- so the
+        builtin of the same name would not catch it.
+        """
+
 
 logger = logging.getLogger('django_aiogram')
 
@@ -117,11 +149,20 @@ def _connected() -> Redis:
 
     Narrowing to ``RedisError`` alone turned those into tracebacks and, in the management
     command, into a bare exception where a ``CommandError`` belongs.
+
+    ``ImportError`` joins them for the same reason: since 4.0 the driver is an extra, so a
+    deployment on another transport has no redis-py at all, and asking it for a client is a
+    failure to reach Redis rather than a crash. Only the two Redis-only reports come here.
+
+    Which is why what this raises is no longer a line the probe prints: the verdict asks the
+    broker, and both callers here degrade instead of refusing. The message travels to their
+    warning as ``tg_reason``, so an operator who asked for ``--guarantee`` still learns why
+    it came back ``unknown``.
     """
     try:
         connection = get_redis()
         connection.ping()
-    except (RedisError, ImproperlyConfigured, ValueError) as error:
+    except (_RedisError, ImproperlyConfigured, ValueError, ImportError) as error:
         msg = f'redis is unreachable: {error}'
         raise _UnhealthyError(msg) from error
     return connection
@@ -147,11 +188,31 @@ def _liveness_age(broker: Broker, *, limit: int, ttl: int) -> int | None:
     """
     try:
         report = broker.liveness()
-    except (RedisError, BrokerError, UnicodeDecodeError) as error:
-        # ping answering says nothing about the next command: a failover in between, or a
-        # key this replica cannot serve. The decode error is not hypothetical either —
-        # `decode_responses` in a URL shared with a cache backend makes redis-py decode
-        # this key, and the bytes there are not ours to promise anything about
+    # before the clause below, and the order is the whole point: `UnicodeDecodeError` *is* a
+    # `ValueError`, so a heartbeat this client could not decode would otherwise be reported as
+    # a settings problem. It is bytes on the wire — `decode_responses` in a URL shared with a
+    # cache backend makes redis-py decode this key, and what is there is not ours to promise
+    # anything about
+    except UnicodeDecodeError as error:
+        msg = f'could not read the consumer liveness: {error}'
+        raise _UnhealthyError(msg) from error
+    except (ImproperlyConfigured, ValueError, _RedisConnectionError) as error:
+        # a transport that cannot be addressed is one this probe cannot reach, which is the
+        # argument the Redis ping made for three releases and the wording it used. Only the
+        # subject changed: the ping ran before every check and named Redis, so a deployment
+        # carrying messages another way could not run the probe at all. These arrive here
+        # instead, because this call is where the client is built now
+        #
+        # a refused connection belongs here rather than with the clause below, and this is the
+        # first call that would meet one: 3.x pinged before every check and answered `redis is
+        # unreachable` for a Redis that was down, which is the failure an operator greps for.
+        # Only redis-py's own class, because it is the only driver whose hierarchy is measured
+        # here -- another transport's connection failure reads as the clause below until it is
+        msg = f'the broker is unreachable: {error}'
+        raise _UnhealthyError(msg) from error
+    except (_RedisError, BrokerError) as error:
+        # addressable and did not answer: down, failing over, or a key this replica cannot
+        # serve
         msg = f'could not read the consumer liveness: {error}'
         raise _UnhealthyError(msg) from error
     if not report.reported:
@@ -196,7 +257,12 @@ def _depth(broker: Broker, *, limit: int) -> int:
     """
     try:
         queued = broker.depth()
-    except (RedisError, BrokerError) as error:
+    except _RedisConnectionError as error:
+        # the same split as the liveness read above: a broker that refused the connection is
+        # unreachable, not a broker that would not answer one question
+        msg = f'the broker is unreachable: {error}'
+        raise _UnhealthyError(msg) from error
+    except (_RedisError, BrokerError) as error:
         msg = f'could not read the queue length: {error}'
         raise _UnhealthyError(msg) from error
     if limit and queued > limit:
@@ -242,7 +308,6 @@ def check(
         ttl = heartbeat_ttl(max(1, _setting_int('HEARTBEAT_INTERVAL')))
         age_limit = ttl if max_age is None else max_age
         queue_limit = _setting_int('HEALTHCHECK_MAX_QUEUE') if max_queue is None else max_queue
-        connection = _connected()
         broker = get_broker()
         age = _liveness_age(broker, limit=age_limit, ttl=ttl)
         queued = _depth(broker, limit=queue_limit)
@@ -254,13 +319,16 @@ def check(
     reported = f'{age}s old' if age is not None else 'not observable from outside'
     healthy = f'healthy: consumer {reported}, {queued} queued'
     if guarantee:
-        healthy = f'{healthy}, {_guarantee(connection)}'
+        # its own client, and only here: the two reports below are the only Redis-shaped
+        # things this probe does, and building one in the default path is what made the
+        # whole probe impossible to start without the driver
+        healthy = f'{healthy}, {_guarantee()}'
     warnings: list[str] = []
     # the per-worker in-flight list is one transport's bookkeeping, and a transport that
     # answers `needs_identity` false has none — scanning for keys that cannot exist would
     # report a reassuring zero about a question this deployment does not have
     if stranded and broker.needs_identity:
-        found, swept = _stranded(connection)
+        found, swept = _stranded()
         if found:
             # not a failure: another worker may be sending them right now. But an
             # invisible pile is how a stranded list stays stranded
@@ -272,7 +340,7 @@ def check(
     return Report(ok=True, message=healthy, warnings=tuple(warnings))
 
 
-def _guarantee(connection: Redis) -> str:
+def _guarantee() -> str:
     """Which delivery guarantee this Redis can actually give.
 
     Asked of the server, not of a consumer: ``Delivery.crash_safe`` starts true and is
@@ -290,6 +358,21 @@ def _guarantee(connection: Redis) -> str:
     worse dependency than a no-op write, so the write stays and the *caller* decides
     whether to pay for it.
     """
+    try:
+        connection = _connected()
+    except _UnhealthyError as refusal:
+        # unreachable, misconfigured, or an install with no driver: this report is extra
+        # credit, and `unknown` is what it already says for every other way it cannot answer.
+        # The reason travels as a field rather than as a refusal, because the verdict is the
+        # broker's now -- this client exists only for the two Redis-shaped extras
+        logger.warning(
+            'could not establish which delivery guarantee is in force',
+            extra={'tg_reason': str(refusal)},
+        )
+        return 'unknown'
+
+    from redis.exceptions import ResponseError  # noqa: PLC0415 - an extra, and a client exists by here
+
     probe = f'{queue_key()}:lmove-probe'
     try:
         connection.lmove(probe, probe, 'LEFT', 'RIGHT')
@@ -298,13 +381,13 @@ def _guarantee(connection: Redis) -> str:
             return 'at-most-once'
         logger.warning('could not establish which delivery guarantee is in force')
         return 'unknown'
-    except RedisError:
+    except _RedisError:
         logger.warning('could not establish which delivery guarantee is in force')
         return 'unknown'
     return 'at-least-once'
 
 
-def _stranded(connection: Redis) -> tuple[int, bool]:
+def _stranded() -> tuple[int, bool]:
     """Count what is in flight under a worker name that is not this one.
 
     Read rather than acted on: a message under another name may be one another worker
@@ -315,7 +398,20 @@ def _stranded(connection: Redis) -> tuple[int, bool]:
     backend — which the settings page suggests is common — an unbounded sweep is a full
     pass over someone else's keys. A partial answer is worth having; one that pretends
     to be complete is not.
+
+    Builds its own client, and only when asked: this is one of the two Redis-shaped reports,
+    and the probe's verdict never needs one. A deployment on another transport does not reach
+    here at all -- the caller asks the broker first, and only the transport that keys its
+    in-flight list on a worker name answers yes.
     """
+    try:
+        connection = _connected()
+    except _UnhealthyError as refusal:
+        # nothing to report rather than a refusal: the verdict is already decided, and this
+        # sweep is a warning line on top of it
+        logger.warning('could not scan for stranded in-flight lists', extra={'tg_reason': str(refusal)})
+        return 0, True
+
     pattern = processing_pattern()
     mine = processing_key()
     # SCAN may return the same key more than once when the keyspace changes
@@ -334,7 +430,7 @@ def _stranded(connection: Redis) -> tuple[int, bool]:
                 total += int(connection.llen(name) or 0)
             if cursor == 0:
                 return total, True
-    except (RedisError, UnicodeDecodeError):
+    except (_RedisError, UnicodeDecodeError):
         # the decode too: a foreign key on a shared Redis can match this pattern and hold
         # bytes that are not UTF-8, and aborting the whole probe over a warning nobody
         # acts on is the opposite of what this sweep is for
@@ -423,6 +519,13 @@ def main(argv: list[str] | None = None) -> int:
             stranded=options.stranded,
             guarantee=options.guarantee,
         )
+    except BrokerDependencyError as error:
+        # the deployment this module was rewritten for: BROKER names a transport whose driver
+        # this image does not carry, because every driver is an extra since 4.0. The settings
+        # are perfectly readable, so the refusal below would be the wrong sentence -- and the
+        # exception already carries the one command that fixes it, which a traceback buries
+        sys.stderr.write(f'{error}\n')
+        return 1
     except ImproperlyConfigured as error:
         # the failure this form meets that the management command cannot: `manage.py` sets
         # DJANGO_SETTINGS_MODULE inside its own process, so a container running it does not

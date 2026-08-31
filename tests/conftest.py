@@ -1,3 +1,5 @@
+import importlib
+
 import fakeredis
 import fakeredis.aioredis
 import pytest
@@ -28,6 +30,18 @@ PATCH_TARGETS = (
     'django_aiogram.healthcheck.get_redis',
     'django_aiogram.management.commands.tgbot_reclaim.get_redis',
 )
+
+# imported here, before any patch is applied, and the comment above says why it matters: a
+# module that `monkeypatch.setattr` imports *for the first time* binds whatever the accessor
+# is at that moment -- and that is the fake the first entry in this tuple has already put
+# there. monkeypatch then records the fake as the original and restores the fake, so the real
+# accessor never comes back for the rest of the session.
+#
+# Measured: after one test that used `redis_server`, `broker.redis_list.broker.get_redis` was
+# still a fixture lambda, so a later test with an unusable `REDIS_URL` read a working fake and
+# reported a healthy consumer.
+for _target in PATCH_TARGETS:
+    importlib.import_module(_target.rsplit('.', 1)[0])
 
 
 @pytest.fixture(autouse=True)

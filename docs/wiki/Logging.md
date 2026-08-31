@@ -57,6 +57,7 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_variable` | the environment variable a message is about |
 | `tg_dropped` | events lost because the buffer was full, or sends dropped at shutdown |
 | `tg_failures` | consecutive failures of the event writer |
+| `tg_reason` | why one of the healthcheck's two Redis-only extras came back `unknown`: the client it needed could not be built or could not answer. Not a verdict — the verdict is the broker's, and it has already been decided by the time this is written |
 
 ## Events worth alerting on
 
