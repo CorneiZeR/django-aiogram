@@ -81,7 +81,13 @@ The table is `django_aiogram_event` now, and `migrate` creates it empty. The old
 drops it.
 
 `I003` says so on every `manage.py check` while that table is there, and names the command that
-copies its rows across. It copies: the old table is left exactly as it is, including any row whose
+copies its rows across.
+
+**The two tables' indexes are named apart**, which is what lets the old one stay: index names are
+unique per schema rather than per table, so this release names its own `dja_event_*` where 3.x
+used `drai_event_*`. Nothing to do about it — it is why `migrate` succeeds with both tables
+present — but a dashboard or a hand-built index that names one of the old four is describing the
+old table, and will keep describing it for as long as you keep it. It copies: the old table is left exactly as it is, including any row whose
 id was already taken. With the app's own `migrate` already run:
 
 ```shell
@@ -334,8 +340,8 @@ flag for it: the old behavior lost messages.
 ## Run migrate
 
 `0002_kind_id_index` swaps the index the event log's admin page and its pruning read:
-`AddIndex` for `dja_event_kind_id` on `(kind, -id)`, then `RemoveIndex` for the old
-`dja_event_kind_recent`. In that order, so the table is never without an index on
+`AddIndex` for `drai_event_kind_id` on `(kind, -id)`, then `RemoveIndex` for the old
+`drai_event_kind_recent`. In that order, so the table is never without an index on
 `kind`. It ships whether or not you turn the log on.
 
 `AddIndex` issues a plain `CREATE INDEX` — no `IF NOT EXISTS`, and no adoption of one
@@ -344,8 +350,8 @@ wants `CONCURRENTLY`, creating it by hand ahead of `migrate` makes the migration
 rather than saving it work. Do the whole swap by hand and then tell Django it is done:
 
 ```sql
-CREATE INDEX CONCURRENTLY dja_event_kind_id ON django_redis_aiogram_event (kind, id DESC);
-DROP INDEX CONCURRENTLY dja_event_kind_recent;
+CREATE INDEX CONCURRENTLY drai_event_kind_id ON django_redis_aiogram_event (kind, id DESC);
+DROP INDEX CONCURRENTLY drai_event_kind_recent;
 ```
 
 ```shell
