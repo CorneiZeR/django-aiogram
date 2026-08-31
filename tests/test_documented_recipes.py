@@ -675,10 +675,17 @@ def test_every_broker_the_readme_publishes_resolves_and_names_a_real_extra(path,
     """
     from django.utils.module_loading import import_string
 
+    from django_aiogram.broker.base import Broker
     from django_aiogram.broker.registry import SHIPPED
 
     broker = import_string(path)
 
+    # a subclass, not merely a name that resolves: `__name__` matches for a function or a
+    # constant left behind at that path, and the registry refuses those at runtime — so a
+    # published `BROKER` that imports and cannot be one would pass a name check and fail in
+    # the project that copied it
+    assert isinstance(broker, type), f'{path} resolves to {broker!r}, which is not a class'
+    assert issubclass(broker, Broker), f'{path} is not a Broker subclass: {broker!r}'
     assert broker.__name__ == path.rsplit('.', 1)[-1]
     assert path in SHIPPED, f'{path} is not a registered transport'
     assert SHIPPED[path][1] == extra, f'{path} needs [{SHIPPED[path][1]}], the README says [{extra}]'
