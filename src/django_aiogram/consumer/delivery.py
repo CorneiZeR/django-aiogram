@@ -97,7 +97,7 @@ def accepts_keyword(handler: Handler, name: str) -> bool:
 
 
 class Delivery(ABC):
-    """Consumes the Redis queue until stopped."""
+    """Consumes whichever transport `BROKER` names, until stopped."""
 
     def __init__(self, handler: Handler) -> None:
         """Take what each decoded message is handed to once it arrives."""

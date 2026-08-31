@@ -39,7 +39,10 @@ ROLES = ('mod', 'class', 'meth', 'func', 'attr', 'data', 'exc')
 #: stays in the pattern so it is resolved the day somebody writes one, and is not required to
 #: appear: demanding a hit for a role nobody uses would fail on a codebase that is perfectly fine
 ROLES_IN_USE = ('mod', 'class', 'meth', 'func', 'attr', 'data')
-REFERENCE = re.compile(rf':({"|".join(ROLES)}):`~?([A-Za-z_][\w.]*)`')
+#: `:meth:`~mod.Class.method``, `:meth:`mod.Class.method`` and Sphinx's explicit-title
+#: `:meth:`label <mod.Class.method>``. The third form is unused here today and matched by nothing
+#: before, so a stale target written that way would have walked straight past this file
+REFERENCE = re.compile(rf':({"|".join(ROLES)}):`(?:[^`<]*<\s*)?~?([A-Za-z_][\w.]*)\s*>?`')
 
 
 def module_file(dotted: str) -> Path | None:
@@ -157,8 +160,23 @@ def test_every_reference_into_this_package_resolves(path):
         (':class:`aiogram.types.Message`', []),
         # a name reached through a re-export resolves, which is the point of counting imports
         (':class:`~django_aiogram.eventlog.recorder.Event`', []),
+        # Sphinx's explicit-title form, which the first pattern here did not read at all
+        (':meth:`flush it <django_aiogram.eventlog.recorder.EventRecorder.flush>`', []),
+        (
+            ':meth:`flush it <django_aiogram.eventlog.recorder.EventRecorder.gone>`',
+            ['gone is not in recorder.py'],
+        ),
     ],
-    ids=['a real method', 'a missing method', 'a real module', 'a missing module', 'not ours', 'a re-export'],
+    ids=[
+        'a real method',
+        'a missing method',
+        'a real module',
+        'a missing module',
+        'not ours',
+        'a re-export',
+        'an explicit title',
+        'an explicit title that is stale',
+    ],
 )
 def test_the_resolver_answers_each_shape(source, expected, tmp_path):
     """The resolver is the test, so its own answers are pinned rather than assumed."""
