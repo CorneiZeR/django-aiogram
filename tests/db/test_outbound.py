@@ -27,7 +27,7 @@ from django_aiogram.eventlog.events import new_correlation_id
 from django_aiogram.eventlog.recorder import recorder
 from django_aiogram.eventlog.records import as_identifier
 from django_aiogram.models import TelegramEvent
-from django_aiogram.producer.client import resolve_correlation_id, task_correlation_id
+from django_aiogram.producer.outbound import resolve_correlation_id, task_correlation_id
 from django_aiogram.wire.serializers import JsonSerializer
 
 QUEUE = 'TELEGRAM_BOT_MESSAGE'

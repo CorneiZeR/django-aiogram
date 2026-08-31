@@ -27,6 +27,7 @@ from django_aiogram import TelegramBot
 from django_aiogram import redis as redis_module
 from django_aiogram.context import correlation_scope
 from django_aiogram.exceptions import UnknownApiMethodError
+from django_aiogram.producer import looping
 from django_aiogram.redis import aget_redis, as_bytes
 from django_aiogram.wire.envelope import unpack
 from django_aiogram.wire.serializers import SerializationError, loads
@@ -243,6 +244,35 @@ def test_the_ids_come_back_in_the_order_the_chats_were_given(redis_server, bulk)
     assert [envelope.correlation_id for envelope in queued] == identifiers, 'the ids do not line up with the chats'
 
 
+def test_the_latch_is_taken_under_its_guard(monkeypatch):
+    """Saying it once is a claim about threads, and `Event` has no atomic test-and-set.
+
+    Two web threads sending at the same moment both read the latch down, both find a
+    running loop and both set it — one line becomes two, from the code that promises one.
+    A racing test would pass most runs, so this records whether the guard was held at the
+    moment the latch was taken, which is the invariant itself.
+    """
+    held: list[bool] = []
+
+    class Watching(threading.Event):
+        """An `Event` that says whether the guard was held when it was set."""
+
+        def set(self):
+            """Record the guard, then latch."""
+            held.append(looping._asend_guard.locked())
+            super().set()
+
+    monkeypatch.setattr('django_aiogram.producer.looping._asend_mentioned', Watching())
+
+    async def mention():
+        looping.mention_asend('asend')
+
+    asyncio.run(mention())
+
+    assert held, 'the latch was never taken, so nothing is being tested'
+    assert all(held), 'the latch was taken without the guard, so two threads can both take it'
+
+
 @override_settings(TELEGRAM_BOT=SETTINGS)
 def test_a_broker_that_cannot_be_resolved_does_not_spend_the_mention(caplog, monkeypatch):
     """The once-per-process line belongs to the first caller who can act on it.
@@ -252,7 +282,7 @@ def test_a_broker_that_cannot_be_resolved_does_not_spend_the_mention(caplog, mon
     caller who *could* have moved to the awaiting twin heard silence.
     """
     latch = threading.Event()
-    monkeypatch.setattr('django_aiogram.producer.client._asend_mentioned', latch)
+    monkeypatch.setattr('django_aiogram.producer.looping._asend_mentioned', latch)
 
     def refuse():
         msg = 'BROKER names something that cannot be imported'
@@ -281,7 +311,7 @@ def test_send_from_a_loop_mentions_asend_once(redis_server, caplog, monkeypatch)
     is how people learn to filter our logger out.
     """
     latch = threading.Event()
-    monkeypatch.setattr('django_aiogram.producer.client._asend_mentioned', latch)
+    monkeypatch.setattr('django_aiogram.producer.looping._asend_mentioned', latch)
     bot = TelegramBot()
 
     async def three_sends():
@@ -305,7 +335,7 @@ def test_send_off_a_loop_says_nothing(redis_server, caplog, monkeypatch):
     """Most callers are synchronous — Celery, a management command, a view — and
     there is nothing for them to do about a message aimed at async code."""
     latch = threading.Event()
-    monkeypatch.setattr('django_aiogram.producer.client._asend_mentioned', latch)
+    monkeypatch.setattr('django_aiogram.producer.looping._asend_mentioned', latch)
 
     with caplog.at_level('WARNING', logger='django_aiogram'):
         TelegramBot().send(chat_id=1, text='hi')
@@ -334,7 +364,7 @@ def test_a_refused_method_does_not_spend_the_mention(caplog, monkeypatch, produc
     send does.
     """
     latch = threading.Event()
-    monkeypatch.setattr('django_aiogram.producer.client._asend_mentioned', latch)
+    monkeypatch.setattr('django_aiogram.producer.looping._asend_mentioned', latch)
     instance = TelegramBot()
 
     def refused():
@@ -366,7 +396,7 @@ def test_a_disabled_send_from_a_loop_says_nothing(caplog, monkeypatch):
     path spent the one line the first real caller should have got.
     """
     latch = threading.Event()
-    monkeypatch.setattr('django_aiogram.producer.client._asend_mentioned', latch)
+    monkeypatch.setattr('django_aiogram.producer.looping._asend_mentioned', latch)
 
     def refuse():
         raise AssertionError('a disabled send reached Redis')
@@ -404,7 +434,7 @@ def test_every_synchronous_route_that_writes_names_its_own_twin(
     release adds went unmentioned to exactly the callers who needed them.
     """
     latch = threading.Event()
-    monkeypatch.setattr('django_aiogram.producer.client._asend_mentioned', latch)
+    monkeypatch.setattr('django_aiogram.producer.looping._asend_mentioned', latch)
     bot = TelegramBot()
 
     async def once():
@@ -536,7 +566,7 @@ def test_a_payload_that_cannot_be_serialized_is_recorded_as_lost(redis_server, b
         msg = 'nothing here can be encoded'
         raise SerializationError(msg)
 
-    monkeypatch.setattr('django_aiogram.producer.client.get_serializer', lambda: SimpleNamespace(dumps=refuse))
+    monkeypatch.setattr('django_aiogram.producer.queueing.get_serializer', lambda: SimpleNamespace(dumps=refuse))
     bot = TelegramBot()
 
     def broadcast():
@@ -657,7 +687,7 @@ def test_send_from_a_loop_does_not_spend_the_mention_on_a_broken_broker(caplog, 
     `send` pairs with `asend`, and only this path can spend that one.
     """
     latch = threading.Event()
-    monkeypatch.setattr('django_aiogram.producer.client._asend_mentioned', latch)
+    monkeypatch.setattr('django_aiogram.producer.looping._asend_mentioned', latch)
 
     def refuse():
         msg = 'BROKER names something that cannot be imported'

@@ -32,7 +32,12 @@ src/django_aiogram/
                         must look like, conditions for what a rule asks first
     broker/         one transport per package, and the contract they answer
     producer/
-        client.py       TelegramBot: bot/dispatcher/loop, send, send_raw
+        client.py       TelegramBot: bot/dispatcher/loop, send, send_raw, shutdown
+        outbound.py     what names one send in flight, and what settles it
+        looping.py      who may drive the loop, and for how long
+        queueing.py     everything a queue write does except the write
+        from_settings.py  the aiogram objects the settings describe, and their refusals
+        routing.py      the handler decorators, which read the router and nothing else
         throttling.py   GCRA reservations, one budget per name
     consumer/
         delivery.py     BlpopDelivery, the one consumer

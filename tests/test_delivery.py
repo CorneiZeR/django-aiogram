@@ -14,7 +14,7 @@ from django_aiogram import TelegramBot
 from django_aiogram.broker.redis_list import RedisListBroker
 from django_aiogram.consumer.delivery import BlpopDelivery, Delivery, get_delivery
 from django_aiogram.eventlog.events import new_correlation_id
-from django_aiogram.producer.client import Outbound
+from django_aiogram.producer.outbound import Outbound
 from django_aiogram.redis import processing_key
 from django_aiogram.wire.serializers import JsonSerializer, PickleSerializer
 

@@ -17,7 +17,8 @@ from django_aiogram import TelegramBot, bot
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.eventlog.events import new_correlation_id
 from django_aiogram.management.commands.start_tgbot import Command as StartCommand
-from django_aiogram.producer.client import Outbound, loop_lock
+from django_aiogram.producer.looping import loop_lock
+from django_aiogram.producer.outbound import Outbound
 
 
 async def stub_close():

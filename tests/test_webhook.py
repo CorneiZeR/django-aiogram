@@ -27,7 +27,8 @@ from django_aiogram.consumer.webhook import (
     webhook_settings,
 )
 from django_aiogram.exceptions import LoopThreadNotStartedError, ShuttingDownError
-from django_aiogram.producer.client import Outbound, loop_lock
+from django_aiogram.producer.looping import loop_lock
+from django_aiogram.producer.outbound import Outbound
 
 SECRET = 'a-long-random-string'
 #: what the deliberately failing handler below raises with

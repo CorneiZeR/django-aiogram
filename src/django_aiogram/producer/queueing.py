@@ -1,0 +1,152 @@
+"""Everything a queue write does, except the write.
+
+One producer is synchronous and the other awaits, and the only line they cannot share is
+the one that hits the transport. Everything around it lives here: the serialization, the
+batching, and both event rows -- including the rule that a message lost on the way to the
+broker records a drop rather than letting silence imply it was queued.
+
+So each transport is the two lines that write. The consumer knows one payload shape and the
+event log has one definition of ``queued``, because neither path owns them.
+"""
+
+import contextlib
+import logging
+import time
+import uuid
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+from django_aiogram.config.enums import EventKind
+from django_aiogram.eventlog.events import new_correlation_id
+from django_aiogram.eventlog.recorder import recorder
+from django_aiogram.eventlog.records import Event, as_identifier
+from django_aiogram.wire.envelope import pack
+from django_aiogram.wire.payloads import describe
+from django_aiogram.wire.serializers import get_serializer
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Iterator
+
+logger = logging.getLogger('django_aiogram')
+
+
+@dataclass
+class Queueing:
+    """One write a producer is about to make, and what it stands for.
+
+    Carries the ids so a failure can be recorded against the messages that were
+    actually lost: a variadic ``RPUSH`` fails for its whole chunk, not one entry.
+    """
+
+    payloads: list[bytes]
+    messages: list[tuple[uuid.UUID, dict[str, Any]]]
+    queued_at: float
+
+
+@contextlib.contextmanager
+def queueing(function: str, messages: list[tuple[uuid.UUID, dict[str, Any]]]) -> 'Iterator[Queueing]':
+    """Everything a queue write does, except the write.
+
+    The one step that cannot be shared between a synchronous producer and an
+    asynchronous one is the ``await`` — the language will not allow it. Everything
+    around it can be, and is: the serialization, the key, and both event rows,
+    including the rule that a message lost on the way to the broker records a drop
+    rather than letting silence imply it was queued. Resolving the serializer and
+    the key sits outside that guard on purpose — a misconfigured ``SERIALIZER``
+    fails identically for every send ever made, and the exception is where that
+    belongs, not a drop row per message for as long as it stays misconfigured.
+
+    So each transport is the two lines that write, and nothing else. The consumer
+    knows one payload shape and the event log has one definition of ``queued``;
+    neither can drift between the two paths, because neither path owns them.
+
+    The two ways a message is lost here are **not** the same, and the ``stage`` on
+    the drop row is what tells them apart. ``serialising`` — spelled as the value is
+    written, since a consumer filters on it — means the payload never
+    left this process, so re-sending it is safe. ``queueing`` means the publish raised, and a
+    publish that raised may still have been applied — the reply is what went missing, and a
+    variadic ``RPUSH`` or a confirmed AMQP publish can both fail that way — so re-sending may
+    duplicate. A broadcast makes
+    that distinction the only one available, because the ids go with the exception.
+    """
+    queued_at = time.time()
+    serializer = get_serializer()
+
+    def dropped(stage: str, error: Exception) -> None:
+        """Record every message this failure lost, and where it lost them."""
+        for identifier, kwargs in messages:
+            recorder.record(
+                Event(
+                    kind=EventKind.OUTBOUND_DROPPED.value,
+                    correlation_id=identifier,
+                    function=function,
+                    chat_id=as_identifier(kwargs.get('chat_id')),
+                    error_code=type(error).__name__,
+                    error=str(error),
+                    detail={'stage': stage},
+                )
+            )
+
+    try:
+        # guarded, not left to the caller: a payload that cannot be serialized
+        # loses its message exactly as a refused write does, and for a chunk the
+        # ids go with the exception — so these rows are the only record of which
+        # messages were lost
+        write = Queueing(
+            payloads=[
+                serializer.dumps(pack(function, kwargs, identifier, queued_at)) for identifier, kwargs in messages
+            ],
+            messages=messages,
+            queued_at=queued_at,
+        )
+    except Exception as error:
+        dropped('serialising', error)
+        raise
+    try:
+        yield write
+    except Exception as error:
+        dropped('queueing', error)
+        raise
+    if not recorder.active:
+        # nothing keeps the table and nothing listens, so there is no event to make
+        return
+    # two gates, not one: whether to record at all is a different question from
+    # whether to summarize the arguments, and describing them is the expensive
+    # half. A metrics receiver counts sends; it does not read message bodies
+    described = recorder.wants_payload
+    for identifier, kwargs in messages:
+        recorder.record(
+            Event(
+                kind=EventKind.OUTBOUND_QUEUED.value,
+                correlation_id=identifier,
+                created_at=queued_at,
+                function=function,
+                chat_id=as_identifier(kwargs.get('chat_id')),
+                detail=describe(kwargs) if described else None,
+            )
+        )
+
+
+def chunks(
+    chat_ids: 'Iterable[int | str]',
+    chunk_size: int,
+    kwargs: dict[str, Any],
+) -> 'Iterator[list[tuple[uuid.UUID, dict[str, Any]]]]':
+    """Group the chats into the batches one write covers.
+
+    Serialization happens inside :func:`queueing`, one chunk at a time, which is what
+    keeps peak memory bounded: a ``BufferedInputFile`` payload times fifty thousand chats
+    would otherwise all exist at once.
+
+    The method is validated by ``TelegramBot._accept_bulk`` before either caller gets here,
+    so a refused one never reaches this generator.
+    """
+    size = max(1, int(chunk_size))
+    chunk: list[tuple[uuid.UUID, dict[str, Any]]] = []
+    for chat_id in chat_ids:
+        chunk.append((new_correlation_id(), {**kwargs, 'chat_id': chat_id}))
+        if len(chunk) >= size:
+            yield chunk
+            chunk = []
+    if chunk:
+        yield chunk
