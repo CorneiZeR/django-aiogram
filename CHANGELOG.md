@@ -675,6 +675,17 @@ a new table, so the old one is left where it is — see **Upgrading** for moving
 
 ### Changed
 
+- **The release build's last gate could not run.** `publish.yml` hands the built artifacts to
+  `scripts/smoke_install.sh dist` so that the wheel it uploads is the wheel that gets
+  installed — and that branch of the script kept the path it was given, relative, then moved
+  into a throwaway project where `dist/...` no longer resolved. So the step failed on
+  `Requirement 'dist/django_aiogram-4.0.0-py3-none-any.whl[redis]' looks like a filename, but
+  the file does not exist`, which would have stopped the publish after the tag was cut.
+
+  Nothing had run it: CI called the script with no argument, where it builds its own copy.
+  The path is resolved absolute now, and the `smoke` job passes a directory the way the
+  release does, so the release's own invocation is exercised on every pull request.
+
 - **The Kafka extra declared a driver floor that cannot be installed on two of the five
   Pythons this package claims.** `confluent-kafka>=2.3` against `requires-python = ">=3.10,
   <3.15"`, and that driver compiles librdkafka: measured on PyPI and then on real

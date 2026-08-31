@@ -21,8 +21,13 @@ trap 'rm -rf "$work"' EXIT
 # PyPI keeps for ever
 if [ -n "${1:-}" ]; then
     echo "--- using the artifacts already built in $1"
-    wheel="$(ls "$1"/*.whl)"
-    sdist="$(ls "$1"/*.tar.gz)"
+    # absolute, and that is the whole point of the `cd`: every step below runs from a
+    # throwaway project directory, so a relative `dist/...` — which is exactly what the
+    # release workflow passes — stops resolving the moment the script moves. It failed
+    # there and nowhere else, because this argument is used by the release build alone
+    given="$(cd "$1" && pwd)"
+    wheel="$(ls "$given"/*.whl)"
+    sdist="$(ls "$given"/*.tar.gz)"
 else
     echo "--- building the wheel and the sdist"
     python -m build --sdist --wheel --outdir "$work/dist" "$root" >/dev/null
