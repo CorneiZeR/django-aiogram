@@ -33,8 +33,15 @@ jobs:
       - name: Publish docs/wiki to the wiki repository
         env:
           # GITHUB_TOKEN has no access to <repo>.wiki.git, whatever the contents
-          # permission says — the wiki is a separate repository. Store a PAT or
-          # GitHub App token with repo write access as WIKI_TOKEN.
+          # permission says — the wiki is a separate repository. Nor has a
+          # fine-grained PAT: nothing in its permission list covers a wiki.
+          #
+          # WIKI_TOKEN is a **classic** PAT. On this public repository the single
+          # `public_repo` scope is enough — measured, one checkbox and no `repo`.
+          #
+          # And <repo>.wiki.git does not exist until somebody creates a page in the
+          # web UI: before that a push fails with "Repository not found", which
+          # reads like the token being wrong when it is the repository being absent.
           TOKEN: ${{ secrets.WIKI_TOKEN }}
         run: |
           set -euo pipefail
