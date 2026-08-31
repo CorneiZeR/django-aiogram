@@ -153,8 +153,11 @@ def test_every_index_this_release_declares_is_created_under_that_name():
     A test that only reads `_meta` passes on a migration that names its indexes differently —
     and the collision that started this is a fact about the database, not about the model.
     """
+    declared = TelegramEvent._meta.indexes
+    assert declared, 'the model declares no index, so the loop below asserts nothing'
+
     with connection.cursor() as cursor:
         existing = set(connection.introspection.get_constraints(cursor, TelegramEvent._meta.db_table))
 
-    for index in TelegramEvent._meta.indexes:
+    for index in declared:
         assert index.name in existing, f'{index.name} is declared by the model and absent from the table'
