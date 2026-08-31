@@ -683,6 +683,11 @@ a new table, so the old one is left where it is — see **Upgrading** for moving
   `ModuleNotFoundError: No module named 'redis'` out of `start_tgbot`. Which is the failure
   `E047` exists to prevent, arriving through the storage door instead of the broker's.
 
+  The install lines follow it: the README and **Installation** show
+  `pip install 'django-aiogram[kafka,redis]'` and the RabbitMQ equivalent, because one extra
+  per transport is true of the *queue* and the FSM store is a second question. `pyproject.toml`
+  says the same beside the extras it declares.
+
   `E019` judges the driver behind `'redis'` now, with both ways out in the hint — install the
   extra, or set `'memory'` if the deployment keeps no chat state — and `find_spec` rather than
   an import, because this rule runs on every `manage.py` invocation. **Installation** says it
@@ -861,8 +866,11 @@ a new table, so the old one is left where it is — see **Upgrading** for moving
   upgrading from 3.x has to add the extra, or `redis` disappears with the rename.
 
   It is worth the one-time edit because the alternative is every deployment carrying every
-  driver: a project on Kafka has no use for `redis`, and this is what lets the later
-  transports ship without adding to what a base install downloads.
+  driver: a project on Kafka needs no Redis *for its queue*, and this is what lets the later
+  transports ship without adding to what a base install downloads. It may still want
+  `[redis]` beside its own extra — `FSM_STORAGE` defaults to aiogram's Redis store, and
+  `E019` says so at startup — which is the one place a transport does not decide the whole
+  install.
 
   Nothing guesses. `BROKER` names the transport, and a name whose driver is absent is
   `E047` at startup carrying that `pip install` line — with one exception that matters to a

@@ -33,10 +33,11 @@ or keep one extra and say the state lives in the process:
 TELEGRAM_BOT = {'FSM_STORAGE': 'memory', ...}   # per process, lost on restart
 ```
 
-`manage.py check` reports `E019` either way round — it used to say nothing here, and
-`start_tgbot` died on `ModuleNotFoundError: No module named 'redis'` while building the
-dispatcher, which is the failure `E047` exists to prevent arriving through the storage
-instead of the broker.
+`manage.py check` reports **`E019`** for exactly one configuration — `FSM_STORAGE` naming
+the Redis store on an install that has no redis-py — and says nothing once either line
+above is in place. It used to say nothing at all: `start_tgbot` died on
+`ModuleNotFoundError: No module named 'redis'` while building the dispatcher, which is the
+failure `E047` exists to prevent, arriving through the storage instead of the broker.
 
 The Kafka floor is two numbers because that driver compiles librdkafka: the first wheel for
 Python 3.13 is 2.6.0 and the first for 3.14 is 2.12.1, so an older pin does not fail to *work*

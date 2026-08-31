@@ -36,16 +36,19 @@ each transport has a page of its own below.
 ## Install
 
 ```shell
-pip install 'django-aiogram[redis]'        # Redis list, the default, or Redis Streams
-pip install 'django-aiogram[rabbitmq]'     # RabbitMQ
-pip install 'django-aiogram[kafka]'        # Kafka
+pip install 'django-aiogram[redis]'                 # Redis list, the default, or Redis Streams
+pip install 'django-aiogram[rabbitmq,redis]'        # RabbitMQ
+pip install 'django-aiogram[kafka,redis]'           # Kafka
 ```
 
-One extra per transport, so a deployment downloads only the driver it uses — a project
-on Kafka has no reason to carry `redis`. Nothing is inferred from what happens to be
-installed: `BROKER` names the transport, and a base `pip install django-aiogram`
-imports and runs `manage.py` but carries no message. `manage.py check` says which
-extra is missing, with the `pip install` line, in the processes that send;
+One extra per transport, so a deployment downloads only the queue driver it uses.
+**`redis` is in the other two lines for the FSM store, not the queue**: `FSM_STORAGE`
+defaults to aiogram's Redis store, so a bot keeping chat state needs that driver whichever
+transport carries its messages, and `FSM_STORAGE: 'memory'` is what drops it.
+
+Nothing is inferred from what happens to be installed: `BROKER` names the transport, and a
+base `pip install django-aiogram` imports and runs `manage.py` but carries no message.
+`manage.py check` names every extra that is missing, with the `pip install` line;
 [Installation](https://github.com/CorneiZeR/django-aiogram/wiki/Installation) has the
 exceptions.
 
