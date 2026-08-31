@@ -70,7 +70,8 @@ def broker_class(*, verify_driver: bool = True) -> type[Broker]:
     try:
         resolved = import_string(path)
     # `ValueError` for a path with an empty module part, which `import_module('')` raises rather
-    # than `ImportError` -- see `producer.client` for the same catch and the same reason
+    # than `ImportError` -- see `producer.from_settings.build_storage` for the same catch and the
+    # same reason
     except (ImportError, ValueError) as error:
         msg = f"{SETTINGS_NAME}['BROKER'] is {path!r}, which cannot be imported: {error}"
         raise BrokerNotConfiguredError(msg) from error

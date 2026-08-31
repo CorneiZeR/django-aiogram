@@ -39,7 +39,7 @@ Reach for a webhook when the delay matters, or when an inbound HTTP endpoint is
 easier to run than a process that calls Telegram in a loop.
 
 It does **not** remove the need for a long-running process. Only inbound polling
-goes away: outbound messages still travel through Redis, so a worker still has
+goes away: outbound messages still go through the broker, so a worker still has
 to consume them. Webhook mode is not a route to serverless.
 
 Webhooks are also not always possible — a public HTTPS endpoint with a valid
@@ -180,8 +180,9 @@ and two sources of updates would be one too many; building the bot raised
 the update — the process is shutting down, its loop is closed,
 or the loop's own thread had not started yet.
 
-**Updates are not queued through Redis.** They go straight from the request to
-the dispatcher. Redis carries outbound messages only, in both modes.
+**Updates are not queued at all.** They go straight from the request to the
+dispatcher, whichever transport is configured: the broker carries outbound
+messages only, in both modes.
 
 ## Health
 

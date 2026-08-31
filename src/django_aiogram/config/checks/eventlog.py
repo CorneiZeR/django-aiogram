@@ -129,8 +129,12 @@ def _a_log_the_rename_left_behind(_key: str) -> list[Problem]:
         return []
     return [
         Problem(
-            f'{OLD_TABLE} is still on the {alias!r} database, holding rows this release does not read.',
+            f'is still on the {alias!r} database, holding rows this release does not read.',
             key='',
+            # the subject is a table, not a setting: without this the line renders as
+            # `TELEGRAM_BOT django_redis_aiogram_event is still on …`, which reads as a typo and
+            # sends a reader looking for a setting by that name
+            label=OLD_TABLE,
             hint=(
                 'manage.py tgbot_move_events copies them into this release table in bounded '
                 'chunks, and can be stopped and rerun. Dropping the old table afterwards is '

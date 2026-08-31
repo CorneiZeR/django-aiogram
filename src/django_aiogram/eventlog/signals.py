@@ -6,7 +6,7 @@ path. A setting would need an entry in ``Settings.md``, a check id, an
 decision about what to do when the path is wrong. A signal needs none of that,
 ``send_robust`` contains most of what a receiver can do wrong, and connecting one is
 the thing every Django developer already knows how to do. *Most*: see
-:meth:`~django_aiogram.eventlog.recorder.EventRecorder._publish` for the receiver shape
+:func:`~django_aiogram.eventlog.publishing.publish` for the receiver shape
 Django's own containment misses, which is why this package does not rely on it
 alone.
 
@@ -20,7 +20,7 @@ from django.dispatch import Signal
 #: Fired once per batch of recorded events, on whichever thread flushed that batch —
 #: normally the event writer's own, and three other threads can be it.
 #:
-#: Receivers get ``events``: a tuple of :class:`~django_aiogram.eventlog.recorder.Event`,
+#: Receivers get ``events``: a tuple of :class:`~django_aiogram.eventlog.records.Event`,
 #: whose field names are pinned by ``tests/test_public_surface.py`` and are
 #: therefore public API. ``sender`` is the recorder instance.
 #:

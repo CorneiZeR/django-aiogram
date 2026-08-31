@@ -326,6 +326,34 @@ Entries land here as the work does; nothing below is released.
 
 ### Fixed
 
+- **The package described itself as Redis-only, on PyPI.** `description` said "send Telegram
+  messages from Django **through Redis**" and `keywords` had no `rabbitmq`, no `kafka`, no
+  `redis-streams` — the first sentence anybody reads on the project page, and the words people
+  search by, both written before `BROKER` existed. Three pages said the same in passing and now
+  name the broker instead: the assistant page's summary of `bot.send`, and two sentences on the
+  **Webhook** page. The README's own diagram keeps the Redis list, which it labels as the default
+  it shows.
+
+- **Two comments and one docstring pointed at things that had moved.** `broker/registry.py` and
+  `consumer/delivery.py` sent a reader to `producer.client` for the `ValueError` catch they share
+  — it moved to `producer/from_settings.py` when the client was split — and `eventlog/signals.py`
+  documented `EventRecorder._publish`, a method the recorder's split deleted, plus `Event` at the
+  home it left.
+
+  **A test resolves them now**, since prose is the one part of the package no gate reads:
+  `tests/test_docstring_references.py` walks every `:mod:`, `:meth:`, `:attr:` and friend that
+  names something inside this package — 148 of them — and resolves each against the syntax tree
+  of the module it names. It found both, and it fails on either coming back. References into other
+  packages are somebody else's to keep; a plain backticked mention is outside it, and the two
+  comments above were fixed by hand for that reason.
+
+- **`I003` introduced itself as a setting that does not exist.** Django prints the check id and
+  then the message, so a keyless rule that inherits the settings name for a subject renders as
+  `TELEGRAM_BOT django_redis_aiogram_event is still on the 'default' database` — which reads as a
+  typo and sends a reader looking for `TELEGRAM_BOT['django_redis_aiogram_event']`. The rule is
+  about a table, and says so: `Problem.label` already existed for exactly this, and `E048` was
+  already using it for `DATABASE_ROUTERS`.
+
 - **`migrate` no longer fails on every upgrade from 3.x.** The new table declared the four index
   names the old one already has — `drai_event_correlation`, `drai_event_recent`,
   `drai_event_kind_id`, `drai_event_chat` — and index names are unique per *schema*, not per
