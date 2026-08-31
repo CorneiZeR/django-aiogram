@@ -372,11 +372,18 @@ liveness is the transport's answer and only two transports write one down.
 | Transport | The consumer | The depth | Stranded in-flight lists |
 | --- | --- | --- | --- |
 | Redis list | the heartbeat key its consumer writes, per worker | `LLEN` on the queue | yes — a `SCAN` over `<REDIS_MESSAGES_KEY>:processing:*` |
-| Redis Streams | `XINFO CONSUMERS`: how long ago any member of the group last spoke, which a blocking read that finds nothing refreshes | entries not yet acknowledged by the group | yes — the group records which consumer holds each pending entry |
+| Redis Streams | `XINFO CONSUMERS`: how long ago any member of the group last spoke, which a blocking read that finds nothing refreshes | entries not yet acknowledged by the group | no — the pending list belongs to the *group*, so any name can reclaim it and there is nothing stranded to find |
 | RabbitMQ | not observable from outside: the broker tracks its own consumers, and it says so instead of guessing | messages ready in the queue | no — unacknowledged deliveries belong to a channel, and the broker returns them itself when it drops |
 | Kafka | the same | the lag on the committed offsets | no — an uncommitted offset is replayed to whoever takes the partition |
 
-`consumer not observable from outside` in a healthy line is that third column, not a
+The last column is the sweep, not the bookkeeping: the group does record which consumer
+holds each pending entry — `manage.py tgbot_reclaim` uses exactly that — but a *stranded*
+list is a thing only the Redis list can have, because only there is unsettled work parked
+under a worker name that nothing else will come back for. On the other three a name is not
+needed to recover the work, which is what `needs_identity` says, and the probe skips a scan
+whose keys cannot exist rather than reporting a reassuring zero.
+
+`consumer not observable from outside` in a healthy line is the second column, not a
 missing consumer: on those two transports a worker that dies gives its work back
 without anybody asking, so there is nothing for a probe to notice. The depth is the
 signal there — set `HEALTHCHECK_MAX_QUEUE` and a wedged consumer shows up as a
@@ -442,10 +449,11 @@ cache backend, and the guarantee is a write. Nobody reads either twice a minute.
 `--stranded` and `--guarantee` turn them on for the `python -m` form too.
 
 **Both are Redis-only**, and they are the only part of the probe that is. They build a
-client of their own, so on a transport with no redis-py they report `unknown` and log why
-as `tg_reason` rather than refusing — the verdict never depended on them. The sweep is
-skipped where in-flight work has no worker name to be keyed on, which is the table above's
-last column.
+client of their own, so on a transport with no redis-py the guarantee reads `unknown` and
+the sweep warns that it did not finish, naming the reason — the verdict never depended on
+either. Where in-flight work has no worker name to be keyed on, the sweep is not attempted
+at all and says nothing: that is the table above's last column, and a line on every probe
+run about a question the transport does not have is worse than silence.
 
 `start_period` matters: the first heartbeat is written when the consumer's loop
 first turns, so a container checked immediately after start has nothing to show

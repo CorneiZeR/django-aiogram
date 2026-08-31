@@ -153,6 +153,7 @@ Grepping one out of `docker inspect` should land here.
 | `the heartbeat is not a timestamp` | Redis list: something else writes to that key. Give the worker its own `REDIS_MESSAGES_KEY`, or its own database |
 | `could not read the consumer liveness: …` | `PING` answered and the next command did not: a failover in between, a replica that cannot serve the key, or `decode_responses` in a URL shared with a cache backend meeting bytes it cannot decode |
 | `could not read the queue length: …` | The same, one command later |
+| `the scan for stranded in-flight lists did not finish: …` | A warning, not a verdict: `--stranded` was asked for and the sweep could not walk the whole keyspace — no client (an install with no redis-py, or an unusable `REDIS_URL`), a key it could not decode, or the twenty-`SCAN`-round bound. The count on the line above, if any, is a floor rather than a total |
 | `N messages are queued, over the limit of N` | Work is backing up. `HEALTHCHECK_MAX_QUEUE` or `--max-queue` is what set that number; see **Messages pile up in the queue** above |
 
 Two lines are not refusals and do not change the exit code:

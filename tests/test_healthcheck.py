@@ -1009,6 +1009,52 @@ def test_the_sweep_matches_the_keys_workers_actually_write(redis_server):
     assert '1 message(s) are in flight' in report.warnings[0], report.warnings
 
 
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+def test_a_sweep_that_could_not_run_says_so_rather_than_reporting_a_clean_zero(redis_server, monkeypatch):
+    """A sweep that never happened must not read like one that found nothing.
+
+    The two are the same line otherwise: the caller warns on a non-zero count, so a client
+    that could not be built returned zero, warned nobody, and left the report saying the
+    healthy thing about a question nothing had asked. Which is the failure this whole change
+    is about, one layer in -- the driver being an extra is exactly how the client stops
+    being available.
+
+    Arranged one-sided on purpose: the broker's own accessor keeps working, so the verdict
+    is reached and the report is healthy. Only the Redis-shaped extra is unavailable, and
+    the reason travels into the warning where an operator reads it.
+    """
+    redis_server.set(f'{QUEUE}:heartbeat:mine', str(int(time.time())))
+
+    def cannot_build():
+        raise ImproperlyConfigured('REDIS_URL is empty')
+
+    monkeypatch.setattr('django_aiogram.healthcheck.get_redis', cannot_build)
+
+    report = check(stranded=True)
+
+    assert report.ok, report.message
+    assert len(report.warnings) == 1, report.warnings
+    assert 'did not finish' in report.warnings[0], report.warnings
+    # the reason, not just the fact: `--stranded` on an install with no driver is the case
+    # this exists for, and "something went wrong" would send the operator to the logs
+    assert 'REDIS_URL is empty' in report.warnings[0], report.warnings
+
+
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+def test_a_sweep_that_finished_adds_no_second_warning(redis_server):
+    """The control, and it is the one that keeps the case above from being free.
+
+    A warning appended unconditionally would satisfy every assertion up there while adding
+    a line to every healthy probe on the list transport -- twice a minute, for nothing.
+    """
+    redis_server.set(f'{QUEUE}:heartbeat:mine', str(int(time.time())))
+
+    report = check(stranded=True)
+
+    assert report.ok, report.message
+    assert report.warnings == (), report.warnings
+
+
 # one key per metacharacter `_escaped` quotes, and a decoy for the two that would
 # otherwise match their own literal: unescaped, `TG?one` and `TG*all` are patterns that
 # also select the decoy, and only a second list makes that visible
@@ -1043,7 +1089,9 @@ def test_a_queue_key_with_glob_characters_is_still_swept(redis_server, key, deco
         if decoy:
             redis_server.rpush(f'{decoy}:processing:gone', b'{}')
 
-        assert _stranded() == (1, True), f'the sweep answered wrongly under {key!r}'
+        sweep = _stranded()
+
+        assert (sweep.found, sweep.complete) == (1, True), f'the sweep answered wrongly under {key!r}'
 
 
 @pytest.mark.parametrize('value', [float('inf'), float('nan'), 'nine', {}], ids=repr)

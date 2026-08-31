@@ -344,13 +344,21 @@ Entries land here as the work does; nothing below is released.
   neither could ever change the verdict. **Deployment** now has a table of what the probe
   can see on each of the four, because "stranded in-flight lists" means nothing on Kafka.
 
-  Two more things came out of it, both in the same class:
+  Three more things came out of it, all in the same class:
 
   - **A `BROKER` whose driver is missing is now reported rather than raised.** Both forms of
     the probe print `RedisListBroker needs the 'redis' package, which is not installed.
     Install it with: pip install "django-aiogram[redis]"` and exit non-zero — an image built
     for one transport and pointed at another used to get a traceback out of a probe whose
     whole output is a diagnosis.
+  - **`--stranded` says when it could not look.** The sweep returned "nothing found, and I
+    finished" whenever its client could not be built — so a report on an install with no
+    driver read as a clean zero about a question nothing had asked. It now warns
+    `the scan for stranded in-flight lists did not finish: …` with the reason, for a missing
+    client, a key it could not decode, or the twenty-`SCAN`-round bound alike. Where the
+    transport has no worker-keyed in-flight work at all, the sweep is still not attempted and
+    still says nothing: a warning twice a minute about a question Kafka does not have is
+    worse than silence.
   - **One refusal changed wording:** `redis is unreachable: …` is **`the broker is
     unreachable: …`**. Up to 3.1 the probe pinged Redis before every check and could name it;
     it opens no client of its own now, so the transport is asked and the first thing it cannot

@@ -425,6 +425,7 @@ PROBE_REFUSALS = (
     'message(s) are in flight under',
     'disabled in this process; nothing to check',
     'could not scan for stranded in-flight lists',
+    'the scan for stranded in-flight lists did not finish',
     'could not establish which delivery guarantee is in force',
 )
 

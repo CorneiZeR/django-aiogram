@@ -271,6 +271,24 @@ def _depth(broker: Broker, *, limit: int) -> int:
     return queued
 
 
+@dataclass(frozen=True)
+class _Sweep:
+    """What the stranded-list sweep saw, and whether it could see all of it.
+
+    Three fields rather than two, because ``(0, True)`` was being used for a sweep that
+    never ran: the client could not be built, the caller warns only when the count is
+    non-zero, and the report came back with a clean line about a question nobody had
+    answered. A sweep that cannot look says so.
+    """
+
+    #: messages in flight under worker names that are not this one
+    found: int
+    #: whether the whole keyspace was walked. False after the round cap as well
+    complete: bool
+    #: why it could not answer, when that is a reason rather than a bound
+    unavailable: str | None = None
+
+
 def check(
     *,
     max_queue: int | None = None,
@@ -328,14 +346,23 @@ def check(
     # answers `needs_identity` false has none — scanning for keys that cannot exist would
     # report a reassuring zero about a question this deployment does not have
     if stranded and broker.needs_identity:
-        found, swept = _stranded()
-        if found:
+        sweep = _stranded()
+        if sweep.found:
             # not a failure: another worker may be sending them right now. But an
             # invisible pile is how a stranded list stays stranded
             warnings.append(
-                f'{found if swept else f"at least {found}"} message(s) are in flight under '
-                'other worker names. If one of those workers is gone, '
-                '`manage.py tgbot_reclaim --worker <name>` requeues them.'
+                f'{sweep.found if sweep.complete else f"at least {sweep.found}"} '
+                'message(s) are in flight under other worker names. If one of those '
+                'workers is gone, `manage.py tgbot_reclaim --worker <name>` requeues them.'
+            )
+        if not sweep.complete:
+            # said out loud rather than left in the log, because the line above is what an
+            # operator reads: a zero from a sweep that never ran looks exactly like a zero
+            # from one that walked the whole keyspace
+            detail = sweep.unavailable or f'it stopped after {STRANDED_SCAN_ROUNDS} SCAN rounds'
+            warnings.append(
+                f'the scan for stranded in-flight lists did not finish: {detail}. '
+                'A pile under another worker name may not be in the count above.'
             )
     return Report(ok=True, message=healthy, warnings=tuple(warnings))
 
@@ -387,13 +414,13 @@ def _guarantee() -> str:
     return 'at-least-once'
 
 
-def _stranded() -> tuple[int, bool]:
+def _stranded() -> _Sweep:
     """Count what is in flight under a worker name that is not this one.
 
     Read rather than acted on: a message under another name may be one another worker
     is sending this second, and taking it back would send it twice.
 
-    Bounded, and returns whether it finished. ``MATCH`` filters on the server but
+    Bounded, and says whether it finished. ``MATCH`` filters on the server but
     ``SCAN`` still walks the whole keyspace, and on a Redis shared with a cache
     backend — which the settings page suggests is common — an unbounded sweep is a full
     pass over someone else's keys. A partial answer is worth having; one that pretends
@@ -407,10 +434,12 @@ def _stranded() -> tuple[int, bool]:
     try:
         connection = _connected()
     except _UnhealthyError as refusal:
-        # nothing to report rather than a refusal: the verdict is already decided, and this
-        # sweep is a warning line on top of it
+        # not a refusal: the verdict is already decided, and this sweep is a warning line on
+        # top of it. But not a clean zero either -- the caller turns this into a warning of
+        # its own, because a deployment that asked for the sweep is entitled to know it did
+        # not happen
         logger.warning('could not scan for stranded in-flight lists', extra={'tg_reason': str(refusal)})
-        return 0, True
+        return _Sweep(found=0, complete=False, unavailable=str(refusal))
 
     pattern = processing_pattern()
     mine = processing_key()
@@ -429,14 +458,14 @@ def _stranded() -> tuple[int, bool]:
                 seen.add(name)
                 total += int(connection.llen(name) or 0)
             if cursor == 0:
-                return total, True
-    except (_RedisError, UnicodeDecodeError):
+                return _Sweep(found=total, complete=True)
+    except (_RedisError, UnicodeDecodeError) as error:
         # the decode too: a foreign key on a shared Redis can match this pattern and hold
         # bytes that are not UTF-8, and aborting the whole probe over a warning nobody
         # acts on is the opposite of what this sweep is for
         logger.warning('could not scan for stranded in-flight lists', extra={'tg_key': pattern})
-        return total, False
-    return total, False
+        return _Sweep(found=total, complete=False, unavailable=str(error))
+    return _Sweep(found=total, complete=False)
 
 
 def add_limit_flags(parser: argparse.ArgumentParser) -> None:
