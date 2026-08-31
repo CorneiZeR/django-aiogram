@@ -62,7 +62,7 @@ do not go looking for a bug: raw group lag counts every record past the committe
 including the ones this process has taken and not yet settled, and `queue_depth()` subtracts
 those. The gap is what the worker is holding, so it closes as the sends finish. Offsets settle a
 contiguous prefix there, so the gap can also outlast the sends that caused it — see
-**[[Delivery]]**.
+**[Delivery](Delivery.md)**.
 
 `inflight_depth()` is **not** the same everywhere, and the difference decides where you can ask
 it. The Redis list keeps its in-flight messages on the server under the worker's name and Redis
@@ -133,7 +133,7 @@ If the probe answers `cannot read the settings: …` instead, that variable is t
 missing: `manage.py` sets it inside its own process, so a container running it may
 never export it.
 
-See **[[Deployment]]**. Raising `timeout:` also stops the killing and leaves your whole
+See **[Deployment](Deployment.md)**. Raising `timeout:` also stops the killing and leaves your whole
 Django app being imported twice a minute to read two keys.
 
 ## What the healthcheck's refusals mean
@@ -245,10 +245,10 @@ duplicates. So the question is which duplicates *this* transport produces:
 
 | Transport | Where a duplicate comes from |
 | --- | --- |
-| **[[Redis-list]]** | a worker killed mid-send, reclaimed by the next start **that resolves the same name** — the in-flight list is keyed on it, so a replacement with a fresh hostname strands the message instead. And two workers sharing a `WORKER_NAME` share one list, so each reclaims what the other is still sending — give every worker its own name, and one it keeps |
-| **[[Redis-Streams]]** | an entry idle longer than the liveness TTL is claimed by another consumer, so a worker slow enough to look dead has its message taken |
-| **[[RabbitMQ]]** | a dropped channel requeues everything it held unacknowledged |
-| **[[Kafka]]** | **a run rather than a message.** One refusal rewinds its partition, so that record and every later one in it are delivered again; a kill replays from the last committed offset, which is at least what was in flight and can be more — records that had already finished stay behind a commit gap and come back with it |
+| **[Redis list](Redis-list.md)** | a worker killed mid-send, reclaimed by the next start **that resolves the same name** — the in-flight list is keyed on it, so a replacement with a fresh hostname strands the message instead. And two workers sharing a `WORKER_NAME` share one list, so each reclaims what the other is still sending — give every worker its own name, and one it keeps |
+| **[Redis Streams](Redis-Streams.md)** | an entry idle longer than the liveness TTL is claimed by another consumer, so a worker slow enough to look dead has its message taken |
+| **[RabbitMQ](RabbitMQ.md)** | a dropped channel requeues everything it held unacknowledged |
+| **[Kafka](Kafka.md)** | **a run rather than a message.** One refusal rewinds its partition, so that record and every later one in it are delivered again; a kill replays from the last committed offset, which is at least what was in flight and can be more — records that had already finished stay behind a commit gap and come back with it |
 
 The Kafka row is the one to read before assuming a bug. Nothing there is per-message, so a
 handler that is not idempotent on its own business key will send innocent messages twice.
@@ -261,7 +261,7 @@ the send path read it the same way.
 
 ## Sends are slow
 
-That is likely the pacing in **[[Rate-limits|Rate limits]]** doing its job: one
+That is likely the pacing in **[Rate limits](Rate-limits.md)** doing its job: one
 message per second to the same chat, 20 per minute to a group. Verify with `RATE_LIMIT`
 set to `None`; if it speeds up, tune the numbers rather than removing them, or
 Telegram will start refusing.
@@ -271,7 +271,7 @@ Telegram will start refusing.
 The 1.x package name was a deprecated shim in 2.x and is gone in 3.0. The
 package is `django_aiogram`: use it in `INSTALLED_APPS`, import from it,
 and note that `TelegramBot` lives in `django_aiogram.producer.client` while the
-settings module is `django_aiogram.config.settings`. See **[[Upgrading]]**.
+settings module is `django_aiogram.config.settings`. See **[Upgrading](Upgrading.md)**.
 
 ## The event log writes nothing
 
@@ -293,7 +293,7 @@ In order of how often it is the answer:
    later release adds. `W008` warns when it names a kind this version does not
    know.
 5. Nothing has been flushed yet. The writer batches on a timer, so a test that
-   asserts immediately needs `recorder.flush()`. See **[[Testing]]**.
+   asserts immediately needs `recorder.flush()`. See **[Testing](Testing.md)**.
 
 `manage.py check` catches the configuration half of this: `W005` if the log is
 on with no database configured, `E041` if `EVENT_LOG_DATABASE` names an alias
@@ -310,7 +310,7 @@ The flag is read per request as well, so turning it off hides the page without
 a restart. If the app shows but every row 403s, the user is missing
 `view_telegramevent`; if the rows show but `detail` and `error` are absent,
 that is `view_telegramevent_payload` doing its job. See
-**[[Event-log|Event log]]**.
+**[Event log](Event-log.md)**.
 
 ## Getting more detail
 
@@ -328,4 +328,4 @@ LOGGING = {
 }
 ```
 
-See **[[Logging]]** for the fields each event carries.
+See **[Logging](Logging.md)** for the fields each event carries.

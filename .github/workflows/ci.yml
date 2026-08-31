@@ -383,6 +383,51 @@ jobs:
       # its cases reaches a method that imports it, and this is the only leg that installs it
       - run: python -m pytest -q tests/test_kafka_publish.py
 
+  docs:
+    # the site is built from the same pages the pull request edits, and `--strict` is what
+    # turns MkDocs' warnings into a failure: a link to a page that does not exist, an anchor
+    # that no heading offers, a page missing from the nav. `tests/test_wiki.py` says the same
+    # about links and anchors without mkdocs installed; this says it about the rendering.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          # the whole history, or `git-revision-date-localized` silently stamps every page
+          # with the build date -- `fallback_to_build_date` is true by design
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install --group docs
+      - run: mkdocs build --strict
+      # what `--strict` cannot say: that the site is the pages. One directory per page, under
+      # the name the wiki published for three releases, because every inbound link in the
+      # world spells it that way and GitHub Pages -- unlike the wiki it replaces -- is
+      # case-sensitive
+      - name: Every page is a page of the site, spelled the way it was
+        run: |
+          set -euo pipefail
+          missing=0
+          for page in docs/wiki/*.md; do
+            name=$(basename "$page" .md)
+            [ "$name" = 'index' ] && target='site/index.html' || target="site/$name/index.html"
+            if [ ! -f "$target" ]; then
+              echo "::error::$page produced no $target"
+              missing=1
+            fi
+          done
+          exit "$missing"
+      - name: The wiki's own syntax reaches no reader
+        run: |
+          set -euo pipefail
+          if grep -rl '\[\[' site --include='*.html'; then
+            echo '::error::a page rendered literal [[wiki]] syntax'
+            exit 1
+          fi
+
   smoke:
     # the unit suite imports from src/, so only an install can catch a packaging
     # mistake: a missing py.typed, a module left out of the wheel

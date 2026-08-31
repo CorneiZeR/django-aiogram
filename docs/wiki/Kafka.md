@@ -35,7 +35,7 @@ Settled is not the same as *delivered to Telegram*, and the difference belongs t
 rather than to Kafka. `bot.send_raw` — what `manage.py start_tgbot` uses — takes `on_complete`
 and signals it when the send finishes, so there the commit does follow the send. A handler of
 your own that takes only `**kwargs` is settled the moment it returns, which may be before
-anything reached Telegram. See **[[Delivery]]**.
+anything reached Telegram. See **[Delivery](Delivery.md)**.
 
 Ordering is **per partition**, not per topic. Nothing here sets a key, so records are spread
 across partitions and two messages queued in order can be delivered out of it. A single

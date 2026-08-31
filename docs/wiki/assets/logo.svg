@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="django-aiogram">
+  <!-- What the package is, in the smallest drawing that still says it: a source, a queue,
+       and a destination. Django's green on the left, Telegram's blue on the right, and the
+       hop between them left hollow because which queue it is has been a setting since 4.0. -->
+  <circle cx="8" cy="24" r="5" fill="#44b78b"/>
+  <path d="M13 24h9" stroke="#7e958d" stroke-width="2" stroke-linecap="round"/>
+  <rect x="19" y="19" width="10" height="10" rx="2.5" fill="none" stroke="#7e958d" stroke-width="2"/>
+  <path d="M29 24h6" stroke="#2aabee" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="40" cy="24" r="5" fill="#2aabee"/>
+</svg>

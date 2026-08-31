@@ -4,10 +4,12 @@ name: Wiki
 # means they are reviewed in pull requests with the code they describe, and
 # published from the default branch only.
 
+# Frozen as of the documentation site. The pages link each other with relative paths now --
+# `[Delivery](Delivery.md)` -- which a GitHub wiki does not resolve, so publishing them there
+# would replace working links with broken ones. The wiki keeps its last good sync until the
+# pull request that turns each page into a stub pointing at the site, and this workflow is
+# deleted with it. Dispatch remains for that one job.
 on:
-  push:
-    branches: [master]
-    paths: ['docs/wiki/**', '.github/workflows/wiki.yml']
   workflow_dispatch:
 
 permissions:

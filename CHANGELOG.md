@@ -1,5 +1,47 @@
 # Changelog
 
+## 4.0.1 - unreleased
+
+The package is untouched: this release moves the documentation and nothing else.
+
+### Documentation
+
+- **The documentation is a site now, not a wiki.** The same pages, in the same files, built by
+  Material for MkDocs and published to GitHub Pages: navigation that groups the twenty-one
+  pages the way the sidebar did, search that reads the prose, a dark theme and a version
+  selector — none of which a GitHub wiki offers, and all of which a reference with thirteen
+  settings tables and a 662-line upgrade guide has earned.
+
+  `docs/wiki/` stays the source directory, deliberately: those file names are the page names
+  the wiki published for three releases, so every inbound link maps one-to-one onto the new
+  site, and the tests that read the pages by name — transport pages, check ids, event kinds,
+  refusal catalogues, executed recipes, measured spans — keep working unchanged.
+
+  **The 120 wiki links are relative Markdown links now.** The wiki's double-bracket form
+  renders as literal brackets anywhere else, so it had to go; `[Delivery](Delivery.md)` renders
+  in the repository *and* resolves into the site. Not through a plugin: python-markdown's `wikilinks`
+  extension does not understand the piped form at all — measured, it renders the label
+  `Event-log|Event log` — and 35 of the 120 were piped.
+
+  **Case matters now, and did not before.** The wiki resolved `rate-limits` to `Rate-limits`;
+  static files do not, so a link differing only in case used to work and would now 404.
+  `tests/test_wiki.py` states the rule for every page on every CI leg, and the new `docs` job
+  runs `mkdocs build --strict`, which refuses a missing target, a fragment no heading offers,
+  and a page absent from the navigation — each proved by adding one and watching the build
+  abort.
+
+  `Home.md` is `index.md`, because that is what answers at the root of a version directory.
+  `_Sidebar.md` is gone: its four groups are the `nav:` block, and the test that checked the
+  sidebar listed every page now checks the navigation does.
+
+  The site inherits the palette and the two IBM Plex faces from the repository's social card
+  rather than inventing a second identity. The greens are not used at card strength for text —
+  measured against the light ground, `#44b78b` is 2.16:1 — so each scheme carries the shade
+  that passes: `#1f7a5c` on paper at 4.53:1, `#44b78b` on ink at 7.60:1.
+
+  The wiki is frozen at its last good sync until it is replaced by stubs pointing at the site;
+  every link in the README still points there until then.
+
 ## 4.0.0 - 2026-08-31
 
 **The package is `django-aiogram` now**, and Redis is one transport among several rather

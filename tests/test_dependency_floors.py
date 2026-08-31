@@ -41,7 +41,7 @@ DIRECTIONS = {
 
 #: pages that state the supported Python range in prose. The README and Home are read
 #: before anything else, and Installation is where somebody checks before upgrading
-PAGES_STATING_THE_RANGE = ('README.md', 'docs/wiki/Home.md', 'docs/wiki/Installation.md')
+PAGES_STATING_THE_RANGE = ('README.md', 'docs/wiki/index.md', 'docs/wiki/Installation.md')
 
 
 def version_tuple(text: str) -> tuple[int, ...]:

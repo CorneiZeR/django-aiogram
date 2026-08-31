@@ -59,7 +59,7 @@ src/django_aiogram/
         signals.py      events_recorded, the metrics seam; imports only django.dispatch
         moving.py       what 3.x's table was, and what the two tables share
         dbrouter.py     optional routing of the log to its own database
-docs/wiki/          the wiki, published from main
+docs/wiki/          the documentation site's pages, published from master
 tests/              pytest, fakeredis, no network
 ```
 
@@ -283,11 +283,13 @@ Two rules that are not style:
 
 ## Documentation
 
-Wiki pages live in `docs/wiki/` and are edited in the same pull request as the
-code they describe. Links are `[[Page-Name]]`, or `[[Page-Name|Link text]]`
-with the page first when the label differs;
-`tests/test_wiki.py` checks that every link resolves, that the sidebar lists
-every page, and that the README's wiki links are not stale. Configuration
+Pages live in `docs/wiki/` and are edited in the same pull request as the code
+they describe. Links between them are relative paths — `[Delivery](Delivery.md)`,
+with an optional `#fragment` — and the file name is spelled exactly, because the
+site is static files and case matters. `tests/test_wiki.py` checks that every link
+and every fragment resolves, that each page is in `nav:` in `mkdocs.yml`, and that
+the README's links are not stale; the `docs` job builds the site with
+`mkdocs build --strict`. Configuration
 examples in the docs are executed by `tests/test_docs_examples.py` and
 `tests/test_documented_recipes.py`, so a snippet that cannot run fails the build.
 

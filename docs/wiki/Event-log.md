@@ -5,7 +5,7 @@ retried or dropped, an update received, an FSM transition, a payload refused.
 It exists to answer the question the structured log cannot once it has rotated —
 *this user says they never got the message; did we send it?*
 
-**It is not a replacement for [[Logging]].** Above roughly ten thousand events a
+**It is not a replacement for [Logging](Logging.md).** Above roughly ten thousand events a
 second a database is the wrong tool and a log shipper is the right one. Below
 that, a table you can query and join against your own models is worth the write.
 
@@ -82,7 +82,7 @@ re-sending by hand duplicates. A send made directly with `send_raw`, from your o
 code rather than from the queue, was never in that list, and nothing will ever
 retry it. The rows tell them apart: a queued message has `outbound.queued` and
 `outbound.consumed` rows under the same `correlation_id`, and a direct `send_raw`
-has neither. See **[[Delivery]]** for the guarantee that makes the first case work.
+has neither. See **[Delivery](Delivery.md)** for the guarantee that makes the first case work.
 
 The stages matter most after a broadcast: `send_many` loses the ids of the failing
 chunk with the exception, so these rows are the only list of which messages went
@@ -139,7 +139,7 @@ plus up to 200 rows. A clean `SIGTERM` loses nothing. This is an event feed, not
 a ledger — if you need durability across a kill, the thing that already gives it
 to you is the queue, on any transport that is crash-safe. The exception is a Redis
 server without `BLMOVE`, where the list transport says so in the log and delivery drops
-to at-most-once; **[[Delivery]]** has the guarantee per transport.
+to at-most-once; **[Delivery](Delivery.md)** has the guarantee per transport.
 
 ## Metrics, without the table
 

@@ -180,11 +180,16 @@ repositories. `.coderabbit.yaml` points it at the invariants above.
 
 ## Documentation
 
-Wiki pages live in `docs/wiki/`. Edit them there, in the same pull request as
-the code they describe; a push to `master` publishes them to the wiki. Links
-between pages use `[[Page-Name]]`, or `[[Page-Name|Link text]]` when the label
-differs from the page name — the page always comes first — and tests
-check that they all resolve and that none is written the other way round.
+Pages live in `docs/wiki/`. Edit them there, in the same pull request as the code
+they describe; a push to `master` publishes them to the documentation site. Links
+between pages are relative paths — `[Delivery](Delivery.md)`, or with a fragment,
+`[Delivery](Delivery.md#crash-safety)` — and both halves are checked, by
+`tests/test_wiki.py` on every leg and by `mkdocs build --strict` in the `docs` job.
+Spell the file name exactly: the site is static files, and unlike the wiki it
+replaced, `rate-limits` is not `Rate-limits`.
+
+`mkdocs serve` shows the site locally, from the `docs` dependency group. A page
+added to `docs/wiki/` also goes in `nav:` in `mkdocs.yml`, or nothing links to it.
 
 ## Commits
 

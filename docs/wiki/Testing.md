@@ -52,7 +52,7 @@ def test_approval_notifies_the_reviewer(monkeypatch):
 ```
 
 3.0 nests the arguments under an envelope so a message can carry a correlation
-id — see **[[Event-log|Event log]]**. Reading through `unpack` is what keeps a
+id — see **[Event log](Event-log.md)**. Reading through `unpack` is what keeps a
 test from having to know that: `call.correlation_id` is there if you want it,
 and `bot.send()` returns the same value.
 

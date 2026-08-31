@@ -1,0 +1,96 @@
+/* The palette this project already has. It was chosen for the repository's social card --
+   Django's green for the source, Telegram's blue for the destination, a near-black biased
+   toward the green so the accent belongs to the ground -- and the site inherits it rather
+   than inventing a second identity.
+
+   The greens are not used at card strength for text. Measured against the light ground
+   (#e8f0ec): #44b78b is 2.16:1 and #2aabee is 2.22:1, both far below the 4.5:1 body text
+   needs. So each scheme gets the shade that passes on its own ground:
+
+       light   #1f7a5c on #e8f0ec   4.53:1      dark   #44b78b on #08120f   7.60:1
+               #0f6693 on #e8f0ec   5.79:1             #2aabee on #08120f   7.39:1
+
+   Ink on paper is 16.40:1 either way round. */
+
+:root {
+  --dja-ink: #08120f;
+  --dja-ink-raised: #0d1a16;
+  --dja-wire: #1e3a31;
+  --dja-paper: #e8f0ec;
+  --dja-dim: #7e958d;
+  --dja-django: #44b78b;
+  --dja-telegram: #2aabee;
+  --dja-django-on-paper: #1f7a5c;
+  --dja-telegram-on-paper: #0f6693;
+
+  --md-text-font: 'IBM Plex Sans';
+  --md-code-font: 'IBM Plex Mono';
+}
+
+/* the header is the near-black in both schemes: it is the one surface that should read as
+   the project rather than as the page */
+.md-header,
+.md-tabs {
+  background-color: var(--dja-ink-raised);
+  color: var(--dja-paper);
+}
+
+[data-md-color-scheme='default'] {
+  --md-primary-fg-color: var(--dja-ink-raised);
+  --md-primary-bg-color: var(--dja-paper);
+  --md-accent-fg-color: var(--dja-telegram-on-paper);
+  --md-typeset-a-color: var(--dja-django-on-paper);
+  --md-default-bg-color: #fbfdfc;
+  --md-code-bg-color: #eef3f0;
+}
+
+[data-md-color-scheme='slate'] {
+  --md-hue: 165;
+  --md-primary-fg-color: var(--dja-ink-raised);
+  --md-primary-bg-color: var(--dja-paper);
+  --md-accent-fg-color: var(--dja-telegram);
+  --md-typeset-a-color: var(--dja-django);
+  --md-default-bg-color: var(--dja-ink);
+  --md-default-fg-color: var(--dja-paper);
+  --md-default-fg-color--light: #c7d5ce;
+  --md-default-fg-color--lighter: var(--dja-dim);
+  --md-code-bg-color: var(--dja-ink-raised);
+  --md-footer-bg-color: var(--dja-ink-raised);
+}
+
+/* Tables carry most of the reference material here -- thirteen of them on the settings page
+   alone, and one row is 1101 characters. Left-aligned, scrollable, and with the first column
+   holding its shape so a settings name never wraps mid-identifier. */
+.md-typeset table:not([class]) {
+  font-size: 0.72rem;
+}
+
+.md-typeset table:not([class]) th {
+  background-color: var(--md-code-bg-color);
+  font-weight: 600;
+}
+
+.md-typeset table:not([class]) td:first-child code {
+  white-space: nowrap;
+}
+
+/* the four transports, as a grid of cards on the landing page */
+.md-typeset .grid.cards > ul > li {
+  border-color: var(--dja-wire);
+}
+
+.md-typeset .grid.cards > ul > li:hover {
+  border-color: var(--md-typeset-a-color);
+  box-shadow: none;
+}
+
+/* the diagram on the landing page is typeset in the mono face, and it is wide: let it scroll
+   on a phone rather than reflow into nonsense */
+.md-typeset pre > code {
+  scrollbar-width: thin;
+}
+
+/* a check id -- E047, W003, I001 -- reads as a token rather than as prose */
+.md-typeset code {
+  font-feature-settings: 'kern', 'liga';
+}

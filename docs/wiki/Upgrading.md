@@ -204,9 +204,9 @@ absence of its driver is a startup complaint rather than a runtime surprise.
 
 A 3.x project that changes nothing here keeps the transport it had: `BROKER` defaults to the
 Redis list, and `REDIS_URL`, `REDIS_MESSAGES_KEY`, `REDIS_TIMEOUT` and `BLPOP_TIMEOUT` mean
-exactly what they meant. **[[Settings]]** lists what each transport declares, and there is a page
-each — **[[Redis-list|Redis list]]**, **[[Redis-Streams|Redis Streams]]**, **[[RabbitMQ]]**,
-**[[Kafka]]** — for what one guarantees and what it needs running.
+exactly what they meant. **[Settings](Settings.md)** lists what each transport declares, and there is a page
+each — **[Redis list](Redis-list.md)**, **[Redis Streams](Redis-Streams.md)**, **[RabbitMQ](RabbitMQ.md)**,
+**[Kafka](Kafka.md)** — for what one guarantees and what it needs running.
 
 ### Switching transport is a drain, not a setting
 
@@ -259,12 +259,12 @@ rather than reporting that a Redis command is not a dotted path.
 `DeliveryKind` is gone with it: an enum of one member is not a choice. If you imported it to spell
 the value, write the path.
 
-**[[Delivery]]** has what a subclass must do, and the six rules that are each a defect this
+**[Delivery](Delivery.md)** has what a subclass must do, and the six rules that are each a defect this
 package has already had.
 
 ### The shutdown budget follows it too
 
-`stop_grace_period` is computed from a table on **[[Deployment]]**, and its first row used to be
+`stop_grace_period` is computed from a table on **[Deployment](Deployment.md)**, and its first row used to be
 `REDIS_TIMEOUT + 1` for every deployment. It is the timeout of the transport you chose now —
 `RABBITMQ_TIMEOUT` or `KAFKA_TIMEOUT` where those apply — because that is the bound the consumer
 thread actually sits inside, and a join shorter than it lets a consumer outlive the shutdown that
@@ -327,7 +327,7 @@ redis-py could not run at all on a deployment carrying its messages through Kafk
 The transport is asked instead, and the first thing it cannot do is what the probe reports.
 
 The refusal is the same failure, with the same driver text after the colon, and it still exits
-1 — only the noun moved. **[[Troubleshooting]]** catalogues every line the probe writes.
+1 — only the noun moved. **[Troubleshooting](Troubleshooting.md)** catalogues every line the probe writes.
 
 Two things follow from the same change, neither of which needs anything from you:
 
@@ -369,7 +369,7 @@ disabled process it proves nothing and the `message sent` line below never comes
 somewhere the flag is on, or set it for the length of the check.
 
 Then confirm the bot container logs `message sent`. If the depth answered and this does not,
-the queue is fine and the worker is not: see **[[Troubleshooting]]**.
+the queue is fine and the worker is not: see **[Troubleshooting](Troubleshooting.md)**.
 
 # From 3.0 to 3.1
 
@@ -383,7 +383,7 @@ guarantee the documentation always claimed. It changes what a crash does: before
 run twice.
 
 A handler of your own that takes only `**kwargs` is still acknowledged the moment it
-returns, which is the pre-3.1.0 behavior and is deliberate — see **[[Delivery]]**. If
+returns, which is the pre-3.1.0 behavior and is deliberate — see **[Delivery](Delivery.md)**. If
 you want the message held until your send finishes, take `on_complete`.
 
 **Do not use `correlation_id` as the key.** A handler's own replies inherit the id of the
@@ -423,7 +423,7 @@ confused for each other.
 
 ## Change the compose healthcheck
 
-If you copied the healthcheck from **[[Deployment]]** in 3.0, replace it:
+If you copied the healthcheck from **[Deployment](Deployment.md)** in 3.0, replace it:
 
 ```yaml
     environment:
@@ -499,7 +499,7 @@ payloads is fine; the reverse is not.
 
 The package ships one table now, and `migrate` creates it whether or not you
 turn the event log on. Creating it later on a live database is the more
-expensive order, so do it with the upgrade — see **[[Event-log|Event log]]**
+expensive order, so do it with the upgrade — see **[Event log](Event-log.md)**
 before switching the feature on.
 
 ## Everything else that moved
@@ -556,7 +556,7 @@ Instead, switch the bot off where it does not belong:
 TELEGRAM_BOT = {'ENABLED': os.getenv('RUN_BOT') == '1'}
 ```
 
-or per container with `DJANGO_REDIS_AIOGRAM_ENABLED`. See **[[Deployment]]**.
+or per container with `DJANGO_REDIS_AIOGRAM_ENABLED`. See **[Deployment](Deployment.md)**.
 
 ## 3. Move parse_mode onto the bot
 

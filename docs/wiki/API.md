@@ -51,7 +51,7 @@ it, and `django_aiogram.redis.redis_conn` is the same object in the module that 
 | `bot.send_many(chat_ids, function='send_message', *, chunk_size=100, **kwargs)` | queue rather than call, one message per chat, a chunk per round trip |
 
 `function` must name a Telegram API method aiogram exposes; anything else raises
-`ValueError` before it reaches the queue. See **[[Sending-messages|Sending messages]]**.
+`ValueError` before it reaches the queue. See **[Sending messages](Sending-messages.md)**.
 
 `send`, `enqueue` and `send_raw` return a **correlation id** — a `uuid.UUID`
 that ties every row about that message together, whichever process wrote it.
@@ -69,7 +69,7 @@ Receipt.objects.create(order=order, telegram_correlation_id=identifier)
 ```
 
 Before 3.0 they returned `None`, so gaining a return value broke no call site. The 4.0
-renames did — see **[[Upgrading]]** for each old name against what to call instead.
+renames did — see **[Upgrading](Upgrading.md)** for each old name against what to call instead.
 
 ### From code already on an event loop
 
@@ -104,7 +104,7 @@ half borrows a thread and publishes through the same connection the synchronous 
 uses. `aclose()` is a no-op there — it closes a Redis client those deployments never
 open — and the connection it did not close belongs to the process rather than to any
 loop. Nothing about the async API changes; what changes is that there is nothing for a
-lifespan shutdown to release. **[[Deployment]]** has
+lifespan shutdown to release. **[Deployment](Deployment.md)** has
 the shutdown recipe.
 
 ### Queue introspection
@@ -168,7 +168,7 @@ async def start(message):
 ```
 
 Arguments pass straight through to aiogram, so filters behave exactly as they do
-there. See **[[Handlers]]**.
+there. See **[Handlers](Handlers.md)**.
 
 ## Running and stopping
 
@@ -186,7 +186,7 @@ The wait defaults to `DRAIN_TIMEOUT`, five seconds, and passing a number overrid
 it for that call. It was a hardcoded five before 3.1.0, which `start_tgbot` never
 passed — so a deployment could raise `stop_grace_period` all it liked and never buy
 the drain a second more. Set the setting rather than the argument: the arithmetic on
-**[[Deployment]]** adds it up for you.
+**[Deployment](Deployment.md)** adds it up for you.
 
 `start_tgbot` does both around the delivery consumer; you only need them when
 running the bot yourself.
@@ -211,7 +211,7 @@ Polling from more than one instance on the same token is not supported by
 Telegram itself: one `getUpdates` consumer per bot.
 
 Prefer the shared `bot`. A fresh instance inside a task or a request means a
-fresh event loop and HTTP session that nothing closes — see **[[Sending-messages|Sending messages]]**.
+fresh event loop and HTTP session that nothing closes — see **[Sending messages](Sending-messages.md)**.
 
 ## Module level
 
@@ -263,7 +263,7 @@ which is what the system checks validate for **these** settings.
 dotted path — to a `Broker` and to a `Delivery` subclass — so their sets are open by design, and
 their checks judge a path rather than a membership. `DeliveryKind` is gone in 4.0 for exactly that
 reason: it had one member, `BLPOP`, and an enum of one is not a choice. There is no replacement to
-look for; write the path, and see **[[Delivery]]**.
+look for; write the path, and see **[Delivery](Delivery.md)**.
 
 The values are **frozen**: queued payloads and stored settings carry them, so a
 member may be renamed but never revalued.
@@ -318,7 +318,7 @@ no inverse a `WHERE` clause could use. It is not unique: sixty random bits make 
 collision unlikely rather than impossible, so a search returns every row a code
 matches and `correlation_id` stays the identifier. Rows already in the table when
 the column arrives have none until `manage.py tgbot_backfill_short_ids` walks
-them — see **[[Event-log|Event log]]**.
+them — see **[Event log](Event-log.md)**.
 
 `events_recorded` is the metrics seam: a `django.dispatch.Signal` fired once per
 batch with the `Event` objects in it, from the event writer's own thread — except
@@ -334,7 +334,7 @@ are therefore API.
 Nothing here is imported unless you import it: `models.py` pulls no aiogram, so
 a migration container pays nothing for it, and `signals.py` pulls neither aiogram
 nor the ORM so a metrics module can import it at settings time. See
-**[[Event-log|Event log]]**.
+**[Event log](Event-log.md)**.
 
 ## Errors
 

@@ -1,6 +1,6 @@
 # Redis Streams
 
-The same server as the **[[Redis-list|Redis list]]** and the same driver, with a different data
+The same server as the **[Redis list](Redis-list.md)** and the same driver, with a different data
 structure behind it: a stream and a consumer group instead of a list. The group is what changes
 the operational story, not the dependency.
 

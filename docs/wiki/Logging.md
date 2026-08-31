@@ -97,7 +97,7 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 ## The database event log
 
 This page is about the structured log: a stream, shipped somewhere, rotated.
-**[[Event-log|Event log]]** is the other tool — an optional table you can query
+**[Event log](Event-log.md)** is the other tool — an optional table you can query
 and join against your own models, off by default. Use the log for volume and
 alerting, and the table for the questions that outlive a retention window.
 
