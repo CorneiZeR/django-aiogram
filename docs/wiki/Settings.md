@@ -287,7 +287,7 @@ entry naming a retired one is dead but harmless.
 | `E012`, `E014` | an integer setting is wrong or below its minimum |
 | `E015` / `E016` | `DEFAULT_KWARGS` not callable / `DEFAULT_BOT_PROPERTIES` not a mapping |
 | `E018` | unknown key in `DEFAULT_BOT_PROPERTIES` |
-| `E019` | `FSM_STORAGE` is not `redis`, `memory` or a dotted path |
+| `E019` | `FSM_STORAGE` is not `redis`, `memory` or a dotted path — or it names `redis` on an install carrying no redis-py, which is the default on a project that installed another transport's extra alone |
 | `E020` | `RATE_LIMIT` is malformed: an unknown budget name, or one holding something that is not a finite non-negative number. `nan` is refused although it is a float — every comparison against it is false, so it would pass a bound here and then admit every message in the limiter |
 | `E021` | `WORKER_NAME` is not a string |
 | `E022` | `SERIALIZER` is `pickle` while `ALLOW_PICKLE` is `False` |

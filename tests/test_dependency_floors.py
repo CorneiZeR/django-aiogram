@@ -109,6 +109,12 @@ def test_the_unit_matrix_runs_every_interpreter_the_package_claims():
     assert tested == expected, f'the matrix runs {sorted(tested)} for a claimed {sorted(expected)}'
 
 
+def wiki() -> str:
+    """Every page as one flattened string, because a claim wraps and a table cell does not."""
+    pages = '\n'.join(path.read_text(encoding='utf-8') for path in sorted((ROOT / 'docs' / 'wiki').glob('*.md')))
+    return re.sub(r'\s+', ' ', pages)
+
+
 def test_installation_documents_every_extra_and_its_floor():
     """The page a reader checks before upgrading carries the same numbers as the metadata.
 
@@ -118,8 +124,34 @@ def test_installation_documents_every_extra_and_its_floor():
     """
     extras = PYPROJECT.split('[project.optional-dependencies]')[1].split('\n[')[0]
     specifiers = re.findall(r'"([\w-]+)(?:\[[\w]+\])?>=([\d.]+)', extras)
-    pages = '\n'.join(path.read_text(encoding='utf-8') for path in (ROOT / 'docs' / 'wiki').glob('*.md'))
+    pages = wiki()
 
     missing = [f'{name}>={floor}' for name, floor in specifiers if f'{name}>={floor}' not in pages]
 
     assert not missing, f'floors documented nowhere in the wiki: {missing}'
+
+
+def test_a_floor_that_depends_on_the_interpreter_is_documented_against_it():
+    """A number is documented; the Python it applies to has to be documented with it.
+
+    Two floors for one package is the shape a marker produces, and the case above is satisfied
+    by both numbers appearing *anywhere* — including a page that pairs them the wrong way
+    round, which is worse than not saying it: the Kafka driver's floor exists precisely because
+    an older pin cannot be installed on a newer Python, so a reader given the pair backwards
+    hits the failure the marker was added to prevent.
+
+    So each marked specifier is looked for within a stretch of prose that also names its
+    Python. The window is generous on purpose — the table writes them a few words apart, and
+    the point is that they are stated together rather than in the same file.
+    """
+    extras = PYPROJECT.split('[project.optional-dependencies]')[1].split('\n[')[0]
+    marked = re.findall(r'"([\w-]+)>=([\d.]+); python_version ([<>=]+) \'([\d.]+)\'"', extras)
+    assert marked, 'no floor depends on the interpreter any more; drop this case with the marker'
+
+    pages = wiki()
+    for name, floor, operator, python in marked:
+        specifier = f'{name}>={floor}'
+        stated = [
+            window for window in re.findall(rf'.{{0,160}}{re.escape(specifier)}.{{0,160}}', pages) if python in window
+        ]
+        assert stated, f'{specifier} applies {operator} Python {python} and no page says so within reach of the number'

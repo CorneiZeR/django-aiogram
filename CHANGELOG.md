@@ -675,6 +675,20 @@ a new table, so the old one is left where it is — see **Upgrading** for moving
 
 ### Changed
 
+- **`manage.py check` said nothing about the one extra a Kafka or RabbitMQ project still
+  needs.** `FSM_STORAGE` defaults to `'redis'` and that store is aiogram's, which imports
+  redis-py — so a project that installed its own transport's extra, left the setting alone and
+  set a `REDIS_URL` passed every check and then died building the dispatcher. Measured on a
+  `[kafka]`-only install: `System check identified no issues`, followed by
+  `ModuleNotFoundError: No module named 'redis'` out of `start_tgbot`. Which is the failure
+  `E047` exists to prevent, arriving through the storage door instead of the broker's.
+
+  `E019` judges the driver behind `'redis'` now, with both ways out in the hint — install the
+  extra, or set `'memory'` if the deployment keeps no chat state — and `find_spec` rather than
+  an import, because this rule runs on every `manage.py` invocation. **Installation** says it
+  too, next to the install lines, since the table above it lists one extra per transport and
+  that is what made the gap easy to walk into.
+
 - **The release build's last gate could not run.** `publish.yml` hands the built artifacts to
   `scripts/smoke_install.sh dist` so that the wheel it uploads is the wheel that gets
   installed — and that branch of the script kept the path it was given, relative, then moved

@@ -1947,3 +1947,45 @@ def test_a_path_with_an_empty_module_part_is_reported_not_raised():
     reported = [message.id for message in check_settings()]
 
     assert 'django_aiogram.E019' in reported, reported
+
+
+@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'})
+def test_the_default_fsm_store_needs_a_driver_and_says_so(monkeypatch):
+    """The hole the transport extras left, and the one the release's own promise closes.
+
+    `FSM_STORAGE` defaults to `'redis'` and that store is aiogram's, which imports redis-py —
+    an extra since 4.0. So a project on Kafka or RabbitMQ installs its transport's extra,
+    leaves this setting alone, and is one `pip install` short of a bot that starts. Measured on
+    a `[kafka]`-only install with a `REDIS_URL` set: `manage.py check` said `no issues` and
+    `start_tgbot` died on `ModuleNotFoundError: No module named 'redis'` building the
+    dispatcher — the failure `E047` exists to prevent, through the storage door instead of the
+    broker's.
+
+    The driver is present in this suite, so its absence is arranged at the one call that asks:
+    hiding `redis` from `sys.modules` would not do it, because `find_spec` reads the path rather
+    than the module table.
+    """
+    monkeypatch.setattr('django_aiogram.config.checks.bot.importlib.util.find_spec', lambda name: None)
+
+    found = [message for message in check_settings() if message.id == 'django_aiogram.E019']
+
+    assert len(found) == 1, [message.msg for message in check_settings()]
+    assert 'whose driver is not installed' in found[0].msg, found[0].msg
+    # the hint carries both ways out, because either is a real answer: install the extra, or
+    # say this deployment keeps no chat state
+    assert 'pip install "django-aiogram[redis]"' in found[0].hint, found[0].hint
+    assert "'memory'" in found[0].hint, found[0].hint
+
+
+@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'FSM_STORAGE': 'memory'})
+def test_a_memory_store_asks_for_no_driver(monkeypatch):
+    """The control: the rule must not report an install that needs nothing installed.
+
+    Without it the case above passes on a rule that fires for every value, which would put an
+    error in front of every RabbitMQ and Kafka project that had already done the right thing.
+    """
+    monkeypatch.setattr('django_aiogram.config.checks.bot.importlib.util.find_spec', lambda name: None)
+
+    reported = [message.id for message in check_settings()]
+
+    assert 'django_aiogram.E019' not in reported, reported

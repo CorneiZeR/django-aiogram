@@ -18,6 +18,26 @@ Then the transport you name adds two of its own, and they are different question
 | RabbitMQ | `pika>=1.3` | RabbitMQ 4 in CI; 1.3.0 of the driver runs the whole integration suite against it |
 | Kafka | `confluent-kafka>=2.6`, and `confluent-kafka>=2.12.1` on Python 3.14 | Apache Kafka 4 in CI |
 
+**One extra is not always enough, and the default is why.** `FSM_STORAGE` defaults to
+`'redis'`, and that store is aiogram's — it imports redis-py. So a project on RabbitMQ or
+Kafka that installs only its own transport's extra has a bot that starts and a dispatcher
+that cannot be built:
+
+```shell
+pip install 'django-aiogram[kafka,redis]'   # Kafka for the queue, redis for the FSM store
+```
+
+or keep one extra and say the state lives in the process:
+
+```python
+TELEGRAM_BOT = {'FSM_STORAGE': 'memory', ...}   # per process, lost on restart
+```
+
+`manage.py check` reports `E019` either way round — it used to say nothing here, and
+`start_tgbot` died on `ModuleNotFoundError: No module named 'redis'` while building the
+dispatcher, which is the failure `E047` exists to prevent arriving through the storage
+instead of the broker.
+
 The Kafka floor is two numbers because that driver compiles librdkafka: the first wheel for
 Python 3.13 is 2.6.0 and the first for 3.14 is 2.12.1, so an older pin does not fail to *work*
 there — it fails to install, asking for a C header. The API needs nothing newer than the wheels

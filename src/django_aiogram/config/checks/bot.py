@@ -6,6 +6,7 @@ importing aiogram -- which is what keeps `manage.py check` from paying most of a
 the cheap refusals have already returned.
 """
 
+import importlib.util
 import math
 from collections.abc import Collection, Mapping
 from dataclasses import fields
@@ -57,13 +58,45 @@ def _known_bot_properties(key: str) -> list[Problem]:
     return [Problem(f'has unknown properties: {", ".join(unknown)}. Known: {", ".join(sorted(known))}.')]
 
 
+def _the_storage_driver() -> list[Problem]:
+    """Whether redis-py is there for the store the setting names.
+
+    Its own function so the rule above keeps one return per shape of value, which is what
+    `ruff`'s PLR0911 is counting.
+    """
+    if importlib.util.find_spec('redis') is not None:
+        return []
+    return [
+        Problem(
+            'names the redis store, whose driver is not installed.',
+            hint=(
+                'pip install "django-aiogram[redis]", or set FSM_STORAGE to '
+                "'memory' if this deployment keeps no chat state."
+            ),
+        )
+    ]
+
+
 def _importable_storage(key: str) -> list[Problem]:
-    """Resolve a dotted path here, so a typo fails before the first message."""
+    """Resolve a dotted path here, so a typo fails before the first message.
+
+    And judge the driver behind ``'redis'``, which is the default. The storage is aiogram's
+    and it imports redis-py, an extra since 4.0 — so a project that names another transport,
+    installs that transport's extra and leaves this setting alone is one ``pip install`` short
+    of a bot that starts. Measured on a ``[kafka]``-only install with a ``REDIS_URL`` set:
+    ``manage.py check`` reported no issues and ``start_tgbot`` died on
+    ``ModuleNotFoundError: No module named 'redis'`` while building the dispatcher — the exact
+    failure ``E047`` exists to prevent, arriving through the storage instead of the broker.
+
+    ``find_spec`` rather than an import: this rule runs on every ``manage.py`` invocation, and
+    the point of the deferred imports above is that a check pays for nothing it can avoid.
+    """
     value = _setting(key)
     if not isinstance(value, str):
         return []
     if value in _STORAGE_CHOICES:
-        return []
+        # 'memory' needs nothing installed; 'redis' needs a driver this install may not carry
+        return _the_storage_driver() if value == StorageKind.REDIS else []
     if '.' not in value:
         return [Problem(f"must be 'redis', 'memory', or a dotted path, got {value!r}.")]
     # deferred like the other aiogram imports: a disabled boot must not pay for it

@@ -133,9 +133,9 @@ the same pull request as the code they describe and published from `master`.
 | [Upgrading](https://github.com/CorneiZeR/django-aiogram/wiki/Upgrading) | what each major release changed, and what you must do |
 | [AI assistants](https://github.com/CorneiZeR/django-aiogram/wiki/AI-assistants) | the brief to hand a coding agent |
 
-Upgrading from 3.x: the distribution and import path are `django-aiogram`, the driver is
-an extra you now name, and the event log has a table of its own. The upgrading page walks
-it in order, `migrate` included.
+Upgrading from 3.x: the distribution is `django-aiogram` and the import path is
+`django_aiogram`, the driver is an extra you now name, and the event log has a table of its
+own. The upgrading page walks it in order, `migrate` included.
 
 ## Contributing
 
