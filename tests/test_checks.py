@@ -1958,8 +1958,8 @@ def test_the_default_fsm_store_needs_a_driver_and_says_so(monkeypatch):
     leaves this setting alone, and is one `pip install` short of a bot that starts. Measured on
     a `[kafka]`-only install with a `REDIS_URL` set: `manage.py check` said `no issues` and
     `start_tgbot` died on `ModuleNotFoundError: No module named 'redis'` building the
-    dispatcher — the failure `E047` exists to prevent, through the storage door instead of the
-    broker's.
+    dispatcher. A missing driver reaching a project as a traceback is the shape `E047` prevents
+    for the broker; this is that shape through the storage door, and `E019` is its rule.
 
     The driver is present in this suite, so its absence is arranged at the one call that asks:
     hiding `redis` from `sys.modules` would not do it, because `find_spec` reads the path rather

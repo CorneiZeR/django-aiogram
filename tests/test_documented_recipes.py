@@ -644,15 +644,16 @@ def readme_transports():
 def test_the_readme_publishes_every_transport_this_package_has():
     """A landing page that lists three of four transports is a page that hides one.
 
-    The count comes from the broker package rather than from a number written here, so a fifth
-    transport fails this until the table has it — which is the release where somebody would
-    otherwise ship it documented only in the wiki.
+    Compared against `SHIPPED`, the registry's own map of path to driver and extra, rather than
+    against the directories under `broker/`: the registry is what `BROKER` is resolved through
+    and what names the extra in `E047`, so a transport that exists as a package and is not
+    registered is not one a reader can configure — and would have satisfied a directory listing.
     """
-    root = pathlib.Path(__file__).resolve().parent.parent
-    packages = {path.parent.name for path in (root / 'src' / 'django_aiogram' / 'broker').glob('*/broker.py')}
-    listed = {path.split('.')[2] for path, _ in readme_transports()}
+    from django_aiogram.broker.registry import SHIPPED
 
-    assert listed == packages, f'the README table lists {sorted(listed)} of {sorted(packages)}'
+    listed = {path for path, _ in readme_transports()}
+
+    assert listed == set(SHIPPED), f'the README table lists {sorted(listed)} against {sorted(SHIPPED)}'
 
 
 @pytest.mark.parametrize(('path', 'extra'), readme_transports(), ids=lambda value: value)
@@ -666,12 +667,21 @@ def test_every_broker_the_readme_publishes_resolves_and_names_a_real_extra(path,
     Resolving is also what pins the promise the extras rest on — no module reaches its driver at
     import time — because this suite's Redis-only leg has none of the other three installed and
     imports all four here.
+
+    The extra is held to `SHIPPED` rather than merely to existing in `pyproject.toml`: a row
+    pairing `KafkaBroker` with `[rabbitmq]` passes an existence check and sends a reader to
+    install the wrong driver, which then reads as this package refusing a transport they did
+    install.
     """
     from django.utils.module_loading import import_string
+
+    from django_aiogram.broker.registry import SHIPPED
 
     broker = import_string(path)
 
     assert broker.__name__ == path.rsplit('.', 1)[-1]
+    assert path in SHIPPED, f'{path} is not a registered transport'
+    assert SHIPPED[path][1] == extra, f'{path} needs [{SHIPPED[path][1]}], the README says [{extra}]'
     root = pathlib.Path(__file__).resolve().parent.parent
     declared = re.findall(r'^(\w+) = \[', (root / 'pyproject.toml').read_text(encoding='utf-8'), re.MULTILINE)
     assert extra in declared, f'`pip install django-aiogram[{extra}]` installs nothing: not an extra'

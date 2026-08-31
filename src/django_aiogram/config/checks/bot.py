@@ -85,8 +85,9 @@ def _importable_storage(key: str) -> list[Problem]:
     installs that transport's extra and leaves this setting alone is one ``pip install`` short
     of a bot that starts. Measured on a ``[kafka]``-only install with a ``REDIS_URL`` set:
     ``manage.py check`` reported no issues and ``start_tgbot`` died on
-    ``ModuleNotFoundError: No module named 'redis'`` while building the dispatcher — the exact
-    failure ``E047`` exists to prevent, arriving through the storage instead of the broker.
+    ``ModuleNotFoundError: No module named 'redis'`` while building the dispatcher. A missing
+    driver reaching a project as a traceback is the shape ``E047`` prevents for the broker;
+    this rule is what prevents it for the store.
 
     ``find_spec`` rather than an import: this rule runs on every ``manage.py`` invocation, and
     the point of the deferred imports above is that a check pays for nothing it can avoid.
