@@ -50,7 +50,7 @@ Project uses django-aiogram 4.x. Rules:
   SERIALIZER='pickle' and ALLOW_PICKLE=True — the flag alone only lets the
   reader accept pickle, so a payload JSON cannot describe is still refused at
   the point it is queued. It is the escape hatch for exactly those payloads,
-  and turning it on means whoever can write to the Redis list can execute code
+  and turning it on means whoever can write to the queue can execute code
   in the bot container, so do it only on a queue nothing untrusted can write to.
 - A queued send cannot raise in the caller. Failures are logged by the worker.
   Use bot.send_raw with RAISE_EXCEPTION only when the caller must see the error.
@@ -112,7 +112,8 @@ and use `bot.router` instead of `bot._router`."* See
 
 **Debug delivery.** *"Messages are queued but never arrive. Check in this order:
 is the `start_tgbot` container running and is `ENABLED` true there, does
-`redis-cli -n <db> llen TELEGRAM_BOT_MESSAGE` grow, and what does the
+`bot.queue_depth()` grow — it asks whichever transport `BROKER` names, where a
+`redis-cli llen` answers for the list transport alone — and what does the
 `django_aiogram` logger say. The wiki's Troubleshooting page lists the
 causes per symptom."*
 

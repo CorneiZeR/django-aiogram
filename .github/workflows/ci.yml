@@ -407,7 +407,13 @@ jobs:
         with:
           python-version: '3.13'
       - run: pip install build
-      - run: bash scripts/smoke_install.sh
+      # built here and passed as a directory, which is the form `publish.yml` uses: it
+      # builds once, uploads that wheel, and checks *that* file. Nothing ran this branch
+      # of the script before, so a bug in it surfaced only after a tag had been cut --
+      # measured, the relative `dist` stopped resolving the moment the script moved into
+      # its throwaway project. The no-argument form is what a developer runs locally
+      - run: python -m build --sdist --wheel --outdir dist
+      - run: bash scripts/smoke_install.sh dist
 
   build:
     runs-on: ubuntu-latest

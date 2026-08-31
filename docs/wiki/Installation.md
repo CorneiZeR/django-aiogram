@@ -4,8 +4,46 @@
 pip install 'django-aiogram[redis]'
 ```
 
-Requires Python 3.10–3.14, Django 5.2+, aiogram 3.30+, and — for the Redis
-transport — redis 6.2+.
+Requires Python 3.10–3.14, Django 5.2+ and aiogram 3.30+. Every pair in that range runs in
+CI, and one leg pins the floors themselves — `django==5.2.0 aiogram==3.30.0 redis==6.2.0` on
+Python 3.10 — because a floor nothing installs is a floor nobody has tried.
+
+Then the transport you name adds two of its own, and they are different questions: the
+**driver** is a Python package this project pins, and the **server** is what you run.
+
+| transport | driver | server |
+| --- | --- | --- |
+| Redis list | `redis>=6.2` | any, but `BLMOVE` — Redis 6.2 — is what makes delivery at-least-once. Below it the consumer says so in the log and drops to at-most-once rather than refusing |
+| Redis Streams | `redis>=6.2` | **7.0 or newer, enforced.** `depth()` reads `lag` from `XINFO GROUPS`, a field that arrived in 7.0, and the transport refuses rather than reporting a number a healthcheck would act on |
+| RabbitMQ | `pika>=1.3` | RabbitMQ 4 in CI; 1.3.0 of the driver runs the whole integration suite against it |
+| Kafka | `confluent-kafka>=2.6` below Python 3.14, `confluent-kafka>=2.12.1` on Python 3.14 and newer | Apache Kafka 4 in CI |
+
+**One extra is not always enough, and the default is why.** `FSM_STORAGE` defaults to
+`'redis'`, and that store is aiogram's — it imports redis-py. So a project on RabbitMQ or
+Kafka that installs only its own transport's extra has a bot that starts and a dispatcher
+that cannot be built:
+
+```shell
+pip install 'django-aiogram[kafka,redis]'   # Kafka for the queue, redis for the FSM store
+```
+
+or keep one extra and say the state lives in the process:
+
+```python
+TELEGRAM_BOT = {'FSM_STORAGE': 'memory', ...}   # per process, lost on restart
+```
+
+`manage.py check` reports **`E019`** for exactly one configuration — `FSM_STORAGE` naming
+the Redis store on an install that has no redis-py — and says nothing once either line
+above is in place. It used to say nothing at all: `start_tgbot` died on
+`ModuleNotFoundError: No module named 'redis'` while building the dispatcher. A missing driver
+reaching a project as a traceback is the shape `E047` prevents for the *broker*; `E019` is the
+rule for this one.
+
+The Kafka floor is two numbers because that driver compiles librdkafka: the first wheel for
+Python 3.13 is 2.6.0 and the first for 3.14 is 2.12.1, so an older pin does not fail to *work*
+there — it fails to install, asking for a C header. The API needs nothing newer than the wheels
+do, measured: 2.6.0 passes every Kafka case against a real broker.
 
 **The transport driver is an extra**, so a deployment downloads the one it uses and
 not the other three. `BROKER` names the transport and nothing is inferred from what
@@ -25,8 +63,9 @@ event log needs no extra. A process that reads the queue depth does need one eve
 disabled: those reads are not gated on `ENABLED`, and `manage.py check` cannot tell
 which processes make them.
 
-The redis floor is 6.2 because aiogram's `RedisStorage` asks for it, and
-`FSM_STORAGE: 'redis'` is the default. On redis-py below 5.0.1 the storage
+The redis *driver* floor is 6.2 because aiogram's `RedisStorage` asks for exactly that —
+`redis[hiredis]>=6.2.0` in its own metadata — and `FSM_STORAGE: 'redis'` is the default, so
+every transport can reach the storage even when the queue itself is somewhere else. On redis-py below 5.0.1 the storage
 raises `AttributeError: 'Redis' object has no attribute 'aclose'`. redis-py 8 is
 tested here and works, though aiogram's own optional extra stops at 7.
 

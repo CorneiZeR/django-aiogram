@@ -21,8 +21,14 @@ trap 'rm -rf "$work"' EXIT
 # PyPI keeps for ever
 if [ -n "${1:-}" ]; then
     echo "--- using the artifacts already built in $1"
-    wheel="$(ls "$1"/*.whl)"
-    sdist="$(ls "$1"/*.tar.gz)"
+    # resolved to an absolute path *here*, while the working directory is still the caller's:
+    # the steps further down run from a throwaway project, and a relative `dist` — which is
+    # exactly what the release workflow passes — would stop resolving once they do. That is
+    # the bug this line fixes, and it could only ever appear in the release build, since CI
+    # called this script without an argument
+    given="$(cd "$1" && pwd)"
+    wheel="$(ls "$given"/*.whl)"
+    sdist="$(ls "$given"/*.tar.gz)"
 else
     echo "--- building the wheel and the sdist"
     python -m build --sdist --wheel --outdir "$work/dist" "$root" >/dev/null

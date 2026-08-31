@@ -37,6 +37,17 @@ NEUTRAL_SURFACES = (
     'src/django_aiogram/producer/client.py',
     'docs/wiki/Sending-messages.md',
     'docs/wiki/Installation.md',
+    # the wiki's own front page, added for the same reason the README is here: it is read
+    # before any transport page and its subject is the queue in general
+    'docs/wiki/Home.md',
+    # the trust boundary is stated on this page, and it was stated as Redis's: whoever can
+    # write to *the queue* runs code in the bot container, and that is true of all four
+    'docs/wiki/Serialization.md',
+    # the brief handed to a coding agent, which is the surface that propagates: it taught a
+    # `redis-cli llen` as the way to read a depth, where `queue_depth()` asks any transport
+    'docs/wiki/AI-assistants.md',
+    # the kinds fire on four transports, and two rows of the table named one
+    'docs/wiki/Event-log.md',
 )
 
 #: `config/defaults.py` is deliberately absent: it is the file that *names* the default
@@ -48,6 +59,14 @@ NEUTRAL_SURFACES = (
 #: Redis presented as *the* queue rather than as one of the four. Each of these was a real
 #: sentence in one of the files above, and each was reported by review rather than by a test
 THE_ONLY_TRANSPORT = (
+    # a call handed *to* a Redis list, which is where the README's first paragraph left the
+    # reader for the whole of 4.0's development: every pattern below matched nothing there,
+    # and it took the project's owner reading the published front page to see it.
+    #
+    # The lookahead is what keeps it from refusing an honest sentence: "written to a Redis
+    # list or stream, an AMQP queue, a Kafka topic" names four transports and is exactly the
+    # phrasing these pages should use, so a list that continues is not a claim about one
+    r'(?:onto|to|on) a Redis list(?![ ,]*(?:or|,))',
     r'the Redis list',
     r'Redis queue',
     r'the Redis behind',
@@ -65,6 +84,15 @@ THE_ONLY_TRANSPORT = (
 #: names 4.0 removed. A docstring or a page citing one sends a reader after something gone;
 #: `test_public_surface.py` pins their absence from the code, and this pins it from the prose
 REMOVED_NAMES = (r'\bsend_redis\b', r'\basend_redis\b', r'\bbot\.redis_conn\b')
+
+
+#: sentences that name Redis and are *not* claims about it being the queue. Held as cases
+#: rather than trusted: a pattern strict enough to catch the front page's opening is strict
+#: enough to refuse the enumeration this package writes everywhere else
+HONEST_ENUMERATIONS = (
+    'a send was written to a Redis list or stream, an AMQP queue, a Kafka topic',
+    'whoever can write to the queue — a Redis list or stream, an AMQP queue, a Kafka topic — can run code',
+)
 
 
 def flattened(relative: str) -> str:
@@ -113,3 +141,31 @@ def test_the_pickle_warning_says_who_can_execute_code():
     assert 'write to the queue' in warning, 'the warning no longer names who is trusted'
     assert 'execute code' in warning, 'the warning no longer names what they can do'
     assert '``BROKER``' in warning, 'the warning no longer says the queue is a setting'
+
+
+def test_the_front_page_sentence_this_pattern_was_added_for_still_fails():
+    """The other half of the lookahead: narrowing it must not disarm it.
+
+    This is the README's opening as it stood through the whole of 4.0's development, and the
+    case above is a sentence that has to pass — so the two together say where the line is.
+    """
+    opening = 'every other process pushes the call onto a Redis list and returns'
+
+    hit = [pattern for pattern in THE_ONLY_TRANSPORT if re.search(pattern, opening, re.IGNORECASE)]
+
+    assert hit, 'the pattern no longer catches the sentence it was written for'
+
+
+@pytest.mark.parametrize('sentence', HONEST_ENUMERATIONS)
+def test_an_enumeration_of_four_transports_is_not_a_claim_about_one(sentence):
+    """The rule must refuse one shape of sentence, not the word Redis.
+
+    Both of these name the list *and* the other three, which is what a neutral surface is
+    supposed to do — and the pattern that catches "pushes the call onto a Redis list" reads the
+    first four words of them identically. So each is checked against every pattern here, and a
+    hit is a rule that would have to be argued away the next time somebody writes prose
+    correctly.
+    """
+    hit = [pattern for pattern in THE_ONLY_TRANSPORT if re.search(pattern, sentence, re.IGNORECASE)]
+
+    assert not hit, f'{hit} would refuse a sentence that names all four transports'

@@ -626,3 +626,83 @@ def test_the_grace_table_adds_up_to_the_period_the_page_sells():
     assert float(total.group(1)) == sum(stated.values()), (
         f'the page totals {total.group(1)}s where its own rows add up to {sum(stated.values())}s'
     )
+
+
+#: the README's transport table, which is the first thing a reader sees and the one place four
+#: `BROKER` values are published together. Read out of the file rather than restated here: the
+#: point is to catch a row that stops matching the package, and a copy in this file would go
+#: stale with it
+README_TRANSPORT_ROW = re.compile(r'\| `(django_aiogram\.broker\.[\w.]+)` \| `\[(\w+)\]` \|')
+
+
+def readme_transports():
+    """Every row of that table, as (dotted path, extra name)."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    return README_TRANSPORT_ROW.findall((root / 'README.md').read_text(encoding='utf-8'))
+
+
+def test_the_readme_publishes_every_transport_this_package_has():
+    """A landing page that lists three of four transports is a page that hides one.
+
+    Compared against `SHIPPED`, the registry's own map of path to driver and extra, rather than
+    against the directories under `broker/`: the registry is what `BROKER` is resolved through
+    and what names the extra in `E047`, so a transport that exists as a package and is not
+    registered is not one a reader can configure — and would have satisfied a directory listing.
+    """
+    from django_aiogram.broker.registry import SHIPPED
+
+    listed = {path for path, _ in readme_transports()}
+
+    assert listed == set(SHIPPED), f'the README table lists {sorted(listed)} against {sorted(SHIPPED)}'
+
+
+@pytest.mark.parametrize(('path', 'extra'), readme_transports(), ids=lambda value: value)
+def test_every_broker_the_readme_publishes_resolves_and_names_a_real_extra(path, extra):
+    """The table's two columns are both copied into a project, so both are held to the package.
+
+    `BROKER` is pasted into settings and the extra into a `pip install`, and neither fails
+    anywhere near the page: a wrong path is an `ImproperlyConfigured` at startup, and a wrong
+    extra is a silent no-op that installs the base distribution and nothing else.
+
+    Resolving is also what pins the promise the extras rest on — no module reaches its driver at
+    import time — because this suite's Redis-only leg has none of the other three installed and
+    imports all four here.
+
+    The extra is held to `SHIPPED` rather than merely to existing in `pyproject.toml`: a row
+    pairing `KafkaBroker` with `[rabbitmq]` passes an existence check and sends a reader to
+    install the wrong driver, which then reads as this package refusing a transport they did
+    install.
+    """
+    from django.utils.module_loading import import_string
+
+    from django_aiogram.broker.base import Broker
+    from django_aiogram.broker.registry import SHIPPED
+
+    broker = import_string(path)
+
+    # a subclass, not merely a name that resolves: `__name__` matches for a function or a
+    # constant left behind at that path, and the registry refuses those at runtime — so a
+    # published `BROKER` that imports and cannot be one would pass a name check and fail in
+    # the project that copied it
+    assert isinstance(broker, type), f'{path} resolves to {broker!r}, which is not a class'
+    assert issubclass(broker, Broker), f'{path} is not a Broker subclass: {broker!r}'
+    assert broker.__name__ == path.rsplit('.', 1)[-1]
+    assert path in SHIPPED, f'{path} is not a registered transport'
+    assert SHIPPED[path][1] == extra, f'{path} needs [{SHIPPED[path][1]}], the README says [{extra}]'
+    root = pathlib.Path(__file__).resolve().parent.parent
+    declared = re.findall(r'^(\w+) = \[', (root / 'pyproject.toml').read_text(encoding='utf-8'), re.MULTILINE)
+    assert extra in declared, f'`pip install django-aiogram[{extra}]` installs nothing: not an extra'
+
+
+def test_the_row_the_readme_marks_default_is_the_default():
+    """`(default)` on the wrong row sends every reader who trusts it to a transport they did not
+    configure — and the default is exactly what a landing page's examples run on."""
+    from django_aiogram.config.defaults import DEFAULTS
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    marked = re.findall(
+        r'\|[^|]*\*\(default\)\*[^|]*\| `(django_aiogram\.broker\.[\w.]+)` \|',
+        (root / 'README.md').read_text(encoding='utf-8'),
+    )
+
+    assert marked == [DEFAULTS['BROKER']], f'the README marks {marked} as default, not {DEFAULTS["BROKER"]!r}'

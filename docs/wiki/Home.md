@@ -43,7 +43,10 @@ bot.send(chat_id=CHAT_ID, text='hello')
 
 ---
 
-Requires Python 3.10–3.14, Django 5.2+, aiogram 3.30+, redis 6.2+.
+Requires Python 3.10–3.14, Django 5.2+ and aiogram 3.30+. No transport driver is a
+dependency of the package since 4.0: the one you name brings its own, and asks for its own
+server — Redis Streams wants 7.0, the list runs on anything and gives at-least-once from 6.2.
+**[[Installation]]** has the pair for each of the four.
 [Source](https://github.com/CorneiZeR/django-aiogram) ·
 [PyPI](https://pypi.org/project/django-aiogram/) ·
 [Changelog](https://github.com/CorneiZeR/django-aiogram/blob/master/CHANGELOG.md)

@@ -5,7 +5,7 @@ JSON.
 
 ## Why not pickle
 
-Whatever can write to the Redis list decides what the bot container executes.
+Whatever can write to the queue decides what the bot container executes.
 With pickle that means arbitrary code. JSON is narrower, but not merely "a
 different Telegram call": a payload naming an `FSInputFile` picks a path, so a
 queue writer can make the bot upload any file its container can read. Treat the
@@ -169,8 +169,8 @@ to queue an open file. It is not a migration aid: 3.0 removed the shim and the
 hatch is still needed.
 
 It is off by default because **unpickling queue data is code execution**.
-Whoever can write to the Redis list can run code in the bot container, so this
-is a trust boundary, not a preference.
+Whoever can write to the queue can run code in the bot container — a Redis list or stream, an
+AMQP queue, a Kafka topic — so this is a trust boundary, not a preference.
 
 Reading pickled payloads takes one key:
 
@@ -212,7 +212,7 @@ Two behaviors make the mixed case work:
 > the flag off. See **[[Delivery]]**.
 
 Only worth it if you must queue objects JSON cannot represent, and only with a
-Redis nothing untrusted can write to.
+queue nothing untrusted can write to.
 
 ## Failures
 

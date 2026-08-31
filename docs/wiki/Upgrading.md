@@ -74,6 +74,27 @@ importing your whole project. So that row is this page's job, and a stale path t
 on the webhook while the bot looks healthy: the process is up, the consumer is sending, and
 Telegram's delivery attempts go nowhere. If you serve a webhook, change both.
 
+## Run migrate
+
+Three migrations, and the app label is the new one:
+
+```shell
+python manage.py migrate django_aiogram
+```
+
+They create `django_aiogram_event`, add the `(kind, -id)` index the admin sorts on, and add the
+`short_id` column empty. Nothing is copied and nothing is dropped: the 3.x table is untouched,
+and the two steps below are what move its rows and fill their codes in — in that order, and
+both after this.
+
+This is the step a pre-release install could not get through: a `4.0.0.dev0` wheel declared the
+index names 3.x already uses, so an upgrade that followed this page met `relation
+"drai_event_correlation" already exists` and went no further. Released 4.0.0 names them
+`dja_event_*` and migrates cleanly. If you rehearsed on `4.0.0.dev0` and it *succeeded*, that
+database now carries the old names — nothing reads an index by name, so it keeps working, and the
+changelog's 4.0.0 entry has the rename, one statement per index, if you would rather they
+matched.
+
 ## Move the event log's rows, or leave them
 
 The table is `django_aiogram_event` now, and `migrate` creates it empty. The old
@@ -88,8 +109,10 @@ and SQLite index names are unique per schema rather than per table, so this rele
 `dja_event_*` where 3.x used `drai_event_*`. (MySQL scopes them per table and would not have
 minded either way.) Nothing to do about it — it is why `migrate` succeeds with both tables
 present — but a dashboard or a hand-built index that names one of the old four is describing the
-old table, and will keep describing it for as long as you keep it. It copies: the old table is left exactly as it is, including any row whose
-id was already taken. With the app's own `migrate` already run:
+old table, and will keep describing it for as long as you keep it.
+
+**It copies**, and leaves the old table exactly as it is, including any row whose id was already
+taken. With the app's own `migrate` already run:
 
 ```shell
 python manage.py tgbot_move_events

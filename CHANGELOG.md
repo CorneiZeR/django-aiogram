@@ -1,13 +1,11 @@
 # Changelog
 
-## 4.0.0 - unreleased
+## 4.0.0 - 2026-08-31
 
 **The package is `django-aiogram` now**, and Redis is one transport among several rather
 than the only one. Import from `django_aiogram`, set environment variables with
 `DJANGO_AIOGRAM_`, and read logs from the `django_aiogram` logger. The event log lives in
 a new table, so the old one is left where it is — see **Upgrading** for moving the rows.
-
-Entries land here as the work does; nothing below is released.
 
 ### Added
 
@@ -396,9 +394,9 @@ Entries land here as the work does; nothing below is released.
   home it left.
 
   **A test resolves them now**, since prose is the one part of the package no gate reads:
-  `tests/test_docstring_references.py` walks every `:mod:`, `:meth:`, `:attr:` and friend that
-  names something inside this package — 148 of them — and resolves each against the syntax tree
-  of the module it names. It found both, and it fails on either coming back. References into other
+  `tests/test_docstring_references.py` reads every `:mod:`, `:meth:`, `:attr:` and friend in the
+  package — 148 of them — and resolves the 37 that name something inside it against the syntax
+  tree of the module named. It found both, and it fails on either coming back. References into other
   packages are somebody else's to keep; a plain backticked mention is outside it, and the two
   comments above were fixed by hand for that reason.
 
@@ -677,6 +675,104 @@ Entries land here as the work does; nothing below is released.
 
 ### Changed
 
+- **`manage.py check` said nothing about the one extra a Kafka or RabbitMQ project still
+  needs.** `FSM_STORAGE` defaults to `'redis'` and that store is aiogram's, which imports
+  redis-py — so a project that installed its own transport's extra, left the setting alone and
+  set a `REDIS_URL` passed every check and then died building the dispatcher. Measured on a
+  `[kafka]`-only install: `System check identified no issues`, followed by
+  `ModuleNotFoundError: No module named 'redis'` out of `start_tgbot`. A missing driver
+  reaching a project as a traceback is the shape `E047` exists to prevent for the *broker*,
+  and this was the same shape arriving through the storage door, where no rule was watching.
+
+  The install lines follow it: the README and **Installation** show
+  `pip install 'django-aiogram[kafka,redis]'` and the RabbitMQ equivalent, because one extra
+  per transport is true of the *queue* and the FSM store is a second question. `pyproject.toml`
+  says the same beside the extras it declares.
+
+  `E019` judges the driver behind `'redis'` now, with both ways out in the hint — install the
+  extra, or set `'memory'` if the deployment keeps no chat state — and `find_spec` rather than
+  an import, because this rule runs on every `manage.py` invocation. **Installation** says it
+  too, next to the install lines, since the table above it lists one extra per transport and
+  that is what made the gap easy to walk into.
+
+- **The release build's last gate could not run.** `publish.yml` hands the built artifacts to
+  `scripts/smoke_install.sh dist` so that the wheel it uploads is the wheel that gets
+  installed — and that branch of the script kept the path it was given, relative, then moved
+  into a throwaway project where `dist/...` no longer resolved. So the step failed on
+  `Requirement 'dist/django_aiogram-4.0.0-py3-none-any.whl[redis]' looks like a filename, but
+  the file does not exist`, which would have stopped the publish after the tag was cut.
+
+  Nothing had run it: CI called the script with no argument, where it builds its own copy.
+  The path is resolved absolute now, and the `smoke` job passes a directory the way the
+  release does, so the release's own invocation is exercised on every pull request.
+
+- **The Kafka extra declared a driver floor that cannot be installed on two of the five
+  Pythons this package claims.** `confluent-kafka>=2.3` against `requires-python = ">=3.10,
+  <3.15"`, and that driver compiles librdkafka: measured on PyPI and then on real
+  interpreters, the first wheel for Python 3.13 is **2.6.0** and the first for 3.14 is
+  **2.12.1**, so `pip install confluent-kafka==2.6.0` on Python 3.14.6 goes looking for
+  `librdkafka/rdkafka.h` and stops. Nobody met it, because a resolver takes the newest — but a
+  lockfile pinning the floor, or `--resolution lowest-direct`, met it immediately.
+
+  It is two specifiers now, by marker: `>=2.6` below Python 3.14 and `>=2.12.1` from it.
+  Verified by resolving the lowest allowed version on three interpreters — 2.6.0 on 3.10 and
+  3.13, 2.12.1 on 3.14 — and the API asks for nothing newer than the wheels do: 2.6.0 passes
+  every Kafka case against a real broker, as does `pika==1.3.0`, the RabbitMQ floor, which
+  nothing had run either.
+
+  Every other floor was checked the same way and holds: `django==5.2.0`, `aiogram==3.30.0`,
+  `redis==6.2.0` and `redis[hiredis]==6.2.0` all install on Python 3.14, and the redis floor is
+  aiogram's own — `redis[hiredis]>=6.2.0` in its metadata.
+
+  **Installation** states each transport's two floors in a table, because they are two
+  questions and the page used to run them together: the *driver* is a package this project
+  pins, the *server* is what you run. Redis Streams needs server 7.0 and refuses below it; the
+  list runs on any server and gives at-least-once from 6.2, saying so in the log when it
+  cannot. `tests/test_dependency_floors.py` ties the numbers together — the floors leg pins
+  what `pyproject.toml` declares, the classifiers and the CI matrix cover exactly what
+  `requires-python` allows, the three pages that state the Python range state the same one, and
+  every extra's floor appears in the wiki. Five claims, each falsified.
+
+- **The README says there are four transports, in the first screen.** It opened on one — a
+  diagram with a Redis list in the middle, a single `pip install 'django-aiogram[redis]'`, and
+  prose about pushing a call onto a list — so the page that decides whether anybody reads
+  further described the default as the design. `BROKER` had been a setting for the whole
+  release and the landing page never said so.
+
+  It now names all four where the diagram was, with a table of what to write in `BROKER`, which
+  extra installs the driver, and which settings that transport requires on top of the two in the
+  block below it. Then the sentence that matters to somebody choosing: the code does not change
+  with the row — same `bot.send()`, same handlers, same event log, same `manage.py start_tgbot` —
+  what changes is what becomes of a message whose worker was killed mid-send.
+
+  Three cases hold the table to the package: every transport in `broker/` has a row, every row's
+  `BROKER` value imports and its extra exists in `pyproject.toml`, and the row marked default is
+  the one `DEFAULTS['BROKER']` names. Resolving all four is also what pins the release's promise
+  that no module reaches its driver at import time — measured on a venv with `redis` installed
+  and neither `pika` nor `confluent-kafka`, where all four classes import.
+
+  Two pages stated the requirements as though redis were still one: **Home** and
+  **Installation** said `redis 6.2+` flatly, where the *server* floor now belongs to the
+  transport — 6.2 for the list, 7.0 for Streams, and no Redis server at all for a project whose
+  queue is RabbitMQ or Kafka. The driver is a separate question on those two, and the answer is
+  usually still yes: `FSM_STORAGE` defaults to aiogram's Redis store.
+
+  And the gate that exists for exactly this class of sentence — `test_broker_neutral_prose.py`,
+  which pins the surfaces whose subject is the queue in general — could not see the one on the
+  front page: it looks for Redis named as *the* queue, and "pushes the call onto a Redis list"
+  matched none of its patterns. It does now, and four more surfaces joined the ones it covers,
+  each with a sentence of this release's own to fix:
+
+  * **Home**, the wiki's front page, read before any transport page.
+  * **Serialization**, where the trust boundary was Redis's: *whoever can write to the queue*
+    runs code in the bot container, and that is true on all four. Three sentences, including
+    the one under `ALLOW_PICKLE`.
+  * **AI assistants**, the brief handed to a coding agent — so the surface that propagates. It
+    told one to watch `redis-cli llen TELEGRAM_BOT_MESSAGE` grow, which answers on one
+    transport; `bot.queue_depth()` asks whichever `BROKER` names.
+  * **Event log**, whose kinds table said `outbound.queued` meant "written to the Redis list"
+    and `outbound.consumed` "took it off the list". Both fire on four transports.
+
 - **`producer/client.py` is six modules.** It held the facade, the loop it drives, every
   route out of the process, the shutdown that has to hold the at-least-once guarantee
   across all of them, and — in the middle of that — fifteen one-line decorators and the
@@ -686,7 +782,8 @@ Entries land here as the work does; nothing below is released.
   settles it), `looping` (who may drive the loop and for how long), `queueing` (everything
   a queue write does except the write, plus the chunking that feeds it), `from_settings`
   (the aiogram objects a project's settings describe) and `routing` (the decorators, which
-  read the router and nothing else). 1610 lines to 1195.
+  read the router and nothing else). 1610 lines to 1195 at the split, and 1215 by the end of
+  the release — the number a reader can count, since later entries here added to it.
 
   **The class is not cut further, and that is the decision.** The shutdown guarantee is a
   property of state that `send`, `_schedule`, `_drain` and `close` share; splitting it into
@@ -772,8 +869,11 @@ Entries land here as the work does; nothing below is released.
   upgrading from 3.x has to add the extra, or `redis` disappears with the rename.
 
   It is worth the one-time edit because the alternative is every deployment carrying every
-  driver: a project on Kafka has no use for `redis`, and this is what lets the later
-  transports ship without adding to what a base install downloads.
+  driver: a project on Kafka needs no Redis *for its queue*, and this is what lets the later
+  transports ship without adding to what a base install downloads. It may still want
+  `[redis]` beside its own extra — `FSM_STORAGE` defaults to aiogram's Redis store, and
+  `E019` says so at startup — which is the one place a transport does not decide the whole
+  install.
 
   Nothing guesses. `BROKER` names the transport, and a name whose driver is absent is
   `E047` at startup carrying that `pip install` line — with one exception that matters to a

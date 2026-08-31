@@ -13,7 +13,7 @@ from __future__ import annotations
 #: checkers understand the sentinel, and a reader can see it is always false
 TYPE_CHECKING = False
 
-__version__ = '4.0.0.dev0'
+__version__ = '4.0.0'
 
 __all__ = ('TelegramBot', '__version__', 'bot', 'conf')
 
