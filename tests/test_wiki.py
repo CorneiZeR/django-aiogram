@@ -68,9 +68,7 @@ def test_every_link_resolves(path):
     case used to work and now 404s, which is a failure no reader can diagnose.
     """
     known = page_files()
-    broken = [
-        target for target, _ in LINK.findall(path.read_text(encoding='utf-8')) if target and target not in known
-    ]
+    broken = [target for target, _ in LINK.findall(path.read_text(encoding='utf-8')) if target and target not in known]
     assert not broken, f'{path.name} links to missing pages: {broken}'
 
 
