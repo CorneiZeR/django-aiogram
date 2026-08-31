@@ -1,13 +1,11 @@
 # Changelog
 
-## 4.0.0 - unreleased
+## 4.0.0 - 2026-08-31
 
 **The package is `django-aiogram` now**, and Redis is one transport among several rather
 than the only one. Import from `django_aiogram`, set environment variables with
 `DJANGO_AIOGRAM_`, and read logs from the `django_aiogram` logger. The event log lives in
 a new table, so the old one is left where it is — see **Upgrading** for moving the rows.
-
-Entries land here as the work does; nothing below is released.
 
 ### Added
 
@@ -396,9 +394,9 @@ Entries land here as the work does; nothing below is released.
   home it left.
 
   **A test resolves them now**, since prose is the one part of the package no gate reads:
-  `tests/test_docstring_references.py` walks every `:mod:`, `:meth:`, `:attr:` and friend that
-  names something inside this package — 148 of them — and resolves each against the syntax tree
-  of the module it names. It found both, and it fails on either coming back. References into other
+  `tests/test_docstring_references.py` reads every `:mod:`, `:meth:`, `:attr:` and friend in the
+  package — 148 of them — and resolves the 37 that name something inside it against the syntax
+  tree of the module named. It found both, and it fails on either coming back. References into other
   packages are somebody else's to keep; a plain backticked mention is outside it, and the two
   comments above were fixed by hand for that reason.
 
@@ -686,7 +684,8 @@ Entries land here as the work does; nothing below is released.
   settles it), `looping` (who may drive the loop and for how long), `queueing` (everything
   a queue write does except the write, plus the chunking that feeds it), `from_settings`
   (the aiogram objects a project's settings describe) and `routing` (the decorators, which
-  read the router and nothing else). 1610 lines to 1195.
+  read the router and nothing else). 1610 lines to 1195 at the split, and 1215 by the end of
+  the release — the number a reader can count, since later entries here added to it.
 
   **The class is not cut further, and that is the decision.** The shutdown guarantee is a
   property of state that `send`, `_schedule`, `_drain` and `close` share; splitting it into
