@@ -351,9 +351,16 @@ Entries land here as the work does; nothing below is released.
   ALTER INDEX drai_event_chat        RENAME TO dja_event_chat;
   ```
 
-  MySQL spells it `ALTER TABLE django_aiogram_event RENAME INDEX drai_event_chat TO
-  dja_event_chat`; SQLite has no rename, so there each is dropped and created again. A fresh
-  install is unaffected, and no released version ever created these names.
+  MySQL spells the same rename `ALTER TABLE django_aiogram_event RENAME INDEX <old> TO <new>`,
+  once for each of the four; SQLite has no rename at all, so there each is dropped and created
+  again.
+
+  One narrower state, measured rather than assumed: a `4.0.0.dev0` whose `migrate` stopped
+  *between* `0001` and `0002` finishes on PostgreSQL without complaint — Django's PostgreSQL
+  editor drops indexes with `IF EXISTS` — but leaves `drai_event_kind_recent` behind, an index
+  nothing will ever drop and every insert pays for. `DROP INDEX drai_event_kind_recent;` is the
+  whole cleanup. A fresh install is unaffected, and no released version ever created these
+  names.
 
 - **The two readers whose contract is to *report* survive a setting `int()` cannot read.**
   `int(float('inf'))` raises `OverflowError`, which neither guard caught: the container health check
