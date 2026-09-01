@@ -39,11 +39,24 @@ The package is untouched: this release moves the documentation and nothing else.
   measured against the light ground, `#44b78b` is 2.16:1 — so each scheme carries the shade
   that passes: `#1f7a5c` on paper at 4.53:1, `#44b78b` on ink at 7.60:1.
 
-  The wiki is frozen at its last good sync until it is replaced by stubs pointing at the site;
-  every link in the README still points there until then. `.github/workflows/wiki.yml` is
-  deleted rather than narrowed to manual dispatch: the pages it would copy now carry relative
-  links, which a GitHub wiki does not resolve, so the one thing a dispatch could still do was
-  break every link on it. The stub workflow that replaces it arrives with the site.
+  **The site is at <https://corneizer.github.io/django-aiogram/>**, versioned by `mike`: a push
+  to `master` publishes the series `__version__` names and moves the `latest` alias onto it, so
+  `/latest/` is what `master` says and a series freezes by itself the day the version moves
+  past it. The 25 links in the README, the one in `AGENTS.md` and `project.urls.Documentation`
+  point there — the last at the site root, so PyPI's sidebar follows the default-version
+  redirect rather than freezing on the series that was current when a release shipped.
+
+  Every page of the old wiki is a line pointing at its replacement. A wiki page cannot
+  redirect — GitHub strips a meta refresh out of the Markdown it renders — so a reader gets a
+  link to click, and the sidebar they see beside it says the same. `.github/workflows/wiki.yml`
+  is deleted rather than narrowed to manual dispatch: the pages it would copy carry relative
+  links, which a wiki does not resolve, so the one thing a dispatch could still do was break
+  every link on it.
+
+  **Case matters in the README too, now.** The check that every page is linked from the front
+  page compared both sides case-folded, because the wiki resolved `rate-limits` to
+  `Rate-limits`; on the site that is a 404, so the comparison is exact and the case that used
+  to prove leniency now proves the opposite.
 
 ## 4.0.0 - 2026-08-31
 

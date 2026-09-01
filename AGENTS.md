@@ -2,7 +2,7 @@
 
 Instructions for coding agents working on **this repository**. For agents
 integrating the package into a project, see the wiki page
-[AI assistants](https://github.com/CorneiZeR/django-aiogram/wiki/AI-assistants).
+[AI assistants](https://corneizer.github.io/django-aiogram/latest/AI-assistants/).
 
 ## What this is
 
