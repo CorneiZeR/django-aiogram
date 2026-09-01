@@ -63,6 +63,21 @@
 
     
     
+  
+  
+    
+  
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Event log · django-aiogram">
+  <meta property="og:description" content="Run aiogram next to Django and send Telegram messages from anywhere, over a Redis list, Redis Streams, RabbitMQ or Kafka">
+  <meta property="og:image" content="https://corneizer.github.io/django-aiogram/latest/4.0assets/social-card.png">
+  
+  <meta property="og:url" content="https://corneizer.github.io/django-aiogram/latest/4.0/Event-log/">
+  
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Event log · django-aiogram">
+  <meta name="twitter:image" content="https://corneizer.github.io/django-aiogram/latest/4.0assets/social-card.png">
+
   </head>
   
   
@@ -1823,18 +1838,21 @@ whole reason this is not a settings hook calling into your code from the send pa
 <p>A receiver that raises is logged as <code>an events_recorded receiver raised</code> and costs
 neither the other receivers their batch nor the database its rows. <code>send_robust</code> is
 most of that: Django hands the exception back instead of letting it end the writer.</p>
-<p>Not all of it, though, and the gap is worth knowing if you write a receiver as a
-class. Django's own failure logging reads <code>receiver.__qualname__</code>, which a <em>callable
-instance</em> does not have — so for that shape <code>send_robust</code> raises rather than
-containing anything, measured on Django 6.1. This package catches that too and logs
-<code>publishing recorded events failed</code>; without it the exception would be counted as a
-failed database write, which is the one story in the log that would send you to the
-wrong place entirely.</p>
-<p>One consequence survives the catch: <code>send_robust</code> stops its own receiver loop when it
-raises, so <strong>receivers after the offending one never see that batch</strong>. The rows are
-unaffected — they were written first — and the next batch starts the loop again. If
-that matters to you, do not write a receiver as a callable class, or keep the risky
-one last.</p>
+<p>Not all of it. Django's failure logging reads <code>receiver.__qualname__</code>, which a <em>callable
+instance</em> does not have — so for that shape <code>send_robust</code> raises rather than containing
+anything, measured on Django 6.1. Two things answer that: connecting a receiver gives it a
+name, so the dispatch does not break in the first place, and this package catches the
+exception anyway. Without the catch it would be counted as a failed database write, which is
+the one story in the log that would send you to the wrong place entirely.</p>
+<p>That used to have a consequence the catch could not reach: <code>send_robust</code> names the failing
+receiver in its own log line, looking the name up <em>inside</em> its <code>except</code>, and a callable
+instance has none — so the lookup raised out of the dispatch and <strong>receivers after the
+offending one never saw that batch</strong>. Connecting a receiver names it now, from its class, so
+the loop survives a receiver that raises — for every receiver that can be named, which is
+every function, every bound method and every ordinary instance.</p>
+<p>Where the name cannot be set — a class with <code>__slots__</code>, a read-only property — connecting
+logs a warning saying so, because that receiver can still end a dispatch. Everything else is
+unchanged: the rows were written first, and a receiver that raises is still contained.</p>
 <p>Two honest notes about <code>prometheus_client</code> in particular. Its <code>labels()</code> and
 <code>inc()</code> both take locks, and in multiprocess mode an increment is an mmap write —
 cheap, but not free, and it happens once per event in the batch. And <code>outbound.sent</code>
@@ -2090,7 +2108,7 @@ express.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 1, 2026 01:02:33 UTC">September 1, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 1, 2026 13:33:42 UTC">September 1, 2026</span>
   </span>
 
     

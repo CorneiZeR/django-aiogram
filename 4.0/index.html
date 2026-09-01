@@ -61,6 +61,19 @@
 
     
     
+  
+  
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="django-aiogram">
+  <meta property="og:description" content="Run aiogram next to Django and send Telegram messages from anywhere, over a Redis list, Redis Streams, RabbitMQ or Kafka">
+  <meta property="og:image" content="https://corneizer.github.io/django-aiogram/latest/4.0assets/social-card.png">
+  
+  <meta property="og:url" content="https://corneizer.github.io/django-aiogram/latest/4.0/">
+  
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="django-aiogram">
+  <meta name="twitter:image" content="https://corneizer.github.io/django-aiogram/latest/4.0assets/social-card.png">
+
   </head>
   
   
@@ -336,6 +349,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#four-transports-one-setting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Four transports, one setting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#start-here" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -347,10 +371,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#going-further" class="md-nav__link">
+  <a href="#running-it" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Going further
+        Running it
       
     </span>
   </a>
@@ -358,10 +382,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#upgrading" class="md-nav__link">
+  <a href="#reference" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Upgrading
+        Reference
       
     </span>
   </a>
@@ -1199,6 +1223,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#four-transports-one-setting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Four transports, one setting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#start-here" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1210,10 +1245,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#going-further" class="md-nav__link">
+  <a href="#running-it" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Going further
+        Running it
       
     </span>
   </a>
@@ -1221,10 +1256,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#upgrading" class="md-nav__link">
+  <a href="#reference" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Upgrading
+        Reference
       
     </span>
   </a>
@@ -1257,43 +1292,151 @@
 
 
 <h1 id="django-aiogram">django-aiogram<a class="headerlink" href="#django-aiogram" title="Link to this section">&para;</a></h1>
-<p>Run <a href="https://docs.aiogram.dev/">aiogram</a> in a container next to Django, write
-handlers as ordinary Django app code, and send Telegram messages from anywhere
-in the project.</p>
-<p>Only the bot container runs the polling loop. Elsewhere <code>send()</code> queues the message and
-returns — where the process is enabled; <code>ENABLED=0</code> makes it a no-op that still names the
-message. Which queue it is — a Redis list or stream, an AMQP queue, a Kafka topic — is what
-<code>BROKER</code> names. <code>send_raw()</code> skips the queue and talks to Telegram from the calling process.</p>
+<p>Run <a href="https://docs.aiogram.dev/">aiogram</a> in a container next to Django, write handlers as
+ordinary Django app code, and send Telegram messages from anywhere in the project.</p>
 <div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram</span><span class="w"> </span><span class="kn">import</span> <span class="n">bot</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">bot</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="n">CHAT_ID</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="s1">'hello'</span><span class="p">)</span>
 </span></code></pre></div>
+<p>Only the bot container runs the polling loop. Elsewhere <code>send()</code> queues the message and
+returns — where the process is enabled; <code>ENABLED=0</code> makes it a no-op that still names the
+message. <code>send_raw()</code> skips the queue and talks to Telegram from the calling process.</p>
+<h2 id="four-transports-one-setting">Four transports, one setting<a class="headerlink" href="#four-transports-one-setting" title="Link to this section">&para;</a></h2>
+<p><code>BROKER</code> names the queue, and your code does not change with it: the same <code>bot.send()</code>, the
+same handlers, the same event log, the same <code>manage.py start_tgbot</code>. What differs is what
+becomes of a message whose worker was killed mid-send, and what recovery is — a command, a
+clock, or the broker's own doing.</p>
+<div class="grid cards">
+<ul>
+<li>
+<p><strong><a href="Redis-list/">Redis list</a></strong></p>
+<hr />
+<p>The default. <code>RPUSH</code> and a blocking pop, with an in-flight list per worker. At-least-once
+wherever <code>BLMOVE</code> is available, and a worker name that has to survive its container.</p>
+<p><code>pip install 'django-aiogram[redis]'</code></p>
+</li>
+<li>
+<p><strong><a href="Redis-Streams/">Redis Streams</a></strong></p>
+<hr />
+<p>The same server, a consumer group, and no identity to keep: any consumer recovers a dead
+one's work. Wants Redis 7.0 and refuses below it.</p>
+<p><code>pip install 'django-aiogram[redis]'</code></p>
+</li>
+<li>
+<p><strong><a href="RabbitMQ/">RabbitMQ</a></strong></p>
+<hr />
+<p>The broker tracks its own consumers, so an unacknowledged message comes back without
+being asked. One thread per connection, which shapes the rest.</p>
+<p><code>pip install 'django-aiogram[rabbitmq,redis]'</code></p>
+</li>
+<li>
+<p><strong><a href="Kafka/">Kafka</a></strong></p>
+<hr />
+<p>Offsets settle a contiguous prefix, ordering is per partition, and a refusal rewinds
+everything after it. The model that differs most from the other three.</p>
+<p><code>pip install 'django-aiogram[kafka,redis]'</code></p>
+</li>
+</ul>
+</div>
+<p><code>redis</code> is in the last two lines for the FSM store rather than the queue: <code>FSM_STORAGE</code>
+defaults to aiogram's Redis one, and <code>FSM_STORAGE: 'memory'</code> is what drops it.
+<strong><a href="Delivery/">Delivery</a></strong> compares the four on what each asks of an operator.</p>
 <h2 id="start-here">Start here<a class="headerlink" href="#start-here" title="Link to this section">&para;</a></h2>
+<div class="grid cards">
 <ul>
-<li><strong><a href="Installation/">Installation</a></strong> — install, configure, run</li>
-<li><strong><a href="Settings/">Settings</a></strong> — every setting, with defaults</li>
-<li><strong><a href="Handlers/">Handlers</a></strong> — writing routers and using FSM</li>
-<li><strong><a href="Sending-messages/">Sending messages</a></strong> — <code>send</code>, <code>asend</code>, <code>send_many</code>, <code>enqueue</code>, <code>send_raw</code>, keyboards, files</li>
-<li><strong><a href="Testing/">Testing</a></strong> — running your suite without a broker, asserting what was queued</li>
-<li><strong><a href="API/">API</a></strong> — the instance, its internals, and what stays public</li>
+<li>
+<p><strong><a href="Installation/">Installation</a></strong></p>
+<hr />
+<p>Install, configure, run — and the two floors each transport adds, driver and server.</p>
+</li>
+<li>
+<p><strong><a href="Settings/">Settings</a></strong></p>
+<hr />
+<p>Every key under <code>TELEGRAM_BOT</code>, with its default and the check id that guards it.</p>
+</li>
+<li>
+<p><strong><a href="Handlers/">Handlers</a></strong></p>
+<hr />
+<p><code>tg_router.py</code> in any installed app: routers, filters, FSM, and the ORM from async code.</p>
+</li>
+<li>
+<p><strong><a href="Sending-messages/">Sending messages</a></strong></p>
+<hr />
+<p><code>send</code>, <code>asend</code>, <code>send_many</code>, <code>enqueue</code>, <code>send_raw</code> — keyboards, files, errors, Celery.</p>
+</li>
+<li>
+<p><strong><a href="Testing/">Testing</a></strong></p>
+<hr />
+<p>Your suite without a broker: <code>fakeredis</code>, asserting what was queued, draining by hand.</p>
+</li>
+<li>
+<p><strong><a href="API/">API</a></strong></p>
+<hr />
+<p>The shared instance, its internals, and what stays public across releases.</p>
+</li>
 </ul>
-<h2 id="going-further">Going further<a class="headerlink" href="#going-further" title="Link to this section">&para;</a></h2>
+</div>
+<h2 id="running-it">Running it<a class="headerlink" href="#running-it" title="Link to this section">&para;</a></h2>
+<div class="grid cards">
 <ul>
-<li><strong><a href="Delivery/">Delivery</a></strong> — how a message gets from the queue to Telegram, what each transport
-  guarantees, and which mode to pick</li>
-<li><strong><a href="Webhook/">Webhook</a></strong> — receiving updates over HTTP instead of polling for them</li>
-<li><strong><a href="Rate-limits/">Rate limits</a></strong> — staying inside Telegram's published limits</li>
-<li><strong><a href="Deployment/">Deployment</a></strong> — docker-compose recipes, disabling the bot per process</li>
-<li><strong><a href="Logging/">Logging</a></strong> — the logger and its structured fields</li>
-<li><strong><a href="Event-log/">Event log</a></strong> — recording what the bot did to a table</li>
-<li><strong><a href="Serialization/">Serialization</a></strong> — what can be queued, and the pickle-to-JSON move</li>
-<li><strong><a href="Troubleshooting/">Troubleshooting</a></strong> — symptoms and their usual causes</li>
+<li>
+<p><strong><a href="Delivery/">Delivery</a></strong></p>
+<hr />
+<p>How a queued message reaches Telegram, what each transport guarantees, and which
+consumer mode to pick.</p>
+</li>
+<li>
+<p><strong><a href="Deployment/">Deployment</a></strong></p>
+<hr />
+<p>A compose recipe per transport, healthchecks, the shutdown budget, per-process opt-out.</p>
+</li>
+<li>
+<p><strong><a href="Webhook/">Webhook</a></strong></p>
+<hr />
+<p>Updates over HTTP instead of polling for them, in four steps.</p>
+</li>
+<li>
+<p><strong><a href="Rate-limits/">Rate limits</a></strong></p>
+<hr />
+<p>Staying inside Telegram's published limits, and what the pacer does when you do not.</p>
+</li>
+<li>
+<p><strong><a href="Logging/">Logging</a></strong></p>
+<hr />
+<p>The <code>django_aiogram</code> logger, its structured fields, and which lines deserve an alert.</p>
+</li>
+<li>
+<p><strong><a href="Event-log/">Event log</a></strong></p>
+<hr />
+<p>An optional table recording what the bot did, and a signal to count it without one.</p>
+</li>
 </ul>
-<h2 id="upgrading">Upgrading<a class="headerlink" href="#upgrading" title="Link to this section">&para;</a></h2>
+</div>
+<h2 id="reference">Reference<a class="headerlink" href="#reference" title="Link to this section">&para;</a></h2>
+<div class="grid cards">
 <ul>
-<li><strong><a href="Upgrading/">Upgrading</a></strong> — what each major release changed, and what you have to do</li>
-<li><strong><a href="AI-assistants/">AI assistants</a></strong> — the brief to hand a coding agent, and what they get wrong</li>
+<li>
+<p><strong><a href="Serialization/">Serialization</a></strong></p>
+<hr />
+<p>What can be queued, the pickle threat model, and the way off it.</p>
+</li>
+<li>
+<p><strong><a href="Troubleshooting/">Troubleshooting</a></strong></p>
+<hr />
+<p>Symptom to cause, with every line the healthcheck and the webhook can print.</p>
+</li>
+<li>
+<p><strong><a href="Upgrading/">Upgrading</a></strong></p>
+<hr />
+<p>What each major release changed and what you have to do, newest first.</p>
+</li>
+<li>
+<p><strong><a href="AI-assistants/">AI assistants</a></strong></p>
+<hr />
+<p>The brief to hand a coding agent, and what they get wrong without it.</p>
+</li>
 </ul>
+</div>
 <hr />
 <p>Requires Python 3.10–3.14, Django 5.2+ and aiogram 3.30+. No transport driver is a
 dependency of the package since 4.0: the one you name brings its own, and asks for its own
@@ -1323,7 +1466,7 @@ at-least-once wherever <code>BLMOVE</code> is available: a capability, not a ver
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 1, 2026 01:02:33 UTC">September 1, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 1, 2026 13:33:42 UTC">September 1, 2026</span>
   </span>
 
     
