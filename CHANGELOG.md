@@ -1,13 +1,17 @@
 # Changelog
 
-## 4.0.1 - unreleased
+## 4.0.0.post1 - unreleased
 
-**A patch, and it started out as a post release.** The intent was metadata only —
-`project.urls.Documentation` naming the documentation site — and `4.0.0.post1` is what PEP 440
-has for that: same code, republished. Then a real defect turned up while checking the claims
-the pages make, and fixing it changed behaviour in `eventlog/signals.py`. A post release
-carrying a behaviour change tells every reader of the version number something false, so the
-number moved rather than the fix.
+**Documentation, and one fix in the seam that publishes it.** What this release is *for* is
+metadata: `project.urls.Documentation` names the documentation site, which is the only thing
+in here a resolver or PyPI reads. `4.0.0.post1` is what PEP 440 has for that — same code,
+republished — and this is that, with one exception stated rather than buried.
+
+**The exception is `eventlog/signals.py`.** Checking what the pages claim turned up a real
+defect in the metrics seam — a broken receiver cost the receivers behind it their batch — and
+the fix belongs with the work that found it. Everything else under `src/` is docstrings: two
+files, no behaviour, no setting, no message. So a post release carries one behaviour change
+here, and anybody reading the number should know it from the first paragraph.
 
 ### Documentation
 
