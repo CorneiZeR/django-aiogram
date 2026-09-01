@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger('django_aiogram')
 
-__all__ = ('defer', 'waits_for_a_commit')
+__all__ = ('defer',)
 
 #: said once per process, like `mention_asend`: the condition is a deployment's database
 #: configuration, so a line per send is noise nobody can act on twice
@@ -45,11 +45,10 @@ _manual_mentioned = threading.Event()
 _manual_guard = threading.Lock()
 
 
-def waits_for_a_commit() -> bool:
-    """Whether a write made now would be held for the caller's transaction.
+def defer(publish: Callable[[], None]) -> bool:
+    """Arrange for ``publish`` to run when the caller's transaction commits.
 
-    Separate from :func:`defer` because a fan-out has to know before it starts: it registers
-    one hook for the whole call, and cannot collect the writes for one without asking first.
+    ``False`` means nothing was arranged and the caller has to publish now.
 
     The default alias, because a send names no database. It is the connection a view's
     ``atomic()`` opens and the one whose rollback the message would outlive; a project
@@ -60,10 +59,11 @@ def waits_for_a_commit() -> bool:
         return False
     connection = connections[DEFAULT_DB_ALIAS]
     if connection.in_atomic_block:
-        if _commits_on_exit(connection):
-            return True
-        _mention_manual_transactions()
-        return False
+        if not _commits_on_exit(connection):
+            _mention_manual_transactions()
+            return False
+        transaction.on_commit(publish, using=DEFAULT_DB_ALIAS)
+        return True
     # only a connection that is already open, because asking an unopened one opens it:
     # a send would connect to a database the process never otherwise touches, and from a
     # coroutine that is `SynchronousOnlyOperation`. Nothing has run on it, so there is no
@@ -71,17 +71,6 @@ def waits_for_a_commit() -> bool:
     if connection.connection is not None and not connection.get_autocommit():
         _mention_manual_transactions()
     return False
-
-
-def defer(publish: Callable[[], None]) -> bool:
-    """Arrange for ``publish`` to run when the caller's transaction commits.
-
-    ``False`` means nothing was arranged and the caller has to publish now.
-    """
-    if not waits_for_a_commit():
-        return False
-    transaction.on_commit(publish, using=DEFAULT_DB_ALIAS)
-    return True
 
 
 def _commits_on_exit(connection: 'BaseDatabaseWrapper') -> bool:

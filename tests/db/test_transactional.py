@@ -6,6 +6,7 @@ never run and every assertion below would be about the harness rather than the p
 """
 
 import asyncio
+import contextlib
 import logging
 from typing import ClassVar
 
@@ -138,6 +139,41 @@ def test_a_chunk_that_fails_stops_the_ones_behind_it(published):
         TelegramBot().send_many([1, 2, 3], chunk_size=1, text='to everyone')
 
     assert len(published) == 1, 'a refused chunk did not stop the ones behind it'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_chunk_that_cannot_be_serialized_does_not_take_the_prepared_ones_with_it(published):
+    """The hook is registered before the loop, and reads its list when it runs.
+
+    Registered after the loop instead, a `serialise` that raises part way through a fan-out
+    leaves every chunk already prepared on a hook nobody made: a caller that catches the
+    error inside its own block and commits anyway then sends none of them, where the
+    immediate path has already published the ones before the failure.
+    """
+    with transaction.atomic(), contextlib.suppress(SerializationError):
+        TelegramBot().send_many([1, object()], chunk_size=1, text='to everyone')
+
+    assert len(published) == 1, 'the chunks prepared before the failure were lost'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=LOGGED)
+def test_the_queued_row_describes_what_was_published_not_what_came_after(published):
+    """The row's summary is built beside the payload, not from the commit hook.
+
+    Described when the hook runs, a nested value the caller changed in the meantime would be
+    the one recorded — so the row would disagree with the bytes on the queue about the same
+    message, and the log is what an operator checks the queue against.
+    """
+    entities = [{'type': 'bold', 'offset': 0, 'length': 2}]
+    with transaction.atomic():
+        TelegramBot().send(chat_id=1, text='as it was written', entities=entities)
+        entities[0]['type'] = 'italic'
+
+    detail = TelegramEvent.objects.get(kind='outbound.queued').detail
+    assert b'italic' not in published[0]
+    assert 'italic' not in str(detail), f'the row describes the mutation, not the message: {detail}'
 
 
 @pytest.mark.django_db(transaction=True)

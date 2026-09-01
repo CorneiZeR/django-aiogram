@@ -32,8 +32,17 @@
 
   A fan-out registers one commit hook for the call rather than one per chunk, which is what
   keeps a chunk the broker refuses from letting the ones behind it through — the immediate
-  path raises and never reaches them. The cost is that a deferred broadcast holds every
-  payload until the block ends, where an immediate one holds a chunk.
+  path raises and never reaches them. It is registered before the first chunk and handed the
+  list it reads at commit time, so a payload that cannot be serialized half way through does
+  not take the chunks already prepared with it: a caller that catches that inside its own
+  block and commits anyway sends what the immediate path had already published. The cost is
+  that a deferred broadcast holds every payload until the block ends, where an immediate one
+  holds a chunk.
+
+  The `queued` row is summarized beside the payload rather than when the write goes out, for
+  the reason the arguments are encoded there: described from the commit hook, a nested value
+  the caller changed in the meantime is the one the row would carry, and the row would then
+  disagree with the bytes on the queue about the same message.
 
   Two cases it does not cover, both said out loud instead of assumed. Manual transaction
   management, in either shape: with no block, `in_atomic_block` is False and Django's

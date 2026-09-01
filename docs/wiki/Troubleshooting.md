@@ -256,8 +256,8 @@ handler that is not idempotent on its own business key will send innocent messag
 ## A message went out for a transaction that rolled back
 
 `bot.send()` writes to the broker where it is called, so an `atomic()` block that raises
-after a send leaves the message queued and its row gone. Set `TRANSACTIONAL` to hold the
-write until the commit — see
+after a send leaves the message queued and its row gone. Set `TRANSACTIONAL` to `True` to
+hold the write until the commit — see
 **[Sending messages](Sending-messages.md#inside-a-transaction)**.
 
 It covers the queue route only. Inside the bot container `send` calls Telegram itself, and

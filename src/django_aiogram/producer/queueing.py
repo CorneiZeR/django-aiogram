@@ -17,7 +17,7 @@ import contextlib
 import logging
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from django_aiogram.config.enums import EventKind
@@ -45,6 +45,11 @@ class Queueing:
     payloads: list[bytes]
     messages: list[tuple[uuid.UUID, dict[str, Any]]]
     queued_at: float
+    #: what the ``queued`` row will say about each call's arguments, or ``None`` per message
+    #: where nothing reads them. Summarized beside the payload rather than at publish time:
+    #: a deferred publish runs after the caller may have changed a nested value, and the
+    #: payload is bytes by then — so a row described later would disagree with the wire
+    details: list[dict[str, Any] | None] = field(default_factory=list)
 
 
 def _dropped(
@@ -101,6 +106,10 @@ def serialise(function: str, messages: list[tuple[uuid.UUID, dict[str, Any]]]) -
     """
     queued_at = time.time()
     serializer = get_serializer()
+    # two gates, not one: whether to record at all is a different question from whether to
+    # summarize the arguments, and describing them is the expensive half. A metrics receiver
+    # counts sends; it does not read message bodies
+    described = recorder.active and recorder.wants_payload
     try:
         return Queueing(
             payloads=[
@@ -108,6 +117,7 @@ def serialise(function: str, messages: list[tuple[uuid.UUID, dict[str, Any]]]) -
             ],
             messages=messages,
             queued_at=queued_at,
+            details=[describe(kwargs) if described else None for _, kwargs in messages],
         )
     except Exception as error:
         _dropped(function, messages, 'serialising', error)
@@ -134,11 +144,7 @@ def publishing(function: str, write: Queueing) -> 'Iterator[Queueing]':
     if not recorder.active:
         # nothing keeps the table and nothing listens, so there is no event to make
         return
-    # two gates, not one: whether to record at all is a different question from
-    # whether to summarize the arguments, and describing them is the expensive
-    # half. A metrics receiver counts sends; it does not read message bodies
-    described = recorder.wants_payload
-    for identifier, kwargs in write.messages:
+    for (identifier, kwargs), detail in zip(write.messages, write.details, strict=True):
         recorder.record(
             Event(
                 kind=EventKind.OUTBOUND_QUEUED.value,
@@ -146,7 +152,7 @@ def publishing(function: str, write: Queueing) -> 'Iterator[Queueing]':
                 created_at=write.queued_at,
                 function=function,
                 chat_id=as_identifier(kwargs.get('chat_id')),
-                detail=describe(kwargs) if described else None,
+                detail=detail,
             )
         )
 
