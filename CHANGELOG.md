@@ -9,6 +9,25 @@ promised a fix nobody made.
 
 ### Documentation
 
+- **Three sentences the pages assert are now checked, starting with the one that named
+  itself.** *Every boolean setting here is parsed, not tested for truthiness* is the kind of
+  claim that is cheap to write, expensive to be wrong about, and verifiable in minutes — and
+  nothing verified it. Checked now, and true: fifteen reads across nine modules, every one
+  through `coerce_bool`, and no reader reaching the settings another way. `RAISE_EXCEPTION`
+  really was read with a bare `if` once, which is what the sentence was written about.
+
+  `tests/test_documented_claims.py` holds it from the syntax tree rather than by grepping
+  lines, because the call wraps. Two more claims joined it, each verified before it was
+  gated: the event log's rows are *inserted and never updated* — the writer's only write is
+  `save(force_insert=True)`, and nothing calls `update` — and *every model is tagged with its
+  class name*, which is what decoding needs to find the class again. Each falsified by making
+  the code say otherwise.
+
+  Four others were checked and left alone because they are true: `send_robust` really does
+  abandon its own loop on a receiver whose `__qualname__` raises — measured, the later
+  receiver does not run — updates really are not queued in either mode, naming a worker is
+  answerable on the Redis transports only, and only the Redis list needs a worker identity.
+
 - **The documentation is a site now, not a wiki.** The same pages, in the same files, built by
   Material for MkDocs and published to GitHub Pages: navigation that groups the twenty-one
   pages the way the sidebar did, search that reads the prose, a dark theme and a version
@@ -36,6 +55,14 @@ promised a fix nobody made.
   `Home.md` is `index.md`, because that is what answers at the root of a version directory.
   `_Sidebar.md` is gone: its four groups are the `nav:` block, and the test that checked the
   sidebar listed every page now checks the navigation does.
+
+  **The front page is a landing page**: the four transports as cards, each with what it
+  guarantees and the one line that installs it, then the pages grouped the way the navigation
+  groups them. The install command on **Installation** is four tabs rather than one line and a
+  paragraph of exceptions, the pickle warning on **Serialization** is an admonition rather
+  than a bold sentence in a blockquote, and every page carries the repository's social card as
+  its Open Graph image — absolute, because a crawler resolves it with no page context, which
+  the obvious `| url` filter does not produce.
 
   The site inherits the palette and the two IBM Plex faces from the repository's social card
   rather than inventing a second identity. The greens are not used at card strength for text —

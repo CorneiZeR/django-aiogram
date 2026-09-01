@@ -428,6 +428,20 @@ jobs:
             exit 1
           fi
 
+      # a link to any page should show the project rather than nothing, and the card is the
+      # one asset a crawler fetches without page context -- so the URL has to be absolute.
+      # Relative is what the obvious `| url` filter produces, and nothing else would notice
+      - name: Every page carries the social card, absolutely
+        run: |
+          set -euo pipefail
+          expected="$(python -c "import re, pathlib; print(re.search(r'^site_url: (.+)$', pathlib.Path('mkdocs.yml').read_text(), re.M).group(1))")assets/social-card.png"
+          missing=0
+          while IFS= read -r page; do
+            grep -q "og:image\" content=\"${expected}\"" "$page" || { echo "::error::$page has no absolute og:image"; missing=1; }
+          done < <(find site -name 'index.html')
+          test -f site/assets/social-card.png || { echo '::error::the card itself is not in the site'; missing=1; }
+          exit "$missing"
+
   smoke:
     # the unit suite imports from src/, so only an install can catch a packaging
     # mistake: a missing py.typed, a module left out of the wheel

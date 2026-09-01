@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+
+<!--
+  One static card for every page, rather than the `social` plugin's per-page ones. The plugin
+  renders each card at build time through cairosvg, which means system libraries in the `docs`
+  job for an image whose text would be the page title — and this project already has a card,
+  drawn for the repository's social preview, in the palette this site inherits. A link to any
+  page then shows the project rather than nothing, which is the whole of what this is for.
+
+  Every `page` access is guarded. MkDocs renders the theme's own templates — `404.html` among
+  them — with `page` set to None, and an unguarded `page.meta` there aborts the entire build
+  with `'None' has no attribute 'meta'`: no HTML at all, only `assets/`. Measured, by writing
+  it without the guards first and reading the traceback the build printed.
+-->
+{% block extrahead %}
+  {#- absolute, not `| url`: Open Graph is read by a crawler with no page context, and a
+      relative path resolves against nothing. Built from `site_url`, which already ends in
+      the version directory -#}
+  {% set card = config.site_url ~ 'assets/social-card.png' %}
+  {% set card_title = config.site_name %}
+  {% if page and page.title and not page.is_homepage %}
+    {% set card_title = page.title ~ ' · ' ~ config.site_name %}
+  {% endif %}
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="{{ card_title }}">
+  <meta property="og:description" content="{{ config.site_description }}">
+  <meta property="og:image" content="{{ card }}">
+  {% if page and page.canonical_url %}
+  <meta property="og:url" content="{{ page.canonical_url }}">
+  {% endif %}
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ card_title }}">
+  <meta name="twitter:image" content="{{ card }}">
+{% endblock %}
