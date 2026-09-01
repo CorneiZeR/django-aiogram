@@ -1,11 +1,13 @@
 # Changelog
 
-## 4.0.0.post1 - unreleased
+## 4.0.1 - unreleased
 
-**A post release, not a patch.** The package is byte-for-byte 4.0.0 — no behaviour, no
-setting, no message changed. What ships is metadata: `project.urls.Documentation` now names
-the documentation site. PEP 440 has a marker for exactly this, and a patch number would have
-promised a fix nobody made.
+**A patch, and it started out as a post release.** The intent was metadata only —
+`project.urls.Documentation` naming the documentation site — and `4.0.0.post1` is what PEP 440
+has for that: same code, republished. Then a real defect turned up while checking the claims
+the pages make, and fixing it changed behaviour in `eventlog/signals.py`. A post release
+carrying a behaviour change tells every reader of the version number something false, so the
+number moved rather than the fix.
 
 ### Documentation
 
@@ -37,8 +39,8 @@ promised a fix nobody made.
   It is fixed at the other end. `events_recorded.connect` names a receiver that has none,
   from its class: one attribute, set on an object the project has just handed over. Nothing is
   wrapped, so a weak connection still dies with its referent and `disconnect` still finds the
-  receiver by identity — and the dispatch survives a receiver that raises whatever shape it
-  was written in. Measured both ways: unnamed, the later receiver does not run; named, both
+  receiver by identity — and the dispatch survives a receiver that raises, for every receiver
+  that can be named: a function, a bound method, an ordinary instance. Measured both ways: unnamed, the later receiver does not run; named, both
   run and the broken one's error comes back as its result, which is what `send_robust`
   promises.
 

@@ -244,8 +244,9 @@ the one story in the log that would send you to the wrong place entirely.
 That used to have a consequence the catch could not reach: `send_robust` names the failing
 receiver in its own log line, looking the name up *inside* its `except`, and a callable
 instance has none — so the lookup raised out of the dispatch and **receivers after the
-offending one never saw that batch**. Connecting a receiver names it now, from its class, and
-the loop survives a receiver that raises whatever shape it was written in.
+offending one never saw that batch**. Connecting a receiver names it now, from its class, so
+the loop survives a receiver that raises — for every receiver that can be named, which is
+every function, every bound method and every ordinary instance.
 
 Where the name cannot be set — a class with `__slots__`, a read-only property — connecting
 logs a warning saying so, because that receiver can still end a dispatch. Everything else is

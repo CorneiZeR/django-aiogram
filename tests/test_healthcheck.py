@@ -1099,17 +1099,18 @@ def test_a_sweep_that_finished_adds_no_second_warning(redis_server):
 
 
 def test_the_escape_set_is_the_one_redis_documents():
-    """The characters `_escaped` quotes, pinned as a set rather than through their effects.
+    """The characters `_escaped` quotes, asserted on the function rather than through a scan.
 
-    Five of the six are covered by the sweep below, which builds a key around each and scans
-    for it. `^` is not, and cannot be: it is special only as the first character of an
-    *unescaped* `[...]`, and `[` is escaped in the same pass — measured against a real server,
-    `TG\\^x:processing:*` and `TG^x:processing:*` select the same key. So dropping it from the
-    set would change no outcome any scan can see, and the docstring said as much and left it
-    untested.
+    Six direct assertions, one per metacharacter Redis documents, and one that an ordinary
+    character is left alone. The sweep below covers five of them the other way round — it
+    builds a key containing each and scans for it — and cannot cover `^`: that character is
+    special only as the first inside an *unescaped* `[...]`, and `[` is escaped in the same
+    pass, so no scan can tell whether `^` is in the set. Measured against a real server,
+    `TG\\^x:processing:*` and `TG^x:processing:*` select the same key.
 
-    A test on the function itself does fail, which is the difference between "no test could
-    fail" and "no test was written". Redis documents the set; this is that set.
+    Which is why the docstring on `_escaped` used to say `^` was untested because no test
+    could fail. A test on the *outcome* cannot; this one can, and dropping `^` from the set
+    fails it.
     """
     from django_aiogram.redis import _escaped
 
