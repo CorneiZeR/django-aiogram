@@ -277,10 +277,13 @@ def test_the_version_is_the_one_the_changelog_announces():
 
     assert heading is not None, 'the changelog has no release headings'
     announced = heading.group(1).split(' - ')[0].strip()
-    assert re.fullmatch(r'\d+\.\d+\.\d+', announced), f'the top changelog heading is not a version: {heading.group(1)}'
-    # the release the version is preparing, so `4.0.0.dev0` matches the `4.0.0` entry
-    # rather than demanding a `4.0.0.dev0` heading nobody would write
-    release = re.match(r'(\d+\.\d+\.\d+)', django_aiogram.__version__).group(1)
+    assert re.fullmatch(r'\d+\.\d+\.\d+(\.post\d+)?', announced), (
+        f'the top changelog heading is not a version: {heading.group(1)}'
+    )
+    # the release the version is preparing, so `4.0.0.dev0` matches the `4.0.0` entry rather
+    # than demanding a `4.0.0.dev0` heading nobody would write -- and `4.0.0.post1.dev0`
+    # matches `4.0.0.post1`, which is a different entry from `4.0.0` and says so
+    release = django_aiogram.__version__.partition('.dev')[0]
     assert release == announced
 
 

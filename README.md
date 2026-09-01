@@ -30,7 +30,7 @@ Telegram. **Four transports can carry it**, and `BROKER` says which:
 Your code does not change with the row: the same `bot.send()`, handlers, event log and
 `manage.py start_tgbot`. What differs is what becomes of a message whose worker was
 killed mid-send, and what recovery is — a command, a clock, or the broker's own doing.
-[Delivery](https://github.com/CorneiZeR/django-aiogram/wiki/Delivery) compares them;
+[Delivery](https://corneizer.github.io/django-aiogram/latest/Delivery/) compares them;
 each transport has a page of its own below.
 
 ## Install
@@ -49,7 +49,7 @@ transport carries its messages, and `FSM_STORAGE: 'memory'` is what drops it.
 Nothing is inferred from what happens to be installed: `BROKER` names the transport, and a
 base `pip install django-aiogram` imports and runs `manage.py` but carries no message.
 `manage.py check` names every extra that is missing, with the `pip install` line;
-[Installation](https://github.com/CorneiZeR/django-aiogram/wiki/Installation) has the
+[Installation](https://corneizer.github.io/django-aiogram/latest/Installation/) has the
 exceptions.
 
 ```python
@@ -69,7 +69,7 @@ TELEGRAM_BOT = {
 Both may be empty: nothing connects or validates credentials at import time, so tests and
 migrations run without them. Requires Python 3.10–3.14, Django 5.2+ and aiogram 3.30+; each
 transport then pins its own driver and asks for its own server —
-[Installation](https://github.com/CorneiZeR/django-aiogram/wiki/Installation) has both, per row.
+[Installation](https://corneizer.github.io/django-aiogram/latest/Installation/) has both, per row.
 
 ## Use it
 
@@ -100,41 +100,41 @@ A router module, a call, and one process running the bot. That process gets Djan
 between-requests connection handling without having any requests — every update is bracketed
 with `close_old_connections()`, so a database that restarts under a long-running bot does not
 leave every handler raising `InterfaceError` until somebody notices. Nothing to configure;
-[Deployment](https://github.com/CorneiZeR/django-aiogram/wiki/Deployment) says what the
+[Deployment](https://corneizer.github.io/django-aiogram/latest/Deployment/) says what the
 healthcheck can and cannot see about it.
 
 Everything else — rate limits, per-process opt-out, healthchecks — is configuration, documented
 rather than required. Webhook mode is the one alternative that also asks for a URL route:
-[Webhook](https://github.com/CorneiZeR/django-aiogram/wiki/Webhook) has the four steps.
+[Webhook](https://corneizer.github.io/django-aiogram/latest/Webhook/) has the four steps.
 
 ## Documentation
 
-The [wiki](https://github.com/CorneiZeR/django-aiogram/wiki) is the
+The [documentation site](https://corneizer.github.io/django-aiogram/) is the
 documentation. Pages live in [`docs/wiki/`](https://github.com/CorneiZeR/django-aiogram/tree/master/docs/wiki), so they are reviewed in
 the same pull request as the code they describe and published from `master`.
 
 | | |
 | --- | --- |
-| [Installation](https://github.com/CorneiZeR/django-aiogram/wiki/Installation) | install, configure, run |
-| [Settings](https://github.com/CorneiZeR/django-aiogram/wiki/Settings) | every setting, with defaults and check ids |
-| [Handlers](https://github.com/CorneiZeR/django-aiogram/wiki/Handlers) | routers, filters, FSM, the async ORM |
-| [Sending messages](https://github.com/CorneiZeR/django-aiogram/wiki/Sending-messages) | routes, keyboards, files, errors |
-| [Testing](https://github.com/CorneiZeR/django-aiogram/wiki/Testing) | your suite without a broker, asserting what was queued |
-| [API](https://github.com/CorneiZeR/django-aiogram/wiki/API) | the instance, its internals, and what stays public |
-| [Delivery](https://github.com/CorneiZeR/django-aiogram/wiki/Delivery) | how queued messages reach Telegram |
-| [Redis list](https://github.com/CorneiZeR/django-aiogram/wiki/Redis-list) | the default transport: what it guarantees, and why the worker's name matters |
-| [Redis Streams](https://github.com/CorneiZeR/django-aiogram/wiki/Redis-Streams) | the same server, a consumer group, and no worker identity to keep |
-| [RabbitMQ](https://github.com/CorneiZeR/django-aiogram/wiki/RabbitMQ) | a broker that tracks its own consumers, and one thread per connection |
-| [Kafka](https://github.com/CorneiZeR/django-aiogram/wiki/Kafka) | offsets settle a prefix, ordering is per partition, a refusal rewinds |
-| [Webhook](https://github.com/CorneiZeR/django-aiogram/wiki/Webhook) | receiving updates over HTTP instead of polling |
-| [Rate limits](https://github.com/CorneiZeR/django-aiogram/wiki/Rate-limits) | staying inside Telegram's published limits |
-| [Deployment](https://github.com/CorneiZeR/django-aiogram/wiki/Deployment) | compose recipes, healthchecks, per-process opt-out |
-| [Logging](https://github.com/CorneiZeR/django-aiogram/wiki/Logging) | the logger and its structured fields |
-| [Event log](https://github.com/CorneiZeR/django-aiogram/wiki/Event-log) | recording what the bot did to a table, and a signal to count it without one |
-| [Serialization](https://github.com/CorneiZeR/django-aiogram/wiki/Serialization) | what can be queued |
-| [Troubleshooting](https://github.com/CorneiZeR/django-aiogram/wiki/Troubleshooting) | symptoms and their usual causes |
-| [Upgrading](https://github.com/CorneiZeR/django-aiogram/wiki/Upgrading) | what each major release changed, and what you must do |
-| [AI assistants](https://github.com/CorneiZeR/django-aiogram/wiki/AI-assistants) | the brief to hand a coding agent |
+| [Installation](https://corneizer.github.io/django-aiogram/latest/Installation/) | install, configure, run |
+| [Settings](https://corneizer.github.io/django-aiogram/latest/Settings/) | every setting, with defaults and check ids |
+| [Handlers](https://corneizer.github.io/django-aiogram/latest/Handlers/) | routers, filters, FSM, the async ORM |
+| [Sending messages](https://corneizer.github.io/django-aiogram/latest/Sending-messages/) | routes, keyboards, files, errors |
+| [Testing](https://corneizer.github.io/django-aiogram/latest/Testing/) | your suite without a broker, asserting what was queued |
+| [API](https://corneizer.github.io/django-aiogram/latest/API/) | the instance, its internals, and what stays public |
+| [Delivery](https://corneizer.github.io/django-aiogram/latest/Delivery/) | how queued messages reach Telegram |
+| [Redis list](https://corneizer.github.io/django-aiogram/latest/Redis-list/) | the default transport: what it guarantees, and why the worker's name matters |
+| [Redis Streams](https://corneizer.github.io/django-aiogram/latest/Redis-Streams/) | the same server, a consumer group, and no worker identity to keep |
+| [RabbitMQ](https://corneizer.github.io/django-aiogram/latest/RabbitMQ/) | a broker that tracks its own consumers, and one thread per connection |
+| [Kafka](https://corneizer.github.io/django-aiogram/latest/Kafka/) | offsets settle a prefix, ordering is per partition, a refusal rewinds |
+| [Webhook](https://corneizer.github.io/django-aiogram/latest/Webhook/) | receiving updates over HTTP instead of polling |
+| [Rate limits](https://corneizer.github.io/django-aiogram/latest/Rate-limits/) | staying inside Telegram's published limits |
+| [Deployment](https://corneizer.github.io/django-aiogram/latest/Deployment/) | compose recipes, healthchecks, per-process opt-out |
+| [Logging](https://corneizer.github.io/django-aiogram/latest/Logging/) | the logger and its structured fields |
+| [Event log](https://corneizer.github.io/django-aiogram/latest/Event-log/) | recording what the bot did to a table, and a signal to count it without one |
+| [Serialization](https://corneizer.github.io/django-aiogram/latest/Serialization/) | what can be queued |
+| [Troubleshooting](https://corneizer.github.io/django-aiogram/latest/Troubleshooting/) | symptoms and their usual causes |
+| [Upgrading](https://corneizer.github.io/django-aiogram/latest/Upgrading/) | what each major release changed, and what you must do |
+| [AI assistants](https://corneizer.github.io/django-aiogram/latest/AI-assistants/) | the brief to hand a coding agent |
 
 Upgrading from 3.x: the distribution is `django-aiogram` and the import path is
 `django_aiogram`, the driver is an extra you now name, and the event log has a table of its

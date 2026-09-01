@@ -148,7 +148,7 @@ measure = [
 
 [project.urls]
 Homepage = "https://github.com/CorneiZeR/django-aiogram"
-Documentation = "https://github.com/CorneiZeR/django-aiogram/wiki"
+Documentation = "https://corneizer.github.io/django-aiogram/"
 Changelog = "https://github.com/CorneiZeR/django-aiogram/blob/master/CHANGELOG.md"
 Issues = "https://github.com/CorneiZeR/django-aiogram/issues"
 Repository = "https://github.com/CorneiZeR/django-aiogram"

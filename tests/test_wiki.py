@@ -106,20 +106,30 @@ def test_the_wiki_link_syntax_is_gone(path):
 
 README = ROOT / 'README.md'
 PYPROJECT = ROOT / 'pyproject.toml'
-# absolute, because the README is also the PyPI description and PyPI does not
-# rewrite relative links — ../../wiki/<page> resolves to pypi.org/wiki/<page>
-WIKI_URL = 'https://github.com/CorneiZeR/django-aiogram/wiki/'
-README_WIKI_LINK = re.compile(rf'\]\({re.escape(WIKI_URL)}([^)#]+)')
+# the site's root. `project.urls.Documentation` points here rather than at a version, so
+# PyPI's sidebar follows mike's default-version redirect instead of freezing on whichever
+# series was current the day a release shipped
+SITE_URL = 'https://corneizer.github.io/django-aiogram/'
+# and the version every link in the README names. Absolute, because the README is also the
+# PyPI description and PyPI does not rewrite relative links — `../../wiki/<page>` used to
+# resolve to `pypi.org/wiki/<page>`
+DOCS_URL = f'{SITE_URL}latest/'
+#: `](.../latest/Delivery/)`, with the trailing slash a directory URL carries
+README_PAGE_LINK = re.compile(rf'\]\({re.escape(DOCS_URL)}([^)#/]+)/?\)')
 
 
-def test_readme_wiki_links_resolve():
-    """The README links into the wiki with ../../wiki/<page>; a rename there
-    breaks them silently."""
+def test_readme_page_links_resolve():
+    """The README links into the site by page name; a rename there breaks them silently.
+
+    And the spelling is exact now. The wiki folded case and turned spaces into dashes, so
+    `../../wiki/rate-limits` reached the page; the site is static files, where it is a 404
+    that no reader can diagnose and no gate here used to catch.
+    """
     known = page_names()
-    targets = README_WIKI_LINK.findall(README.read_text(encoding='utf-8'))
-    assert targets, 'no wiki links found in the README'
+    targets = README_PAGE_LINK.findall(README.read_text(encoding='utf-8'))
+    assert targets, 'no documentation links found in the README'
     broken = [target for target in targets if target not in known]
-    assert not broken, f'README links to missing wiki pages: {broken}'
+    assert not broken, f'README links to pages that do not exist: {broken}'
 
 
 def test_every_documented_log_message_is_still_emitted():
@@ -184,14 +194,19 @@ def test_the_newest_changelog_entry_is_this_version_and_is_dated():
     lines = visible(CHANGELOG.read_text(encoding='utf-8')).splitlines()
     heading = next(line for line in lines if line.startswith('## '))
 
-    # a version under development announces the entry it is preparing — `4.0.0.dev0`
-    # belongs to the `4.0.0` heading — and only a final version may carry a date. Dating
-    # an entry while the version still says `dev` is how a nightly reads as shipped
-    release, prerelease = re.match(r'(\d+\.\d+\.\d+)(.*)', __version__).groups()
+    # a version under development announces the entry it is preparing -- `4.0.0.dev0`
+    # belongs to the `4.0.0` heading -- and only a final version may carry a date. Dating an
+    # entry while the version still says `dev` is how a nightly reads as shipped.
+    #
+    # Split on `.dev` rather than on the release triple, so a post release keeps its own
+    # entry: `4.0.0.post1.dev0` announces `## 4.0.0.post1`, where a regex that stopped at the
+    # third number would have demanded the `4.0.0` heading -- already dated, and about a
+    # different set of changes
+    announced, _, developing = __version__.partition('.dev')
 
-    assert heading.startswith(f'## {release} - '), f'the newest entry is not {release}: {heading!r}'
-    stamp = heading.removeprefix(f'## {release} - ')
-    if prerelease:
+    assert heading.startswith(f'## {announced} - '), f'the newest entry is not {announced}: {heading!r}'
+    stamp = heading.removeprefix(f'## {announced} - ')
+    if developing:
         assert stamp == 'unreleased', f'{__version__} is not released, so the entry cannot be dated {stamp!r}'
         return
     # parsed, not pattern-matched: `2026-13-45` has the shape of a date and is not one,
@@ -387,18 +402,26 @@ def test_visible_drops_what_is_not_rendered():
 
 
 def test_an_unclosed_fence_hides_everything_after_it():
-    """Which is what GitHub renders: the rest of the file becomes code."""
-    text = '## Real\n```\n## Never closed\n[API](https://github.com/CorneiZeR/django-aiogram/wiki/API)\n'
+    """Which is what GitHub renders: the rest of the file becomes code.
+
+    The link in the fixture is a site link, and that is load-bearing: it carried the old wiki
+    URL through the move, which `README_PAGE_LINK` does not match at all -- so the second
+    assertion held whether or not `visible()` still removed the fence, and the case could not
+    fail. Found in review.
+    """
+    text = f'## Real\n```\n## Never closed\n[API]({DOCS_URL}API/)\n'
 
     rendered = visible(text)
 
     assert sections(rendered) == ['Real']
-    assert README_WIKI_LINK.findall(rendered) == []
+    assert README_PAGE_LINK.findall(rendered) == []
 
 
 def test_the_readme_stays_a_front_page():
     lines = README.read_text(encoding='utf-8').splitlines()
-    assert len(lines) <= README_BUDGET, f'the README is {len(lines)} lines; anything this long belongs in a wiki page'
+    assert len(lines) <= README_BUDGET, (
+        f'the README is {len(lines)} lines; anything this long belongs on a documentation page'
+    )
 
 
 def test_no_readme_section_duplicates_a_wiki_page():
@@ -408,37 +431,43 @@ def test_no_readme_section_duplicates_a_wiki_page():
         title for title in sections(visible(README.read_text(encoding='utf-8'))) if normalized(title) in pages
     ]
 
-    assert not duplicated, f'these belong in the wiki, not the README: {duplicated}'
+    assert not duplicated, f'these belong on a documentation page, not in the README: {duplicated}'
 
 
 def test_the_readme_links_to_every_page():
     """A new page nobody can find from the front page is a page nobody reads.
 
-    Both sides are normalized: GitHub resolves a wiki link case-insensitively and
-    treats spaces as dashes, so `../../wiki/rate-limits` reaches the page and has
-    to count as reaching it.
+    Spelled exactly, on both sides. While these were wiki pages both were normalised, because
+    GitHub resolved a link case-insensitively and folded spaces into dashes — so
+    `../../wiki/rate-limits` reached the page and had to count as reaching it. On a static
+    site it reaches a 404, so the leniency went with the wiki.
     """
-    linked = {normalized(target) for target in README_WIKI_LINK.findall(visible(README.read_text(encoding='utf-8')))}
-    pages = {normalized(name) for name in page_names()}
-    missing = pages - linked - {'index'}
+    linked = set(README_PAGE_LINK.findall(visible(README.read_text(encoding='utf-8'))))
+    missing = page_names() - linked - {'index'}
 
     assert not missing, f'pages the README does not link to: {sorted(missing)}'
 
 
-def test_a_link_spelled_the_way_github_accepts_it_counts(tmp_path, monkeypatch):
-    """Otherwise the test demands one spelling of a link that has several."""
+def test_a_link_in_the_wrong_case_does_not_count(tmp_path, monkeypatch):
+    """The inverse of what this asserted while the pages were a wiki.
+
+    It used to prove that `../../wiki/rate-limits` counted as linking `Rate-limits`, because
+    GitHub resolved it and demanding one spelling would have been pedantry. The site serves
+    files: that URL is a 404, and a check that accepts it is a check that ships one.
+    """
     readme = tmp_path / 'README.md'
-    rows = '\n'.join(f'[{name}]({WIKI_URL}{normalized(name)})' for name in page_names())
+    rows = '\n'.join(f'[{name}]({DOCS_URL}{name.lower()}/)' for name in page_names())
     readme.write_text(rows + '\n', encoding='utf-8')
     monkeypatch.setattr('tests.test_wiki.README', readme)
 
-    test_the_readme_links_to_every_page()
+    with pytest.raises(AssertionError, match='does not link to'):
+        test_the_readme_links_to_every_page()
 
 
 def a_readme(tmp_path, monkeypatch, body: str):
     """Point the checks at a README of our own, through the name they read."""
     readme = tmp_path / 'README.md'
-    rows = '\n'.join(f'[{name}]({WIKI_URL}{normalized(name)})' for name in page_names())
+    rows = '\n'.join(f'[{name}]({DOCS_URL}{name}/)' for name in page_names())
     readme.write_text(rows + '\n' + body, encoding='utf-8')
     monkeypatch.setattr('tests.test_wiki.README', readme)
     return readme
@@ -455,7 +484,7 @@ def test_a_duplicate_heading_outside_a_fence_is_caught(tmp_path, monkeypatch):
     """The other half: the check must still do its job."""
     a_readme(tmp_path, monkeypatch, '## Delivery\n\nTwo consumers are available.\n')
 
-    with pytest.raises(AssertionError, match='belong in the wiki'):
+    with pytest.raises(AssertionError, match='belong on a documentation page'):
         test_no_readme_section_duplicates_a_wiki_page()
 
 
@@ -463,7 +492,7 @@ def test_a_link_only_inside_a_fence_does_not_count(tmp_path, monkeypatch):
     """Reading raw text here would call an unreachable page linked."""
     readme = a_readme(tmp_path, monkeypatch, '')
     text = readme.read_text(encoding='utf-8')
-    row = next(line for line in text.splitlines() if f'{WIKI_URL}webhook)' in line)
+    row = next(line for line in text.splitlines() if f'{DOCS_URL}Webhook/)' in line)
     readme.write_text(text.replace(row + '\n', '') + '```\n' + row + '\n```\n', encoding='utf-8')
 
     with pytest.raises(AssertionError, match='does not link to'):
@@ -473,7 +502,7 @@ def test_a_link_only_inside_a_fence_does_not_count(tmp_path, monkeypatch):
 def test_a_link_only_inside_a_comment_does_not_count(tmp_path, monkeypatch):
     readme = a_readme(tmp_path, monkeypatch, '')
     text = readme.read_text(encoding='utf-8')
-    row = next(line for line in text.splitlines() if f'{WIKI_URL}api)' in line)
+    row = next(line for line in text.splitlines() if f'{DOCS_URL}API/)' in line)
     readme.write_text(text.replace(row + '\n', '') + f'<!-- {row} -->\n', encoding='utf-8')
 
     with pytest.raises(AssertionError, match='does not link to'):
@@ -496,6 +525,6 @@ def test_the_documentation_url_is_declared():
 
     Read as text rather than through tomllib, which the 3.10 floor lacks.
     """
-    declared = f'Documentation = "{WIKI_URL.rstrip("/")}"'
+    declared = f'Documentation = "{SITE_URL}"'
 
     assert declared in PYPROJECT.read_text(encoding='utf-8')
