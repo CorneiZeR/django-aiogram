@@ -1,6 +1,6 @@
 # Changelog
 
-## 4.0.0.post1 - unreleased
+## 4.0.0.post1 - 2026-09-01
 
 **Documentation, and one fix in the seam that publishes it.** What this release is *for* is
 metadata: `project.urls.Documentation` names the documentation site, which is the only thing
@@ -106,7 +106,9 @@ here, and anybody reading the number should know it from the first paragraph.
   link to click, and the sidebar they see beside it says the same. `.github/workflows/wiki.yml`
   is deleted rather than narrowed to manual dispatch: the pages it would copy carry relative
   links, which a wiki does not resolve, so the one thing a dispatch could still do was break
-  every link on it.
+  every link on it. The workflow that wrote the stubs is deleted with this release for the
+  same reason it existed: it was written to be dispatched once, it was, and every page it
+  would rewrite already says what it would say.
 
   **Case matters in the README too, now.** The check that every page is linked from the front
   page compared both sides case-folded, because the wiki resolved `rate-limits` to
