@@ -1,74 +1,107 @@
-"""The wiki is published verbatim, so a broken link ships as a broken link."""
+"""The pages are published as a site, so a broken link ships as a broken link.
+
+Until 4.0 these were GitHub wiki pages and linked each other with `[[Page]]`, which the
+wiki resolved leniently: it folded spaces into dashes and ignored case, so three spellings
+of one link all worked and the tests here had to police which one was written.
+
+The site is static files. `/latest/rate-limits/` is not `/latest/Rate-limits/` — it is a
+404 — so the rules got stricter and simpler at once: a link is a relative path to a file
+that exists, spelled exactly. `mkdocs build --strict` says the same thing in the `docs` CI
+job; this file says it on every leg, including the ones with no mkdocs installed, and it is
+what a contributor sees before pushing.
+"""
 
 import re
 from datetime import date
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 WIKI = ROOT / 'docs' / 'wiki'
-LINK = re.compile(r'\[\[([^\]]+)\]\]')
+MKDOCS = ROOT / 'mkdocs.yml'
+#: `[label](Target.md)`, `[label](Target.md#anchor)` and the same-page `[label](#anchor)`.
+#: External links start with a scheme and are somebody else's to keep.
+#:
+#: The third form is the one the corpus actually has -- its only anchor points at a heading on
+#: its own page -- so a pattern that required a file name checked every link except that one.
+#: Found in review, after the anchor case had been written and had passed against nothing
+LINK = re.compile(r'\]\(([^):#]*\.md)?(#[^)]+)?\)')
+#: the syntax the wiki used. It renders literally in Markdown, so it may not survive anywhere
+WIKI_LINK = re.compile(r'\[\[')
 
 PAGES = sorted(WIKI.glob('*.md'))
 
 
 def page_names() -> set[str]:
-    """GitHub turns spaces into dashes when resolving a wiki link."""
+    """Every page by its stem, which is how the README and the nav name one."""
     return {path.stem for path in PAGES}
 
 
-def target_of(link: str) -> str:
-    """GitHub wiki links are [[Page-Name|Link Text]] — the page comes first."""
-    target = link.split('|', maxsplit=1)[0]
-    return target.strip().replace(' ', '-')
+def page_files() -> set[str]:
+    """Every page by its file name, which is what a relative link has to spell exactly."""
+    return {path.name for path in PAGES}
+
+
+def headings_of(path: Path) -> set[str]:
+    """The anchors a page offers, slugified the way the toc extension does it."""
+    slugs = set()
+    for line in visible(path.read_text(encoding='utf-8')).splitlines():
+        found = ATX.match(line)
+        if found:
+            text = re.sub(r'`|\*|\[|\]|\(.*?\)', '', found.group(1))
+            slugs.add(re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-'))
+    return slugs
 
 
 def test_the_wiki_has_pages():
     assert PAGES, 'docs/wiki is empty'
 
 
-def test_target_of_reads_the_page_not_the_label():
-    """Reading the last field instead would have hidden a broken link whose
-    label happened to match a page name."""
-    assert target_of('Missing|Home') == 'Missing'
-    assert target_of('Rate-limits|Rate limits') == 'Rate-limits'
-    assert target_of('Home') == 'Home'
-
-
 @pytest.mark.parametrize('path', PAGES, ids=lambda path: path.name)
 def test_every_link_resolves(path):
-    known = page_names()
-    broken = [link for link in LINK.findall(path.read_text(encoding='utf-8')) if target_of(link) not in known]
+    """A relative link names a file in this directory, spelled exactly.
+
+    Case matters now and did not before: GitHub's wiki resolved `rate-limits` to
+    `Rate-limits`, and GitHub Pages serves what is on disk. A link that only differs in
+    case used to work and now 404s, which is a failure no reader can diagnose.
+    """
+    known = page_files()
+    broken = [target for target, _ in LINK.findall(path.read_text(encoding='utf-8')) if target and target not in known]
     assert not broken, f'{path.name} links to missing pages: {broken}'
 
 
 @pytest.mark.parametrize('path', PAGES, ids=lambda path: path.name)
-def test_piped_links_name_the_page_first(path):
-    """[[Page-Name|Link Text]], not the other way round.
+def test_every_anchor_resolves(path):
+    """The fragment half of a link, against the headings the target page actually has.
 
-    Reversed, GitHub still resolves the page — it normalizes spaces to dashes —
-    but renders the file name as the label, so the resolve check above cannot
-    catch it. This requires the first field to match a page exactly.
+    One link in the corpus carries an anchor, and a heading it points at is exactly the kind
+    of thing a rewrite renames without looking. `mkdocs build --strict` checks this too, with
+    `validation.links.anchors` — pinned by `test_the_config_validates_what_it_claims`.
     """
-    known = page_names()
-    reversed_links = [
-        link
-        for link in LINK.findall(path.read_text(encoding='utf-8'))
-        if '|' in link and link.split('|')[0].strip() not in known
-    ]
-    assert not reversed_links, f'{path.name} has label-first links: {reversed_links}'
+    dangling = []
+    for target, fragment in LINK.findall(path.read_text(encoding='utf-8')):
+        if not fragment:
+            continue
+        if target and target not in page_files():
+            continue
+        # no file name means the anchor is on this page, which is the form the corpus uses
+        page = WIKI / target if target else path
+        if fragment.lstrip('#') not in headings_of(page):
+            dangling.append(f'{target}{fragment}')
+    assert not dangling, f'{path.name} links to headings that do not exist: {dangling}'
 
 
-@pytest.mark.parametrize('path', PAGES, ids=lambda path: path.name)
-def test_a_multi_word_page_is_linked_by_its_file_name(path):
-    """`[[Sending messages]]` does resolve — GitHub normalizes spaces to dashes,
-    which is why the check above accepts it — but it names no file, so a rename
-    breaks it in a way only a published wiki shows. Both forms were in use here
-    at once. Spell the page, let the label carry the spaces.
+@pytest.mark.parametrize('path', [*PAGES, ROOT / 'README.md', ROOT / 'CHANGELOG.md'], ids=lambda path: path.name)
+def test_the_wiki_link_syntax_is_gone(path):
+    """`[[Page]]` renders as literal brackets everywhere except a GitHub wiki.
+
+    It was banned from the README and the changelog while the wiki existed; now that the
+    pages are a site, the ban covers the pages too — this is the check that the conversion of
+    all 120 of them was complete, and that nobody writes the 121st.
     """
-    loose = [link for link in LINK.findall(path.read_text(encoding='utf-8')) if '|' not in link and ' ' in link.strip()]
-    assert not loose, f'{path.name} links to a page by its label: {loose}'
+    assert not WIKI_LINK.search(path.read_text(encoding='utf-8')), f'{path.name} still uses wiki link syntax'
 
 
 README = ROOT / 'README.md'
@@ -123,23 +156,6 @@ def test_every_documented_log_message_is_still_emitted():
         names.update(literal.split(separator, 1)[0] for separator in (':', ';') if separator in literal)
     stale = [message for message in documented if message not in names]
     assert not stale, f'documented but no longer emitted: {stale}'
-
-
-def test_wiki_link_syntax_stays_in_the_wiki():
-    """`[[Page]]` is wiki-only syntax, and renders literally everywhere else.
-
-    The changelog is read on the repository page and as the package description,
-    where a double-bracket link shows its own brackets. It names pages in prose
-    instead — "the Deployment page" — and this is what keeps a habit from one
-    file leaking into the other.
-    """
-    outside = {'CHANGELOG.md', 'README.md'}
-    offenders = {
-        name: [line for line in (ROOT / name).read_text(encoding='utf-8').splitlines() if '[[' in line]
-        for name in outside
-    }
-    broken = {name: lines for name, lines in offenders.items() if lines}
-    assert not broken, f'wiki link syntax outside the wiki: {broken}'
 
 
 CHANGELOG = ROOT / 'CHANGELOG.md'
@@ -253,16 +269,60 @@ def test_every_documented_cap_formula_states_the_floor():
     assert without == [], f'the cap is stated without its floor in: {without}'
 
 
-def test_home_and_sidebar_exist():
-    assert (WIKI / 'Home.md').is_file()
-    assert (WIKI / '_Sidebar.md').is_file()
+def navigated() -> set[str]:
+    """Every page `mkdocs.yml` puts in the navigation, however deeply it is grouped.
+
+    Parsed rather than pattern-matched: this file's meaning is YAML's, and `pyyaml` is
+    already a test dependency for the same reason on `.coderabbit.yaml`.
+    """
+
+    def walk(entry) -> list[str]:
+        if isinstance(entry, str):
+            return [entry]
+        if isinstance(entry, dict):
+            return [name for value in entry.values() for name in walk(value)]
+        if isinstance(entry, list):
+            return [name for item in entry for name in walk(item)]
+        return []
+
+    return set(walk(yaml.safe_load(MKDOCS.read_text(encoding='utf-8'))['nav']))
 
 
-def test_the_sidebar_lists_every_page():
-    sidebar = (WIKI / '_Sidebar.md').read_text(encoding='utf-8')
-    listed = {target_of(link) for link in LINK.findall(sidebar)}
-    missing = page_names() - listed - {'_Sidebar'}
-    assert not missing, f'pages missing from the sidebar: {sorted(missing)}'
+def test_the_site_has_a_front_page():
+    """`index.md` is what answers at the root of a version directory.
+
+    It was `Home.md` while these were wiki pages, because that is the name a GitHub wiki
+    serves first. Renaming it is what lets mike's default-version redirect land on a page
+    rather than on a 404.
+    """
+    assert (WIKI / 'index.md').is_file()
+
+
+def test_the_nav_lists_every_page():
+    """The sidebar used to be a page anybody could forget to edit; now it is the config.
+
+    Same rule as before and the same failure it prevents: a page that exists and appears in
+    no navigation is a page reachable only by search. `mkdocs build --strict` also refuses
+    it -- `validation.omitted_files` -- and this says it without mkdocs installed.
+    """
+    missing = {f'{name}.md' for name in page_names()} - navigated()
+    assert not missing, f'pages missing from the nav in mkdocs.yml: {sorted(missing)}'
+
+
+def test_the_config_validates_what_it_claims():
+    """`--strict` only escalates the warnings MkDocs is configured to emit.
+
+    Anchors are not checked by default, so `validation.links.anchors` is the setting that
+    makes the strict build mean what the `docs` job says it means. Pinned here because
+    dropping one line from `mkdocs.yml` would take a whole class of checking with it and
+    leave every gate green.
+    """
+    validation = yaml.safe_load(MKDOCS.read_text(encoding='utf-8'))['validation']
+
+    assert validation['nav']['omitted_files'] == 'warn'
+    assert validation['links']['anchors'] == 'warn'
+    assert validation['links']['unrecognized_links'] == 'warn'
+    assert validation['links']['absolute_links'] == 'warn'
 
 
 #: the README is a front page, not the documentation. It was 351 lines of
@@ -343,7 +403,7 @@ def test_the_readme_stays_a_front_page():
 
 def test_no_readme_section_duplicates_a_wiki_page():
     """A section named after a page is that page's material coming back."""
-    pages = {normalized(name) for name in page_names()} - {'home', '_sidebar'}
+    pages = {normalized(name) for name in page_names()} - {'index'}
     duplicated = [
         title for title in sections(visible(README.read_text(encoding='utf-8'))) if normalized(title) in pages
     ]
@@ -360,7 +420,7 @@ def test_the_readme_links_to_every_page():
     """
     linked = {normalized(target) for target in README_WIKI_LINK.findall(visible(README.read_text(encoding='utf-8')))}
     pages = {normalized(name) for name in page_names()}
-    missing = pages - linked - {normalized('Home'), normalized('_Sidebar')}
+    missing = pages - linked - {'index'}
 
     assert not missing, f'pages the README does not link to: {sorted(missing)}'
 
@@ -368,7 +428,7 @@ def test_the_readme_links_to_every_page():
 def test_a_link_spelled_the_way_github_accepts_it_counts(tmp_path, monkeypatch):
     """Otherwise the test demands one spelling of a link that has several."""
     readme = tmp_path / 'README.md'
-    rows = '\n'.join(f'[{name}]({WIKI_URL}{normalized(name)})' for name in page_names() if name != '_Sidebar')
+    rows = '\n'.join(f'[{name}]({WIKI_URL}{normalized(name)})' for name in page_names())
     readme.write_text(rows + '\n', encoding='utf-8')
     monkeypatch.setattr('tests.test_wiki.README', readme)
 
@@ -378,7 +438,7 @@ def test_a_link_spelled_the_way_github_accepts_it_counts(tmp_path, monkeypatch):
 def a_readme(tmp_path, monkeypatch, body: str):
     """Point the checks at a README of our own, through the name they read."""
     readme = tmp_path / 'README.md'
-    rows = '\n'.join(f'[{name}]({WIKI_URL}{normalized(name)})' for name in page_names() if name != '_Sidebar')
+    rows = '\n'.join(f'[{name}]({WIKI_URL}{normalized(name)})' for name in page_names())
     readme.write_text(rows + '\n' + body, encoding='utf-8')
     monkeypatch.setattr('tests.test_wiki.README', readme)
     return readme

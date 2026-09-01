@@ -1,0 +1,148 @@
+# The documentation site, built from the same pages the pull request that changes the
+# behaviour changes. `docs_dir` is `docs/wiki/` and not a directory of its own: the file
+# names are the page names the GitHub wiki published for three releases, so every inbound
+# link maps one-to-one onto a page here, and the tests that read those files by name --
+# transport pages, check ids, event kinds, refusal catalogues, executed recipes -- keep
+# working without being taught a new path.
+
+site_name: django-aiogram
+site_description: Run aiogram next to Django and send Telegram messages from anywhere, over a Redis list, Redis Streams, RabbitMQ or Kafka
+site_author: Oleksii Kolosiuk
+# the version directory, not the site root: mike serves every page under one, and a
+# `site_url` at the root makes Material emit the same canonical link for /latest/Delivery/
+# and /4.0/Delivery/ — a URL that is itself a 404. Pointing it at /latest/ consolidates the
+# frozen copies onto the current one, which is also the address every link in the README uses
+site_url: https://corneizer.github.io/django-aiogram/latest/
+copyright: MIT
+
+repo_url: https://github.com/CorneiZeR/django-aiogram
+repo_name: CorneiZeR/django-aiogram
+edit_uri: edit/master/docs/wiki/
+
+docs_dir: docs/wiki
+site_dir: site
+
+# every one of these is an error under `--strict`, which is how the `docs` job in CI checks
+# the 120 links this release converted from wiki syntax. `anchors` is why the one in-page
+# link on Sending-messages cannot rot
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
+  links:
+    not_found: warn
+    absolute_links: warn
+    unrecognized_links: warn
+    anchors: warn
+
+theme:
+  name: material
+  language: en
+  logo: assets/logo.svg
+  favicon: assets/favicon.svg
+  font:
+    text: IBM Plex Sans
+    code: IBM Plex Mono
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: '(prefers-color-scheme)'
+      toggle:
+        icon: material/brightness-auto
+        name: Follow the system
+    - media: '(prefers-color-scheme: light)'
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark
+    - media: '(prefers-color-scheme: dark)'
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light
+  features:
+    # `navigation.instant` is deliberately absent: it intercepts same-origin links, and mike's
+    # version selector points across version directories with a different base path — Material
+    # documents the combination as unsupported, and the symptom is a dropdown that hard-breaks
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.action.edit
+    - content.tabs.link
+
+extra_css:
+  - assets/extra.css
+
+extra:
+  version:
+    provider: mike
+    alias: true
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/CorneiZeR/django-aiogram
+      name: The repository
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/django-aiogram/
+      name: The package on PyPI
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      permalink_title: Link to this section
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+plugins:
+  - search
+  # the pages carry operational advice, and how old it is matters to whoever reads it
+  - git-revision-date-localized:
+      type: date
+      enable_creation_date: false
+      fallback_to_build_date: true
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: Installation.md
+      - Settings: Settings.md
+      - Handlers: Handlers.md
+      - Sending messages: Sending-messages.md
+      - Testing: Testing.md
+  - Transports:
+      - Redis list: Redis-list.md
+      - Redis Streams: Redis-Streams.md
+      - RabbitMQ: RabbitMQ.md
+      - Kafka: Kafka.md
+  - Running it:
+      - Delivery: Delivery.md
+      - Webhook: Webhook.md
+      - Rate limits: Rate-limits.md
+      - Deployment: Deployment.md
+      - Logging: Logging.md
+      - Event log: Event-log.md
+  - Reference:
+      - API: API.md
+      - Serialization: Serialization.md
+      - Troubleshooting: Troubleshooting.md
+      - Upgrading: Upgrading.md
+      - AI assistants: AI-assistants.md

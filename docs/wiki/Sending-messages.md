@@ -94,7 +94,7 @@ still pace what leaves for Telegram, so fifty thousand chats is about half an ho
 at the default thirty a second. And it makes event-log overflow *worse*, because
 the pacing that sequential round trips gave the writer is gone: raise
 `EVENT_LOG_BUFFER_SIZE`, or narrow `EVENT_LOG_KINDS`, before broadcasting. See
-**[[Event-log|Event log]]**.
+**[Event log](Event-log.md)**.
 
 A chunk that fails records a drop for its own messages and raises. Earlier chunks
 are already queued and their ids are lost with the exception, which is why those
@@ -157,7 +157,7 @@ except TelegramBadRequest:
 
 Telegram rate-limit refusals are retried up to `MAX_RETRIES`; exhausting them
 logs an error and, with `RAISE_EXCEPTION`, re-raises — into the caller that was
-waiting, so the same qualification applies. See **[[Rate-limits|Rate limits]]**
+waiting, so the same qualification applies. See **[Rate limits](Rate-limits.md)**
 for staying under the limits in the first place.
 
 ## From Celery

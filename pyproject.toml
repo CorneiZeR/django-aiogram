@@ -120,6 +120,20 @@ dev = [
     "pyyaml>=6",
 ]
 
+# what builds the documentation site. A group and not an extra for the reason `dev` is one:
+# an extra reaches every consumer as `Provides-Extra:`, and nobody installing this package to
+# send Telegram messages needs a static site generator.
+#
+# Material for MkDocs is in maintenance until 5 November 2026, when it reaches end of life;
+# its successor Zensical, from the same team, reads this same `mkdocs.yml`. The built site is
+# static and outlives either. Recorded here so the question is not reopened from scratch.
+docs = [
+    "mkdocs-material>=9.7",
+    # >=2 for `extra.version.alias`, which the version selector in mkdocs.yml uses
+    "mike>=2.2",
+    "mkdocs-git-revision-date-localized-plugin>=1.5",
+]
+
 # the drivers this package did **not** choose, and nothing else. `scripts/measurements` compares
 # them against the ones it ships, so the comparisons stay re-runnable — a driver release or a
 # faster broker could move the numbers the choices rest on, and a decision nobody can re-check
@@ -163,6 +177,8 @@ include = [
     "tests",
     "docs",
     "scripts",
+    # the pages travel in `docs/`, and this is what turns them into the site
+    "mkdocs.yml",
     "README.md",
     "CHANGELOG.md",
     "CONTRIBUTING.md",

@@ -24,6 +24,8 @@ reviews:
   path_filters:
     - '!**/__pycache__/**'
     - '!dist/**'
+    # the built site: generated from docs/wiki/, reviewed there
+    - '!site/**'
 
   pre_merge_checks:
     # the built-in check counts every definition in the pull request, and the schema

@@ -98,7 +98,7 @@ python manage.py migrate
 
 The table is created whether or not you turn the event log on — `EVENT_LOG` is
 off by default, and nothing is written until you set it. See
-**[[Event-log|Event log]]**.
+**[Event log](Event-log.md)**.
 
 ## Configure from the environment
 
@@ -132,7 +132,7 @@ services:
     restart: always
 ```
 
-See **[[Deployment]]** for the whole file, and for turning the bot off in every
+See **[Deployment](Deployment.md)** for the whole file, and for turning the bot off in every
 other process.
 
 ## Check the configuration
@@ -152,5 +152,5 @@ registers all of them on its own, bot settings included.
 
 ## Next
 
-* **[[Handlers]]** to answer messages
-* **[[Sending-messages|Sending messages]]** to send them
+* **[Handlers](Handlers.md)** to answer messages
+* **[Sending messages](Sending-messages.md)** to send them

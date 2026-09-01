@@ -12,7 +12,7 @@ TELEGRAM_BOT = {'MODE': 'webhook'}  # or 'polling', the default
 
 Scalars can come from the environment, so the choice can be made at startup
 without touching code — set it where the process is started, which for the
-compose recipe on **[[Deployment]]** is the service's own `environment:`:
+compose recipe on **[Deployment](Deployment.md)** is the service's own `environment:`:
 
 ```yaml
   telegram_bot:
@@ -159,7 +159,7 @@ cannot.
 
 **Telegram retries a non-2xx.** The view answers 200 even when a handler raised,
 because a handler that failed once will fail the same way on redelivery — that
-is a loop, not a retry. Failures are logged; see **[[Logging]]**.
+is a loop, not a retry. Failures are logged; see **[Logging](Logging.md)**.
 
 It answers **503** for the other case: an update that was *refused* rather than
 handled, because nothing ran it. Shutting down is one reason; a loop already closed
@@ -193,4 +193,4 @@ django_aiogram.healthcheck` in a container, `manage.py tgbot_healthcheck`
 by hand — so in webhook mode it answers for the `start_tgbot` worker rather than
 for the web process: the worker still runs the queue consumer, it just does not
 poll. Do not point it at the web service, which writes no heartbeat and would
-read unhealthy for ever. See **[[Deployment]]**.
+read unhealthy for ever. See **[Deployment](Deployment.md)**.

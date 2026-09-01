@@ -3,7 +3,7 @@
 `bot.send()` puts a serialized call on the queue. The bot container takes it off
 and makes the call.
 
-Which queue is `BROKER`'s answer — see **[[Settings]]** — and this page is about
+Which queue is `BROKER`'s answer — see **[Settings](Settings.md)** — and this page is about
 what the consumer does with it, which is the same either way: take one message,
 send it, settle it, and leave it unsettled if the send did not happen. Where a
 transport's own machinery shows through, the section says which transport it is
@@ -11,7 +11,7 @@ talking about.
 
 This page is about outbound messages: how a queued `bot.send()` reaches
 Telegram. Which way *updates* arrive — polling or webhook — is a separate
-choice, described in **[[Webhook]]**; the queue works the same under both.
+choice, described in **[Webhook](Webhook.md)**; the queue works the same under both.
 
 ## One transport at a time, and where to read about it
 
@@ -20,10 +20,10 @@ and what it needs from you differs enough to be worth a page each:
 
 | Transport | Crash safety | Needs a worker name | Recovery is |
 | --- | --- | --- | --- |
-| **[[Redis-list]]** | at-least-once wherever `BLMOVE` is available, at-most-once without it — a capability, not a version | **yes** — the in-flight list is keyed on it | a command you run |
-| **[[Redis-Streams]]** | at-least-once, and **Redis 7.0+ or it refuses to run** | no | a clock: idle entries are claimed |
-| **[[RabbitMQ]]** | at-least-once, the broker's doing | no | automatic: a dropped channel requeues |
-| **[[Kafka]]** | at-least-once, the group's doing | no | automatic: an uncommitted offset replays |
+| **[Redis list](Redis-list.md)** | at-least-once wherever `BLMOVE` is available, at-most-once without it — a capability, not a version | **yes** — the in-flight list is keyed on it | a command you run |
+| **[Redis Streams](Redis-Streams.md)** | at-least-once, and **Redis 7.0+ or it refuses to run** | no | a clock: idle entries are claimed |
+| **[RabbitMQ](RabbitMQ.md)** | at-least-once, the broker's doing | no | automatic: a dropped channel requeues |
+| **[Kafka](Kafka.md)** | at-least-once, the group's doing | no | automatic: an uncommitted offset replays |
 
 A payload's size is the transport's business too, and the ceilings are not comparable: Kafka's
 default is around a megabyte while the Redis and AMQP ones are orders larger. This package
@@ -129,7 +129,7 @@ The consumer takes each message once, and every transport is responsible for tha
 being true: the Redis list relies on `BLMOVE` and `BLPOP` being atomic, and Redis
 Streams on a consumer group handing an entry to one member. Running several bot
 containers is safe, though a single one handles a lot: the limits in
-**[[Rate-limits|Rate limits]]** bind long before the consumer does.
+**[Rate limits](Rate-limits.md)** bind long before the consumer does.
 
 ## Crash safety
 
@@ -212,7 +212,7 @@ Waiting for the send is something the *handler* opts into, by taking an
 so a normal worker has the guarantee above.
 
 A handler of your own that takes only `**kwargs` — the shape every recipe on
-**[[Testing]]** uses — keeps the pre-3.1.0 semantics exactly: it is acknowledged
+**[Testing](Testing.md)** uses — keeps the pre-3.1.0 semantics exactly: it is acknowledged
 the moment it returns, which is at-most-once if it goes on to do the sending
 somewhere else. That is deliberate, so existing handlers are not silently made to
 hold messages they never release. Take `on_complete` and call it when your send
@@ -220,9 +220,9 @@ finishes if you want the message held until then.
 
 `MAX_IN_FLIGHT` bounds how many sends the consumer will leave outstanding before it stops
 taking messages. The default, `0`, is no bound. Worth setting on any worker that sees large
-backlogs, though what it saves you differs: on the **[[Redis-list|Redis list]]** each
+backlogs, though what it saves you differs: on the **[Redis list](Redis-list.md)** each
 acknowledgement scans the in-flight list, so an unbounded one makes draining quadratic; on
-**[[Kafka]]** it is how many records a single gap can hold back, because offsets settle a
+**[Kafka](Kafka.md)** it is how many records a single gap can hold back, because offsets settle a
 contiguous prefix.
 
 `REQUIRE_CRASH_SAFE` refuses to start where the transport cannot promise at-least-once, rather
@@ -237,7 +237,7 @@ between the transports. There the in-flight list is keyed on the worker's name, 
 does not survive the container strands whatever it was sending, and two workers sharing a name
 reclaim each other's work. `manage.py tgbot_reclaim`, `I001` and the stranded-list report all
 exist for that one transport; the other three answer for themselves and those tools refuse.
-**[[Redis-list|Redis list]]** has the whole story, including what Docker does to a hostname.
+**[Redis list](Redis-list.md)** has the whole story, including what Docker does to a hostname.
 
 Handler errors are not crashes: a message whose send *failed* is acknowledged
 and logged, not redelivered forever.

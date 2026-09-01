@@ -100,7 +100,7 @@ recording before the table exists drops everything it records until someone
 notices. Then set `EVENT_LOG_RETENTION_DAYS` and schedule
 `manage.py tgbot_prune_events` daily. Leave `EVENT_LOG_PAYLOAD` at its default
 so message bodies stay out of the table, and grant support only
-`view_telegramevent`."* See **[[Event-log|Event log]]**.
+`view_telegramevent`."* See **[Event log](Event-log.md)**.
 
 **Migrate an older project.** *"This project imports `telegram_bot`, which
 `django-redis-aiogram` 3.0 removed, and that distribution is now `django-aiogram`.
@@ -108,7 +108,7 @@ Move it to `django_aiogram` 4.x following the wiki's Upgrading page, newest sect
 first: rename it in `INSTALLED_APPS`, replace the imports with the 4.0 layout, move
 `parse_mode` into `DEFAULT_BOT_PROPERTIES`, drop the placeholder token from settings,
 and use `bot.router` instead of `bot._router`."* See
-**[[Upgrading]]**.
+**[Upgrading](Upgrading.md)**.
 
 **Debug delivery.** *"Messages are queued but never arrive. Check in this order:
 is the `start_tgbot` container running and is `ENABLED` true there, does

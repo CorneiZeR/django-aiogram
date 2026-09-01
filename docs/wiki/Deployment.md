@@ -49,7 +49,7 @@ name it.
 
 **Redis Streams** needs no new service: the same server, a different data structure — provided
 that server is **7.0 or newer**, which the list does not require. Below it the transport refuses
-on first use rather than reporting a queue depth it cannot compute; see **[[Redis-Streams]]**.
+on first use rather than reporting a queue depth it cannot compute; see **[Redis Streams](Redis-Streams.md)**.
 
 ```yaml
     environment:
@@ -132,7 +132,7 @@ that points at the credential rather than at the encoding. `env_file: .env` is a
 mechanism and does not help here: it hands variables to the *container*, while `${...}` in the
 compose file is substituted before that, from Compose's own environment and `.env`.
 
-**Kafka.** Read **[[Kafka]]** before this one rather than after: ordering is per partition and a
+**Kafka.** Read **[Kafka](Kafka.md)** before this one rather than after: ordering is per partition and a
 refusal replays a run of messages, and neither is something to discover in production.
 
 ```yaml
@@ -228,7 +228,7 @@ exists only in the process holding it.
 
 Neither maps that work to a **name** this package chose, so passing a name there raises
 `WorkerDepthUnavailableError` — the caller's own included, since there is nothing for a name to
-match. The unnamed call is the one that answers. See **[[Delivery]]** for which
+match. The unnamed call is the one that answers. See **[Delivery](Delivery.md)** for which
 transport keeps what.
 
 So a disabled process needs no token, and needs its broker reachable only if something
@@ -302,7 +302,7 @@ it works — it simply writes to a socket on the thread serving requests, and on
 first call that includes a connect bounded by the configured transport's own timeout.
 `bot.asend()` is the same message without blocking that thread: the connect and its
 timeout still happen, it just yields while they do. See
-**[[Sending-messages|Sending messages]]**.
+**[Sending messages](Sending-messages.md)**.
 
 One thing is worth knowing rather than discovering. The async client belongs to
 the loop that created it, so each loop gets its own, and only that loop may close
@@ -490,7 +490,7 @@ one per worker — and makes every send wait for the database, which is why
 Point it somewhere else if the traffic warrants: `EVENT_LOG_DATABASE` names any
 alias in `DATABASES`, and the writer and the admin both use it explicitly, so
 the feature works with or without the router installed. See
-**[[Event-log|Event log]]**.
+**[Event log](Event-log.md)**.
 
 The bot container needs `DATABASES` reachable too. It is the same Django
 project, but a different place on the network — a database that only the web
@@ -520,7 +520,7 @@ pops, which is **at-most-once**: a kill between the pop and the call loses that
 one message — unless `REQUIRE_CRASH_SAFE` is on, in which case the command
 refuses to start at all rather than run that way. A send that *fails* is
 acknowledged and logged either way, never redelivered for ever. See
-**[[Delivery]]**.
+**[Delivery](Delivery.md)**.
 
 Do not run two containers polling the **same token**, though. Telegram allows
 only one `getUpdates` consumer per bot, and the second will fight the first for

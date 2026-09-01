@@ -196,20 +196,20 @@ Two behaviors make the mixed case work:
   without being stopped, so switching `SERIALIZER` needs no downtime.
 - **A refused pickle stays in flight**, rather than being acknowledged — *on
   Redis 6.2 and newer*. It is one of the cases where `dispatch()` returns
-  `False`, which is what withholds the acknowledgement; see **[[Delivery]]**.
+  `False`, which is what withholds the acknowledgement; see **[Delivery](Delivery.md)**.
   Turning `ALLOW_PICKLE` off while a producer is still writing pickled payloads
   leaves them in the worker's processing list with a log line saying so; set it
   back and restart the worker under the same worker identity — `WORKER_NAME`, or
   the fixed `hostname:` it falls back to — and they are delivered. Start it under
   a different one and the backlog sits in a list the new worker never opens; see
-  **[[Delivery]]**.
+  **[Delivery](Delivery.md)**.
 
 > **Turning `ALLOW_PICKLE` off is only recoverable where `LMOVE` exists.**
 > Without it there is no in-flight list — the consumer has already popped the
 > message when it refuses it, so a refused pickle is **gone**. The consumer says
 > which mode it is in at startup, as `tg_crash_safe` on the `delivery started`
 > line. On such a server, stop or upgrade every pickle producer *before* turning
-> the flag off. See **[[Delivery]]**.
+> the flag off. See **[Delivery](Delivery.md)**.
 
 Only worth it if you must queue objects JSON cannot represent, and only with a
 queue nothing untrusted can write to.

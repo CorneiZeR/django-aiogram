@@ -43,7 +43,7 @@ Neither is required for the project to boot.
 unparseable raises `ImproperlyConfigured` rather than being read as true — which
 matters because the environment can only give you a string, so `'false'` under a
 bare truthiness test would mean the opposite of what it says. `RAISE_EXCEPTION`
-was the last setting read that way, and no longer is. See **[[Deployment]]**.
+was the last setting read that way, and no longer is. See **[Deployment](Deployment.md)**.
 
 ## Bot behavior
 
@@ -80,7 +80,7 @@ def default_kwargs(function: str) -> dict:
 ## Updates
 
 These decide how updates reach the bot. They have nothing to do with the queue,
-which carries outbound messages in both modes — see **[[Webhook]]**.
+which carries outbound messages in both modes — see **[Webhook](Webhook.md)**.
 
 | Setting | Default | Description |
 | ------- | ------- | ----------- |
@@ -93,9 +93,9 @@ which carries outbound messages in both modes — see **[[Webhook]]**.
 
 | Setting | Default | Description |
 | ------- | ------- | ----------- |
-| `DELIVERY` | `'django_aiogram.consumer.delivery.BlpopDelivery'` | Dotted path to the consumer class. Your own `Delivery` subclass goes here — see **[[Delivery]]** |
+| `DELIVERY` | `'django_aiogram.consumer.delivery.BlpopDelivery'` | Dotted path to the consumer class. Your own `Delivery` subclass goes here — see **[Delivery](Delivery.md)** |
 | `BROKER` | `'django_aiogram.broker.redis_list.RedisListBroker'` | Which transport carries messages, by dotted path. Nothing is inferred from what happens to be installed: a name whose driver is missing is a system check with the `pip install` line, not an `ImportError` on the first send. Each broker declares its **own** settings — see the table below — and the other queue rows here belong to the package rather than to a transport. A broker with no sensible default for where a message goes marks that setting required and refuses at startup without it |
-| `WORKER_NAME` | hostname | Names this worker's in-flight list on the Redis list transport, and nothing on the other three — see **[[Redis-list]]** |
+| `WORKER_NAME` | hostname | Names this worker's in-flight list on the Redis list transport, and nothing on the other three — see **[Redis list](Redis-list.md)** |
 | `BLPOP_TIMEOUT` | `5` | How often the blocking take is interrupted to check for shutdown, capped at `min(HEARTBEAT_INTERVAL, floor(<the transport timeout>) - 1)`, never below 1 — the transport's timeout being `REDIS_TIMEOUT`, `RABBITMQ_TIMEOUT` or `KAFKA_TIMEOUT`, whichever `BROKER` names. Floored because two of those accept fractions, so a `2.6` deadline leaves a whole second inside it rather than 1.6. `W004` says so and names the bound that binds. The package's, not a transport's: every consumer reads it, whichever queue it takes from |
 | `DRAIN_TIMEOUT` | `5` | Seconds `close()` gives in-flight sends to finish before canceling them |
 | `MAX_IN_FLIGHT` | `0` | Sends the consumer leaves in flight before it stops taking messages; `0` is no bound |
@@ -103,7 +103,7 @@ which carries outbound messages in both modes — see **[[Webhook]]**.
 | `REDIS_TIMEOUT` | `10` | Seconds a single Redis call may take before the server counts as gone |
 | `HEARTBEAT_INTERVAL` | `10` | Seconds between the consumer's reports; the key lives three times as long, which is also the most `--max-age` can observe |
 | `HEALTHCHECK_MAX_QUEUE` | `0` | Longest queue still considered healthy; the check fails only above it, and `0` disables it |
-| `SERIALIZER` | `'json'` | `'json'` or `'pickle'` — see **[[Serialization]]** |
+| `SERIALIZER` | `'json'` | `'json'` or `'pickle'` — see **[Serialization](Serialization.md)** |
 | `ALLOW_PICKLE` | `False` | Let the reader accept pickled payloads. Needed to *read* them at all, and needed alongside `SERIALIZER: 'pickle'` to write them. Unpickling queue data is code execution, so only on a queue nothing untrusted can write to |
 
 ### What each transport declares
@@ -237,13 +237,13 @@ TELEGRAM_BOT = {
 }
 ```
 
-See **[[Rate-limits|Rate limits]]**.
+See **[Rate limits](Rate-limits.md)**.
 
 ## Event log
 
 Off by default. Turning it on records what the bot did into one append-only
 table, which needs `manage.py migrate` and a retention job — see
-**[[Event-log|Event log]]** before you enable it.
+**[Event log](Event-log.md)** before you enable it.
 
 | Setting | Default | Description |
 | ------- | ------- | ----------- |

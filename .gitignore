@@ -11,6 +11,8 @@ __pycache__/
 # build
 build/
 dist/
+# the documentation site, built from docs/wiki/ by `mkdocs build`
+site/
 
 # tooling caches
 .pytest_cache/

@@ -19,7 +19,7 @@ TELEGRAM_BOT = {
 | `REDIS_MESSAGES_KEY` | `TELEGRAM_BOT_MESSAGE` | the list, and the prefix every other key here derives from |
 | `REDIS_TIMEOUT` | `10` | the deadline on any single call |
 
-See **[[Settings]]** for the rest, and **[[Delivery]]** for what the consumer does with any
+See **[Settings](Settings.md)** for the rest, and **[Delivery](Delivery.md)** for what the consumer does with any
 transport. This page is the part that is this one's alone.
 
 ## What it guarantees

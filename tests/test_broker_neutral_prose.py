@@ -39,7 +39,7 @@ NEUTRAL_SURFACES = (
     'docs/wiki/Installation.md',
     # the wiki's own front page, added for the same reason the README is here: it is read
     # before any transport page and its subject is the queue in general
-    'docs/wiki/Home.md',
+    'docs/wiki/index.md',
     # the trust boundary is stated on this page, and it was stated as Redis's: whoever can
     # write to *the queue* runs code in the bot container, and that is true of all four
     'docs/wiki/Serialization.md',
