@@ -56,8 +56,9 @@ def _dropped(
     """Record every message a failure lost, and where it lost them.
 
     The two ways a message is lost here are **not** the same, and ``stage`` is what tells
-    them apart. ``serialising`` — spelled as the value is written, since a consumer filters
-    on it — means the payload never left this process, so re-sending it is safe.
+    them apart. ``serialising`` — spelled as it is written here, because the value reaches a
+    row rather than a reader, and whoever queries the log matches this literal — means the
+    payload never left this process, so re-sending it is safe.
     ``queueing`` means the publish raised, and a publish that raised may still have been
     applied: the reply is what went missing, and a variadic ``RPUSH`` or a confirmed AMQP
     publish can both fail that way, so re-sending may duplicate. A broadcast makes that
@@ -90,8 +91,13 @@ def serialise(function: str, messages: list[tuple[uuid.UUID, dict[str, Any]]]) -
     Always on the calling thread, including when ``TRANSACTIONAL`` holds the publish back
     to the commit. Two reasons, and the second is the one that matters: a payload the
     project cannot serialize raises where the project wrote the call rather than out of a
-    commit hook, and ``kwargs`` is the caller's own dict — snapshotting it here is what
-    keeps a send from picking up a mutation made after it returned.
+    commit hook, and the bytes are what a deferred publish then carries.
+
+    ``**kwargs`` already copies the mapping a caller passed, so the shallow layer was never
+    at risk — the values under it are, and they are the ones a project holds a handle to: a
+    keyboard, a list of entities, a dict it builds and reuses. Encoding here freezes those
+    where the call was written, rather than reading them again from a commit hook that runs
+    after the caller has moved on.
     """
     queued_at = time.time()
     serializer = get_serializer()

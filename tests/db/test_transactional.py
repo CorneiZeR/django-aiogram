@@ -131,14 +131,20 @@ def test_a_payload_that_cannot_be_serialized_raises_where_the_call_was_written(p
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT=SETTINGS)
-def test_the_arguments_are_snapshotted_at_the_call_not_at_the_commit(published):
-    """A dict the caller kept and changed cannot rewrite a send that already returned."""
-    kwargs = {'chat_id': 1, 'text': 'as it was written'}
-    with transaction.atomic():
-        TelegramBot().send(**kwargs)
-        kwargs['text'] = 'as it was changed'
+def test_a_nested_value_is_frozen_at_the_call_not_read_again_at_the_commit(published):
+    """`**kwargs` copies the mapping, so the layer under it is what a caller still holds.
 
-    assert b'as it was written' in published[0]
+    A keyboard, a list of entities, a dict the project builds and reuses: encoding where the
+    call was written is what keeps a deferred publish from reading them again after the
+    caller has moved on. Deferring `serialise` along with the publish is what this refuses.
+    """
+    entities = [{'type': 'bold', 'offset': 0, 'length': 2}]
+    with transaction.atomic():
+        TelegramBot().send(chat_id=1, text='as it was written', entities=entities)
+        entities[0]['type'] = 'italic'
+
+    assert b'bold' in published[0]
+    assert b'italic' not in published[0]
 
 
 @pytest.mark.django_db(transaction=True)

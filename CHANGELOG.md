@@ -20,8 +20,10 @@
   What moves with it is written down rather than discovered. The `outbound.queued` row waits
   for the commit too and carries the time of the *call*, so a deferred message reads as that
   much queue latency. Serialization does not wait — a payload the project cannot serialize
-  still raises where the call was written, and the arguments are snapshotted there, so a
-  `kwargs` dict mutated after `send()` returned cannot change what is published. A publish
+  still raises where the call was written, and the arguments are encoded there. That second
+  half is not the mapping, which `**kwargs` already copies: it is the values under it, the
+  keyboard or the list of entities a project builds and reuses, which a hook running after
+  the caller moved on would otherwise read again. A publish
   that fails after the commit has nothing left to roll back: the drop is recorded and
   `RAISE_EXCEPTION` decides whether the exception also leaves the `atomic()` block, where it
   would take every commit hook queued behind it.
