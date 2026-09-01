@@ -15,7 +15,9 @@ deployed in either order.
 New, and `False`, so an upgrade changes nothing until you say otherwise. It is worth a
 minute anyway: with it off, a `bot.send()` inside `transaction.atomic()` reaches the broker
 before the transaction commits, and a block that rolls back afterwards has already
-announced a row that no longer exists.
+announced a row that no longer exists. It governs the queue write and nothing else — a send
+that calls Telegram directly, which is `send_raw` anywhere and `send` inside the bot
+container, has no write to defer.
 
 ```python
 TELEGRAM_BOT = {'TRANSACTIONAL': True}

@@ -260,6 +260,10 @@ after a send leaves the message queued and its row gone. Set `TRANSACTIONAL` to 
 write until the commit — see
 **[Sending messages](Sending-messages.md#inside-a-transaction)**.
 
+It covers the queue route only. Inside the bot container `send` calls Telegram itself, and
+`send_raw` does so from anywhere: there is no queue write to hold back, so a message sent
+that way still goes out when the block rolls back.
+
 With it already on and the message still going out, check which connection the block is on:
 the setting watches `default`, and a transaction opened on another alias is not one it can
 see. An alias configured `AUTOCOMMIT: False` is the other case, and it says so once in the

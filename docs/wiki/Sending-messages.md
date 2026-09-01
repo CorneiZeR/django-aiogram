@@ -150,8 +150,8 @@ with transaction.atomic():
     charge(order)  # raises
 ```
 
-The row is gone and the message is not. `TRANSACTIONAL` holds the write until the commit,
-so the block above announces nothing when it rolls back:
+The row is gone and the message is not. `TRANSACTIONAL` holds the **queue** write until the
+commit, so the block above announces nothing when it rolls back:
 
 ```python
 TELEGRAM_BOT = {'TRANSACTIONAL': True}
@@ -161,6 +161,11 @@ It is off by default because it moves when a message reaches the queue.
 **[Settings](Settings.md#bot-behavior)** has what changes with it on — the event row waits
 too, and a publish that fails after the commit cannot undo it. Without the setting, the
 same guarantee is `transaction.on_commit(lambda: bot.send(...))` written at each call site.
+
+The other route is unaffected, and deliberately: `send_raw` — and `send` inside the bot
+container, which is the same thing by
+[the rule above](#choosing-the-route-yourself) — calls Telegram rather than the broker, so a
+handler replying to an update does not wait for anything to commit.
 
 ## Errors
 
