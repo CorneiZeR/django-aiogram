@@ -129,7 +129,7 @@ def test_readme_page_links_resolve():
     targets = README_PAGE_LINK.findall(README.read_text(encoding='utf-8'))
     assert targets, 'no documentation links found in the README'
     broken = [target for target in targets if target not in known]
-    assert not broken, f'README links to missing wiki pages: {broken}'
+    assert not broken, f'README links to pages that do not exist: {broken}'
 
 
 def test_every_documented_log_message_is_still_emitted():
@@ -194,14 +194,19 @@ def test_the_newest_changelog_entry_is_this_version_and_is_dated():
     lines = visible(CHANGELOG.read_text(encoding='utf-8')).splitlines()
     heading = next(line for line in lines if line.startswith('## '))
 
-    # a version under development announces the entry it is preparing — `4.0.0.dev0`
-    # belongs to the `4.0.0` heading — and only a final version may carry a date. Dating
-    # an entry while the version still says `dev` is how a nightly reads as shipped
-    release, prerelease = re.match(r'(\d+\.\d+\.\d+)(.*)', __version__).groups()
+    # a version under development announces the entry it is preparing -- `4.0.0.dev0`
+    # belongs to the `4.0.0` heading -- and only a final version may carry a date. Dating an
+    # entry while the version still says `dev` is how a nightly reads as shipped.
+    #
+    # Split on `.dev` rather than on the release triple, so a post release keeps its own
+    # entry: `4.0.0.post1.dev0` announces `## 4.0.0.post1`, where a regex that stopped at the
+    # third number would have demanded the `4.0.0` heading -- already dated, and about a
+    # different set of changes
+    announced, _, developing = __version__.partition('.dev')
 
-    assert heading.startswith(f'## {release} - '), f'the newest entry is not {release}: {heading!r}'
-    stamp = heading.removeprefix(f'## {release} - ')
-    if prerelease:
+    assert heading.startswith(f'## {announced} - '), f'the newest entry is not {announced}: {heading!r}'
+    stamp = heading.removeprefix(f'## {announced} - ')
+    if developing:
         assert stamp == 'unreleased', f'{__version__} is not released, so the entry cannot be dated {stamp!r}'
         return
     # parsed, not pattern-matched: `2026-13-45` has the shape of a date and is not one,
@@ -408,7 +413,9 @@ def test_an_unclosed_fence_hides_everything_after_it():
 
 def test_the_readme_stays_a_front_page():
     lines = README.read_text(encoding='utf-8').splitlines()
-    assert len(lines) <= README_BUDGET, f'the README is {len(lines)} lines; anything this long belongs in a wiki page'
+    assert len(lines) <= README_BUDGET, (
+        f'the README is {len(lines)} lines; anything this long belongs on a documentation page'
+    )
 
 
 def test_no_readme_section_duplicates_a_wiki_page():
@@ -418,7 +425,7 @@ def test_no_readme_section_duplicates_a_wiki_page():
         title for title in sections(visible(README.read_text(encoding='utf-8'))) if normalized(title) in pages
     ]
 
-    assert not duplicated, f'these belong in the wiki, not the README: {duplicated}'
+    assert not duplicated, f'these belong on a documentation page, not in the README: {duplicated}'
 
 
 def test_the_readme_links_to_every_page():
@@ -471,7 +478,7 @@ def test_a_duplicate_heading_outside_a_fence_is_caught(tmp_path, monkeypatch):
     """The other half: the check must still do its job."""
     a_readme(tmp_path, monkeypatch, '## Delivery\n\nTwo consumers are available.\n')
 
-    with pytest.raises(AssertionError, match='belong in the wiki'):
+    with pytest.raises(AssertionError, match='belong on a documentation page'):
         test_no_readme_section_duplicates_a_wiki_page()
 
 

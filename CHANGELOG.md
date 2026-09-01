@@ -1,8 +1,11 @@
 # Changelog
 
-## 4.0.1 - unreleased
+## 4.0.0.post1 - unreleased
 
-The package is untouched: this release moves the documentation and nothing else.
+**A post release, not a patch.** The package is byte-for-byte 4.0.0 — no behaviour, no
+setting, no message changed. What ships is metadata: `project.urls.Documentation` now names
+the documentation site. PEP 440 has a marker for exactly this, and a patch number would have
+promised a fix nobody made.
 
 ### Documentation
 
