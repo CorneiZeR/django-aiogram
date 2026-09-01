@@ -436,9 +436,14 @@ jobs:
           set -euo pipefail
           expected="$(python -c "import re, pathlib; print(re.search(r'^site_url: (.+)$', pathlib.Path('mkdocs.yml').read_text(), re.M).group(1))")assets/social-card.png"
           missing=0
+          # every HTML the build produced, not only the pages: `404.html` is the theme's own
+          # template, it goes through the same override, and a reader who lands on it from a
+          # stale link is exactly who a card is for
+          #
+          # -F, because the URL is full of dots and a regex would let `latestXDelivery` match
           while IFS= read -r page; do
-            grep -q "og:image\" content=\"${expected}\"" "$page" || { echo "::error::$page has no absolute og:image"; missing=1; }
-          done < <(find site -name 'index.html')
+            grep -qF "og:image\" content=\"${expected}\"" "$page" || { echo "::error::$page has no absolute og:image"; missing=1; }
+          done < <(find site -type f -name '*.html')
           test -f site/assets/social-card.png || { echo '::error::the card itself is not in the site'; missing=1; }
           exit "$missing"
 

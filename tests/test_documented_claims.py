@@ -98,7 +98,10 @@ def test_every_boolean_setting_is_read_through_the_parser(path):
     names = boolean_settings()
     tree = ast.parse(path.read_text(encoding='utf-8'))
 
-    raw = [f'{path.name}:{line}' for line, parsed in reads_of(tree, names) if not parsed]
+    # the path relative to the package, not the file name: nine modules here are `__init__.py`
+    # and `broker.py`, and a failure naming one of those sends the reader looking
+    where = path.relative_to(SOURCE)
+    raw = [f'{where}:{line}' for line, parsed in reads_of(tree, names) if not parsed]
 
     assert not raw, f'these read a boolean setting without coerce_bool: {raw}'
 
