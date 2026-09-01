@@ -70,8 +70,13 @@ What it does not change, and what to expect:
 
 - **Outside a transaction nothing moves.** A send with no `atomic()` around it publishes
   where it stands, on either setting.
-- **The correlation id still comes back immediately.** `send()` returns before anything is
-  published either way, so a caller storing the id beside its own row is unaffected.
+- **The correlation id is the same value either way.** It is resolved before the write is
+  attempted, not derived from it, so a caller storing it beside its own row is unaffected —
+  and it is the *deferred* call that returns sooner, because the immediate one waits for the
+  broker to acknowledge the write before `send()` returns at all.
+- **A send never opens a database connection.** The `default` connection is inspected only
+  when it is already established: a process that touches no database keeps not touching one,
+  and a connection nothing has run on cannot be inside a transaction anyway.
 - **The `outbound.queued` row waits too**, and carries the time of the *call* rather than
   of the commit — a message deferred for the length of a transaction reads as that much
   queue latency. Nothing is recorded for a block that rolled back, because nothing was

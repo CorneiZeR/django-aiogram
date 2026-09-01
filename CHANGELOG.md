@@ -13,9 +13,10 @@
 
   `TRANSACTIONAL` — `False`, so an upgrade changes nothing — holds the queue write until the
   `default` connection commits, and a rolled-back block queues nothing at all. The
-  synchronous producers, which are the ones a view and a Celery task reach for: a coroutine
-  holds its own connection, measured, so `await bot.asend()` cannot see a surrounding
-  transaction and there are no asynchronous transactions for it to be inside of.
+  synchronous producers, which are the ones a view and a Celery task reach for. Measured, a
+  coroutine holds its own connection — inside `asyncio.run` the `default` connection is a
+  different object with `in_atomic_block` False — so `await bot.asend()` cannot see a
+  surrounding transaction, and Django has no asynchronous transactions for it to be inside.
 
   What moves with it is written down rather than discovered. The `outbound.queued` row waits
   for the commit too and carries the time of the *call*, so a deferred message reads as that
