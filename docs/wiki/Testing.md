@@ -25,9 +25,9 @@ returns the id it would have used.
 
 ## `TRANSACTIONAL` and `TestCase`
 
-If the project sets `TRANSACTIONAL` to `True`, a send made inside Django's `TestCase` never reaches
-the broker: `TestCase` wraps each test in a transaction it rolls back, so the commit the
-write is waiting for never comes. That is the setting working, not a bug — but an assertion
+If the project sets `TRANSACTIONAL` to `True`, a send made inside Django's `TestCase`
+never reaches the broker: `TestCase` wraps each test in a transaction it rolls back, so
+the commit the write is waiting for never comes. That is the setting working, not a bug — but an assertion
 that a message was queued will fail, and it will fail in a way that reads like the code
 under test never sent one.
 

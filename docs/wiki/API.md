@@ -71,8 +71,8 @@ Receipt.objects.create(order=order, telegram_correlation_id=identifier)
 With `TRANSACTIONAL` on, a send that takes the queue route and is made inside
 `transaction.atomic()` returns its id immediately and reaches the broker when the block
 commits. Only that route: the table above has `bot.send()` calling Telegram directly inside
-the bot container, and `bot.send_raw()` doing so everywhere, and neither makes a queue write
-there is anything to hold back. See
+the bot container, and `bot.send_raw()` doing so everywhere. Neither makes a queue write, so
+there is nothing for the setting to hold back. See
 **[Sending messages](Sending-messages.md#inside-a-transaction)**. The awaiting twins below
 never wait for a commit: a coroutine holds its own database connection, so there is no
 transaction of the caller's for them to see.

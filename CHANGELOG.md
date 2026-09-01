@@ -12,8 +12,9 @@
   transaction for rollback. The producer had no equivalent.
 
   `TRANSACTIONAL` — `False`, so an upgrade changes nothing — holds the queue write until the
-  `default` connection commits, and a rolled-back block queues nothing at all. The
-  synchronous producers, which are the ones a view and a Celery task reach for. Measured, a
+  `default` connection commits, and a rolled-back block queues nothing at all. It governs the
+  synchronous producers and only those, which are the ones a view and a Celery task reach
+  for. Measured, a
   coroutine holds its own connection — inside `asyncio.run` the `default` connection is a
   different object with `in_atomic_block` False — so `await bot.asend()` cannot see a
   surrounding transaction, and Django has no asynchronous transactions for it to be inside.
