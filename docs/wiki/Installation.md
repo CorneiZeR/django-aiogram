@@ -1,8 +1,37 @@
 # Installation
 
-```shell
-pip install 'django-aiogram[redis]'
-```
+=== "Redis list"
+
+    ```shell
+    pip install 'django-aiogram[redis]'
+    ```
+
+    The default: no `BROKER` needed.
+
+=== "Redis Streams"
+
+    ```shell
+    pip install 'django-aiogram[redis]'
+    ```
+
+    Same driver as the list — a different data structure on the server, not a different
+    dependency.
+
+=== "RabbitMQ"
+
+    ```shell
+    pip install 'django-aiogram[rabbitmq,redis]'
+    ```
+
+    `redis` for the FSM store, which is aiogram's and defaults on; see below.
+
+=== "Kafka"
+
+    ```shell
+    pip install 'django-aiogram[kafka,redis]'
+    ```
+
+    `redis` for the FSM store, which is aiogram's and defaults on; see below.
 
 Requires Python 3.10–3.14, Django 5.2+ and aiogram 3.30+. Every pair in that range runs in
 CI, and one leg pins the floors themselves — `django==5.2.0 aiogram==3.30.0 redis==6.2.0` on

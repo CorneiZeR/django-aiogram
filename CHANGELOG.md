@@ -2,12 +2,56 @@
 
 ## 4.0.0.post1 - unreleased
 
-**A post release, not a patch.** The package is byte-for-byte 4.0.0 — no behaviour, no
-setting, no message changed. What ships is metadata: `project.urls.Documentation` now names
-the documentation site. PEP 440 has a marker for exactly this, and a patch number would have
-promised a fix nobody made.
+**Documentation, and one fix in the seam that publishes it.** What this release is *for* is
+metadata: `project.urls.Documentation` names the documentation site, which is the only thing
+in here a resolver or PyPI reads. `4.0.0.post1` is what PEP 440 has for that — same code,
+republished — and this is that, with one exception stated rather than buried.
+
+**The exception is `eventlog/signals.py`.** Checking what the pages claim turned up a real
+defect in the metrics seam — a broken receiver cost the receivers behind it their batch — and
+the fix belongs with the work that found it. Everything else under `src/` is docstrings: two
+files, no behaviour, no setting, no message. So a post release carries one behaviour change
+here, and anybody reading the number should know it from the first paragraph.
 
 ### Documentation
+
+- **Three sentences the pages assert are now checked, starting with the one that named
+  itself.** *Every boolean setting here is parsed, not tested for truthiness* is the kind of
+  claim that is cheap to write, expensive to be wrong about, and verifiable in minutes — and
+  nothing verified it. Checked now, and true: fifteen reads across nine modules, every one
+  through `coerce_bool`, and no reader reaching the settings another way. `RAISE_EXCEPTION`
+  really was read with a bare `if` once, which is what the sentence was written about.
+
+  `tests/test_documented_claims.py` holds it from the syntax tree rather than by grepping
+  lines, because the call wraps. Two more claims joined it, each verified before it was
+  gated: the event log's rows are *inserted and never updated* — the writer's only write is
+  `save(force_insert=True)`, and nothing calls `update` — and *every model is tagged with its
+  class name*, which is what decoding needs to find the class again. Each falsified by making
+  the code say otherwise.
+
+  Three others were checked and left alone because they are true: updates really are not
+  queued in either mode, naming a worker is answerable on the Redis transports only, and only
+  the Redis list needs a worker identity.
+
+- **A broken metrics receiver no longer costs the receivers behind it.** The fourth claim
+  checked was that `send_robust` abandons its own loop on a receiver Django cannot name — and
+  it was true, measured: a collector written as a callable instance raises, Django's failure
+  log reaches for `receiver.__qualname__` *inside* its own `except`, that lookup raises too,
+  and every receiver connected afterwards silently stops seeing batches. It had been written
+  down as Django's limitation and left there.
+
+  It is fixed at the other end. `events_recorded.connect` names a receiver that has none,
+  from its class: one attribute, set on an object the project has just handed over. Nothing is
+  wrapped, so a weak connection still dies with its referent and `disconnect` still finds the
+  receiver by identity — and the dispatch survives a receiver that raises, for every receiver
+  that can be named: a function, a bound method, an ordinary instance. Measured both ways: unnamed, the later receiver does not run; named, both
+  run and the broken one's error comes back as its result, which is what `send_robust`
+  promises.
+
+  Where the name cannot be set — a class with `__slots__`, a read-only property — connecting
+  logs a warning naming the class, because that receiver can still end a dispatch. The
+  previous advice, *do not write a receiver as a callable class*, is withdrawn: that is an
+  ordinary shape for a collector and it works now.
 
 - **The documentation is a site now, not a wiki.** The same pages, in the same files, built by
   Material for MkDocs and published to GitHub Pages: navigation that groups the twenty-one
@@ -36,6 +80,14 @@ promised a fix nobody made.
   `Home.md` is `index.md`, because that is what answers at the root of a version directory.
   `_Sidebar.md` is gone: its four groups are the `nav:` block, and the test that checked the
   sidebar listed every page now checks the navigation does.
+
+  **The front page is a landing page**: the four transports as cards, each with what it
+  guarantees and the one line that installs it, then the pages grouped the way the navigation
+  groups them. The install command on **Installation** is four tabs rather than one line and a
+  paragraph of exceptions, the pickle warning on **Serialization** is an admonition rather
+  than a bold sentence in a blockquote, and every page carries the repository's social card as
+  its Open Graph image — absolute, because a crawler resolves it with no page context, which
+  the obvious `| url` filter does not produce.
 
   The site inherits the palette and the two IBM Plex faces from the repository's social card
   rather than inventing a second identity. The greens are not used at card strength for text —

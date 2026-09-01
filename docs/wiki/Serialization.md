@@ -204,12 +204,13 @@ Two behaviors make the mixed case work:
   a different one and the backlog sits in a list the new worker never opens; see
   **[Delivery](Delivery.md)**.
 
-> **Turning `ALLOW_PICKLE` off is only recoverable where `LMOVE` exists.**
-> Without it there is no in-flight list — the consumer has already popped the
-> message when it refuses it, so a refused pickle is **gone**. The consumer says
-> which mode it is in at startup, as `tg_crash_safe` on the `delivery started`
-> line. On such a server, stop or upgrade every pickle producer *before* turning
-> the flag off. See **[Delivery](Delivery.md)**.
+!!! warning "Turning `ALLOW_PICKLE` off is only recoverable where `LMOVE` exists"
+
+    Without it there is no in-flight list — the consumer has already popped the message when
+    it refuses it, so a refused pickle is **gone**. The consumer says which mode it is in at
+    startup, as `tg_crash_safe` on the `delivery started` line. On such a server, stop or
+    upgrade every pickle producer *before* turning the flag off. See
+    **[Delivery](Delivery.md)**.
 
 Only worth it if you must queue objects JSON cannot represent, and only with a
 queue nothing untrusted can write to.
