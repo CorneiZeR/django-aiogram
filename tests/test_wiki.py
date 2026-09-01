@@ -132,6 +132,36 @@ def test_readme_page_links_resolve():
     assert not broken, f'README links to pages that do not exist: {broken}'
 
 
+#: a path into this repository, as prose writes one. Rooted at a directory that exists here,
+#: which is what separates `tests/test_wiki.py` from the `tgbot/tg_router.py` a reader is told
+#: to create in their own project.
+#:
+#: The left edge is a lookbehind and not `\b`, because a word boundary is exactly what a
+#: backtick followed by `.github` does not have: two non-word characters in a row. Written with
+#: `\b` first, and the falsification caught it -- a dangling `.github/workflows/...` still
+#: passed, because the pattern had never matched a dotted root at all
+REPO_PATH = re.compile(r'(?<![\w./-])((?:\.github|src|tests|scripts|docs)/[\w./-]*[\w-])')
+#: the changelog is exempt, and is the reason this test exists: naming a file a release deleted
+#: is what a release note is for, while a live page naming one is a reader sent to a 404
+PROSE = [README, ROOT / 'AGENTS.md', ROOT / 'CONTRIBUTING.md', *PAGES]
+
+
+@pytest.mark.parametrize('path', PROSE, ids=lambda path: path.name)
+def test_every_repository_path_in_the_prose_exists(path):
+    """Documentation that names a file names one that is there.
+
+    Deleting a workflow, a script or a test module is the moment its mentions rot, and every
+    gate stays green while they do: the sentence is still grammatical, the link still is not
+    one. Found the other way round in review -- a release note naming a workflow it had
+    deleted, which is correct, next to a sentence that named the same kind of file by
+    description because nothing forced it to be exact.
+    """
+    missing = sorted(
+        {match for match in REPO_PATH.findall(path.read_text()) if not (ROOT / match).exists()},
+    )
+    assert not missing, f'{path.name} names paths that do not exist: {", ".join(missing)}'
+
+
 def test_every_documented_log_message_is_still_emitted():
     """The other direction from the table's own purpose.
 

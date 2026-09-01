@@ -106,9 +106,10 @@ here, and anybody reading the number should know it from the first paragraph.
   link to click, and the sidebar they see beside it says the same. `.github/workflows/wiki.yml`
   is deleted rather than narrowed to manual dispatch: the pages it would copy carry relative
   links, which a wiki does not resolve, so the one thing a dispatch could still do was break
-  every link on it. The workflow that wrote the stubs is deleted with this release for the
-  same reason it existed: it was written to be dispatched once, it was, and every page it
-  would rewrite already says what it would say.
+  every link on it. `.github/workflows/wiki-stubs.yml`, which wrote those stubs, is deleted
+  with this release for the same reason it existed: it was written to be dispatched once, it
+  was, and every page it would rewrite already says what it would say. Both names are in the
+  past tense on purpose -- this entry is the only place either workflow is still mentioned.
 
   **Case matters in the README too, now.** The check that every page is linked from the front
   page compared both sides case-folded, because the wiki resolved `rate-limits` to
