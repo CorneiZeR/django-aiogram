@@ -29,11 +29,19 @@
   `RAISE_EXCEPTION` decides whether the exception also leaves the `atomic()` block, where it
   would take every commit hook queued behind it.
 
-  Two cases it does not cover, both said out loud instead of assumed. An alias configured
-  `AUTOCOMMIT: False` holds a transaction open with `in_atomic_block` still False, and
-  Django's `on_commit` refuses a manually managed transaction rather than deferring it — so
-  the write happens immediately and one line in the log says so per process. And inside the
-  bot container a send reaches Telegram directly, where there is no queue write to hold back.
+  A fan-out registers one commit hook for the call rather than one per chunk, which is what
+  keeps a chunk the broker refuses from letting the ones behind it through — the immediate
+  path raises and never reaches them. The cost is that a deferred broadcast holds every
+  payload until the block ends, where an immediate one holds a chunk.
+
+  Two cases it does not cover, both said out loud instead of assumed. Manual transaction
+  management, in either shape: with no block, `in_atomic_block` is False and Django's
+  `on_commit` refuses outright; with an `atomic()` inside it, the hook is accepted and then
+  runs on `set_autocommit(True)` rather than when the block ends — measured, and neither
+  leaving the block nor `transaction.commit()` runs it. `get_autocommit()` cannot tell that
+  apart from an ordinary block, where it is False too, so `commit_on_exit` is what decides.
+  Both publish immediately and say so once per process. And inside the bot container a send
+  reaches Telegram directly, where there is no queue write to hold back.
 
   `E049` reports a `TRANSACTIONAL` that cannot be read as a boolean.
 

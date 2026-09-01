@@ -10,7 +10,7 @@ import logging
 from typing import ClassVar
 
 import pytest
-from django.db import transaction
+from django.db import connection, transaction
 from django.test import override_settings
 
 from django_aiogram.broker.redis_list import RedisListBroker
@@ -29,9 +29,14 @@ class RecordingBroker(RedisListBroker):
 
     published: ClassVar[list[bytes]] = []
     refuses: ClassVar[bool] = False
+    #: refuse the write at this index and no other, so a batch can fail in the middle
+    refuses_at: ClassVar[int | None] = None
+    writes: ClassVar[int] = 0
 
     def publish(self, payloads):
-        if RecordingBroker.refuses:
+        this = RecordingBroker.writes
+        RecordingBroker.writes += 1
+        if RecordingBroker.refuses or this == RecordingBroker.refuses_at:
             raise ConnectionError('the broker refused the write')
         RecordingBroker.published.extend(payloads)
 
@@ -51,10 +56,14 @@ def published():
     """The payloads this test's sends reached the broker with."""
     RecordingBroker.published.clear()
     RecordingBroker.refuses = False
+    RecordingBroker.refuses_at = None
+    RecordingBroker.writes = 0
     committing._manual_mentioned.clear()
     yield RecordingBroker.published
     RecordingBroker.published.clear()
     RecordingBroker.refuses = False
+    RecordingBroker.refuses_at = None
+    RecordingBroker.writes = 0
 
 
 @pytest.mark.django_db(transaction=True)
@@ -103,6 +112,55 @@ def test_the_fan_out_defers_every_chunk(published):
         assert published == []
 
     assert len(published) == 3
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_batch_registers_one_commit_hook_however_many_chunks(published):
+    """Counted, because the payload assertion above passes with a hook per chunk too."""
+    with transaction.atomic():
+        TelegramBot().send_many([1, 2, 3, 4, 5], chunk_size=1, text='to everyone')
+        assert len(connection.run_on_commit) == 1, 'a hook per chunk, not one for the call'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_chunk_that_fails_stops_the_ones_behind_it(published):
+    """What the immediate path does, where the raise ends the loop before the next chunk.
+
+    One hook for the call is what preserves it, and only the middle chunk refuses so that
+    it is measurable: with a hook per chunk each failure is swallowed on its own, so the
+    third goes out behind the second and three chats produce two messages instead of one.
+    """
+    RecordingBroker.refuses_at = 1
+
+    with transaction.atomic():
+        TelegramBot().send_many([1, 2, 3], chunk_size=1, text='to everyone')
+
+    assert len(published) == 1, 'a refused chunk did not stop the ones behind it'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_an_atomic_block_under_manual_management_publishes_immediately(published, caplog):
+    """`atomic()` with autocommit off sets `in_atomic_block` and does not commit on exit.
+
+    Measured: the hook it accepts runs on `set_autocommit(True)` and on nothing else —
+    not on leaving the block, not on `transaction.commit()`. So a message handed to one
+    goes out at a moment no caller chose, or never in a process that keeps autocommit off.
+    `get_autocommit()` cannot tell this apart from an ordinary block, which is False there
+    too; `commit_on_exit` is what does.
+    """
+    transaction.set_autocommit(False)
+    try:
+        with caplog.at_level(logging.WARNING, logger='django_aiogram'), transaction.atomic():
+            TelegramBot().send(chat_id=1, text='the order was accepted')
+            assert len(published) == 1, 'the write waited for a commit that will not come'
+    finally:
+        transaction.rollback()
+        transaction.set_autocommit(True)
+
+    assert 'manually managed transaction' in caplog.text
 
 
 @pytest.mark.django_db(transaction=True)
@@ -182,7 +240,7 @@ def test_autocommit_off_publishes_where_it_stands_and_says_so_once(published, ca
         transaction.rollback()
         transaction.set_autocommit(True)
 
-    said = [record for record in caplog.records if 'no commit hook to wait on' in record.message]
+    said = [record for record in caplog.records if 'manually managed transaction' in record.message]
     assert len(published) == 2
     assert len(said) == 1, 'the fallback said so once per send rather than once per process'
 

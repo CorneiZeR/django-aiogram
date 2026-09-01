@@ -266,8 +266,10 @@ that way still goes out when the block rolls back.
 
 With it already on and the message still going out, check which connection the block is on:
 the setting watches `default`, and a transaction opened on another alias is not one it can
-see. An alias configured `AUTOCOMMIT: False` is the other case, and it says so once in the
-log — *publishing without waiting for a commit*.
+see. An alias configured `AUTOCOMMIT: False` is the other case — a manually managed
+transaction does not run commit hooks when it ends, `atomic()` blocks inside it included, so
+the write is made immediately and the log says so once: *publishing without waiting for a
+commit*.
 
 ## The bot ignores ENABLED
 

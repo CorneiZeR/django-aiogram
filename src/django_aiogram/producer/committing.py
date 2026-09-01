@@ -12,6 +12,10 @@ the queue and a deployment measuring queue latency will see that.
 Only the queue write. Inside the bot container a send reaches Telegram directly and there
 is no publish to hold back, so a handler's reply is unaffected by this setting.
 
+And only where a commit will actually happen: a connection under manual transaction
+management publishes immediately and says so once, because its hooks wait for
+``set_autocommit(True)`` rather than for the block.
+
 And only a synchronous one. ``connections`` is context-aware, so a coroutine holds its own
 connection rather than the one a surrounding ``atomic()`` opened -- measured: inside
 ``asyncio.run`` the object differs and ``in_atomic_block`` is False. That is not a gap this
@@ -22,14 +26,18 @@ transactions, so ``await bot.asend()`` is never inside one and has nothing to wa
 import logging
 import threading
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from django.db import DEFAULT_DB_ALIAS, connections, transaction
 
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 
+if TYPE_CHECKING:
+    from django.db.backends.base.base import BaseDatabaseWrapper
+
 logger = logging.getLogger('django_aiogram')
 
-__all__ = ('defer',)
+__all__ = ('defer', 'waits_for_a_commit')
 
 #: said once per process, like `mention_asend`: the condition is a deployment's database
 #: configuration, so a line per send is noise nobody can act on twice
@@ -37,10 +45,11 @@ _manual_mentioned = threading.Event()
 _manual_guard = threading.Lock()
 
 
-def defer(publish: Callable[[], None]) -> bool:
-    """Hand the write to the caller's transaction, and say whether that happened.
+def waits_for_a_commit() -> bool:
+    """Whether a write made now would be held for the caller's transaction.
 
-    ``False`` means nothing was arranged and the caller has to publish now.
+    Separate from :func:`defer` because a fan-out has to know before it starts: it registers
+    one hook for the whole call, and cannot collect the writes for one without asking first.
 
     The default alias, because a send names no database. It is the connection a view's
     ``atomic()`` opens and the one whose rollback the message would outlive; a project
@@ -51,8 +60,10 @@ def defer(publish: Callable[[], None]) -> bool:
         return False
     connection = connections[DEFAULT_DB_ALIAS]
     if connection.in_atomic_block:
-        transaction.on_commit(publish, using=DEFAULT_DB_ALIAS)
-        return True
+        if _commits_on_exit(connection):
+            return True
+        _mention_manual_transactions()
+        return False
     # only a connection that is already open, because asking an unopened one opens it:
     # a send would connect to a database the process never otherwise touches, and from a
     # coroutine that is `SynchronousOnlyOperation`. Nothing has run on it, so there is no
@@ -62,15 +73,51 @@ def defer(publish: Callable[[], None]) -> bool:
     return False
 
 
+def defer(publish: Callable[[], None]) -> bool:
+    """Arrange for ``publish`` to run when the caller's transaction commits.
+
+    ``False`` means nothing was arranged and the caller has to publish now.
+    """
+    if not waits_for_a_commit():
+        return False
+    transaction.on_commit(publish, using=DEFAULT_DB_ALIAS)
+    return True
+
+
+def _commits_on_exit(connection: 'BaseDatabaseWrapper') -> bool:
+    """Whether leaving the outermost block will commit, and so run the hooks queued in it.
+
+    An ``atomic()`` entered while autocommit is off does not. Django sets ``commit_on_exit``
+    False there — its own comment calls it "a note to deal with this case in ``__exit__``" —
+    and the hooks then wait for ``set_autocommit(True)``. Measured: leaving the block runs
+    nothing, ``transaction.commit()`` runs nothing, and restoring autocommit runs them, which
+    is a moment no caller of ``send()`` chose and a process that never restores it never
+    reaches.
+
+    ``get_autocommit()`` cannot answer this, which is the trap. It is False inside an
+    *ordinary* ``atomic()`` too, because the block turns autocommit off to open its
+    transaction — measured on both shapes — so reading it here would refuse every deferral
+    the setting exists for.
+
+    True where the attribute is gone, so a Django that renames it keeps deferring rather than
+    silently stopping for everyone; the manual-management test then fails on that leg, which
+    is where a rename should be found.
+    """
+    return bool(getattr(connection, 'commit_on_exit', True))
+
+
 def _mention_manual_transactions() -> None:
     """Say once that the setting cannot be honoured on this connection.
 
-    With autocommit off the server holds a transaction open from the first statement and
-    ``in_atomic_block`` is still False — the case ``eventlog.writer._recycle`` documents
-    from the other side. ``on_commit`` does not defer there, it raises
-    ``TransactionManagementError``, so honouring the setting would turn every send on an
-    alias configured ``AUTOCOMMIT: False`` into a failure. Publishing now is the same
-    behaviour the deployment had before the setting, said out loud rather than assumed.
+    Two shapes, one answer. With autocommit off and no block, the server holds a transaction
+    open from the first statement while ``in_atomic_block`` is still False — the case
+    ``eventlog.writer._recycle`` documents from the other side — and ``on_commit`` raises
+    ``TransactionManagementError`` rather than deferring, so honouring the setting would turn
+    every send on such an alias into a failure. With a block inside that, the hook is
+    accepted and then runs at a moment nobody chose; see :func:`_commits_on_exit`.
+
+    Publishing now is the same behaviour the deployment had before the setting, said out loud
+    rather than assumed.
     """
     if _manual_mentioned.is_set():
         return
@@ -79,7 +126,7 @@ def _mention_manual_transactions() -> None:
             return
         _manual_mentioned.set()
     logger.warning(
-        'publishing without waiting for a commit: autocommit is off on this connection, '
-        'so there is no commit hook to wait on',
+        'publishing without waiting for a commit: this connection is in a manually managed '
+        'transaction, which does not run commit hooks when it ends',
         extra={'tg_database': DEFAULT_DB_ALIAS},
     )

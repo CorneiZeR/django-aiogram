@@ -74,6 +74,11 @@ What it does not change, and what to expect:
   attempted, not derived from it, so a caller storing it beside its own row is unaffected —
   and it is the *deferred* call that returns sooner, because the immediate one waits for the
   broker to acknowledge the write before `send()` returns at all.
+- **A broadcast holds its payloads until the commit.** `send_many` serializes a chunk at a
+  time so peak memory stays bounded, and a deferred write is a payload waiting in memory —
+  fifty thousand chats inside a long transaction is the shape to avoid. One commit hook is
+  registered per call, so a chunk the broker refuses stops the ones behind it, exactly as
+  the immediate path does.
 - **A send never opens a database connection.** The `default` connection is inspected only
   when it is already established: a process that touches no database keeps not touching one,
   and a connection nothing has run on cannot be inside a transaction anyway.
@@ -88,9 +93,12 @@ What it does not change, and what to expect:
 - **A publish that fails after the commit cannot undo it.** The drop is recorded, and
   `RAISE_EXCEPTION` decides whether the exception also leaves the `atomic()` block — where
   it would take any commit hook queued behind this one with it.
-- **`AUTOCOMMIT: False` on the alias is not supported by this.** Django's `on_commit` refuses
-  a manually managed transaction rather than deferring, so the write happens immediately and
-  a line in the log says so once per process.
+- **`AUTOCOMMIT: False` on the alias is not supported by this**, with or without an
+  `atomic()` block inside it. Without one, Django's `on_commit` refuses a manually managed
+  transaction outright; with one, it accepts the hook and then runs it on
+  `set_autocommit(True)` rather than when the block ends — a moment no caller chose, and one
+  a process that keeps autocommit off never reaches. Both publish immediately instead, and a
+  line in the log says so once per process.
 - **Inside the bot container it does nothing.** A send there reaches Telegram directly and
   there is no queue write to hold back.
 

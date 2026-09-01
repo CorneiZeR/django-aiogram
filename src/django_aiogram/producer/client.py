@@ -52,7 +52,7 @@ from django_aiogram.eventlog.instrumentation import install_instrumentation
 from django_aiogram.eventlog.recorder import recorder
 from django_aiogram.eventlog.records import Event, as_identifier
 from django_aiogram.exceptions import LoopThreadNotStartedError, ShuttingDownError
-from django_aiogram.producer.committing import defer
+from django_aiogram.producer.committing import defer, waits_for_a_commit
 from django_aiogram.producer.from_settings import build_default_properties, build_storage
 from django_aiogram.producer.looping import LOOP_THREAD, RUNNER_TIMEOUT, drain_budget, loop_lock, mention_asend
 from django_aiogram.producer.outbound import TASK_PREFIX, Outbound, completion, resolve_correlation_id, settle
@@ -1016,13 +1016,24 @@ class TelegramBot(RouterShortcuts):
             return identifier, False
         return identifier, True
 
-    def _deferred(self, function: str, write: Queueing, publish: Callable[[list[bytes]], None]) -> bool:
-        """Hand this write to the caller's transaction, and say whether that happened.
+    def _deferred(
+        self,
+        function: str,
+        writes: list[Queueing],
+        publish: Callable[[list[bytes]], None],
+    ) -> bool:
+        """Hand these writes to the caller's transaction, and say whether that happened.
 
         ``False`` means the caller publishes where it stands, which is what every send did
         before ``TRANSACTIONAL`` existed and what all of them still do with it off.
 
-        The synchronous ``publish`` is what a hook would run: a commit hook is ordinary
+        **One hook for the call, however many writes it covers.** A fan-out is a list here
+        rather than a hook per chunk, because the hooks are what decide what a failing chunk
+        costs: registered one by one and swallowed one by one, chunk three would go out after
+        chunk two was refused, where the immediate path raises and never reaches it. In one
+        hook the loop below stops where that loop stops.
+
+        The synchronous ``publish`` is what a hook runs: a commit hook is ordinary
         synchronous code on the thread that committed, with no loop to hand an ``await`` to.
         In practice the awaiting producers never reach one — a coroutine holds its own
         database connection, so there is no transaction of the caller's for them to see.
@@ -1037,14 +1048,18 @@ class TelegramBot(RouterShortcuts):
         def publish_after_commit() -> None:
             """Write to the broker now that the caller's transaction has landed."""
             try:
-                with publishing(function, write) as ready:
-                    publish(ready.payloads)
+                for write in writes:
+                    with publishing(function, write) as ready:
+                        publish(ready.payloads)
             except Exception:
                 if self._raises_send_failures:
                     raise
                 logger.exception(
                     'a deferred publish failed after its transaction committed',
-                    extra={'tg_function': function, 'tg_messages': len(write.messages)},
+                    extra={
+                        'tg_function': function,
+                        'tg_messages': sum(len(write.messages) for write in writes),
+                    },
                 )
 
         return defer(publish_after_commit)
@@ -1083,7 +1098,7 @@ class TelegramBot(RouterShortcuts):
         # `check_function` in `send`, one failure mode further along
         mention_asend('aenqueue')
         write = serialise(function, [(identifier, kwargs)])
-        if not self._deferred(function, write, broker.publish):
+        if not self._deferred(function, [write], broker.publish):
             with publishing(function, write) as ready:
                 broker.publish(ready.payloads)
         return identifier
@@ -1110,7 +1125,7 @@ class TelegramBot(RouterShortcuts):
 
         broker = get_broker()
         write = serialise(function, [(identifier, kwargs)])
-        if not self._deferred(function, write, broker.publish):
+        if not self._deferred(function, [write], broker.publish):
             with publishing(function, write) as ready:
                 await broker.apublish(ready.payloads)
         return identifier
@@ -1164,16 +1179,23 @@ class TelegramBot(RouterShortcuts):
         broker = get_broker() if writing else None
         if writing:
             mention_asend('asend_many')
+        # asked once for the batch, before the first chunk: the answer cannot change between
+        # them, and a fan-out has to know before it starts whether it is collecting writes for
+        # one commit hook or publishing each as it goes
+        waiting = broker is not None and waits_for_a_commit()
         identifiers: list[uuid.UUID] = []
+        held: list[Queueing] = []
         for chunk in chunks(chat_ids, chunk_size, kwargs):
             if broker is not None:
-                # one deferral per chunk, which is one per write rather than one per
-                # message: a chunk is what a publish covers and what a drop row covers
                 write = serialise(function, chunk)
-                if not self._deferred(function, write, broker.publish):
+                if waiting:
+                    held.append(write)
+                else:
                     with publishing(function, write) as ready:
                         broker.publish(ready.payloads)
             identifiers.extend(identifier for identifier, _ in chunk)
+        if held and broker is not None:
+            self._deferred(function, held, broker.publish)
         return identifiers
 
     async def asend_many(
@@ -1195,14 +1217,20 @@ class TelegramBot(RouterShortcuts):
         # after the decision, not before: a disabled process may have no transport
         # configured at all, and resolving one would raise where the point is to do nothing
         broker = get_broker() if writing else None
+        waiting = broker is not None and waits_for_a_commit()
         identifiers: list[uuid.UUID] = []
+        held: list[Queueing] = []
         for chunk in chunks(chat_ids, chunk_size, kwargs):
             if broker is not None:
                 write = serialise(function, chunk)
-                if not self._deferred(function, write, broker.publish):
+                if waiting:
+                    held.append(write)
+                else:
                     with publishing(function, write) as ready:
                         await broker.apublish(ready.payloads)
             identifiers.extend(identifier for identifier, _ in chunk)
+        if held and broker is not None:
+            self._deferred(function, held, broker.publish)
         return identifiers
 
     async def aclose(self) -> None:
