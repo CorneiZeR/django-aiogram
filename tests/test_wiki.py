@@ -402,8 +402,14 @@ def test_visible_drops_what_is_not_rendered():
 
 
 def test_an_unclosed_fence_hides_everything_after_it():
-    """Which is what GitHub renders: the rest of the file becomes code."""
-    text = '## Real\n```\n## Never closed\n[API](https://github.com/CorneiZeR/django-aiogram/wiki/API)\n'
+    """Which is what GitHub renders: the rest of the file becomes code.
+
+    The link in the fixture is a site link, and that is load-bearing: it carried the old wiki
+    URL through the move, which `README_PAGE_LINK` does not match at all -- so the second
+    assertion held whether or not `visible()` still removed the fence, and the case could not
+    fail. Found in review.
+    """
+    text = f'## Real\n```\n## Never closed\n[API]({DOCS_URL}API/)\n'
 
     rendered = visible(text)
 
