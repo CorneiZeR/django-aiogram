@@ -45,7 +45,8 @@ bot.send(chat_id=CHAT_ID, text='hello')
 
 Requires Python 3.10–3.14, Django 5.2+ and aiogram 3.30+. No transport driver is a
 dependency of the package since 4.0: the one you name brings its own, and asks for its own
-server — Redis Streams wants 7.0, the list runs on anything and gives at-least-once from 6.2.
+server — Redis Streams wants 7.0 and refuses below it, and the list runs on anything, giving
+at-least-once wherever `BLMOVE` is available: a capability, not a version number.
 **[Installation](Installation.md)** has the pair for each of the four.
 [Source](https://github.com/CorneiZeR/django-aiogram) ·
 [PyPI](https://pypi.org/project/django-aiogram/) ·

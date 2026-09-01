@@ -40,9 +40,10 @@ The package is untouched: this release moves the documentation and nothing else.
   that passes: `#1f7a5c` on paper at 4.53:1, `#44b78b` on ink at 7.60:1.
 
   The wiki is frozen at its last good sync until it is replaced by stubs pointing at the site;
-  every link in the README still points there until then. Its publisher is deleted rather than
-  left dispatchable: the pages it would copy now carry relative links, which a GitHub wiki does
-  not resolve, so the one thing that workflow could still do was break every link on it.
+  every link in the README still points there until then. `.github/workflows/wiki.yml` is
+  deleted rather than narrowed to manual dispatch: the pages it would copy now carry relative
+  links, which a GitHub wiki does not resolve, so the one thing a dispatch could still do was
+  break every link on it. The stub workflow that replaces it arrives with the site.
 
 ## 4.0.0 - 2026-08-31
 
