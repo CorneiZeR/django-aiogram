@@ -1098,6 +1098,27 @@ def test_a_sweep_that_finished_adds_no_second_warning(redis_server):
     assert report.warnings == (), report.warnings
 
 
+def test_the_escape_set_is_the_one_redis_documents():
+    """The characters `_escaped` quotes, pinned as a set rather than through their effects.
+
+    Five of the six are covered by the sweep below, which builds a key around each and scans
+    for it. `^` is not, and cannot be: it is special only as the first character of an
+    *unescaped* `[...]`, and `[` is escaped in the same pass — measured against a real server,
+    `TG\\^x:processing:*` and `TG^x:processing:*` select the same key. So dropping it from the
+    set would change no outcome any scan can see, and the docstring said as much and left it
+    untested.
+
+    A test on the function itself does fail, which is the difference between "no test could
+    fail" and "no test was written". Redis documents the set; this is that set.
+    """
+    from django_aiogram.redis import _escaped
+
+    for character in '*?[]^\\':
+        assert _escaped(f'TG{character}x') == f'TG\\{character}x', f'{character} left the escape set'
+
+    assert _escaped('TG_ok') == 'TG_ok', 'an ordinary character was escaped'
+
+
 # one key per metacharacter `_escaped` quotes, and a decoy for the two that would
 # otherwise match their own literal: unescaped, `TG?one` and `TG*all` are patterns that
 # also select the decoy, and only a second list makes that visible
