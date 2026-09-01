@@ -1,0 +1,1894 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Run aiogram next to Django and send Telegram messages from anywhere, over a Redis list, Redis Streams, RabbitMQ or Kafka">
+      
+      
+        <meta name="author" content="Oleksii Kolosiuk">
+      
+      
+        <link rel="canonical" href="https://corneizer.github.io/django-aiogram/latest/4.0/Upgrading/">
+      
+      
+        <link rel="prev" href="../Troubleshooting/">
+      
+      
+        <link rel="next" href="../AI-assistants/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/favicon.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Upgrading - django-aiogram</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=IBM+Plex+Sans:300,300i,400,400i,700,700i%7CIBM+Plex+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"IBM Plex Sans";--md-code-font:"IBM Plex Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#upgrading" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="django-aiogram" class="md-header__button md-logo" aria-label="django-aiogram" data-md-component="logo">
+      
+  <img src="../assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            django-aiogram
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Upgrading
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Follow the system"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Follow the system" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9zM20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12zm-9.15 3.96h2.3L12 9z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to light" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/CorneiZeR/django-aiogram" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    CorneiZeR/django-aiogram
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="django-aiogram" class="md-nav__button md-logo" aria-label="django-aiogram" data-md-component="logo">
+      
+  <img src="../assets/logo.svg" alt="logo">
+
+    </a>
+    django-aiogram
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/CorneiZeR/django-aiogram" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    CorneiZeR/django-aiogram
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Handlers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Handlers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Sending-messages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sending messages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Transports
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Transports
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Redis-list/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Redis list
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Redis-Streams/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Redis Streams
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../RabbitMQ/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RabbitMQ
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Kafka/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kafka
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Running it
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Running it
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Delivery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Delivery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Webhook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Webhook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Rate-limits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rate limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Logging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Logging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Event-log/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Event log
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Serialization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Serialization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrading
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AI-assistants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI assistants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/CorneiZeR/django-aiogram/edit/master/docs/wiki/Upgrading.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="upgrading">Upgrading<a class="headerlink" href="#upgrading" title="Link to this section">&para;</a></h1>
+<p>What each major release changed, newest first — so an upgrade is read from the bottom. Find
+the lowest section that applies to the version you are on and work <strong>up</strong> the page, one release
+at a time: each covers a single hop and assumes the ones below it are done.</p>
+<h1 id="from-31-to-40">From 3.1 to 4.0<a class="headerlink" href="#from-31-to-40" title="Link to this section">&para;</a></h1>
+<h2 id="install-the-new-distribution">Install the new distribution<a class="headerlink" href="#install-the-new-distribution" title="Link to this section">&para;</a></h2>
+<p><code>django-redis-aiogram</code> is not updated any more. <code>pip install django-aiogram</code>, and drop the
+old one — nothing imports it after the steps below.</p>
+<p>Redis is no longer a hard dependency. Pick the transport you run and install it with the
+package: <code>pip install django-aiogram[redis]</code> for the queue 3.x used. A project that names a
+transport whose driver is not installed is refused by a system check at startup rather than by
+an <code>ImportError</code> on the first send — in the processes that send. A process with <code>ENABLED=0</code> is
+not asked for a driver, so a disabled one still reaches <code>E047</code> only if you enable it; if it
+reads a queue depth it needs the driver regardless, because those reads are not gated.</p>
+<h2 id="rename-the-app-and-the-imports">Rename the app and the imports<a class="headerlink" href="#rename-the-app-and-the-imports" title="Link to this section">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">INSTALLED_APPS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">'django_aiogram'</span><span class="p">]</span>
+</span></code></pre></div>
+<div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram</span><span class="w"> </span><span class="kn">import</span> <span class="n">bot</span><span class="p">,</span> <span class="n">conf</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.producer.client</span><span class="w"> </span><span class="kn">import</span> <span class="n">TelegramBot</span>
+</span></code></pre></div>
+<p><code>TELEGRAM_BOT</code> stays as the settings key — it names what it configures, not the package
+that reads it. Environment variables move from <code>DJANGO_REDIS_AIOGRAM_*</code> to
+<code>DJANGO_AIOGRAM_*</code>, the logger from <code>django_redis_aiogram</code> to <code>django_aiogram</code>, and check
+ids from <code>django_redis_aiogram.EXXX</code> to <code>django_aiogram.EXXX</code> — so re-silence anything you
+had silenced by id.</p>
+<h3 id="one-import-inside-the-event-log-moved">One import inside the event log moved<a class="headerlink" href="#one-import-inside-the-event-log-moved" title="Link to this section">&para;</a></h3>
+<p>Only for a project that builds an <code>Event</code> itself — a custom recording seam, a test that
+asserts on one, a metrics receiver that names the type:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.eventlog.records</span><span class="w"> </span><span class="kn">import</span> <span class="n">Event</span><span class="p">,</span> <span class="n">as_identifier</span>
+</span></code></pre></div>
+<p>They were in <code>django_aiogram.eventlog.recorder</code>, which is now the queue and the writer
+thread and nothing else. The shapes that cross that queue travel further than it does —
+every seam builds one, the writer reads one, receivers are handed one — so they live beside
+each other in their own module. Same objects, same fields; <code>recorder</code>, <code>EventRecorder</code> and
+<code>events_recorded</code> did not move.</p>
+<h3 id="two-paths-you-wrote-down-yourself">Two paths you wrote down yourself<a class="headerlink" href="#two-paths-you-wrote-down-yourself" title="Link to this section">&para;</a></h3>
+<p>Everything above is inside your own imports, where a rename fails loudly the moment it is wrong.
+These two live in Django's settings and in your <code>urls.py</code>, where nothing imports them until
+something needs them:</p>
+<table>
+<thead>
+<tr>
+<th>where</th>
+<th>3.x</th>
+<th>4.0</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DATABASE_ROUTERS</code></td>
+<td><code>django_redis_aiogram.dbrouter.TelegramEventLogRouter</code></td>
+<td><code>django_aiogram.eventlog.dbrouter.TelegramEventLogRouter</code></td>
+</tr>
+<tr>
+<td><code>urls.py</code></td>
+<td><code>django_redis_aiogram.webhook.telegram_webhook</code></td>
+<td><code>django_aiogram.consumer.webhook.telegram_webhook</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong><code>manage.py check</code> catches the first one.</strong> <code>E048</code> reports any <code>django_redis_aiogram.</code> entry in
+<code>DATABASE_ROUTERS</code>: for the router in the table above it names the replacement, and for any other
+path from that distribution it says the distribution is gone — which is all it can honestly say
+about a path this package never shipped. Without the check the router is imported on the first
+query that needs routing, which is a request rather than a deployment step, and the failure is
+Django's own <code>ImportError</code> naming a module rather than the fix.</p>
+<p><strong>It cannot catch the second.</strong> Nothing in this package can read your <code>urls.py</code> — the URL
+configuration is Django's, resolved at request time, and a check that tried to import it would be
+importing your whole project. So that row is this page's job, and a stale path there answers 404
+on the webhook while the bot looks healthy: the process is up, the consumer is sending, and
+Telegram's delivery attempts go nowhere. If you serve a webhook, change both.</p>
+<h2 id="run-migrate">Run migrate<a class="headerlink" href="#run-migrate" title="Link to this section">&para;</a></h2>
+<p>Three migrations, and the app label is the new one:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>migrate<span class="w"> </span>django_aiogram
+</span></code></pre></div>
+<p>They create <code>django_aiogram_event</code>, add the <code>(kind, -id)</code> index the admin sorts on, and add the
+<code>short_id</code> column empty. Nothing is copied and nothing is dropped: the 3.x table is untouched,
+and the two steps below are what move its rows and fill their codes in — in that order, and
+both after this.</p>
+<p>This is the step a pre-release install could not get through: a <code>4.0.0.dev0</code> wheel declared the
+index names 3.x already uses, so an upgrade that followed this page met <code>relation
+"drai_event_correlation" already exists</code> and went no further. Released 4.0.0 names them
+<code>dja_event_*</code> and migrates cleanly. If you rehearsed on <code>4.0.0.dev0</code> and it <em>succeeded</em>, that
+database now carries the old names — nothing reads an index by name, so it keeps working, and the
+changelog's 4.0.0 entry has the rename, one statement per index, if you would rather they
+matched.</p>
+<h2 id="move-the-event-logs-rows-or-leave-them">Move the event log's rows, or leave them<a class="headerlink" href="#move-the-event-logs-rows-or-leave-them" title="Link to this section">&para;</a></h2>
+<p>The table is <code>django_aiogram_event</code> now, and <code>migrate</code> creates it empty. The old
+<code>django_redis_aiogram_event</code> is left exactly where it is: nothing reads it and nothing
+drops it.</p>
+<p><code>I003</code> says so on every <code>manage.py check</code> while that table is there, and names the command that
+copies its rows across.</p>
+<p><strong>The two tables' indexes are named apart</strong>, which is what lets the old one stay: on PostgreSQL
+and SQLite index names are unique per schema rather than per table, so this release names its own
+<code>dja_event_*</code> where 3.x used <code>drai_event_*</code>. (MySQL scopes them per table and would not have
+minded either way.) Nothing to do about it — it is why <code>migrate</code> succeeds with both tables
+present — but a dashboard or a hand-built index that names one of the old four is describing the
+old table, and will keep describing it for as long as you keep it.</p>
+<p><strong>It copies</strong>, and leaves the old table exactly as it is, including any row whose id was already
+taken. With the app's own <code>migrate</code> already run:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_move_events
+</span></code></pre></div>
+<p>It copies by primary-key range in bounded chunks — <code>--chunk</code>, <code>--sleep</code>, <code>--max-chunks</code>,
+<code>--dry-run</code>, and <code>--database</code> for a log on its own alias — so a table sized by traffic takes as
+many nights as it takes rather than one long statement. Both tables share the primary key, so an id
+already in the new table is never inserted again: a run you stop resumes at the first id the
+destination does not have, and a second run copies nothing. It is safe to run after the bot has
+been writing for a while — and if one of its rows holds an id an old row also has, that old row is
+left where it is and reported rather than overwritten.</p>
+<p>Doing it by hand is still a reasonable choice on a small table <strong>that nothing has written to yet</strong>.
+Both tables carry the same primary key, so a destination holding even one row the bot wrote after
+<code>migrate</code> makes this <code>INSERT</code> fail on a duplicate key — and the ids it collides with are exactly the
+history you are trying to keep. Past that point the command is the path: it copies the ids the
+destination does not have and reports the ones it could not take.</p>
+<p>On an empty destination it takes two statements rather than one:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">INSERT</span><span class="w"> </span><span class="k">INTO</span><span class="w"> </span><span class="n">django_aiogram_event</span><span class="w"> </span><span class="p">(</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">created_at</span><span class="p">,</span><span class="w"> </span><span class="n">correlation_id</span><span class="p">,</span><span class="w"> </span><span class="n">kind</span><span class="p">,</span><span class="w"> </span><span class="k">function</span><span class="p">,</span><span class="w"> </span><span class="n">chat_id</span><span class="p">,</span><span class="w"> </span><span class="n">user_id</span><span class="p">,</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">    </span><span class="n">message_id</span><span class="p">,</span><span class="w"> </span><span class="n">update_id</span><span class="p">,</span><span class="w"> </span><span class="n">worker</span><span class="p">,</span><span class="w"> </span><span class="n">attempt</span><span class="p">,</span><span class="w"> </span><span class="n">duration_ms</span><span class="p">,</span><span class="w"> </span><span class="n">error_code</span><span class="p">,</span><span class="w"> </span><span class="n">error</span><span class="p">,</span><span class="w"> </span><span class="n">detail</span><span class="p">,</span><span class="w"> </span><span class="n">short_id</span><span class="p">)</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="k">SELECT</span><span class="w"> </span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">created_at</span><span class="p">,</span><span class="w"> </span><span class="n">correlation_id</span><span class="p">,</span><span class="w"> </span><span class="n">kind</span><span class="p">,</span><span class="w"> </span><span class="k">function</span><span class="p">,</span><span class="w"> </span><span class="n">chat_id</span><span class="p">,</span><span class="w"> </span><span class="n">user_id</span><span class="p">,</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="n">message_id</span><span class="p">,</span><span class="w"> </span><span class="n">update_id</span><span class="p">,</span><span class="w"> </span><span class="n">worker</span><span class="p">,</span><span class="w"> </span><span class="n">attempt</span><span class="p">,</span><span class="w"> </span><span class="n">duration_ms</span><span class="p">,</span><span class="w"> </span><span class="n">error_code</span><span class="p">,</span><span class="w"> </span><span class="n">error</span><span class="p">,</span><span class="w"> </span><span class="n">detail</span><span class="p">,</span><span class="w"> </span><span class="s1">''</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="k">FROM</span><span class="w"> </span><span class="n">django_redis_aiogram_event</span><span class="p">;</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="c1">-- PostgreSQL only, and not optional: explicit ids do not advance the sequence</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="k">SELECT</span><span class="w"> </span><span class="n">setval</span><span class="p">(</span><span class="n">pg_get_serial_sequence</span><span class="p">(</span><span class="s1">'django_aiogram_event'</span><span class="p">,</span><span class="w"> </span><span class="s1">'id'</span><span class="p">),</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">              </span><span class="k">coalesce</span><span class="p">(</span><span class="k">max</span><span class="p">(</span><span class="n">id</span><span class="p">),</span><span class="w"> </span><span class="mi">1</span><span class="p">),</span><span class="w"> </span><span class="k">max</span><span class="p">(</span><span class="n">id</span><span class="p">)</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">null</span><span class="p">)</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="k">FROM</span><span class="w"> </span><span class="n">django_aiogram_event</span><span class="p">;</span>
+</span></code></pre></div>
+<p><code>short_id</code> is 4.0's and the old table does not have it, so the copy writes an empty one: those rows
+show as <code>(not backfilled)</code> in the admin until <code>manage.py tgbot_backfill_short_ids</code> fills them. It
+cannot simply be left out of the list — <code>migrate</code> adds the column with a default and then drops the
+default, so an <code>INSERT</code> that omits it is refused.</p>
+<p>Name every column rather than writing <code>SELECT *</code>, which agrees with itself until either table
+changes: a mismatched count is rejected, and a matching count in a different order is accepted with
+every value one column to the side. And without the <code>setval</code>, PostgreSQL accepts the copy and
+refuses the <em>bot's</em> next write with a duplicate key: the sequence is still where <code>migrate</code> left it.</p>
+<p>The three-argument form is deliberate, and it is the one Django's own <code>sequence_reset_sql</code> emits —
+which is what the command runs, so the two say the same thing. On a destination that ended up empty
+the two-argument version is handed <code>NULL</code>, and <code>setval</code> is strict: measured on PostgreSQL 17.11 it
+returns <code>NULL</code> and moves nothing, leaving the sequence wherever it already was. <code>coalesce</code> supplies
+the 1 instead, and the third argument says that 1 has not been handed out yet, so an empty table is
+left about to issue 1 rather than silently keeping an older position.</p>
+<p>Then drop the old table when you are satisfied — <code>DROP TABLE django_redis_aiogram_event</code> is yours
+to run, and this package will never run it for you.</p>
+<h2 id="fill-in-the-short-id-or-leave-it">Fill in the short id, or leave it<a class="headerlink" href="#fill-in-the-short-id-or-leave-it" title="Link to this section">&para;</a></h2>
+<p><code>migrate</code> adds one column to the event log: <code>short_id</code>, twelve characters of the correlation id in
+an alphabet a person can read out. It is what the admin's thread column shows and what its search
+box takes — the column used to show the correlation id's first eight characters, which are a clock
+rather than an identifier and which the search refused when they were typed back.</p>
+<p>Rows written from now on carry their own. Rows already in the table have none until the backfill
+walks them, in bounded chunks, with the arguments the other jobs take:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_backfill_short_ids<span class="w"> </span>--dry-run
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_backfill_short_ids
+</span></code></pre></div>
+<p>Leaving it unrun is a legitimate choice and nothing breaks: those rows read <code>(not backfilled)</code> in
+the admin and still link to the rest of their thread. A run you stop resumes — a row with no code is
+a row still to do — and running it again after it finishes writes nothing.</p>
+<p>Rows moved from 3.x arrive with no code, whether the command copied them or you did, so run this
+after the move rather than before it.</p>
+<p><strong><code>0003_short_id</code> builds an index</strong>, and on a table sized by traffic that build holds a lock for
+its duration. The column itself is cheap — PostgreSQL adds it without rewriting the table — so it
+is the index that decides whether this migration wants a window. There is no
+<code>CREATE INDEX CONCURRENTLY</code> recipe here on purpose: Django generates that index's name, and a
+hand-built one has to match it exactly. <code>python manage.py sqlmigrate django_aiogram 0003</code> prints
+the statements this release will run, name included, which is the honest source for anyone
+building it by hand.</p>
+<h2 id="choose-the-transport-explicitly">Choose the transport explicitly<a class="headerlink" href="#choose-the-transport-explicitly" title="Link to this section">&para;</a></h2>
+<p>Nothing is detected from what happens to be installed. Name the broker you want, and the
+absence of its driver is a startup complaint rather than a runtime surprise.</p>
+<p>A 3.x project that changes nothing here keeps the transport it had: <code>BROKER</code> defaults to the
+Redis list, and <code>REDIS_URL</code>, <code>REDIS_MESSAGES_KEY</code>, <code>REDIS_TIMEOUT</code> and <code>BLPOP_TIMEOUT</code> mean
+exactly what they meant. <strong><a href="../Settings/">Settings</a></strong> lists what each transport declares, and there is a page
+each — <strong><a href="../Redis-list/">Redis list</a></strong>, <strong><a href="../Redis-Streams/">Redis Streams</a></strong>, <strong><a href="../RabbitMQ/">RabbitMQ</a></strong>,
+<strong><a href="../Kafka/">Kafka</a></strong> — for what one guarantees and what it needs running.</p>
+<h3 id="switching-transport-is-a-drain-not-a-setting">Switching transport is a drain, not a setting<a class="headerlink" href="#switching-transport-is-a-drain-not-a-setting" title="Link to this section">&para;</a></h3>
+<p>Nothing moves messages from one transport to another, and nothing can: a queued message is
+addressed to the queue it is in. So the switch has an order, and getting it wrong loses whatever
+was in flight.</p>
+<ol>
+<li>Stop the producers, or set <code>ENABLED=0</code> in them. They are what keeps the old queue filling.</li>
+<li>Let the bot container finish the old queue, and <strong>stop the workers before you believe the
+   numbers</strong>. <code>bot.queue_depth()</code> answers for the whole queue, but <code>bot.inflight_depth()</code>
+   answers for the process that asks it: zero from a shell proves that <em>shell</em> holds nothing.
+   On the Redis list every worker has its own list, so with more than one worker running there
+   is no single reading that means "nothing is in flight anywhere".</li>
+</ol>
+<p>So: stop every worker first, then check. <code>manage.py tgbot_healthcheck --stranded</code> reports
+   what sits under each worker name on the Redis list, and <code>bot.inflight_depth('&lt;name&gt;')</code> asks
+   about one of them by name — a question only the two Redis transports can answer, since the
+   other two raise <code>WorkerDepthUnavailableError</code> rather than a misleading zero. On RabbitMQ and
+   Kafka nothing is left behind by a stopped worker —
+   the broker requeues, the group replays — so stopping them <em>is</em> the drain, and what returns to
+   the old queue has to be finished by a worker still on the old transport.</p>
+<ol>
+<li><strong>Recover anything stranded, before the next step makes it unreachable.</strong> A count from
+   <code>--stranded</code> identifies messages; it does not move them. <code>manage.py tgbot_reclaim --worker
+   &lt;name&gt;</code> puts them back at the front of the queue, and it needs a worker still configured for
+   the <strong>old</strong> transport to take them — so run it, start one worker, and let the queue and its
+   in-flight list reach zero before going on. Once step 4 has moved every process, that list is
+   a key nothing reads: the messages are still in Redis and nothing this package runs will look
+   at them again.</li>
+<li>Change <code>BROKER</code> and the settings the new transport declares, in <strong>every</strong> process. A producer
+   left on the old transport writes to a queue nothing reads any more, and it will not complain:
+   both configurations are valid, they are simply not the same queue.</li>
+<li>Start the bot container first, then the producers. The reverse order queues messages nobody
+   is reading yet, which is harmless but indistinguishable from a broken deployment while you
+   watch it.</li>
+</ol>
+<p>Step 4 is the one worth checking twice. <code>manage.py check</code> refuses a <code>BROKER</code> whose driver is
+missing and a required setting that is empty, so a half-configured process usually fails at
+startup rather than silently — but a process still naming the <em>old</em> transport is a correct
+configuration, and nothing can tell it apart from one that meant it.</p>
+<h3 id="delivery-takes-a-dotted-path"><code>DELIVERY</code> takes a dotted path<a class="headerlink" href="#delivery-takes-a-dotted-path" title="Link to this section">&para;</a></h3>
+<p><code>'blpop'</code> is <code>'django_aiogram.consumer.delivery.BlpopDelivery'</code> now — or drop the key, which is
+the same thing, since that is the default. The old word was the name of a Redis command that three
+of the four transports never issue, and the setting had exactly one legal value; it selects a class
+now, so a consumer you write goes there. <code>E009</code> refuses <code>'blpop'</code> by name and says what to write,
+rather than reporting that a Redis command is not a dotted path.</p>
+<p><code>DeliveryKind</code> is gone with it: an enum of one member is not a choice. If you imported it to spell
+the value, write the path.</p>
+<p><strong><a href="../Delivery/">Delivery</a></strong> has what a subclass must do, and the six rules that are each a defect this
+package has already had.</p>
+<h3 id="the-shutdown-budget-follows-it-too">The shutdown budget follows it too<a class="headerlink" href="#the-shutdown-budget-follows-it-too" title="Link to this section">&para;</a></h3>
+<p><code>stop_grace_period</code> is computed from a table on <strong><a href="../Deployment/">Deployment</a></strong>, and its first row used to be
+<code>REDIS_TIMEOUT + 1</code> for every deployment. It is the timeout of the transport you chose now —
+<code>RABBITMQ_TIMEOUT</code> or <code>KAFKA_TIMEOUT</code> where those apply — because that is the bound the consumer
+thread actually sits inside, and a join shorter than it lets a consumer outlive the shutdown that
+joined it.</p>
+<p>Nothing to change if you keep the defaults: all four default their own timeout to ten, so the
+total is the 21 seconds it was. It matters the moment you raise one, and the setting to raise
+alongside it is the grace period, not <code>REDIS_TIMEOUT</code>.</p>
+<p>One consequence for RabbitMQ, and the only thing here that changes without you touching a setting:
+<code>RABBITMQ_TIMEOUT</code> now wins over a <code>blocked_connection_timeout</code> written into <code>RABBITMQ_URL</code>, where
+the URL used to win. Both of the numbers above are computed from the setting, so a URL overriding it
+left the take cap and the join describing a deadline no call carried — measured, a URL saying 60
+against a setting of 2 left the join at 3 seconds while a blocked publish could sit for a minute. If
+you set it in the URL, move the number to <code>RABBITMQ_TIMEOUT</code>; every other pika parameter in the URL
+is still yours, <code>socket_timeout</code> included, and that one does not bound a take.</p>
+<h2 id="rename-what-used-to-say-redis">Rename what used to say Redis<a class="headerlink" href="#rename-what-used-to-say-redis" title="Link to this section">&para;</a></h2>
+<p>Five public names said Redis, in the four entries below, for two different reasons — and the
+table separates them.</p>
+<p><strong>Two were routing names.</strong> <code>send_redis</code> and <code>asend_redis</code> said where a message went, and where
+it goes is a setting now — so they are gone, renamed rather than aliased, because an alias that
+outlives the release it was written for is a second name for the same thing for ever.</p>
+<p><strong>Three were client-access names</strong> — <code>bot.redis_conn</code>, and the package's <code>get_redis</code> and
+<code>redis_conn</code>, which share a row below because they move in one import. Those <em>moved</em> rather than
+went: one transport's client is
+not the package's business to export from its front door, but the object is unchanged and still
+importable from the module that owns it.</p>
+<table>
+<thead>
+<tr>
+<th>3.x</th>
+<th>4.0</th>
+<th>why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>bot.send_redis(...)</code></td>
+<td><code>bot.enqueue(...)</code></td>
+<td>the queue is a list, a stream, an AMQP queue or a Kafka topic, depending on <code>BROKER</code></td>
+</tr>
+<tr>
+<td><code>await bot.asend_redis(...)</code></td>
+<td><code>await bot.aenqueue(...)</code></td>
+<td>the same, on the awaiting half</td>
+</tr>
+<tr>
+<td><code>bot.redis_conn</code></td>
+<td><code>from django_aiogram.redis import redis_conn</code></td>
+<td>a client that can carry any of four transports should not answer for one</td>
+</tr>
+<tr>
+<td><code>from django_aiogram import get_redis, redis_conn</code></td>
+<td><code>from django_aiogram.redis import get_redis, redis_conn</code></td>
+<td>the package stopped exporting one transport's client from its front door</td>
+</tr>
+</tbody>
+</table>
+<p>The last two are moves rather than removals: the objects are the same, they are as lazy as they
+were, and there is still one connection behind them. Only the shortcut through the package is
+gone. <code>bot.send()</code> is untouched — it still delivers directly inside the worker and queues
+everywhere else, and <code>enqueue</code> is what it calls when it queues.</p>
+<p>Nothing is renamed in the settings: <code>REDIS_URL</code> and the rest still say Redis because they <em>are</em>
+Redis's, and a project that runs the list transport writes exactly what it wrote before.</p>
+<h3 id="one-healthcheck-refusal-says-broker-where-it-said-redis">One healthcheck refusal says broker where it said redis<a class="headerlink" href="#one-healthcheck-refusal-says-broker-where-it-said-redis" title="Link to this section">&para;</a></h3>
+<p>If you grep the container probe's output — an alert on <code>docker inspect</code>, a log filter, a
+runbook — one line changed:</p>
+<table>
+<thead>
+<tr>
+<th>3.x</th>
+<th>4.0</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>redis is unreachable: …</code></td>
+<td><code>the broker is unreachable: …</code></td>
+</tr>
+</tbody>
+</table>
+<p>Up to 3.1 the probe pinged Redis before every check, so it could name Redis in the refusal.
+It no longer opens a client of its own: the driver is an extra now, and a probe that needed
+redis-py could not run at all on a deployment carrying its messages through Kafka or RabbitMQ.
+The transport is asked instead, and the first thing it cannot do is what the probe reports.</p>
+<p>The refusal is the same failure, with the same driver text after the colon, and it still exits
+1 — only the noun moved. <strong><a href="../Troubleshooting/">Troubleshooting</a></strong> catalogues every line the probe writes.</p>
+<p>Two things follow from the same change, neither of which needs anything from you:</p>
+<ul>
+<li><code>python -m django_aiogram.healthcheck</code> now runs on an install with no redis-py at all.
+  Measured on a Kafka-only image: <code>healthy: consumer not observable from outside, 0 queued</code>,
+  where 4.0.0 up to this point could not start the probe.</li>
+<li>A <code>BROKER</code> whose driver is missing is reported rather than raised, by both forms:
+  <code>RedisListBroker needs the 'redis' package, which is not installed. Install it with: pip
+  install "django-aiogram[redis]"</code>.</li>
+</ul>
+<h2 id="verifying-the-upgrade">Verifying the upgrade<a class="headerlink" href="#verifying-the-upgrade" title="Link to this section">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>pip<span class="w"> </span>show<span class="w"> </span>django-redis-aiogram<span class="w">   </span><span class="c1"># nothing: the old distribution is gone, not shadowed</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>check
+</span></code></pre></div>
+<p><code>check</code> is where this hop fails loudest, and deliberately so: a <code>BROKER</code> whose driver is not
+installed is refused here rather than left to raise <code>ModuleNotFoundError</code> inside the first
+send, in a producer, in production.</p>
+<p>Then, in a shell on a non-bot process:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram</span><span class="w"> </span><span class="kn">import</span> <span class="n">bot</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">bot</span><span class="o">.</span><span class="n">enabled</span>  <span class="c1"># must be True for the send below to do anything</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">bot</span><span class="o">.</span><span class="n">queue_depth</span><span class="p">()</span>  <span class="c1"># crosses the broker boundary, sends nothing</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="n">bot</span><span class="o">.</span><span class="n">enqueue</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="n">YOUR_ID</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="s1">'upgrade check'</span><span class="p">)</span>  <span class="c1"># `enqueue` replaces `send_redis` in 4.0</span>
+</span></code></pre></div>
+<p>Read the depth first. It is the only step that proves the transport is configured <em>and</em>
+reachable without putting a message on the queue, and it reaches the broker regardless of
+<code>ENABLED</code> — so it verifies the broker on the web tier you keep from sending, which is where you
+are most likely to be standing.</p>
+<p>The send is the opposite: <code>ENABLED=0</code> makes <code>enqueue</code> a no-op that still returns an id, so on a
+disabled process it proves nothing and the <code>message sent</code> line below never comes. Run it
+somewhere the flag is on, or set it for the length of the check.</p>
+<p>Then confirm the bot container logs <code>message sent</code>. If the depth answered and this does not,
+the queue is fine and the worker is not: see <strong><a href="../Troubleshooting/">Troubleshooting</a></strong>.</p>
+<h1 id="from-30-to-31">From 3.0 to 3.1<a class="headerlink" href="#from-30-to-31" title="Link to this section">&para;</a></h1>
+<h2 id="make-your-handlers-idempotent-on-your-own-key">Make your handlers idempotent, on your own key<a class="headerlink" href="#make-your-handlers-idempotent-on-your-own-key" title="Link to this section">&para;</a></h2>
+<p>3.0 acknowledged a message when the send was <em>scheduled</em>; 3.1 acknowledges it when the
+send has actually finished, for a handler that takes an <code>on_complete</code> keyword and calls
+it. <code>bot.send_raw</code> does, and <code>manage.py start_tgbot</code> uses it, so a normal worker has the
+guarantee the documentation always claimed. It changes what a crash does: before, a
+<code>kill -9</code> mid-send lost the message silently — now it is redelivered, so a handler can
+run twice.</p>
+<p>A handler of your own that takes only <code>**kwargs</code> is still acknowledged the moment it
+returns, which is the pre-3.1.0 behavior and is deliberate — see <strong><a href="../Delivery/">Delivery</a></strong>. If
+you want the message held until your send finishes, take <code>on_complete</code>.</p>
+<p><strong>Do not use <code>correlation_id</code> as the key.</strong> A handler's own replies inherit the id of the
+update that caused them, so it is one per <em>conversation turn</em>, not one per message: a
+handler that sends three messages produces three rows under one id, and <code>SET :seen:&lt;id&gt;
+NX</code> would drop two of them. Use something your own domain owns — an order number, a
+notification row's primary key.</p>
+<p>Nothing to configure. If you would rather have the old behavior for a while, there is no
+flag for it: the old behavior lost messages.</p>
+<h2 id="run-migrate_1">Run migrate<a class="headerlink" href="#run-migrate_1" title="Link to this section">&para;</a></h2>
+<p><code>0002_kind_id_index</code> swaps the index the event log's admin page and its pruning read:
+<code>AddIndex</code> for <code>drai_event_kind_id</code> on <code>(kind, -id)</code>, then <code>RemoveIndex</code> for the old
+<code>drai_event_kind_recent</code>. In that order, so the table is never without an index on
+<code>kind</code>. It ships whether or not you turn the log on.</p>
+<p><code>AddIndex</code> issues a plain <code>CREATE INDEX</code> — no <code>IF NOT EXISTS</code>, and no adoption of one
+that is already there — so on PostgreSQL, where a table big enough for the lock to matter
+wants <code>CONCURRENTLY</code>, creating it by hand ahead of <code>migrate</code> makes the migration <strong>fail</strong>
+rather than saving it work. Do the whole swap by hand and then tell Django it is done:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">INDEX</span><span class="w"> </span><span class="n">CONCURRENTLY</span><span class="w"> </span><span class="n">drai_event_kind_id</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">django_redis_aiogram_event</span><span class="w"> </span><span class="p">(</span><span class="n">kind</span><span class="p">,</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="k">DESC</span><span class="p">);</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="k">DROP</span><span class="w"> </span><span class="k">INDEX</span><span class="w"> </span><span class="n">CONCURRENTLY</span><span class="w"> </span><span class="n">drai_event_kind_recent</span><span class="p">;</span>
+</span></code></pre></div>
+<div class="highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>migrate<span class="w"> </span>django_redis_aiogram<span class="w"> </span>0002_kind_id_index<span class="w"> </span>--fake
+</span></code></pre></div>
+<p>Neither statement can run inside a transaction, so run them outside one — <code>psql</code> does
+that by default. Everywhere else, plain <code>migrate</code> is the whole procedure. The index name
+is new rather than reused so that the hand-made one and the migration's own cannot be
+confused for each other.</p>
+<h2 id="change-the-compose-healthcheck">Change the compose healthcheck<a class="headerlink" href="#change-the-compose-healthcheck" title="Link to this section">&para;</a></h2>
+<p>If you copied the healthcheck from <strong><a href="../Deployment/">Deployment</a></strong> in 3.0, replace it:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">      </span><span class="nt">DJANGO_SETTINGS_MODULE</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">core.settings</span><span class="w">   </span><span class="c1"># the probe is its own process</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">    </span><span class="nt">healthcheck</span><span class="p">:</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">      </span><span class="nt">test</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">'CMD'</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">'python'</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">'-m'</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">'django_redis_aiogram.healthcheck'</span><span class="p p-Indicator">]</span>
+</span></code></pre></div>
+<p><code>manage.py tgbot_healthcheck</code> still exists and still works, but it runs <code>django.setup()</code>
+first — every <code>AppConfig.ready()</code> in your project, before it reads a single Redis key. One
+measured project spent 17.9 seconds there against 0.01 seconds of probing, so Docker
+killed the probe at every timeout and the container read <code>unhealthy</code> while the bot was
+fine. The <code>python -m</code> form is 69 ms end to end. <code>DJANGO_SETTINGS_MODULE</code> has to be in
+<code>environment:</code> because a healthcheck is a separate process and <code>manage.py</code> only sets it
+inside its own.</p>
+<h2 id="raise-stop_grace_period-to-30-seconds">Raise <code>stop_grace_period</code> to 30 seconds<a class="headerlink" href="#raise-stop_grace_period-to-30-seconds" title="Link to this section">&para;</a></h2>
+<p>The shutdown arithmetic moved. Joining the consumer thread is bounded by
+<code>REDIS_TIMEOUT + 1</code> — eleven seconds at the defaults, where 3.0 used
+<code>BLPOP_TIMEOUT + 1</code> and gave it six, which was shorter than the worst call the consumer
+makes. Add <code>DRAIN_TIMEOUT</code> (five) and the event log's flush (five) and the total is
+<strong>21 seconds</strong>, against 16 before.</p>
+<p>A grace period shorter than that turns a graceful stop into a kill, which is now the case
+that duplicates messages rather than losing them. <code>30s</code> leaves room; raise
+<code>DRAIN_TIMEOUT</code> if your sends spend long in the rate limiter, and raise the grace period
+with it.</p>
+<h2 id="re-silence-checks-if-you-had-to">Re-silence checks if you had to<a class="headerlink" href="#re-silence-checks-if-you-had-to" title="Link to this section">&para;</a></h2>
+<p><code>W010</code> and <code>W011</code> are gone, replaced by <code>I001</code> and <code>I002</code> with the same meanings. They
+report as <em>information</em> now: an ephemeral hostname and an unrouted log alias are both
+conditions a system check can see but cannot judge from where it stands, and as warnings
+they failed <code>manage.py check --fail-level WARNING</code> in containers that owned no in-flight
+list at all. If either id is in <code>SILENCED_SYSTEM_CHECKS</code>, update it — a silenced id that
+no longer exists is dead but harmless, so nothing will tell you.</p>
+<p><code>E030</code> also refuses <code>REDIS_TIMEOUT</code> below <strong>2</strong> rather than below 1: at 1 the blocking
+pop's deadline equals the socket's, and every idle pop raises instead of returning empty.</p>
+<h1 id="from-2x-to-30">From 2.x to 3.0<a class="headerlink" href="#from-2x-to-30" title="Link to this section">&para;</a></h1>
+<h2 id="the-telegram_bot-package-name-is-gone">The <code>telegram_bot</code> package name is gone<a class="headerlink" href="#the-telegram_bot-package-name-is-gone" title="Link to this section">&para;</a></h2>
+<p>2.0 renamed the package and kept <code>telegram_bot</code> as a deprecated shim; 3.0
+removes it. A project that upgrades without touching <code>INSTALLED_APPS</code> fails at
+startup with <code>ModuleNotFoundError: No module named 'telegram_bot'</code>, which is the
+loudest this could reasonably be.</p>
+<div class="highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">INSTALLED_APPS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">'django_redis_aiogram'</span><span class="p">]</span>
+</span></code></pre></div>
+<div class="highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_redis_aiogram</span><span class="w"> </span><span class="kn">import</span> <span class="n">bot</span><span class="p">,</span> <span class="n">conf</span><span class="p">,</span> <span class="n">redis_conn</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_redis_aiogram.client</span><span class="w"> </span><span class="kn">import</span> <span class="n">TelegramBot</span>
+</span></code></pre></div>
+<h2 id="deploy-the-bot-container-before-the-web-tier">Deploy the bot container before the web tier<a class="headerlink" href="#deploy-the-bot-container-before-the-web-tier" title="Link to this section">&para;</a></h2>
+<p>3.0 nests a queued call under an envelope so it can carry a correlation id. The
+3.0 consumer reads both shapes, so a backlog written by 2.x drains — but a <strong>2.x
+consumer handed a 3.0 payload</strong> calls the Telegram method with <code>__envelope__</code> as
+a keyword, raises, logs it and swallows it. The message is gone, with nothing
+left to redeliver.</p>
+<p>So: upgrade and restart the container running <code>start_tgbot</code> <strong>first</strong>, then the
+web and Celery processes. A brief window where the new consumer reads old
+payloads is fine; the reverse is not.</p>
+<h2 id="run-migrate_2">Run migrate<a class="headerlink" href="#run-migrate_2" title="Link to this section">&para;</a></h2>
+<p>The package ships one table now, and <code>migrate</code> creates it whether or not you
+turn the event log on. Creating it later on a live database is the more
+expensive order, so do it with the upgrade — see <strong><a href="../Event-log/">Event log</a></strong>
+before switching the feature on.</p>
+<h2 id="everything-else-that-moved">Everything else that moved<a class="headerlink" href="#everything-else-that-moved" title="Link to this section">&para;</a></h2>
+<p><code>keyspace</code> delivery is gone: remove <code>'DELIVERY': 'keyspace'</code>, which check <code>E009</code>
+now refuses rather than ignoring. The module-level string constants that
+aliased enum members are gone too — import the member and interpolate <code>.value</code>.</p>
+<p>If you are still on 1.x, do the 2.x section below first — the shim exists only
+in 2.x, so 1.x to 3.0 is one jump with no compatibility layer to lean on.</p>
+<h1 id="from-1x-to-2x">From 1.x to 2.x<a class="headerlink" href="#from-1x-to-2x" title="Link to this section">&para;</a></h1>
+<p>If the Redis queue holds messages written by 1.x at the moment you deploy, set
+<code>'ALLOW_PICKLE': True</code> for the upgrade window — unpickling queue data is code
+execution, so it is refused by default. Remove the setting once the queue has
+drained.</p>
+<h2 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Link to this section">&para;</a></h2>
+<p>Python 3.10–3.14, Django 5.2+, aiogram 3.30+, redis 6.2+. Django 4.2 reached
+end of life, and aiogram 3.30 needs Python 3.10.</p>
+<h2 id="1-rename-the-app-and-the-imports">1. Rename the app and the imports<a class="headerlink" href="#1-rename-the-app-and-the-imports" title="Link to this section">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">INSTALLED_APPS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">'django_redis_aiogram'</span><span class="p">]</span>
+</span></code></pre></div>
+<div class="highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_redis_aiogram</span><span class="w"> </span><span class="kn">import</span> <span class="n">bot</span><span class="p">,</span> <span class="n">conf</span><span class="p">,</span> <span class="n">redis_conn</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_redis_aiogram.client</span><span class="w"> </span><span class="kn">import</span> <span class="n">TelegramBot</span>
+</span></code></pre></div>
+<p><code>TelegramBot</code> moved out of <code>telegram_bot.telegram_bot</code>, and the settings module
+is <code>django_redis_aiogram.settings</code>. The package exports <code>bot</code> and <code>conf</code>, which
+would otherwise shadow submodules of the same name. In 2.x the old name kept
+working through a shim; in 3.0 it does not exist at all.</p>
+<h2 id="2-drop-placeholder-tokens">2. Drop placeholder tokens<a class="headerlink" href="#2-drop-placeholder-tokens" title="Link to this section">&para;</a></h2>
+<p>The package no longer builds a bot or connects to Redis at import time, so a
+project without credentials boots and tests normally. If you added something
+like this to keep <code>manage.py test</code> working, delete it:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># no longer needed</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="n">TG_BOT_KEY</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s1">'TG_BOT_KEY'</span><span class="p">)</span> <span class="ow">or</span> <span class="s1">'0:placeholder'</span>
+</span></code></pre></div>
+<p>Instead, switch the bot off where it does not belong:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="n">TELEGRAM_BOT</span> <span class="o">=</span> <span class="p">{</span><span class="s1">'ENABLED'</span><span class="p">:</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s1">'RUN_BOT'</span><span class="p">)</span> <span class="o">==</span> <span class="s1">'1'</span><span class="p">}</span>
+</span></code></pre></div>
+<p>or per container with <code>DJANGO_REDIS_AIOGRAM_ENABLED</code>. See <strong><a href="../Deployment/">Deployment</a></strong>.</p>
+<h2 id="3-move-parse_mode-onto-the-bot">3. Move parse_mode onto the bot<a class="headerlink" href="#3-move-parse_mode-onto-the-bot" title="Link to this section">&para;</a></h2>
+<p>1.x had no way to reach aiogram's <code>DefaultBotProperties</code>, so projects injected
+<code>parse_mode</code> into every call:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1"># before</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">default_kwargs</span><span class="p">(</span><span class="n">function</span><span class="p">):</span>
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>    <span class="k">return</span> <span class="p">{</span>
+</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>        <span class="s1">'send_message'</span><span class="p">:</span> <span class="p">{</span><span class="s1">'parse_mode'</span><span class="p">:</span> <span class="s1">'HTML'</span><span class="p">},</span>
+</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>        <span class="s1">'send_photo'</span><span class="p">:</span> <span class="p">{</span><span class="s1">'parse_mode'</span><span class="p">:</span> <span class="s1">'Markdown'</span><span class="p">},</span>
+</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a>    <span class="p">}</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">function</span><span class="p">,</span> <span class="p">{})</span>
+</span></code></pre></div>
+<div class="highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># after</span>
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="n">TELEGRAM_BOT</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>    <span class="s1">'DEFAULT_BOT_PROPERTIES'</span><span class="p">:</span> <span class="p">{</span><span class="s1">'parse_mode'</span><span class="p">:</span> <span class="s1">'HTML'</span><span class="p">},</span>
+</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="p">}</span>
+</span></code></pre></div>
+<p><code>DEFAULT_KWARGS</code> stays for what bot properties cannot express, such as a
+default caption.</p>
+<h2 id="4-use-the-public-router">4. Use the public router<a class="headerlink" href="#4-use-the-public-router" title="Link to this section">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="n">dispatcher</span><span class="o">.</span><span class="n">include_router</span><span class="p">(</span><span class="n">bot</span><span class="o">.</span><span class="n">router</span><span class="p">)</span>  <span class="c1"># was bot._router</span>
+</span></code></pre></div>
+<h2 id="5-prefer-botsend">5. Prefer bot.send()<a class="headerlink" href="#5-prefer-botsend" title="Link to this section">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="n">bot</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="n">chat_id</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="n">text</span><span class="p">)</span>
+</span></code></pre></div>
+<p>It queues from your app and calls Telegram directly inside the bot container.
+<code>send_redis</code> and <code>send_raw</code> still work — <code>send_redis</code> is the name at this hop; the 4.0 section
+above lists what it is called now.</p>
+<h2 id="6-drain-the-1x-queue-then-drop-the-flag">6. Drain the 1.x queue, then drop the flag<a class="headerlink" href="#6-drain-the-1x-queue-then-drop-the-flag" title="Link to this section">&para;</a></h2>
+<p>If you needed <code>'ALLOW_PICKLE': True</code> for the upgrade window, the order in which
+you close it again matters — a 1.x producer keeps writing pickled payloads:</p>
+<ol>
+<li>upgrade or stop <strong>every</strong> producer: web, celery, anything calling
+   <code>send_redis</code></li>
+<li>wait for the queue <strong>and</strong> every in-flight list to reach zero:
+   <code>LLEN &lt;REDIS_MESSAGES_KEY&gt;</code> and <code>LLEN</code> on each
+   <code>&lt;REDIS_MESSAGES_KEY&gt;:processing*</code> key — on Redis 6.2+ a message being sent
+   sits in one of those, not in the queue</li>
+<li>only then remove the setting</li>
+</ol>
+<p><code>ALLOW_PICKLE</code> controls reads: <code>True</code> accepts a pickled payload, <code>False</code>
+refuses it. So removing it while an old producer is still running means its
+messages are written and then refused on read. On Redis 6.2+ the consumer
+leaves each refused message in its in-flight list and says so in the log, so
+setting <code>ALLOW_PICKLE</code> back and restarting the worker delivers them; without
+<code>LMOVE</code> they are gone. Either way it is the code-execution door, so close it as
+soon as step 2 holds.</p>
+<h2 id="7-re-silence-checks-if-you-had-to">7. Re-silence checks if you had to<a class="headerlink" href="#7-re-silence-checks-if-you-had-to" title="Link to this section">&para;</a></h2>
+<p>Ids moved from <code>telegram_bot.EXXX</code> to <code>django_redis_aiogram.EXXX</code> — and in 4.0 to
+<code>django_aiogram.EXXX</code>, which is the prefix to silence if you are reading this page on the way
+from 1.x to 4.0 rather than stopping at 2.0.</p>
+<h2 id="behavior-that-changed-by-itself">Behavior that changed by itself<a class="headerlink" href="#behavior-that-changed-by-itself" title="Link to this section">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>1.x</th>
+<th>2.0</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Import without credentials</td>
+<td>breaks the project</td>
+<td>fine</td>
+</tr>
+<tr>
+<td>Delivery</td>
+<td>keyspace expiry events</td>
+<td><code>BLPOP</code>, no server config needed</td>
+</tr>
+<tr>
+<td>Redis database</td>
+<td>hardcoded to 0</td>
+<td>taken from <code>REDIS_URL</code></td>
+</tr>
+<tr>
+<td>Queue format</td>
+<td>pickle</td>
+<td>JSON; pickle refused unless opted in</td>
+</tr>
+<tr>
+<td>Crash mid-send</td>
+<td>message lost</td>
+<td>redelivered on the next start (Redis 6.2+)</td>
+</tr>
+<tr>
+<td>FSM state</td>
+<td>lost on restart</td>
+<td>stored in Redis</td>
+</tr>
+<tr>
+<td>Rate limiting</td>
+<td>retry after refusal</td>
+<td>paced under the published limits</td>
+</tr>
+<tr>
+<td>System checks</td>
+<td>could never fail</td>
+<td>actually validate</td>
+</tr>
+<tr>
+<td>Logging</td>
+<td>root logger</td>
+<td><code>django_redis_aiogram</code>, structured fields</td>
+</tr>
+<tr>
+<td>Retries exhausted</td>
+<td>silent drop</td>
+<td>logged, and raised if configured</td>
+</tr>
+</tbody>
+</table>
+<p>2.x let you keep the old mechanism with <code>'DELIVERY': 'keyspace'</code>. 3.0 removed
+it — see the section above.</p>
+<h2 id="verifying-the-upgrade_1">Verifying the upgrade<a class="headerlink" href="#verifying-the-upgrade_1" title="Link to this section">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>check
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span><span class="nb">test</span>
+</span></code></pre></div>
+<p>Then, in a shell on a non-bot process:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_redis_aiogram</span><span class="w"> </span><span class="kn">import</span> <span class="n">bot</span>  <span class="c1"># the name at this hop; it changes again at 4.0</span>
+</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>
+</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a><span class="n">bot</span><span class="o">.</span><span class="n">enabled</span>  <span class="c1"># False where you disabled it</span>
+</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="n">bot</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="n">YOUR_ID</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="s1">'upgrade check'</span><span class="p">)</span>
+</span></code></pre></div>
+<p>and confirm the bot container logs <code>message sent</code>.</p>
+
+
+
+
+
+
+
+  
+    
+  
+  
+
+
+  <aside class="md-source-file">
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="Last update">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 1, 2026 01:02:33 UTC">September 1, 2026</span>
+  </span>
+
+    
+    
+    
+    
+  </aside>
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../Troubleshooting/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Troubleshooting">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Troubleshooting
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../AI-assistants/" class="md-footer__link md-footer__link--next" aria-label="Next: AI assistants">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                AI assistants
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      MIT
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/CorneiZeR/django-aiogram" target="_blank" rel="noopener" title="The repository" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+    
+    
+    
+    
+    <a href="https://pypi.org/project/django-aiogram/" target="_blank" rel="noopener" title="The package on PyPI" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.8 200.5c-7.7-30.9-22.3-54.2-53.4-54.2h-40.1v47.4c0 36.8-31.2 67.8-66.8 67.8H172.7c-29.2 0-53.4 25-53.4 54.3v101.8c0 29 25.2 46 53.4 54.3 33.8 9.9 66.3 11.7 106.8 0 26.9-7.8 53.4-23.5 53.4-54.3v-40.7H226.2v-13.6h160.2c31.1 0 42.6-21.7 53.4-54.2 11.2-33.5 10.7-65.7 0-108.6M286.2 444.7a20.4 20.4 0 1 1 0-40.7 20.4 20.4 0 1 1 0 40.7M167.8 248.1h106.8c29.7 0 53.4-24.5 53.4-54.3V91.9c0-29-24.4-50.7-53.4-55.6-35.8-5.9-74.7-5.6-106.8.1-45.2 8-53.4 24.7-53.4 55.6v40.7h106.9v13.6h-147c-31.1 0-58.3 18.7-66.8 54.2-9.8 40.7-10.2 66.1 0 108.6 7.6 31.6 25.7 54.2 56.8 54.2H101v-48.8c0-35.3 30.5-66.4 66.8-66.4m-6.6-183.4a20.4 20.4 0 1 1 0 40.8 20.4 20.4 0 1 1 0-40.8"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tracking", "navigation.sections", "navigation.top", "navigation.footer", "toc.follow", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate", "content.action.edit", "content.tabs.link"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"alias": true, "provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
