@@ -4,6 +4,27 @@ What each major release changed, newest first — so an upgrade is read from the
 the lowest section that applies to the version you are on and work **up** the page, one release
 at a time: each covers a single hop and assumes the ones below it are done.
 
+# From 4.0 to 4.1
+
+Nothing is required. Every setting 4.0 had keeps its meaning and its default, no migration
+runs, and the wire format is unchanged — so the bot container and the web tier may be
+deployed in either order.
+
+## Decide about `TRANSACTIONAL`
+
+New, and `False`, so an upgrade changes nothing until you say otherwise. It is worth a
+minute anyway: with it off, a `bot.send()` inside `transaction.atomic()` reaches the broker
+before the transaction commits, and a block that rolls back afterwards has already
+announced a row that no longer exists.
+
+```python
+TELEGRAM_BOT = {'TRANSACTIONAL': True}
+```
+
+Read **[Settings](Settings.md#bot-behavior)** before turning it on: the `outbound.queued`
+row waits for the commit too, so a deployment measuring queue latency sees the transaction's
+length in it, and a publish that fails after the commit can no longer be rolled back.
+
 # From 3.1 to 4.0
 
 ## Install the new distribution

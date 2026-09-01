@@ -253,6 +253,18 @@ duplicates. So the question is which duplicates *this* transport produces:
 The Kafka row is the one to read before assuming a bug. Nothing there is per-message, so a
 handler that is not idempotent on its own business key will send innocent messages twice.
 
+## A message went out for a transaction that rolled back
+
+`bot.send()` writes to the broker where it is called, so an `atomic()` block that raises
+after a send leaves the message queued and its row gone. Set `TRANSACTIONAL` to hold the
+write until the commit — see
+**[Sending messages](Sending-messages.md#inside-a-transaction)**.
+
+With it already on and the message still going out, check which connection the block is on:
+the setting watches `default`, and a transaction opened on another alias is not one it can
+see. An alias configured `AUTOCOMMIT: False` is the other case, and it says so once in the
+log — *publishing without waiting for a commit*.
+
 ## The bot ignores ENABLED
 
 `ENABLED` is parsed, so `'false'` disables. If a value cannot be parsed you get

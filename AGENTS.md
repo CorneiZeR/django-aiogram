@@ -36,6 +36,7 @@ src/django_aiogram/
         outbound.py     what names one send in flight, and what settles it
         looping.py      who may drive the loop, and for how long
         queueing.py     everything a queue write does except the write
+        committing.py   whether that write waits for the caller's transaction
         from_settings.py  the aiogram objects the settings describe, and their refusals
         routing.py      the handler decorators, which read the router and nothing else
         throttling.py   GCRA reservations, one budget per name

@@ -76,6 +76,7 @@ def test_integer_below_minimum_is_caught():
         'EVENT_LOG': 'on',
         'EVENT_LOG_SYNC': 'off',
         'REQUIRE_CRASH_SAFE': 0,
+        'TRANSACTIONAL': 'yes',
         'TOKEN': '42:x',
         'REDIS_URL': 'r://x',
     }
@@ -91,9 +92,20 @@ def test_a_configuration_that_boots_and_sends_does_not_fail_the_checks():
     the case they were written for.
     """
     reported = {str(message.id) for message in check_settings()}
-    boolean_ids = {f'django_aiogram.{code}' for code in ('E001', 'E002', 'E017', 'E031', 'E042', 'E046')}
+    boolean_ids = {f'django_aiogram.{code}' for code in ('E001', 'E002', 'E017', 'E031', 'E042', 'E046', 'E049')}
 
     assert reported & boolean_ids == set(), f'a working configuration was refused: {sorted(reported & boolean_ids)}'
+
+
+@override_settings(TELEGRAM_BOT={'TRANSACTIONAL': 'maybe', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
+def test_a_transactional_setting_nothing_can_read_is_reported():
+    """E049 is not in `EXPECTED_IDS`, so it is asserted here the way E047 and E048 are.
+
+    `TRANSACTIONAL` is read on the send path rather than while the app loads, so an
+    unreadable value raises out of the first send in a request instead of out of
+    `apps.ready()` — which is exactly the case a check exists to move to the boot.
+    """
+    assert 'django_aiogram.E049' in ids(errors(check_settings()))
 
 
 @override_settings(TELEGRAM_BOT={'ENABLED': 'maybe', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})

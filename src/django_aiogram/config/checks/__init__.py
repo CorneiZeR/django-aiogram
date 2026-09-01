@@ -86,6 +86,7 @@ CHECKS: tuple[Check, ...] = (
     Check('E002', 'AUTODISCOVER', _a_readable_boolean),
     Check('E003', 'RAISE_EXCEPTION', _a_readable_boolean),
     Check('E017', 'ALLOW_PICKLE', _a_readable_boolean),
+    Check('E049', 'TRANSACTIONAL', _a_readable_boolean),
     Check('E004', 'TOKEN', _a_string),
     Check('E005', 'REDIS_URL', _a_string),
     Check('E006', 'MODULE_NAME', _a_string),

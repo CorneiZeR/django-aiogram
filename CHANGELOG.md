@@ -1,5 +1,39 @@
 # Changelog
 
+## 4.1.0 - unreleased
+
+### Added
+
+- **A send inside `transaction.atomic()` can now wait for the commit.** `bot.send()` writes
+  to the broker as it is called, and that write was never part of the caller's transaction:
+  a block that created a row, announced it in Telegram and then raised left the message sent
+  and the row gone. The event log's writer already reasons about a caller's open transaction
+  — it will not recycle a connection inside one, because on PostgreSQL that marks the whole
+  transaction for rollback. The producer had no equivalent.
+
+  `TRANSACTIONAL` — `False`, so an upgrade changes nothing — holds the queue write until the
+  `default` connection commits, and a rolled-back block queues nothing at all. The
+  synchronous producers, which are the ones a view and a Celery task reach for: a coroutine
+  holds its own connection, measured, so `await bot.asend()` cannot see a surrounding
+  transaction and there are no asynchronous transactions for it to be inside of.
+
+  What moves with it is written down rather than discovered. The `outbound.queued` row waits
+  for the commit too and carries the time of the *call*, so a deferred message reads as that
+  much queue latency. Serialization does not wait — a payload the project cannot serialize
+  still raises where the call was written, and the arguments are snapshotted there, so a
+  `kwargs` dict mutated after `send()` returned cannot change what is published. A publish
+  that fails after the commit has nothing left to roll back: the drop is recorded and
+  `RAISE_EXCEPTION` decides whether the exception also leaves the `atomic()` block, where it
+  would take every commit hook queued behind it.
+
+  Two cases it does not cover, both said out loud instead of assumed. An alias configured
+  `AUTOCOMMIT: False` holds a transaction open with `in_atomic_block` still False, and
+  Django's `on_commit` refuses a manually managed transaction rather than deferring it — so
+  the write happens immediately and one line in the log says so per process. And inside the
+  bot container a send reaches Telegram directly, where there is no queue write to hold back.
+
+  `E049` reports a `TRANSACTIONAL` that cannot be read as a boolean.
+
 ## 4.0.0.post1 - 2026-09-01
 
 **Documentation, and one fix in the seam that publishes it.** What this release is *for* is

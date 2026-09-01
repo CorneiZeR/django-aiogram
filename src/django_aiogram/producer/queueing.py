@@ -7,6 +7,10 @@ broker records a drop rather than letting silence imply it was queued.
 
 So each transport is the two lines that write. The consumer knows one payload shape and the
 event log has one definition of ``queued``, because neither path owns them.
+
+In two halves as well as in one call. :func:`serialise` always runs where the caller stands;
+:func:`publishing` may be held back to the caller's commit, which is what ``TRANSACTIONAL``
+does with it. :func:`queueing` is the two together, for every producer that does not wait.
 """
 
 import contextlib
@@ -43,56 +47,56 @@ class Queueing:
     queued_at: float
 
 
-@contextlib.contextmanager
-def queueing(function: str, messages: list[tuple[uuid.UUID, dict[str, Any]]]) -> 'Iterator[Queueing]':
-    """Everything a queue write does, except the write.
+def _dropped(
+    function: str,
+    messages: list[tuple[uuid.UUID, dict[str, Any]]],
+    stage: str,
+    error: Exception,
+) -> None:
+    """Record every message a failure lost, and where it lost them.
 
-    The one step that cannot be shared between a synchronous producer and an
-    asynchronous one is the ``await`` — the language will not allow it. Everything
-    around it can be, and is: the serialization, the key, and both event rows,
-    including the rule that a message lost on the way to the broker records a drop
-    rather than letting silence imply it was queued. Resolving the serializer and
-    the key sits outside that guard on purpose — a misconfigured ``SERIALIZER``
-    fails identically for every send ever made, and the exception is where that
-    belongs, not a drop row per message for as long as it stays misconfigured.
+    The two ways a message is lost here are **not** the same, and ``stage`` is what tells
+    them apart. ``serialising`` — spelled as the value is written, since a consumer filters
+    on it — means the payload never left this process, so re-sending it is safe.
+    ``queueing`` means the publish raised, and a publish that raised may still have been
+    applied: the reply is what went missing, and a variadic ``RPUSH`` or a confirmed AMQP
+    publish can both fail that way, so re-sending may duplicate. A broadcast makes that
+    distinction the only one available, because the ids go with the exception.
+    """
+    for identifier, kwargs in messages:
+        recorder.record(
+            Event(
+                kind=EventKind.OUTBOUND_DROPPED.value,
+                correlation_id=identifier,
+                function=function,
+                chat_id=as_identifier(kwargs.get('chat_id')),
+                error_code=type(error).__name__,
+                error=str(error),
+                detail={'stage': stage},
+            )
+        )
 
-    So each transport is the two lines that write, and nothing else. The consumer
-    knows one payload shape and the event log has one definition of ``queued``;
-    neither can drift between the two paths, because neither path owns them.
 
-    The two ways a message is lost here are **not** the same, and the ``stage`` on
-    the drop row is what tells them apart. ``serialising`` — spelled as the value is
-    written, since a consumer filters on it — means the payload never
-    left this process, so re-sending it is safe. ``queueing`` means the publish raised, and a
-    publish that raised may still have been applied — the reply is what went missing, and a
-    variadic ``RPUSH`` or a confirmed AMQP publish can both fail that way — so re-sending may
-    duplicate. A broadcast makes
-    that distinction the only one available, because the ids go with the exception.
+def serialise(function: str, messages: list[tuple[uuid.UUID, dict[str, Any]]]) -> Queueing:
+    """Turn the calls into payloads, and stamp the moment they were made.
+
+    Guarded, not left to the caller: a payload that cannot be serialized loses its message
+    exactly as a refused write does, and for a chunk the ids go with the exception — so
+    those drop rows are the only record of which messages were lost. Resolving the
+    serializer sits outside that guard on purpose: a misconfigured ``SERIALIZER`` fails
+    identically for every send ever made, and the exception is where that belongs, not a
+    drop row per message for as long as it stays misconfigured.
+
+    Always on the calling thread, including when ``TRANSACTIONAL`` holds the publish back
+    to the commit. Two reasons, and the second is the one that matters: a payload the
+    project cannot serialize raises where the project wrote the call rather than out of a
+    commit hook, and ``kwargs`` is the caller's own dict — snapshotting it here is what
+    keeps a send from picking up a mutation made after it returned.
     """
     queued_at = time.time()
     serializer = get_serializer()
-
-    def dropped(stage: str, error: Exception) -> None:
-        """Record every message this failure lost, and where it lost them."""
-        for identifier, kwargs in messages:
-            recorder.record(
-                Event(
-                    kind=EventKind.OUTBOUND_DROPPED.value,
-                    correlation_id=identifier,
-                    function=function,
-                    chat_id=as_identifier(kwargs.get('chat_id')),
-                    error_code=type(error).__name__,
-                    error=str(error),
-                    detail={'stage': stage},
-                )
-            )
-
     try:
-        # guarded, not left to the caller: a payload that cannot be serialized
-        # loses its message exactly as a refused write does, and for a chunk the
-        # ids go with the exception — so these rows are the only record of which
-        # messages were lost
-        write = Queueing(
+        return Queueing(
             payloads=[
                 serializer.dumps(pack(function, kwargs, identifier, queued_at)) for identifier, kwargs in messages
             ],
@@ -100,12 +104,26 @@ def queueing(function: str, messages: list[tuple[uuid.UUID, dict[str, Any]]]) ->
             queued_at=queued_at,
         )
     except Exception as error:
-        dropped('serialising', error)
+        _dropped(function, messages, 'serialising', error)
         raise
+
+
+@contextlib.contextmanager
+def publishing(function: str, write: Queueing) -> 'Iterator[Queueing]':
+    """Wrap the one line that hits the transport, and record what it did.
+
+    The step that cannot be shared between a synchronous producer and an asynchronous one
+    is the ``await`` — the language will not allow it. Everything around it is here: the
+    drop row for a write that raised, and the ``queued`` row for one that did not.
+
+    So each transport is the two lines that write, and nothing else. The consumer knows one
+    payload shape and the event log has one definition of ``queued``; neither can drift
+    between the two paths, because neither path owns them.
+    """
     try:
         yield write
     except Exception as error:
-        dropped('queueing', error)
+        _dropped(function, write.messages, 'queueing', error)
         raise
     if not recorder.active:
         # nothing keeps the table and nothing listens, so there is no event to make
@@ -114,17 +132,30 @@ def queueing(function: str, messages: list[tuple[uuid.UUID, dict[str, Any]]]) ->
     # whether to summarize the arguments, and describing them is the expensive
     # half. A metrics receiver counts sends; it does not read message bodies
     described = recorder.wants_payload
-    for identifier, kwargs in messages:
+    for identifier, kwargs in write.messages:
         recorder.record(
             Event(
                 kind=EventKind.OUTBOUND_QUEUED.value,
                 correlation_id=identifier,
-                created_at=queued_at,
+                created_at=write.queued_at,
                 function=function,
                 chat_id=as_identifier(kwargs.get('chat_id')),
                 detail=describe(kwargs) if described else None,
             )
         )
+
+
+@contextlib.contextmanager
+def queueing(function: str, messages: list[tuple[uuid.UUID, dict[str, Any]]]) -> 'Iterator[Queueing]':
+    """Everything a queue write does, except the write.
+
+    The two halves in one call, for the producer that publishes where it stands. A producer
+    that hands the publish to a commit hook holds them apart instead — see
+    :func:`~django_aiogram.producer.committing.defer` — because only the second half may
+    wait.
+    """
+    with publishing(function, serialise(function, messages)) as write:
+        yield write
 
 
 def chunks(

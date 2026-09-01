@@ -68,6 +68,12 @@ identifier = bot.send(chat_id=chat_id, text='hello')
 Receipt.objects.create(order=order, telegram_correlation_id=identifier)
 ```
 
+With `TRANSACTIONAL` on, a send made inside `transaction.atomic()` returns its id
+immediately and reaches the broker when the block commits — see
+**[Sending messages](Sending-messages.md#inside-a-transaction)**. The awaiting twins below
+never wait for a commit: a coroutine holds its own database connection, so there is no
+transaction of the caller's for them to see.
+
 Before 3.0 they returned `None`, so gaining a return value broke no call site. The 4.0
 renames did — see **[Upgrading](Upgrading.md)** for each old name against what to call instead.
 

@@ -11,7 +11,7 @@ further into mixins — it is a property of state that ``send``, ``_schedule``, 
 and ``close`` share, and spreading that state across files would leave no file answerable
 for it.
 
-Five modules carry the parts that are *not* about that state, and each says what belongs
+Six modules carry the parts that are *not* about that state, and each says what belongs
 in it:
 
 * :mod:`~django_aiogram.producer.outbound` — what names one send in flight, and what says
@@ -19,6 +19,8 @@ in it:
 * :mod:`~django_aiogram.producer.looping` — who may drive the loop, and for how long.
 * :mod:`~django_aiogram.producer.queueing` — everything a queue write does except the
   write, shared by the synchronous producer and the awaiting one.
+* :mod:`~django_aiogram.producer.committing` — whether that write waits for the caller's
+  transaction to commit.
 * :mod:`~django_aiogram.producer.from_settings` — the aiogram objects a project's settings
   describe, and the refusals they earn.
 * :mod:`~django_aiogram.producer.routing` — the handler decorators, which read the router
@@ -50,10 +52,11 @@ from django_aiogram.eventlog.instrumentation import install_instrumentation
 from django_aiogram.eventlog.recorder import recorder
 from django_aiogram.eventlog.records import Event, as_identifier
 from django_aiogram.exceptions import LoopThreadNotStartedError, ShuttingDownError
+from django_aiogram.producer.committing import defer
 from django_aiogram.producer.from_settings import build_default_properties, build_storage
 from django_aiogram.producer.looping import LOOP_THREAD, RUNNER_TIMEOUT, drain_budget, loop_lock, mention_asend
 from django_aiogram.producer.outbound import TASK_PREFIX, Outbound, completion, resolve_correlation_id, settle
-from django_aiogram.producer.queueing import chunks, queueing
+from django_aiogram.producer.queueing import Queueing, chunks, publishing, serialise
 from django_aiogram.producer.routing import RouterShortcuts
 from django_aiogram.producer.throttling import RateLimiter, get_rate_limiter
 from django_aiogram.redis import aclose_redis
@@ -1013,6 +1016,39 @@ class TelegramBot(RouterShortcuts):
             return identifier, False
         return identifier, True
 
+    def _deferred(self, function: str, write: Queueing, publish: Callable[[list[bytes]], None]) -> bool:
+        """Hand this write to the caller's transaction, and say whether that happened.
+
+        ``False`` means the caller publishes where it stands, which is what every send did
+        before ``TRANSACTIONAL`` existed and what all of them still do with it off.
+
+        The synchronous ``publish`` is what a hook would run: a commit hook is ordinary
+        synchronous code on the thread that committed, with no loop to hand an ``await`` to.
+        In practice the awaiting producers never reach one — a coroutine holds its own
+        database connection, so there is no transaction of the caller's for them to see.
+
+        A publish that fails here fails **after** the commit, so there is nothing left to
+        roll back — the row the message was about is already there. ``publishing`` has
+        recorded the drop by then, and ``RAISE_EXCEPTION`` decides whether the exception
+        also leaves the ``atomic()`` block, where it would take every commit hook queued
+        behind this one with it.
+        """
+
+        def publish_after_commit() -> None:
+            """Write to the broker now that the caller's transaction has landed."""
+            try:
+                with publishing(function, write) as ready:
+                    publish(ready.payloads)
+            except Exception:
+                if self._raises_send_failures:
+                    raise
+                logger.exception(
+                    'a deferred publish failed after its transaction committed',
+                    extra={'tg_function': function, 'tg_messages': len(write.messages)},
+                )
+
+        return defer(publish_after_commit)
+
     def enqueue(
         self,
         function: str = 'send_message',
@@ -1046,8 +1082,10 @@ class TelegramBot(RouterShortcuts):
         # the first caller who could have acted on the advice hearing nothing. Same reasoning as
         # `check_function` in `send`, one failure mode further along
         mention_asend('aenqueue')
-        with queueing(function, [(identifier, kwargs)]) as write:
-            broker.publish(write.payloads)
+        write = serialise(function, [(identifier, kwargs)])
+        if not self._deferred(function, write, broker.publish):
+            with publishing(function, write) as ready:
+                broker.publish(ready.payloads)
         return identifier
 
     async def aenqueue(
@@ -1071,8 +1109,10 @@ class TelegramBot(RouterShortcuts):
             return identifier
 
         broker = get_broker()
-        with queueing(function, [(identifier, kwargs)]) as write:
-            await broker.apublish(write.payloads)
+        write = serialise(function, [(identifier, kwargs)])
+        if not self._deferred(function, write, broker.publish):
+            with publishing(function, write) as ready:
+                await broker.apublish(ready.payloads)
         return identifier
 
     def _accept_bulk(self, function: str) -> bool:
@@ -1127,8 +1167,12 @@ class TelegramBot(RouterShortcuts):
         identifiers: list[uuid.UUID] = []
         for chunk in chunks(chat_ids, chunk_size, kwargs):
             if broker is not None:
-                with queueing(function, chunk) as write:
-                    broker.publish(write.payloads)
+                # one deferral per chunk, which is one per write rather than one per
+                # message: a chunk is what a publish covers and what a drop row covers
+                write = serialise(function, chunk)
+                if not self._deferred(function, write, broker.publish):
+                    with publishing(function, write) as ready:
+                        broker.publish(ready.payloads)
             identifiers.extend(identifier for identifier, _ in chunk)
         return identifiers
 
@@ -1154,8 +1198,10 @@ class TelegramBot(RouterShortcuts):
         identifiers: list[uuid.UUID] = []
         for chunk in chunks(chat_ids, chunk_size, kwargs):
             if broker is not None:
-                with queueing(function, chunk) as write:
-                    await broker.apublish(write.payloads)
+                write = serialise(function, chunk)
+                if not self._deferred(function, write, broker.publish):
+                    with publishing(function, write) as ready:
+                        await broker.apublish(ready.payloads)
             identifiers.extend(identifier for identifier, _ in chunk)
         return identifiers
 
