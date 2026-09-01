@@ -23,10 +23,29 @@ promised a fix nobody made.
   class name*, which is what decoding needs to find the class again. Each falsified by making
   the code say otherwise.
 
-  Four others were checked and left alone because they are true: `send_robust` really does
-  abandon its own loop on a receiver whose `__qualname__` raises — measured, the later
-  receiver does not run — updates really are not queued in either mode, naming a worker is
-  answerable on the Redis transports only, and only the Redis list needs a worker identity.
+  Three others were checked and left alone because they are true: updates really are not
+  queued in either mode, naming a worker is answerable on the Redis transports only, and only
+  the Redis list needs a worker identity.
+
+- **A broken metrics receiver no longer costs the receivers behind it.** The fourth claim
+  checked was that `send_robust` abandons its own loop on a receiver Django cannot name — and
+  it was true, measured: a collector written as a callable instance raises, Django's failure
+  log reaches for `receiver.__qualname__` *inside* its own `except`, that lookup raises too,
+  and every receiver connected afterwards silently stops seeing batches. It had been written
+  down as Django's limitation and left there.
+
+  It is fixed at the other end. `events_recorded.connect` names a receiver that has none,
+  from its class: one attribute, set on an object the project has just handed over. Nothing is
+  wrapped, so a weak connection still dies with its referent and `disconnect` still finds the
+  receiver by identity — and the dispatch survives a receiver that raises whatever shape it
+  was written in. Measured both ways: unnamed, the later receiver does not run; named, both
+  run and the broken one's error comes back as its result, which is what `send_robust`
+  promises.
+
+  Where the name cannot be set — a class with `__slots__`, a read-only property — connecting
+  logs a warning naming the class, because that receiver can still end a dispatch. The
+  previous advice, *do not write a receiver as a callable class*, is withdrawn: that is an
+  ordinary shape for a collector and it works now.
 
 - **The documentation is a site now, not a wiki.** The same pages, in the same files, built by
   Material for MkDocs and published to GitHub Pages: navigation that groups the twenty-one

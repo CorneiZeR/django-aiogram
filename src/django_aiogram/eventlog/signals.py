@@ -10,12 +10,77 @@ the thing every Django developer already knows how to do. *Most*: see
 Django's own containment misses, which is why this package does not rely on it
 alone.
 
-This module imports ``django.dispatch`` and nothing else — not aiogram, not the
-ORM, not the rest of this package. A metrics module can import it at settings
-time without dragging anything in.
+This module imports ``django.dispatch`` and the standard library's ``logging`` — not
+aiogram, not the ORM, not the rest of this package. A metrics module can import it at
+settings time without dragging anything in.
 """
 
+import logging
+from collections.abc import Callable
+
 from django.dispatch import Signal
+
+logger = logging.getLogger('django_aiogram')
+
+
+def _nameable(receiver: object) -> None:
+    """Give a receiver a ``__qualname__`` if it has none, before Django needs one.
+
+    ``Signal.send_robust`` contains what a receiver raises — but it then logs the failure,
+    and the log line names the receiver: ``receiver.__qualname__``, evaluated *inside* the
+    ``except``. A callable instance has none unless its class was written to provide one, and
+    the attribute lookup then raises out of ``send_robust`` itself, abandoning its own loop.
+    Every receiver connected after the offending one silently stops seeing batches.
+
+    Measured on Django 6.1, with a collector whose ``__getattr__`` raises: unnamed, the
+    dispatch ends in ``AttributeError`` and a later receiver does not run; named, both
+    receivers run and the broken one's error comes back as its result, which is what
+    ``send_robust`` promises.
+
+    So the name is set here, at connect time, where it is one attribute on an object the
+    project just handed us — rather than at dispatch time, where fixing it would mean
+    calling receivers ourselves through a private API. Nothing is wrapped: the object Django
+    stores is the object the caller passed, so a weak connection still dies with its
+    referent and ``disconnect`` still finds it by identity.
+    """
+    try:
+        named = getattr(receiver, '__qualname__', None) is not None
+    except Exception:  # noqa: BLE001 - a lookup that raises is exactly the case being fixed
+        named = False
+    if named:
+        return
+
+    kind = type(receiver)
+    try:
+        receiver.__qualname__ = f'{kind.__module__}.{kind.__qualname__}'  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - __slots__, a read-only property, a C extension
+        logger.warning(
+            'a receiver of events_recorded cannot be named, so a failure in it would stop '
+            'the dispatch before later receivers ran; give the class a __qualname__',
+            extra={'tg_receiver': f'{kind.__module__}.{kind.__qualname__}'},
+        )
+
+
+class _RecordedEvents(Signal):
+    """The signal, with one thing added: every receiver can be named in a log line.
+
+    ``connect`` is public API and this override changes nothing else about it — the
+    signature, the weak reference, the ``dispatch_uid`` and the return value are Django's.
+    """
+
+    def connect(
+        self,
+        receiver: Callable[..., object],
+        sender: object = None,
+        # Django's signature, positional and boolean; an override that changed it would be a
+        # different method. `typing.override` would say so to the linter and needs 3.12
+        weak: bool = True,  # noqa: FBT001, FBT002
+        dispatch_uid: object = None,
+    ) -> None:
+        """Name the receiver, then connect it exactly as Django would."""
+        _nameable(receiver)
+        super().connect(receiver, sender=sender, weak=weak, dispatch_uid=dispatch_uid)
+
 
 #: Fired once per batch of recorded events, on whichever thread flushed that batch —
 #: normally the event writer's own, and three other threads can be it.
@@ -73,12 +138,14 @@ from django.dispatch import Signal
 #: fail. It is a testing setting, and receivers running inside the send path is one
 #: more reason to keep it one.
 #:
-#: A dispatch that fails can leave later receivers without the batch: ``send_robust``
-#: stops its own loop when Django's failure logging raises, which it does for a
-#: callable instance. This package catches that and logs
-#: ``publishing recorded events failed``, but the receivers after the offending one
-#: were never called.
+#: **A receiver that raises no longer costs the ones after it.** ``send_robust`` logs each
+#: failure by naming the receiver, and that name is looked up inside its own ``except`` — so
+#: a callable instance without a ``__qualname__`` used to end the dispatch there, and every
+#: receiver connected later silently stopped seeing batches. ``connect`` names such a
+#: receiver now, from its class, which is the whole fix. Where the name cannot be set — a
+#: class with ``__slots__``, a read-only property — connecting logs a warning saying so,
+#: because that receiver can still take the dispatch down with it.
 #:
 #: The write happens before either, and only when ``EVENT_LOG`` is on: with the log
 #: off nothing is written at all, and a receiver is the only thing the batch reaches.
-events_recorded: Signal = Signal()
+events_recorded: Signal = _RecordedEvents()

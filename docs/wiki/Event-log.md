@@ -234,19 +234,22 @@ A receiver that raises is logged as `an events_recorded receiver raised` and cos
 neither the other receivers their batch nor the database its rows. `send_robust` is
 most of that: Django hands the exception back instead of letting it end the writer.
 
-Not all of it, though, and the gap is worth knowing if you write a receiver as a
-class. Django's own failure logging reads `receiver.__qualname__`, which a *callable
-instance* does not have — so for that shape `send_robust` raises rather than
-containing anything, measured on Django 6.1. This package catches that too and logs
-`publishing recorded events failed`; without it the exception would be counted as a
-failed database write, which is the one story in the log that would send you to the
-wrong place entirely.
+Not all of it. Django's failure logging reads `receiver.__qualname__`, which a *callable
+instance* does not have — so for that shape `send_robust` raises rather than containing
+anything, measured on Django 6.1. Two things answer that: connecting a receiver gives it a
+name, so the dispatch does not break in the first place, and this package catches the
+exception anyway. Without the catch it would be counted as a failed database write, which is
+the one story in the log that would send you to the wrong place entirely.
 
-One consequence survives the catch: `send_robust` stops its own receiver loop when it
-raises, so **receivers after the offending one never see that batch**. The rows are
-unaffected — they were written first — and the next batch starts the loop again. If
-that matters to you, do not write a receiver as a callable class, or keep the risky
-one last.
+That used to have a consequence the catch could not reach: `send_robust` names the failing
+receiver in its own log line, looking the name up *inside* its `except`, and a callable
+instance has none — so the lookup raised out of the dispatch and **receivers after the
+offending one never saw that batch**. Connecting a receiver names it now, from its class, and
+the loop survives a receiver that raises whatever shape it was written in.
+
+Where the name cannot be set — a class with `__slots__`, a read-only property — connecting
+logs a warning saying so, because that receiver can still end a dispatch. Everything else is
+unchanged: the rows were written first, and a receiver that raises is still contained.
 
 Two honest notes about `prometheus_client` in particular. Its `labels()` and
 `inc()` both take locks, and in multiprocess mode an increment is an mmap write —

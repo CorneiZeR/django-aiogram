@@ -60,15 +60,14 @@ def publish(sender: object, batch: list['Event']) -> None:
     The upshot is a function that **cannot raise**, which is the property the rest of the
     writer needs from it rather than a defensive habit.
 
-    One limit worth stating, because it is Django's and not ours: when ``send_robust``
-    raises on that unnamed receiver it abandons **its own loop**, so receivers connected
-    after the offending one do not run for that batch at all. Containing it here keeps
-    the write and every earlier receiver whole; it cannot reach past Django into a
-    dispatch that already stopped. Calling receivers ourselves would need
-    ``Signal._live_receivers``, a private API, which is a worse trade than one documented
-    sentence. A collector written as a callable instance can close the gap on its side by
-    defining ``__qualname__``; one written as a function or a bound method has it already,
-    and is the shape every recipe uses.
+    That used to cost the receivers behind it as well: ``send_robust`` abandons **its own
+    loop** when its failure logging raises, so everything connected after the offending
+    receiver missed the batch, and containing the exception here could not reach past a
+    dispatch that had already stopped. Fixed at the other end -- ``events_recorded.connect``
+    names a receiver that has no name, from its class -- so the loop now survives a callable
+    instance that raises. This ``try`` stays: it is what keeps the failure out of the write's
+    accounting, and a receiver whose name cannot be set at all (``__slots__``) can still end
+    a dispatch, loudly, having said so when it connected.
 
     A tuple rather than the list itself: receivers run one after another with the same
     argument, so one of them sorting or clearing a list would decide what the next sees.
