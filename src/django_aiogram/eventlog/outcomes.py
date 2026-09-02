@@ -183,13 +183,26 @@ def _cannot_come_back(row: 'TelegramEvent', *, queued: bool) -> bool:
     * **``NotScheduled``** — refused or cancelled by a shutdown. Whether it comes back
       depends on where the send came from, and the feed says which: a message that came off
       the queue was refused *without* being acknowledged, so it is still in the in-flight
-      list for the next start to reclaim, and one row proves it was queued. A direct
-      ``send_raw`` was never on a queue, so nothing will reclaim it and this row is the only
-      one it will ever have.
+      list for the next start to reclaim, and one row proves it was queued. A send that took
+      the *direct* route — ``send_raw`` anywhere, or ``send`` inside the bot container — was
+      never on a queue, so nothing will reclaim it and this row is the only one it will ever
+      have.
 
     That last rule is why ``outbound.queued`` is in :data:`REQUIRED_KINDS`: without the row,
     ``queued`` reads False for a message that was queued, and a send the next start will
     deliver is reported as one that never will.
+
+    **``queued`` is about the id, not about one message under it, and the feed cannot narrow
+    it.** Where an id names several messages — a handler's replies inherit the update's —
+    one of them being queued makes every ``NotScheduled`` drop under that id read as
+    reclaimable, including a direct send's, which nothing will reclaim. There is no row that
+    would settle it: an id is deliberately not one per message, so the rows carry no finer
+    identity to match a drop to its own queueing.
+
+    So the ambiguity is resolved in the direction that cannot duplicate a message. Reading
+    ``pending`` for a send that is really finished costs a caller a wait and then a decision
+    of its own; reading ``failed`` for one the next start will deliver costs the chat two
+    copies, because ``failed`` is what a caller re-sends on.
     """
     detail = row.detail or {}
     if 'max_retries' in detail:

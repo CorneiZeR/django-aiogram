@@ -160,8 +160,10 @@ if answer.state == 'sent':
 ```
 
 It needs `EVENT_LOG` on and an `EVENT_LOG_KINDS` that is empty or keeps the four kinds an
-outcome is decided from; either one missing raises `OutcomesUnavailableError` at the call,
-naming what to add. A state of `pending` or `unknown` means ask again rather than never —
+outcome is decided from, **in the bot container as well as here** — the rows are written by
+whichever process sent the message, and the refusal can only speak for the process that
+asks. A `log.dropped` row is the other reason a delivered message has none. A state of
+`pending` or `unknown` means ask again rather than never —
 **[Event log](Event-log.md#what-became-of-one-message)** has the four states and what
 `unknown` does not tell you. There is no waiting built in on purpose: blocking a request on
 the bot container is what the queue exists to avoid.

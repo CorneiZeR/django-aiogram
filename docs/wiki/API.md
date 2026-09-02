@@ -319,6 +319,11 @@ keeps the four kinds an outcome is decided from. Either one missing raises
 `OutcomesUnavailableError` at the call, naming what to add, rather than answering `unknown`
 for ever.
 
+**That guard is about the reading process only.** The rows are written by whichever process
+*sent* the message, and it reads its own settings — so a bot container with the log off, or
+with a narrower `EVENT_LOG_KINDS`, leaves the call answering `unknown` with nothing to
+refuse. Both processes have to be configured to record the deciding kinds.
+
 A row written since the column arrived also carries a **short id**: the same
 message in twelve characters a person can read out, which is what the admin's
 thread column shows and what its search box takes. Rows already in the table when

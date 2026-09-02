@@ -12,6 +12,7 @@ what a contributor sees before pushing.
 """
 
 import re
+import unicodedata
 from datetime import date
 from pathlib import Path
 
@@ -45,14 +46,28 @@ def page_files() -> set[str]:
 
 
 def headings_of(path: Path) -> set[str]:
-    """The anchors a page offers, slugified the way the toc extension does it."""
+    """The anchors a page offers, slugified the way the toc extension does it.
+
+    Its algorithm, not an approximation of it: punctuation is **removed** and only
+    whitespace becomes a dash. `[^a-z0-9]+ -> -` was close enough while no heading held a
+    dot inside a word, and wrong the day one did -- `bot.outcome()` publishes as
+    `botoutcome-...`, where that rule computed `bot-outcome-...` and reported a live anchor
+    as dangling. Checked against the ids in `site/` by
+    `test_the_slugs_match_the_ones_the_build_publishes`.
+    """
     slugs = set()
     for line in visible(path.read_text(encoding='utf-8')).splitlines():
         found = ATX.match(line)
         if found:
             text = re.sub(r'`|\*|\[|\]|\(.*?\)', '', found.group(1))
-            slugs.add(re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-'))
+            slugs.add(slugify(text))
     return slugs
+
+
+def slugify(text: str) -> str:
+    """Turn heading text into its anchor, as `markdown.extensions.toc.slugify` does."""
+    stripped = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('ascii')
+    return re.sub(r'[\s-]+', '-', re.sub(r'[^\w\s-]', '', stripped).strip().lower())
 
 
 def test_the_wiki_has_pages():
@@ -70,6 +85,26 @@ def test_every_link_resolves(path):
     known = page_files()
     broken = [target for target, _ in LINK.findall(path.read_text(encoding='utf-8')) if target and target not in known]
     assert not broken, f'{path.name} links to missing pages: {broken}'
+
+
+@pytest.mark.parametrize('path', PAGES, ids=lambda path: path.name)
+def test_the_slugs_match_the_ones_the_build_publishes(path):
+    """`headings_of` models the toc extension, so the model is held to the output.
+
+    Skipped where `site/` has not been built, which is most runs -- the point is the CI leg
+    that builds the docs, where a heading whose anchor this file cannot compute would
+    otherwise make `test_every_anchor_resolves` report a live link as dangling. That is what
+    happened to a heading holding `bot.outcome()`.
+    """
+    built = ROOT / 'site' / path.stem / 'index.html'
+    if not built.exists():
+        pytest.skip('site/ is not built in this run')
+    published = set(re.findall(r'<h[1-6][^>]*\bid="([^"]+)"', built.read_text(encoding='utf-8')))
+    computed = headings_of(path)
+
+    assert computed <= published, (
+        f'slugs this file computes that the build does not have: {sorted(computed - published)}'
+    )
 
 
 @pytest.mark.parametrize('path', PAGES, ids=lambda path: path.name)

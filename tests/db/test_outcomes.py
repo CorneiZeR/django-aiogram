@@ -233,6 +233,24 @@ def test_the_methods_on_the_bot_reach_the_functions_behind_them(reader):
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_shared_id_resolves_the_drop_the_way_that_cannot_duplicate_a_message():
+    """Two messages under one id, one queued and one direct, both dropped by a shutdown.
+
+    The feed holds nothing finer than the id, so the rule can only see that *something*
+    under it was queued -- and it answers `pending` for both. That is the deliberate side of
+    an ambiguity it cannot resolve: a caller waiting for a send that is already finished
+    loses a wait, where one told `failed` about a message the next start will deliver
+    re-sends it and the chat gets two copies.
+    """
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_QUEUED, chat_id=7)
+    record(identifier, EventKind.OUTBOUND_DROPPED, chat_id=8, error='cancelled at shutdown', error_code='NotScheduled')
+
+    assert outcome(identifier).state is OutcomeState.PENDING, 'the safe side of a shared id was not taken'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
 def test_a_publish_that_may_still_have_landed_is_pending_and_not_failed():
     """The one drop a caller must not re-send: `queueing` means the write may have applied.
 

@@ -27,14 +27,16 @@
   the publish raised and may still have been applied — the one case a caller must not
   re-send — and a shutdown's `NotScheduled` depends on where the send came from, which the
   feed says. A message that came off the queue was refused without being acknowledged and
-  the next start reclaims it; a direct `send_raw` was never on a queue and nothing will.
+  the next start reclaims it; one that took the direct route — `send_raw` anywhere, or
+  `send` inside the bot container — was never on a queue and nothing will.
   Both read as `pending` and `failed` respectively, and `Event log` has the table.
 
   **The feed is the only source, and that is a decision.** The recorder drops an event rather
   than let a send wait for the database, so a store that always holds the answer would be a
-  promise this package refuses to make everywhere else. `unknown` therefore has three causes
-  it cannot tell apart — not yet, dropped under pressure, or pruned — and the page says so:
-  treat it as *not yet* and give up on a bound of your own.
+  promise this package refuses to make everywhere else. `unknown` therefore has causes it
+  cannot tell apart — not yet, dropped under pressure, pruned, or a *sending* process whose
+  own settings record no outcome, which no guard in the reading process can see — and the
+  page says so: treat it as *not yet* and give up on a bound of your own.
 
   A configuration that cannot answer raises `OutcomesUnavailableError` at the call instead of
   reporting `unknown` for ever: `EVENT_LOG` off, or an `EVENT_LOG_KINDS` that leaves out any

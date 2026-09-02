@@ -140,7 +140,7 @@ caller told `failed` re-sends. That kind is written from three places:
 | `detail.stage` is `serialising` | `failed` | the payload never left the process; re-sending is safe |
 | `detail.stage` is `queueing` | `pending` | the publish raised and **may still have been applied** — this is the one not to re-send |
 | `NotScheduled`, with an `outbound.queued` row | `pending` | a shutdown refused it without acknowledging, so the next start reclaims it |
-| `NotScheduled`, with no `queued` row | `failed` | a direct `send_raw` was never on a queue, so nothing will reclaim it |
+| `NotScheduled`, with no `queued` row | `failed` | a send that took the direct route — `send_raw` anywhere, or `send` inside the bot container — was never on a queue, so nothing will reclaim it |
 
 `sent` wins over anything written after it, because an id is not one per message: a
 handler's replies inherit the id of the update that caused them, so a later `retried` may
@@ -148,21 +148,41 @@ belong to a different message under the same id. `answer.sent` is every message 
 under it, newest first, and `message_id`, `chat_id` and `at` read the newest — which is the
 answer when one `send()` produced one message.
 
-**`unknown` has three causes and the feed cannot tell them apart.** The message has not got
-there yet; or the writer dropped the event under pressure, which the section below explains
-and a `log.dropped` row marks; or `EVENT_LOG_RETENTION_DAYS` has pruned it. So treat it as
-*not yet* and give up after a bound of your own — this is a feed, not a receipt.
+**Where an id does name several, the state is about the id and not about one of them**, and
+the feed holds nothing finer to narrow it with. The case that shows: one message queued and
+another sent directly, both dropped by a shutdown — the queued one is reclaimed by the next
+start and the direct one is not, and the rule above can only see that *something* under this
+id was queued. It answers `pending` for both, which is the side that cannot duplicate a
+message: a caller waiting for a send that is already finished loses a wait, where one told
+`failed` about a message the next start will deliver re-sends it and the chat gets two. Pass
+an explicit `correlation_id` per send where you need the states apart.
+
+**`unknown` has several causes and the feed cannot tell them apart.** The message has not
+got there yet; or the writer dropped the event under pressure, which the section below
+explains and a `log.dropped` row marks; or `EVENT_LOG_RETENTION_DAYS` has pruned it; or —
+the one that looks least like a misconfiguration — **the process that sent the message does
+not record outcomes.** The bot container reads its own `TELEGRAM_BOT`, so one with the log
+off or with a narrower `EVENT_LOG_KINDS` writes no row for a message it delivered perfectly
+well, and the refusal below cannot fire for a configuration this process cannot see.
+
+So treat `unknown` as *not yet*, give up after a bound of your own, and check the sending
+container's settings before concluding anything —
+**[Troubleshooting](Troubleshooting.md#botoutcome-says-unknown-for-a-message-that-was-delivered)**
+walks the list. This is a feed, not a receipt.
 
 **A configuration that cannot answer refuses instead**, rather than reporting `unknown` for
 ever — the one word that means *not yet*. `EVENT_LOG` off is one. The other is an
 `EVENT_LOG_KINDS` that leaves out any kind an outcome is decided from, and there are four:
 
-| kind | what its absence costs |
+The call refuses, so none of the rows below is something you can observe — each is what the
+refusal is *for*, which is why it demands the kind rather than answering without it:
+
+| kind | what answering without it would do |
 | --- | --- |
-| `outbound.sent` | there is no result at all |
-| `outbound.failed` | a refused message reads `unknown`, so a caller polling for an end never reaches one |
+| `outbound.sent` | there would be no result at all |
+| `outbound.failed` | a refused message would read `unknown`, so a caller polling for an end never reaches one |
 | `outbound.dropped` | the same, for the drops above |
-| `outbound.queued` | not a missing answer but a **wrong** one: the shutdown-drop rule reads this row, so without it a message the next start will deliver is reported `failed` |
+| `outbound.queued` | not a missing answer but a **wrong** one: the shutdown-drop rule reads this row, so without it a message the next start will deliver would be reported `failed` — and a caller acts on `failed` by re-sending |
 
 `outbound.consumed` and `outbound.retried` are not among them. They can only ever produce
 `pending`, so leaving them out moves an in-flight message to `unknown` — a different word
