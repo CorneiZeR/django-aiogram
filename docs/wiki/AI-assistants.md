@@ -56,9 +56,10 @@ Project uses django-aiogram 4.x. Rules:
   Use bot.send_raw with RAISE_EXCEPTION only when the caller must see the error.
 - To edit or delete a message you queued, read its `message_id` back with
   `bot.outcome(identifier)` — the id `send()` returned is a correlation id and not
-  Telegram's. It needs EVENT_LOG=True and an EVENT_LOG_KINDS that is empty or
-  includes outbound.sent, or the call raises. A state of `pending` or `unknown`
-  means ask again later. Do not write a loop that blocks a request waiting for it.
+  Telegram's. It needs EVENT_LOG=True and an EVENT_LOG_KINDS that is either empty
+  or keeps outbound.sent, outbound.failed, outbound.dropped and outbound.queued;
+  otherwise the call raises and names what is missing. A state of `pending` or
+  `unknown` means ask again later. Do not write a loop that blocks a request for it.
 - `python manage.py check` validates the settings; treat its E0xx/W0xx output as
   the spec.
 - Run `python manage.py migrate` after upgrading. The package ships one table,

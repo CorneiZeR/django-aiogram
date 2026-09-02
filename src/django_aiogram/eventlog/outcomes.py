@@ -46,6 +46,26 @@ DECIDING_KINDS: tuple[str, ...] = (
     EventKind.OUTBOUND_RETRIED.value,
 )
 
+#: the kinds a project must keep for an answer to be *right*, which is not all of the above.
+#: Each one's absence costs something a caller acts on:
+#:
+#: * ``sent`` — there would be no result at all.
+#: * ``failed`` and ``dropped`` — a message that will never arrive reads ``unknown``, which
+#:   means *not yet*, so a caller polling for an end never reaches one.
+#: * ``queued`` — worse than a missing answer, a wrong one: the shutdown-drop rule reads
+#:   this row to tell a message the next start will reclaim from one nothing will, so
+#:   without it a redeliverable send is reported ``failed`` and re-sending duplicates it.
+#:
+#: ``consumed`` and ``retried`` are deliberately not here. They can only ever produce
+#: ``pending``, and their absence moves an in-flight message to ``unknown`` — a different
+#: word for the same instruction, *ask again*, so it costs precision and not correctness.
+REQUIRED_KINDS: tuple[str, ...] = (
+    EventKind.OUTBOUND_SENT.value,
+    EventKind.OUTBOUND_FAILED.value,
+    EventKind.OUTBOUND_DROPPED.value,
+    EventKind.OUTBOUND_QUEUED.value,
+)
+
 
 @dataclass(frozen=True)
 class SentMessage:
@@ -107,12 +127,16 @@ def _identifier(correlation_id: uuid.UUID | str) -> uuid.UUID:
 
 
 def _refuse_where_nothing_records() -> None:
-    """Raise where an outcome cannot exist, rather than reporting one that never will.
+    """Raise where the answer would be missing or wrong, rather than giving it anyway.
 
-    Two configurations, and both would otherwise answer ``unknown`` for ever — the one
-    answer a caller is meant to read as *not yet*. With the table off nothing is written at
-    all; with ``EVENT_LOG_KINDS`` naming a set that leaves ``outbound.sent`` out, the send
-    is recorded and its result is not.
+    At the call rather than as a system check, and that is the whole reason it can be a
+    refusal: a project may narrow ``EVENT_LOG_KINDS`` for perfectly good reasons and never
+    ask for an outcome, and a check cannot tell whether this one does. Asked, it can — so a
+    deployment that reads outcomes gets one exception naming what to add, and one that does
+    not gets nothing at all.
+
+    Every missing kind at once, because a caller fixing them one exception at a time is
+    four deploys for one mistake.
     """
     if not recorder.enabled:
         msg = (
@@ -120,10 +144,12 @@ def _refuse_where_nothing_records() -> None:
             f'message and there is no outcome to read.'
         )
         raise OutcomesUnavailableError(msg)
-    if not recorder.wants(EventKind.OUTBOUND_SENT.value):
+    missing = [kind for kind in REQUIRED_KINDS if not recorder.wants(kind)]
+    if missing:
         msg = (
-            f"{SETTINGS_NAME}['EVENT_LOG_KINDS'] does not include "
-            f"'{EventKind.OUTBOUND_SENT.value}', so a message's result is never recorded."
+            f"{SETTINGS_NAME}['EVENT_LOG_KINDS'] leaves out {', '.join(repr(kind) for kind in missing)}, "
+            f'which an outcome is decided from — so it would read as if nothing had happened to a '
+            f'message that will never arrive. Add them, or leave the setting empty to keep every kind.'
         )
         raise OutcomesUnavailableError(msg)
 
@@ -160,6 +186,10 @@ def _cannot_come_back(row: 'TelegramEvent', *, queued: bool) -> bool:
       list for the next start to reclaim, and one row proves it was queued. A direct
       ``send_raw`` was never on a queue, so nothing will reclaim it and this row is the only
       one it will ever have.
+
+    That last rule is why ``outbound.queued`` is in :data:`REQUIRED_KINDS`: without the row,
+    ``queued`` reads False for a message that was queued, and a send the next start will
+    deliver is reported as one that never will.
     """
     detail = row.detail or {}
     if 'max_retries' in detail:

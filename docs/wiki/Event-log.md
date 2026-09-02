@@ -153,9 +153,25 @@ there yet; or the writer dropped the event under pressure, which the section bel
 and a `log.dropped` row marks; or `EVENT_LOG_RETENTION_DAYS` has pruned it. So treat it as
 *not yet* and give up after a bound of your own — this is a feed, not a receipt.
 
-The two configurations where no outcome can ever exist are refused rather than answered
-`unknown` for ever: `EVENT_LOG` off, and an `EVENT_LOG_KINDS` that leaves `outbound.sent`
-out. Both raise `OutcomesUnavailableError` at the call.
+**A configuration that cannot answer refuses instead**, rather than reporting `unknown` for
+ever — the one word that means *not yet*. `EVENT_LOG` off is one. The other is an
+`EVENT_LOG_KINDS` that leaves out any kind an outcome is decided from, and there are four:
+
+| kind | what its absence costs |
+| --- | --- |
+| `outbound.sent` | there is no result at all |
+| `outbound.failed` | a refused message reads `unknown`, so a caller polling for an end never reaches one |
+| `outbound.dropped` | the same, for the drops above |
+| `outbound.queued` | not a missing answer but a **wrong** one: the shutdown-drop rule reads this row, so without it a message the next start will deliver is reported `failed` |
+
+`outbound.consumed` and `outbound.retried` are not among them. They can only ever produce
+`pending`, so leaving them out moves an in-flight message to `unknown` — a different word
+for the same instruction — and costs precision rather than correctness.
+
+Either refusal is an `OutcomesUnavailableError` at the call, naming every kind that is
+missing at once. It is checked when asked rather than at boot on purpose: narrowing
+`EVENT_LOG_KINDS` is a reasonable thing to do in a project that never reads an outcome, and
+a system check cannot tell whether this one does.
 
 `await bot.aoutcome(identifier)` is the same read without blocking the loop, and
 `django_aiogram.eventlog.outcomes.outcome()` is the function behind both for code that has

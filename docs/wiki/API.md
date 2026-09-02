@@ -314,9 +314,10 @@ state means and what `unknown` does not mean.
 `is OutcomeState.SENT` are the same test. It is not a value any setting accepts, which is
 why it is here rather than in the table above.
 
-It reads the `outbound.sent` row, so it needs `EVENT_LOG` on **and** an `EVENT_LOG_KINDS`
-that is empty or includes `outbound.sent`. Either one missing raises
-`OutcomesUnavailableError` at the call rather than answering `unknown` for ever.
+It reads the feed, so it needs `EVENT_LOG` on **and** an `EVENT_LOG_KINDS` that is empty or
+keeps the four kinds an outcome is decided from. Either one missing raises
+`OutcomesUnavailableError` at the call, naming what to add, rather than answering `unknown`
+for ever.
 
 A row written since the column arrived also carries a **short id**: the same
 message in twelve characters a person can read out, which is what the admin's

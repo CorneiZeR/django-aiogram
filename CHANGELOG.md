@@ -36,9 +36,15 @@
   it cannot tell apart — not yet, dropped under pressure, or pruned — and the page says so:
   treat it as *not yet* and give up on a bound of your own.
 
-  The two configurations where no outcome can ever exist raise `OutcomesUnavailableError` at
-  the call instead of answering `unknown` for ever: `EVENT_LOG` off, and an `EVENT_LOG_KINDS`
-  that leaves `outbound.sent` out. There is no built-in wait, deliberately — blocking a
+  A configuration that cannot answer raises `OutcomesUnavailableError` at the call instead of
+  reporting `unknown` for ever: `EVENT_LOG` off, or an `EVENT_LOG_KINDS` that leaves out any
+  of the four kinds an outcome is decided from. `outbound.sent` is the obvious one;
+  `outbound.failed` and `outbound.dropped` matter because their absence makes a message that
+  will never arrive read as *not yet*, and `outbound.queued` because the shutdown-drop rule
+  reads that row — without it a send the next start will deliver is reported `failed`, which
+  is a wrong answer rather than a missing one. Refused when asked rather than at boot,
+  because narrowing the kinds is reasonable in a project that never reads an outcome and a
+  check cannot tell whether one does. There is no built-in wait, deliberately — blocking a
   request on the bot container is what the queue exists to avoid.
 
 - **A send inside `transaction.atomic()` can now wait for the commit.** `bot.send()` writes

@@ -14,7 +14,7 @@ from django.test import override_settings
 
 from django_aiogram import TelegramBot
 from django_aiogram.config.enums import EventKind, OutcomeState
-from django_aiogram.eventlog.outcomes import aoutcome, outcome
+from django_aiogram.eventlog.outcomes import REQUIRED_KINDS, aoutcome, outcome
 from django_aiogram.eventlog.recorder import recorder
 from django_aiogram.eventlog.records import Event
 from django_aiogram.exceptions import OutcomesUnavailableError
@@ -143,6 +143,49 @@ def test_kinds_that_leave_the_result_out_are_refused_too():
     """The send is recorded and its result is not, so the answer would never arrive."""
     with pytest.raises(OutcomesUnavailableError, match='EVENT_LOG_KINDS'):
         outcome(uuid.uuid4())
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize('absent', REQUIRED_KINDS)
+def test_a_kind_an_answer_needs_is_refused_by_name_even_with_the_result_kept(absent):
+    """Keeping `outbound.sent` is not enough, and each of the four earns its place.
+
+    Without `failed` or `dropped` a message that will never arrive reads `unknown`, which
+    means *ask again* -- so a caller polling for an end never reaches one. Without `queued`
+    the answer is not missing but wrong: the shutdown-drop rule reads that row to tell a
+    message the next start reclaims from one nothing will.
+    """
+    kept = tuple(kind for kind in REQUIRED_KINDS if kind != absent)
+    with (
+        override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_KINDS': kept}),
+        pytest.raises(OutcomesUnavailableError, match=absent),
+    ):
+        outcome(uuid.uuid4())
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_KINDS': REQUIRED_KINDS})
+def test_the_four_kinds_an_answer_needs_are_enough_on_their_own():
+    """`consumed` and `retried` are precision, not correctness, so they are not demanded.
+
+    A project narrowing its kinds to what an outcome is decided from is a working
+    configuration, and refusing it would be asking for rows nothing reads.
+    """
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_SENT, chat_id=7, message_id=11)
+
+    assert outcome(identifier).message_id == 11
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_KINDS': ('outbound.sent',)})
+def test_the_refusal_names_every_missing_kind_at_once():
+    """Four exceptions in turn is four deploys for one mistake."""
+    with pytest.raises(OutcomesUnavailableError) as refused:
+        outcome(uuid.uuid4())
+
+    for kind in ('outbound.failed', 'outbound.dropped', 'outbound.queued'):
+        assert kind in str(refused.value)
 
 
 @pytest.mark.django_db(transaction=True)
