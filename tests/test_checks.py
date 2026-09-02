@@ -68,19 +68,49 @@ def test_integer_below_minimum_is_caught():
     assert 'django_aiogram.E012' in ids(errors(check_settings()))
 
 
-@override_settings(
-    TELEGRAM_BOT={
-        'ENABLED': 'true',
-        'AUTODISCOVER': '1',
-        'ALLOW_PICKLE': 'no',
-        'EVENT_LOG': 'on',
-        'EVENT_LOG_SYNC': 'off',
-        'REQUIRE_CRASH_SAFE': 0,
-        'TRANSACTIONAL': 'yes',
-        'TOKEN': '42:x',
-        'REDIS_URL': 'r://x',
-    }
-)
+#: a human-written value for every boolean setting the package has, in the spellings the
+#: environment can produce. Named rather than inlined so the test below can hold it to
+#: `DEFAULTS`: hand-listed, it drifted -- `RAISE_EXCEPTION` was absent for four releases
+HUMAN_BOOLEANS = {
+    'ENABLED': 'true',
+    'AUTODISCOVER': '1',
+    'ALLOW_PICKLE': 'no',
+    'RAISE_EXCEPTION': 'off',
+    'EVENT_LOG': 'on',
+    'EVENT_LOG_SYNC': 'off',
+    'REQUIRE_CRASH_SAFE': 0,
+    'TRANSACTIONAL': 'yes',
+}
+
+#: the check each of those earns when it cannot be read. There is no deriving this from the
+#: registry -- an id is a decision, not a function of the name -- so it is pinned against
+#: `HUMAN_BOOLEANS` instead, which is pinned against `DEFAULTS`
+BOOLEAN_IDS = {
+    'ENABLED': 'E001',
+    'AUTODISCOVER': 'E002',
+    'RAISE_EXCEPTION': 'E003',
+    'ALLOW_PICKLE': 'E017',
+    'EVENT_LOG': 'E031',
+    'EVENT_LOG_SYNC': 'E042',
+    'REQUIRE_CRASH_SAFE': 'E046',
+    'TRANSACTIONAL': 'E049',
+}
+
+
+def test_the_boolean_fixture_covers_every_boolean_setting():
+    """The claim the test below makes about itself, checked rather than repeated.
+
+    Both directions and both tables: a boolean setting added without a line here would be
+    left out of a fixture whose whole subject is booleans, and an id left out of the set the
+    assertion intersects makes that assertion pass over the regression it exists to catch.
+    """
+    booleans = {name for name, value in DEFAULTS.items() if isinstance(value, bool)}
+
+    assert set(HUMAN_BOOLEANS) == booleans, f'the fixture and DEFAULTS disagree: {set(HUMAN_BOOLEANS) ^ booleans}'
+    assert set(BOOLEAN_IDS) == booleans, f'the id table and DEFAULTS disagree: {set(BOOLEAN_IDS) ^ booleans}'
+
+
+@override_settings(TELEGRAM_BOT={**HUMAN_BOOLEANS, 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_a_configuration_that_boots_and_sends_does_not_fail_the_checks():
     """Every boolean here comes from the environment, which has only strings.
 
@@ -92,7 +122,7 @@ def test_a_configuration_that_boots_and_sends_does_not_fail_the_checks():
     the case they were written for.
     """
     reported = {str(message.id) for message in check_settings()}
-    boolean_ids = {f'django_aiogram.{code}' for code in ('E001', 'E002', 'E017', 'E031', 'E042', 'E046', 'E049')}
+    boolean_ids = {f'django_aiogram.{code}' for code in BOOLEAN_IDS.values()}
 
     assert reported & boolean_ids == set(), f'a working configuration was refused: {sorted(reported & boolean_ids)}'
 
