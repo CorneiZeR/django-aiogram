@@ -96,9 +96,13 @@ def test_the_slugs_match_the_ones_the_build_publishes(path):
     otherwise make `test_every_anchor_resolves` report a live link as dangling. That is what
     happened to a heading holding `bot.outcome()`.
     """
-    built = ROOT / 'site' / path.stem / 'index.html'
-    if not built.exists():
+    if not (ROOT / 'site').exists():
         pytest.skip('site/ is not built in this run')
+    # `index.md` is the site root rather than a directory of its own, and asking for
+    # `site/index/index.html` skipped the front page for as long as the skip was per file --
+    # so a missing page is a failure now and only an unbuilt `site/` is a skip
+    built = ROOT / 'site' / ('index.html' if path.stem == 'index' else f'{path.stem}/index.html')
+    assert built.exists(), f'site/ is built and has no page for {path.name}: expected {built}'
     # `_1` and `_2` are what the toc extension appends to a repeated heading, and `headings_of`
     # answers with a set -- so the suffixes are dropped rather than modelled, and a page with
     # two `## Run migrate` sections still compares equal
