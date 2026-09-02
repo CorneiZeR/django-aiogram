@@ -74,11 +74,13 @@ What it does not change, and what to expect:
   attempted, not derived from it, so a caller storing it beside its own row is unaffected —
   and it is the *deferred* call that returns sooner, because the immediate one waits for the
   broker to acknowledge the write before `send()` returns at all.
-- **A broadcast holds its payloads until the commit.** `send_many` serializes a chunk at a
-  time so peak memory stays bounded, and a deferred write is a payload waiting in memory —
-  fifty thousand chats inside a long transaction is the shape to avoid. One commit hook is
-  registered per call, so a chunk the broker refuses stops the ones behind it, exactly as
-  the immediate path does.
+- **A broadcast holds its payloads until the commit, and only the immediate path is
+  chunk-bounded.** `send_many` serializes a chunk at a time and publishes it before
+  preparing the next, so peak memory is one chunk — with the write deferred there is nothing
+  to publish yet, and every payload waits in memory until the block ends. Fifty thousand
+  chats inside a long transaction is the shape to avoid. One commit hook is registered per
+  call, so a chunk the broker refuses stops the ones behind it, exactly as the immediate
+  path does.
 - **A send never opens a database connection.** The `default` connection is inspected only
   when it is already established: a process that touches no database keeps not touching one,
   and a connection nothing has run on cannot be inside a transaction anyway.

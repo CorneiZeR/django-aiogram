@@ -177,11 +177,13 @@ def chunks(
 ) -> 'Iterator[list[tuple[uuid.UUID, dict[str, Any]]]]':
     """Group the chats into the batches one write covers.
 
-    :func:`serialise` runs on one chunk at a time, which is what keeps peak memory bounded:
-    a ``BufferedInputFile`` payload times fifty thousand chats would otherwise all exist at
-    once. ``TRANSACTIONAL`` is the exception and cannot not be: a write held for the commit
-    is a payload held in memory, so a broadcast inside a transaction does carry the whole
-    batch until the block ends.
+    :func:`serialise` runs on one chunk at a time and the caller publishes it before asking
+    for the next, which is what keeps peak memory to one chunk: a ``BufferedInputFile``
+    payload times fifty thousand chats would otherwise all exist at once.
+
+    That bound belongs to the immediate path alone, and ``TRANSACTIONAL`` cannot be given it:
+    a write waiting for a commit has nothing to publish yet, so a broadcast inside a
+    transaction does hold every payload until the block ends.
 
     The method is validated by ``TelegramBot._accept_bulk`` before either caller gets here,
     so a refused one never reaches this generator.
