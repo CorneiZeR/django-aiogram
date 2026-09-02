@@ -1,0 +1,2112 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Run aiogram next to Django and send Telegram messages from anywhere, over a Redis list, Redis Streams, RabbitMQ or Kafka">
+      
+      
+        <meta name="author" content="Oleksii Kolosiuk">
+      
+      
+        <link rel="canonical" href="https://corneizer.github.io/django-aiogram/latest/4.1/Troubleshooting/">
+      
+      
+        <link rel="prev" href="../Serialization/">
+      
+      
+        <link rel="next" href="../Upgrading/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/favicon.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Troubleshooting - django-aiogram</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=IBM+Plex+Sans:300,300i,400,400i,700,700i%7CIBM+Plex+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"IBM Plex Sans";--md-code-font:"IBM Plex Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  
+  
+    
+  
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Troubleshooting · django-aiogram">
+  <meta property="og:description" content="Run aiogram next to Django and send Telegram messages from anywhere, over a Redis list, Redis Streams, RabbitMQ or Kafka">
+  <meta property="og:image" content="https://corneizer.github.io/django-aiogram/latest/4.1assets/social-card.png">
+  
+  <meta property="og:url" content="https://corneizer.github.io/django-aiogram/latest/4.1/Troubleshooting/">
+  
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Troubleshooting · django-aiogram">
+  <meta name="twitter:image" content="https://corneizer.github.io/django-aiogram/latest/4.1assets/social-card.png">
+
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#troubleshooting" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="django-aiogram" class="md-header__button md-logo" aria-label="django-aiogram" data-md-component="logo">
+      
+  <img src="../assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            django-aiogram
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Troubleshooting
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Follow the system"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Follow the system" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9zM20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12zm-9.15 3.96h2.3L12 9z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to light" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/CorneiZeR/django-aiogram" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    CorneiZeR/django-aiogram
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="django-aiogram" class="md-nav__button md-logo" aria-label="django-aiogram" data-md-component="logo">
+      
+  <img src="../assets/logo.svg" alt="logo">
+
+    </a>
+    django-aiogram
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/CorneiZeR/django-aiogram" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    CorneiZeR/django-aiogram
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Handlers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Handlers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Sending-messages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sending messages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Transports
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Transports
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Redis-list/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Redis list
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Redis-Streams/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Redis Streams
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../RabbitMQ/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RabbitMQ
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Kafka/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kafka
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Running it
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Running it
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Delivery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Delivery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Webhook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Webhook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Rate-limits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rate limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Logging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Logging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Event-log/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Event log
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../API/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Serialization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Serialization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#nothing-is-delivered-no-errors-anywhere" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nothing is delivered, no errors anywhere
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#managepy-check-fails-with-e009-after-upgrading" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        manage.py check fails with E009 after upgrading
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-send-hangs-instead-of-failing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A send hangs instead of failing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#messages-pile-up-in-the-queue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Messages pile up in the queue
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-container-is-unhealthy-while-the-probe-says-healthy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The container is unhealthy while the probe says healthy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-healthchecks-refusals-mean" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the healthcheck's refusals mean
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-webhook-answers-503-or-every-update-403s" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The webhook answers 503, or every update 403s
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#handlers-never-fire" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Handlers never fire
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-project-will-not-start-without-a-token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The project will not start without a token
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fsm-state-is-lost-on-restart" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FSM state is lost on restart
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#duplicate-messages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Duplicate messages
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-message-went-out-for-a-transaction-that-rolled-back" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A message went out for a transaction that rolled back
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-bot-ignores-enabled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The bot ignores ENABLED
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sends-are-slow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sends are slow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#modulenotfounderror-no-module-named-telegram_bot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ModuleNotFoundError: No module named 'telegram_bot'
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-event-log-writes-nothing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The event log writes nothing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-admin-page-is-missing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The admin page is missing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#getting-more-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Getting more detail
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../Upgrading/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrading
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AI-assistants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI assistants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#nothing-is-delivered-no-errors-anywhere" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nothing is delivered, no errors anywhere
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#managepy-check-fails-with-e009-after-upgrading" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        manage.py check fails with E009 after upgrading
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-send-hangs-instead-of-failing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A send hangs instead of failing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#messages-pile-up-in-the-queue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Messages pile up in the queue
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-container-is-unhealthy-while-the-probe-says-healthy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The container is unhealthy while the probe says healthy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-healthchecks-refusals-mean" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the healthcheck's refusals mean
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-webhook-answers-503-or-every-update-403s" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The webhook answers 503, or every update 403s
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#handlers-never-fire" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Handlers never fire
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-project-will-not-start-without-a-token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The project will not start without a token
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fsm-state-is-lost-on-restart" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FSM state is lost on restart
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#duplicate-messages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Duplicate messages
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-message-went-out-for-a-transaction-that-rolled-back" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A message went out for a transaction that rolled back
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-bot-ignores-enabled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The bot ignores ENABLED
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sends-are-slow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sends are slow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#modulenotfounderror-no-module-named-telegram_bot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ModuleNotFoundError: No module named 'telegram_bot'
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-event-log-writes-nothing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The event log writes nothing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-admin-page-is-missing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The admin page is missing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#getting-more-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Getting more detail
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/CorneiZeR/django-aiogram/edit/master/docs/wiki/Troubleshooting.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Link to this section">&para;</a></h1>
+<h2 id="nothing-is-delivered-no-errors-anywhere">Nothing is delivered, no errors anywhere<a class="headerlink" href="#nothing-is-delivered-no-errors-anywhere" title="Link to this section">&para;</a></h2>
+<p>Check the bot container is actually running the bot:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>telegram_bot<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s1">'delivery started'</span>
+</span></code></pre></div>
+<p>No such line means either <code>ENABLED</code> is off in that container, or the command
+never got past startup. <code>manage.py check</code> will say which.</p>
+<h2 id="managepy-check-fails-with-e009-after-upgrading"><code>manage.py check</code> fails with <code>E009</code> after upgrading<a class="headerlink" href="#managepy-check-fails-with-e009-after-upgrading" title="Link to this section">&para;</a></h2>
+<p><code>DELIVERY</code> is a dotted path since 4.0, so the words that used to go there no longer
+do. <code>'blpop'</code> is now <code>'django_aiogram.consumer.delivery.BlpopDelivery'</code> — or drop the
+key, which is the same thing by default. <code>'keyspace'</code> was the 1.x mechanism, removed
+in 3.0, and there is nothing to write instead. <code>E009</code> names both by name rather than
+reporting "not a dotted path", because a settings file being upgraded has one of them
+in it.</p>
+<p>The check fails rather than falling back silently, because a consumer that quietly
+changes is worse than one that refuses to start. What <code>E009</code> cannot tell you is whether
+a <em>plausible</em> path imports and is a <code>Delivery</code>: resolving it would make every
+<code>manage.py check</code> import aiogram. <code>start_tgbot</code> settles that before it starts a thread.</p>
+<h2 id="a-send-hangs-instead-of-failing">A send hangs instead of failing<a class="headerlink" href="#a-send-hangs-instead-of-failing" title="Link to this section">&para;</a></h2>
+<p><code>REDIS_TIMEOUT</code> (10 seconds by default) bounds both connecting and waiting for an
+answer, so a Redis that accepts the connection and then stops responding raises
+<code>redis.exceptions.TimeoutError</code> rather than holding the request thread.</p>
+<p>redis-py only started applying a read deadline of its own in 8.0. On 5.x, 6.x
+and 7.x a stalled server blocks the caller until the process is killed, which is
+why the package sets the deadline itself rather than relying on the client.</p>
+<h2 id="messages-pile-up-in-the-queue">Messages pile up in the queue<a class="headerlink" href="#messages-pile-up-in-the-queue" title="Link to this section">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram</span><span class="w"> </span><span class="kn">import</span> <span class="n">bot</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">bot</span><span class="o">.</span><span class="n">queue_depth</span><span class="p">()</span>  <span class="c1"># messages waiting for a worker</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">bot</span><span class="o">.</span><span class="n">inflight_depth</span><span class="p">()</span>  <span class="c1"># what this worker is part-way through sending — on Redis Streams, the group</span>
+</span></code></pre></div>
+<p>Those two answer for whichever transport <code>BROKER</code> names. From a shell there is no
+one command, because each transport counts differently — for the Redis list:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>redis-cli<span class="w"> </span>-n<span class="w"> </span>&lt;db&gt;<span class="w"> </span>llen<span class="w"> </span>TELEGRAM_BOT_MESSAGE
+</span></code></pre></div>
+<p><code>TELEGRAM_BOT_MESSAGE</code> is the default <code>REDIS_MESSAGES_KEY</code>; if you set your own, it
+is that key here and in every Redis path below. On a stream it is <code>XLEN</code>, on AMQP the queue's
+message count, on Kafka the lag of the consumer group — which is the reason to prefer
+<code>queue_depth()</code> in anything you keep, an exporter especially. It asks the same question on every
+transport, and it reads a scheme that is ours to change.</p>
+<p>Expect the shell figure and <code>queue_depth()</code> to disagree on Kafka while sends are in flight, and
+do not go looking for a bug: raw group lag counts every record past the committed offset,
+including the ones this process has taken and not yet settled, and <code>queue_depth()</code> subtracts
+those. The gap is what the worker is holding, so it closes as the sends finish. Offsets settle a
+contiguous prefix there, so the gap can also outlast the sends that caused it — see
+<strong><a href="../Delivery/">Delivery</a></strong>.</p>
+<p><code>inflight_depth()</code> is <strong>not</strong> the same everywhere, and the difference decides where you can ask
+it. The Redis list keeps its in-flight messages on the server under the worker's name and Redis
+Streams keeps them in the group's pending list, so either can be read from anywhere — a monitor
+in the web tier included. On RabbitMQ and Kafka the count is process-local instead, for
+two different reasons: AMQP tracks unacknowledged deliveries per channel and a client sees its
+own, so another's is a management-API question rather than a protocol one, while Kafka has
+nothing to ask at all — an offset is either committed or not. Asked anywhere else it
+answers <strong>zero</strong>, correctly and uselessly. On those two, run it in the bot container or read the
+broker's own tooling.</p>
+<p>The same split decides whether you may <strong>name</strong> a worker. <code>inflight_depth('some-worker')</code> reads
+that worker's in-flight work on the Redis pair; on RabbitMQ and Kafka <strong>any</strong> name raises
+<code>WorkerDepthUnavailableError</code> — the calling worker's own included — because the unsettled work
+there belongs to a channel or a group member rather than to a name this package chose, so there is
+nothing for a name to match. That refusal is deliberately not a zero: on those
+two transports what a dead worker held is already back in <code>queue_depth()</code> — the broker returns an
+unacknowledged message when the channel drops, the group replays an uncommitted offset — so the
+number to look at is the queue's, and there is nothing to reclaim by hand.</p>
+<p>A growing list does not by itself mean the consumer is stopped: producers can
+simply be outpacing it, and <code>MAX_IN_FLIGHT</code> deliberately holds intake back while
+sends are outstanding. Check the heartbeat and the in-flight list below before
+concluding the worker is down — see above for one that genuinely is. Messages
+wait in the queue until a worker takes them. On Redis 6.2+ a taken message sits in
+<code>&lt;key&gt;:processing:&lt;worker&gt;</code> until the send has finished, and a restart under the
+same <strong>worker identity</strong> reclaims it: at-least-once, so a crash mid-send can
+duplicate a send. That identity is <code>WORKER_NAME</code> when it is set and the hostname
+otherwise — so on a platform that gives each container a fresh hostname, a
+recreated worker looks like a different one and leaves the old list untouched.
+Set <code>WORKER_NAME</code> to something stable wherever hostnames change.</p>
+<p>All of that holds for the worker <code>start_tgbot</code> runs; a handler of your own is
+only held that way if it takes an <code>on_complete</code> keyword.</p>
+<p>That list is expected to be non-empty while sends are in flight, and an entry
+stays until its send finishes or shutdown cancels it. <code>MAX_IN_FLIGHT</code> bounds how
+many sends the consumer leaves outstanding, and so how far the list can run
+ahead. Without <code>LMOVE</code> it is at-most-once, unless <code>REQUIRE_CRASH_SAFE</code> is on —
+then the worker refuses to start rather than deliver that way. A send that
+exhausted <code>MAX_RETRIES</code> is logged and acknowledged, not redelivered.</p>
+<h2 id="the-container-is-unhealthy-while-the-probe-says-healthy">The container is unhealthy while the probe says <code>healthy</code><a class="headerlink" href="#the-container-is-unhealthy-while-the-probe-says-healthy" title="Link to this section">&para;</a></h2>
+<p>The probe was killed by Docker's <code>timeout</code>, so its exit code never arrived — <code>docker
+inspect</code> shows <code>ExitCode: -1</code> and a growing <code>FailingStreak</code> beside a last line that
+reads <code>healthy: consumer 6s old, 0 queued</code>. The age is what the <em>transport</em> says: a
+Redis list has a heartbeat key the consumer writes, and a stream reads it off its
+consumer group, which is why the line says <code>consumer</code> rather than naming one of them.
+A transport that cannot answer at all says <code>consumer not observable from outside</code>, and
+that is a pass rather than a failure — there is nothing to look at, so the depth is the
+whole verdict.</p>
+<p>It happens when the healthcheck runs <code>manage.py tgbot_healthcheck</code>, because a
+management command runs <code>django.setup()</code> first: the whole of your <code>INSTALLED_APPS</code>,
+every <code>AppConfig.ready()</code>, before the first Redis call. In one project that was 17.9
+seconds. Use the form that does not:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">      </span><span class="nt">DJANGO_SETTINGS_MODULE</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">core.settings</span><span class="w">   </span><span class="c1"># a healthcheck is a separate process</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="nt">healthcheck</span><span class="p">:</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">      </span><span class="nt">test</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">'CMD'</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">'python'</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">'-m'</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">'django_aiogram.healthcheck'</span><span class="p p-Indicator">]</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">      </span><span class="nt">timeout</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5s</span>
+</span></code></pre></div>
+<p>If the probe answers <code>cannot read the settings: …</code> instead, that variable is the thing
+missing: <code>manage.py</code> sets it inside its own process, so a container running it may
+never export it.</p>
+<p>See <strong><a href="../Deployment/">Deployment</a></strong>. Raising <code>timeout:</code> also stops the killing and leaves your whole
+Django app being imported twice a minute to read two keys.</p>
+<h2 id="what-the-healthchecks-refusals-mean">What the healthcheck's refusals mean<a class="headerlink" href="#what-the-healthchecks-refusals-mean" title="Link to this section">&para;</a></h2>
+<p>Every line below is what the probe writes to stderr before exiting 1, from either form.
+Grepping one out of <code>docker inspect</code> should land here.</p>
+<table>
+<thead>
+<tr>
+<th>The line</th>
+<th>What it is telling you</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>the broker is unreachable: …</code></td>
+<td>The transport could not be addressed or refused the connection. Covers a missing or malformed <code>REDIS_URL</code>, an unreadable <code>REDIS_TIMEOUT</code>, and a broker that is genuinely down or has dropped the connection mid-probe. This line was <code>redis is unreachable</code> up to 3.1 — it moved when the probe stopped pinging Redis before every check, which is what lets it run at all on a transport that is not Redis. The old wording survives in one place: <code>--guarantee</code> and <code>--stranded</code> build a Redis client of their own, and when that fails they log <code>redis is unreachable</code> as <code>tg_reason</code> rather than refusing — the guarantee then reads <code>unknown</code>, and the sweep says it did not finish</td>
+</tr>
+<tr>
+<td><code>… needs the '…' package, which is not installed. Install it with: pip install "django-aiogram[…]"</code></td>
+<td><code>BROKER</code> names a transport whose driver this image does not carry. Every driver is an extra since 4.0, so an image built for one transport and pointed at another gets this — the line names the extra that fixes it. Both forms of the probe report it; neither tracebacks</td>
+</tr>
+<tr>
+<td><code>TELEGRAM_BOT['…'] is not a number: …</code></td>
+<td><code>HEARTBEAT_INTERVAL</code> or <code>HEALTHCHECK_MAX_QUEUE</code> holds something <code>int()</code> refuses. <code>manage.py check</code> reports these as <code>E023</code>/<code>E024</code>, but the container form never runs it — that is the point of it — so it says so itself</td>
+</tr>
+<tr>
+<td><code>cannot read the settings: …</code></td>
+<td><code>DJANGO_SETTINGS_MODULE</code> is missing from the container's environment, or names a module that does not import. See the section above</td>
+</tr>
+<tr>
+<td><code>no heartbeat has been written: nothing within Ns, or the consumer never started</code></td>
+<td>Redis list: the key is absent — the consumer never ran, died before its first beat, or has been silent longer than the key's TTL. If the line adds that a limit over the TTL cannot be observed, <code>--max-age</code> is set above <code>3 × HEARTBEAT_INTERVAL</code> and is doing nothing</td>
+</tr>
+<tr>
+<td><code>no consumer has joined the group: nothing within Ns, or the consumer never started</code></td>
+<td>Redis Streams: the group exists and nothing has ever read from it. Nothing is written for this transport — the group's own record of when each member last spoke is the signal — so this means no worker has started, not that a key is missing</td>
+</tr>
+<tr>
+<td><code>the consumer last reported Ns ago, over the Ns limit</code></td>
+<td>The transport can see the consumer and it has been quiet too long. What was measured depends on which one: the Redis list reads the heartbeat key its consumer writes on every pass, and Redis Streams reads how long ago any member of the consumer group last spoke — which a blocking read that finds nothing refreshes, so an idle queue is not a stale consumer. Either way the worker is wedged, gone, or slower than <code>HEARTBEAT_INTERVAL × 3</code></td>
+</tr>
+<tr>
+<td><code>the heartbeat is not a timestamp</code></td>
+<td>Redis list: something else writes to that key. Give the worker its own <code>REDIS_MESSAGES_KEY</code>, or its own database</td>
+</tr>
+<tr>
+<td><code>could not read the consumer liveness: …</code></td>
+<td><code>PING</code> answered and the next command did not: a failover in between, a replica that cannot serve the key, or <code>decode_responses</code> in a URL shared with a cache backend meeting bytes it cannot decode</td>
+</tr>
+<tr>
+<td><code>could not read the queue length: …</code></td>
+<td>The same, one command later</td>
+</tr>
+<tr>
+<td><code>N messages are queued, over the limit of N</code></td>
+<td>Work is backing up. <code>HEALTHCHECK_MAX_QUEUE</code> or <code>--max-queue</code> is what set that number; see <strong>Messages pile up in the queue</strong> above</td>
+</tr>
+</tbody>
+</table>
+<p>Three lines are not refusals and do not change the exit code:</p>
+<table>
+<thead>
+<tr>
+<th>The line</th>
+<th>What it is telling you</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>N message(s) are in flight under other worker names …</code></td>
+<td>Written to stderr while still exiting 0, and only with <code>--stranded</code>. Another worker may be sending them this second; if it is gone, <code>manage.py tgbot_reclaim --worker &lt;name&gt;</code> requeues them. <code>at least N</code> means the bounded sweep stopped early, so the count is a floor — and the next line says why</td>
+</tr>
+<tr>
+<td><code>the scan for stranded in-flight lists did not finish: …</code></td>
+<td>The sweep was asked for and could not walk the whole keyspace: no client (an install with no redis-py, or an unusable <code>REDIS_URL</code>), a key it could not decode, or the twenty-<code>SCAN</code>-round bound. Without this line a zero would be indistinguishable from a sweep that never ran. Where the transport keys no in-flight work on a worker name at all — Redis Streams, RabbitMQ, Kafka — the sweep is not attempted and nothing is written</td>
+</tr>
+<tr>
+<td><code>disabled in this process; nothing to check</code></td>
+<td><code>ENABLED</code> is off here, so nothing is meant to be running and nothing is wrong. Exit 0, and deliberately not colored as a success</td>
+</tr>
+</tbody>
+</table>
+<p>Two more reach the log rather than the output — both mean the probe declined to answer
+that part rather than fail the container over it:</p>
+<ul>
+<li><code>could not scan for stranded in-flight lists</code></li>
+<li><code>could not establish which delivery guarantee is in force</code></li>
+</ul>
+<h2 id="the-webhook-answers-503-or-every-update-403s">The webhook answers 503, or every update 403s<a class="headerlink" href="#the-webhook-answers-503-or-every-update-403s" title="Link to this section">&para;</a></h2>
+<p><strong>503</strong> means the view refused the update rather than handling it, so Telegram will
+redeliver — which is what you want. Four reasons, each with its own log line:</p>
+<ul>
+<li><code>webhook received an update while the bot is disabled</code> — <code>ENABLED</code> is off here</li>
+<li><code>webhook is not configured to serve updates</code> — <code>MODE</code> or <code>WEBHOOK_SECRET</code> cannot be
+  read: an unknown mode and an empty secret each raise <code>ImproperlyConfigured</code>, and this is
+  the view answering for it rather than raising through. The secret is only read once the
+  mode says to serve, so a polling deployment is told it polls instead</li>
+<li><code>webhook received an update while this deployment polls</code> — <code>MODE</code> is not <code>webhook</code>, so
+  a worker is polling and this process must not also feed the dispatcher</li>
+<li><code>webhook cannot build the bot</code> — building it raised <code>ImproperlyConfigured</code>; a
+  missing or malformed <code>TOKEN</code> is the common example, not the only one</li>
+<li><code>webhook refused an update</code> — nothing ran it: the process is shutting down, its loop was
+  already closed by an earlier <code>close()</code>, or the loop's own thread had not started yet.
+  The closed-loop case is worth knowing about in a web worker that stays up — something
+  closed the bot and requests kept arriving</li>
+</ul>
+<p><strong>403</strong> means the <code>X-Telegram-Bot-Api-Secret-Token</code> header did not match
+<code>WEBHOOK_SECRET</code>. Check that the value you registered with <code>manage.py tgbot_webhook set</code>
+is the one the process now reads — rotating the setting without re-registering gives
+exactly this. The comparison is on bytes, so a secret outside ASCII is compared like any
+other: a matching one passes, and a mismatched one gets this 403 rather than a traceback.</p>
+<p><strong>400</strong> means the body did not parse as an update. Something other than Telegram is
+posting to that URL.</p>
+<h2 id="handlers-never-fire">Handlers never fire<a class="headerlink" href="#handlers-never-fire" title="Link to this section">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram</span><span class="w"> </span><span class="kn">import</span> <span class="n">bot</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="nb">len</span><span class="p">(</span><span class="n">bot</span><span class="o">.</span><span class="n">router</span><span class="o">.</span><span class="n">observers</span><span class="p">[</span><span class="s1">'message'</span><span class="p">]</span><span class="o">.</span><span class="n">handlers</span><span class="p">)</span>
+</span></code></pre></div>
+<p>Zero means autodiscovery did not find them. Usual causes:</p>
+<ul>
+<li>the file is not called <code>tg_router.py</code> (or <code>MODULE_NAME</code> says otherwise)</li>
+<li>the app is not in <code>INSTALLED_APPS</code></li>
+<li><code>AUTODISCOVER</code> or <code>ENABLED</code> is off in that process</li>
+</ul>
+<p>If a router raises while importing, the error surfaces at startup — it is not
+swallowed. 1.x did swallow it, so a typo there disabled the whole file
+silently.</p>
+<h2 id="the-project-will-not-start-without-a-token">The project will not start without a token<a class="headerlink" href="#the-project-will-not-start-without-a-token" title="Link to this section">&para;</a></h2>
+<p>It should. 2.0 does not build a bot, and no release since connects to the broker at import
+time. If it still fails, something in <em>your</em> code is touching <code>bot.bot</code>, <code>send_raw</code> or a depth
+read at import time — those are the points that genuinely need credentials. <code>bot.redis_conn</code> used
+to be on that list and is gone in 4.0. <code>django_aiogram.redis.redis_conn</code> is the same object, and
+importing it costs nothing — it is a proxy, and only <em>using</em> one, <code>redis_conn.ping()</code> say, opens
+the connection that needs credentials.</p>
+<p>Placeholder tokens are no longer necessary; drop them.</p>
+<h2 id="fsm-state-is-lost-on-restart">FSM state is lost on restart<a class="headerlink" href="#fsm-state-is-lost-on-restart" title="Link to this section">&para;</a></h2>
+<p><code>FSM_STORAGE</code> is <code>'redis'</code> by default. If you set it to <code>'memory'</code>, state lives
+in the process and does not survive. 1.x had no storage at all, so this is
+often left over from then.</p>
+<h2 id="duplicate-messages">Duplicate messages<a class="headerlink" href="#duplicate-messages" title="Link to this section">&para;</a></h2>
+<p>Check whether two bot containers are polling the same token — Telegram allows
+one <code>getUpdates</code> consumer per bot.</p>
+<p>Each message goes to one worker on every transport — an atomic pop, a consumer group handing
+an entry to one member, a broker delivering once — but that is ownership, not exactly-once.
+Delivery is at-least-once wherever the transport can recover a message it handed out — every
+one here except a Redis list without <code>LMOVE</code>, which is at-most-once and loses rather than
+duplicates. So the question is which duplicates <em>this</em> transport produces:</p>
+<table>
+<thead>
+<tr>
+<th>Transport</th>
+<th>Where a duplicate comes from</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong><a href="../Redis-list/">Redis list</a></strong></td>
+<td>a worker killed mid-send, reclaimed by the next start <strong>that resolves the same name</strong> — the in-flight list is keyed on it, so a replacement with a fresh hostname strands the message instead. And two workers sharing a <code>WORKER_NAME</code> share one list, so each reclaims what the other is still sending — give every worker its own name, and one it keeps</td>
+</tr>
+<tr>
+<td><strong><a href="../Redis-Streams/">Redis Streams</a></strong></td>
+<td>an entry idle longer than the liveness TTL is claimed by another consumer, so a worker slow enough to look dead has its message taken</td>
+</tr>
+<tr>
+<td><strong><a href="../RabbitMQ/">RabbitMQ</a></strong></td>
+<td>a dropped channel requeues everything it held unacknowledged</td>
+</tr>
+<tr>
+<td><strong><a href="../Kafka/">Kafka</a></strong></td>
+<td><strong>a run rather than a message.</strong> One refusal rewinds its partition, so that record and every later one in it are delivered again; a kill replays from the last committed offset, which is at least what was in flight and can be more — records that had already finished stay behind a commit gap and come back with it</td>
+</tr>
+</tbody>
+</table>
+<p>The Kafka row is the one to read before assuming a bug. Nothing there is per-message, so a
+handler that is not idempotent on its own business key will send innocent messages twice.</p>
+<h2 id="a-message-went-out-for-a-transaction-that-rolled-back">A message went out for a transaction that rolled back<a class="headerlink" href="#a-message-went-out-for-a-transaction-that-rolled-back" title="Link to this section">&para;</a></h2>
+<p><code>bot.send()</code> writes to the broker where it is called, so an <code>atomic()</code> block that raises
+after a send leaves the message queued and its row gone. Set <code>TRANSACTIONAL</code> to <code>True</code> to
+hold the write until the commit — see
+<strong><a href="../Sending-messages/#inside-a-transaction">Sending messages</a></strong>.</p>
+<p>It covers the queue route only. Inside the bot container <code>send</code> calls Telegram itself, and
+<code>send_raw</code> does so from anywhere: there is no queue write to hold back, so a message sent
+that way still goes out when the block rolls back.</p>
+<p>With it already on and the message still going out, check which connection the block is on:
+the setting watches <code>default</code>, and a transaction opened on another alias is not one it can
+see. An alias configured <code>AUTOCOMMIT: False</code> is the other case — a manually managed
+transaction does not run commit hooks when it ends, <code>atomic()</code> blocks inside it included, so
+the write is made immediately and the log says so once: <em>publishing without waiting for a
+commit</em>.</p>
+<h2 id="the-bot-ignores-enabled">The bot ignores ENABLED<a class="headerlink" href="#the-bot-ignores-enabled" title="Link to this section">&para;</a></h2>
+<p><code>ENABLED</code> is parsed, so <code>'false'</code> disables. If a value cannot be parsed you get
+<code>ImproperlyConfigured</code> rather than a silent fallback. Both the app startup and
+the send path read it the same way.</p>
+<h2 id="sends-are-slow">Sends are slow<a class="headerlink" href="#sends-are-slow" title="Link to this section">&para;</a></h2>
+<p>That is likely the pacing in <strong><a href="../Rate-limits/">Rate limits</a></strong> doing its job: one
+message per second to the same chat, 20 per minute to a group. Verify with <code>RATE_LIMIT</code>
+set to <code>None</code>; if it speeds up, tune the numbers rather than removing them, or
+Telegram will start refusing.</p>
+<h2 id="modulenotfounderror-no-module-named-telegram_bot"><code>ModuleNotFoundError: No module named 'telegram_bot'</code><a class="headerlink" href="#modulenotfounderror-no-module-named-telegram_bot" title="Link to this section">&para;</a></h2>
+<p>The 1.x package name was a deprecated shim in 2.x and is gone in 3.0. The
+package is <code>django_aiogram</code>: use it in <code>INSTALLED_APPS</code>, import from it,
+and note that <code>TelegramBot</code> lives in <code>django_aiogram.producer.client</code> while the
+settings module is <code>django_aiogram.config.settings</code>. See <strong><a href="../Upgrading/">Upgrading</a></strong>.</p>
+<h2 id="the-event-log-writes-nothing">The event log writes nothing<a class="headerlink" href="#the-event-log-writes-nothing" title="Link to this section">&para;</a></h2>
+<p>In order of how often it is the answer:</p>
+<ol>
+<li><code>TELEGRAM_BOT['EVENT_LOG']</code> is off. It is off by default, and <code>record()</code>
+   returns before it reads anything else.</li>
+<li><code>migrate</code> has not run. The writer logs <code>no such table</code> once per batch and
+   drops what it held; after five failures in a row it suspends for a minute
+   rather than hammering the database, and records a <code>log.dropped</code> row for the
+   gap once it gets through again.</li>
+<li>The process you are looking at is not the one that records. <code>outbound.queued</code>
+   is written by whichever process queued the message — through <code>enqueue</code> or
+   <code>aenqueue</code>, and <code>send</code>/<code>asend</code> outside the worker reach one of those —
+   <code>outbound.sent</code> by the bot container. Enabling the log in one and not the other gives you half a
+   story, and that is not a bug.</li>
+<li><code>EVENT_LOG_KINDS</code> is set and excludes what you are looking for. The list is
+   <strong>inclusive</strong>: naming anything drops everything unnamed, including kinds a
+   later release adds. <code>W008</code> warns when it names a kind this version does not
+   know.</li>
+<li>Nothing has been flushed yet. The writer batches on a timer, so a test that
+   asserts immediately needs <code>recorder.flush()</code>. See <strong><a href="../Testing/">Testing</a></strong>.</li>
+</ol>
+<p><code>manage.py check</code> catches the configuration half of this: <code>W005</code> if the log is
+on with no database configured, <code>E041</code> if <code>EVENT_LOG_DATABASE</code> names an alias
+that does not exist.</p>
+<h2 id="the-admin-page-is-missing">The admin page is missing<a class="headerlink" href="#the-admin-page-is-missing" title="Link to this section">&para;</a></h2>
+<p>The changelist is registered in <code>ready()</code> only when <strong>both</strong> are true:
+<code>EVENT_LOG</code> is on, and <code>django.contrib.admin</code> is in <code>INSTALLED_APPS</code>. It is
+above the <code>ENABLED</code> gate on purpose — reading the feed is not talking to
+Telegram, so a web tier with <code>ENABLED=0</code> still shows it.</p>
+<p>The flag is read per request as well, so turning it off hides the page without
+a restart. If the app shows but every row 403s, the user is missing
+<code>view_telegramevent</code>; if the rows show but <code>detail</code> and <code>error</code> are absent,
+that is <code>view_telegramevent_payload</code> doing its job. See
+<strong><a href="../Event-log/">Event log</a></strong>.</p>
+<h2 id="getting-more-detail">Getting more detail<a class="headerlink" href="#getting-more-detail" title="Link to this section">&para;</a></h2>
+<p>Merge this logger into your existing <code>LOGGING</code>, keeping your own <code>version</code> and
+<code>handlers</code>:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">LOGGING</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="s1">'version'</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="s1">'disable_existing_loggers'</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="s1">'handlers'</span><span class="p">:</span> <span class="p">{</span><span class="s1">'console'</span><span class="p">:</span> <span class="p">{</span><span class="s1">'class'</span><span class="p">:</span> <span class="s1">'logging.StreamHandler'</span><span class="p">}},</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="s1">'loggers'</span><span class="p">:</span> <span class="p">{</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>        <span class="s1">'django_aiogram'</span><span class="p">:</span> <span class="p">{</span><span class="s1">'handlers'</span><span class="p">:</span> <span class="p">[</span><span class="s1">'console'</span><span class="p">],</span> <span class="s1">'level'</span><span class="p">:</span> <span class="s1">'DEBUG'</span><span class="p">},</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="p">},</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>See <strong><a href="../Logging/">Logging</a></strong> for the fields each event carries.</p>
+
+
+
+
+
+
+
+  
+    
+  
+  
+
+
+  <aside class="md-source-file">
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="Last update">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 2, 2026 07:45:06 UTC">September 2, 2026</span>
+  </span>
+
+    
+    
+    
+    
+  </aside>
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../Serialization/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Serialization">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Serialization
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../Upgrading/" class="md-footer__link md-footer__link--next" aria-label="Next: Upgrading">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Upgrading
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      MIT
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/CorneiZeR/django-aiogram" target="_blank" rel="noopener" title="The repository" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+    
+    
+    
+    
+    <a href="https://pypi.org/project/django-aiogram/" target="_blank" rel="noopener" title="The package on PyPI" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.8 200.5c-7.7-30.9-22.3-54.2-53.4-54.2h-40.1v47.4c0 36.8-31.2 67.8-66.8 67.8H172.7c-29.2 0-53.4 25-53.4 54.3v101.8c0 29 25.2 46 53.4 54.3 33.8 9.9 66.3 11.7 106.8 0 26.9-7.8 53.4-23.5 53.4-54.3v-40.7H226.2v-13.6h160.2c31.1 0 42.6-21.7 53.4-54.2 11.2-33.5 10.7-65.7 0-108.6M286.2 444.7a20.4 20.4 0 1 1 0-40.7 20.4 20.4 0 1 1 0 40.7M167.8 248.1h106.8c29.7 0 53.4-24.5 53.4-54.3V91.9c0-29-24.4-50.7-53.4-55.6-35.8-5.9-74.7-5.6-106.8.1-45.2 8-53.4 24.7-53.4 55.6v40.7h106.9v13.6h-147c-31.1 0-58.3 18.7-66.8 54.2-9.8 40.7-10.2 66.1 0 108.6 7.6 31.6 25.7 54.2 56.8 54.2H101v-48.8c0-35.3 30.5-66.4 66.8-66.4m-6.6-183.4a20.4 20.4 0 1 1 0 40.8 20.4 20.4 0 1 1 0-40.8"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tracking", "navigation.sections", "navigation.top", "navigation.footer", "toc.follow", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate", "content.action.edit", "content.tabs.link"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"alias": true, "provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

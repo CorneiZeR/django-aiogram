@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="django-aiogram">
+  <!-- The logo does not survive 16 pixels: three shapes and two rules become mud. So the
+       favicon keeps only what is recognisable at that size -- the two ends of the wire, on
+       the project's own ground. -->
+  <rect width="32" height="32" rx="7" fill="#08120f"/>
+  <circle cx="11" cy="16" r="4.5" fill="#44b78b"/>
+  <circle cx="22" cy="16" r="4.5" fill="#2aabee"/>
+</svg>
