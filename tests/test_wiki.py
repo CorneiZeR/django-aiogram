@@ -68,6 +68,25 @@ def headings_of(path: Path) -> set[str]:
     return slugs
 
 
+def published_ids(html: str) -> set[str]:
+    """The heading ids a built page carries, with duplicate suffixes folded onto their base.
+
+    A heading that appears twice publishes `slug` and then `slug_1`, and `headings_of` answers
+    with a set -- so the suffixed ones fold in rather than being modelled.
+
+    **Only where the base is published too.** A heading named `result_1` slugifies to
+    `result_1` and is nobody's duplicate, so folding every `_1`-shaped tail unconditionally
+    turned a valid id into one the page does not have, and failed the comparison for a page
+    whose anchors were all correct.
+    """
+    found = set(re.findall(r'<h[1-6][^>]*\bid="([^"]+)"', html))
+    folded = set()
+    for one in found:
+        suffixed = re.fullmatch(r'(.*)_\d+', one)
+        folded.add(suffixed.group(1) if suffixed and suffixed.group(1) in found else one)
+    return folded
+
+
 def slugify(text: str) -> str:
     """Turn heading text into its anchor, as `markdown.extensions.toc.slugify` does."""
     stripped = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('ascii')
@@ -107,13 +126,7 @@ def test_the_slugs_match_the_ones_the_build_publishes(path):
     # so a missing page is a failure now and only an unbuilt `site/` is a skip
     built = ROOT / 'site' / ('index.html' if path.stem == 'index' else f'{path.stem}/index.html')
     assert built.exists(), f'site/ is built and has no page for {path.name}: expected {built}'
-    # `_1` and `_2` are what the toc extension appends to a repeated heading, and `headings_of`
-    # answers with a set -- so the suffixes are dropped rather than modelled, and a page with
-    # two `## Run migrate` sections still compares equal
-    published = {
-        re.sub(r'_\d+$', '', found)
-        for found in re.findall(r'<h[1-6][^>]*\bid="([^"]+)"', built.read_text(encoding='utf-8'))
-    }
+    published = published_ids(built.read_text(encoding='utf-8'))
     computed = headings_of(path)
 
     # both directions, and non-empty. `computed <= published` was the first draft, and it holds
@@ -554,6 +567,27 @@ def test_a_parenthetical_is_only_stripped_when_it_is_a_link_target(heading, slug
     page.write_text(f'{heading}\n', encoding='utf-8')
 
     assert headings_of(page) == {slug}
+
+
+@pytest.mark.parametrize(
+    ('ids', 'folded'),
+    [
+        (['run-migrate', 'run-migrate_1', 'run-migrate_2'], {'run-migrate'}),
+        (['result_1'], {'result_1'}),
+        (['result', 'result_1'], {'result'}),
+        (['a_1', 'b'], {'a_1', 'b'}),
+    ],
+)
+def test_a_suffixed_id_is_a_duplicate_only_when_its_base_is_published(ids, folded):
+    """`_1` is the toc extension's mark for a repeat, and also a legal part of a heading.
+
+    Stripping it unconditionally turned `result_1` -- which is what a heading of that name
+    slugifies to, and nobody's duplicate -- into `result`, so the comparison failed for a
+    page whose anchors were all correct.
+    """
+    html = ''.join(f'<h2 id="{one}">x</h2>' for one in ids)
+
+    assert published_ids(html) == folded
 
 
 def test_a_link_in_the_wrong_case_does_not_count(tmp_path, monkeypatch):
