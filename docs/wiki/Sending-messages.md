@@ -163,7 +163,9 @@ It needs `EVENT_LOG` on and an `EVENT_LOG_KINDS` that is empty or keeps the four
 outcome is decided from, **in the bot container as well as here** — the rows are written by
 whichever process sent the message, and the refusal can only speak for the process that
 asks. A `log.dropped` row is the other reason a delivered message has none. A state of
-`pending` or `unknown` means ask again rather than never —
+`pending` or `unknown` means ask again — within a bound of your own, because `unknown` can
+be permanent and after that bound the honest answer is *unresolved* rather than another
+poll. See
 **[Event log](Event-log.md#what-became-of-one-message)** has the four states and what
 `unknown` does not tell you. There is no waiting built in on purpose: blocking a request on
 the bot container is what the queue exists to avoid.

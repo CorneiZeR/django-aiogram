@@ -59,7 +59,11 @@ def headings_of(path: Path) -> set[str]:
     for line in visible(path.read_text(encoding='utf-8')).splitlines():
         found = ATX.match(line)
         if found:
-            text = re.sub(r'`|\*|\[|\]|\(.*?\)', '', found.group(1))
+            # a link becomes its own text, which is what the renderer slugifies. Deleting
+            # every parenthetical instead ate literal ones: `## Install (optional)` computed
+            # `install` where the build publishes `install-optional`
+            linked = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', found.group(1))
+            text = re.sub(r'[`*\[\]]', '', linked)
             slugs.add(slugify(text))
     return slugs
 
@@ -527,6 +531,29 @@ def test_the_readme_links_to_every_page():
     missing = page_names() - linked - {'index'}
 
     assert not missing, f'pages the README does not link to: {sorted(missing)}'
+
+
+@pytest.mark.parametrize(
+    ('heading', 'slug'),
+    [
+        ('## Install (optional)', 'install-optional'),
+        ('## See [the page](Other.md)', 'see-the-page'),
+        ('## `bot.outcome()` says `unknown`', 'botoutcome-says-unknown'),
+        ('## E001-E049, W001', 'e001-e049-w001'),
+    ],
+)
+def test_a_parenthetical_is_only_stripped_when_it_is_a_link_target(heading, slug, tmp_path):
+    """Two jobs one regex was doing, and it got the second wrong.
+
+    `[text](target)` has to become its text, because that is what the renderer slugifies.
+    Deleting every parenthetical did that and also ate literal ones, so a heading holding
+    `(optional)` computed a slug the build does not publish -- and
+    `test_every_anchor_resolves` would have called a live link dangling.
+    """
+    page = tmp_path / 'Page.md'
+    page.write_text(f'{heading}\n', encoding='utf-8')
+
+    assert headings_of(page) == {slug}
 
 
 def test_a_link_in_the_wrong_case_does_not_count(tmp_path, monkeypatch):

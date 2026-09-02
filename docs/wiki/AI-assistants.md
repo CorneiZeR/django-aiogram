@@ -59,7 +59,9 @@ Project uses django-aiogram 4.x. Rules:
   Telegram's. It needs EVENT_LOG=True and an EVENT_LOG_KINDS that is either empty
   or keeps outbound.sent, outbound.failed, outbound.dropped and outbound.queued;
   otherwise the call raises and names what is missing. A state of `pending` or
-  `unknown` means ask again later. Do not write a loop that blocks a request for it.
+  `unknown` means ask again later, within a bound of your own — `unknown` can be
+  permanent, so after that bound treat it as unresolved rather than polling on.
+  Do not write a loop that blocks a request waiting for it.
 - `python manage.py check` validates the settings; treat its E0xx/W0xx output as
   the spec.
 - Run `python manage.py migrate` after upgrading. The package ships one table,

@@ -61,11 +61,15 @@ class RateLimitKey(str, Enum):
 class OutcomeState(str, Enum):
     """What the feed can say about one correlation id, and the four are exhaustive.
 
-    ``UNKNOWN`` and ``PENDING`` are deliberately apart. Under ``UNKNOWN`` nothing has been
-    recorded against the id at all; under ``PENDING`` something has, and it has not
-    finished. A caller polling for a result treats both as *not yet*, and an operator
-    reading ``unknown`` a minute later knows to look at whether the log dropped the event
-    rather than at the queue.
+    ``UNKNOWN`` and ``PENDING`` are deliberately apart. Under ``UNKNOWN`` none of the
+    *outbound* rows an outcome is decided from has been recorded — others may well exist
+    under the id, a handler's ``inbound.*`` among them, and none of those decides anything.
+    Under ``PENDING`` a deciding row exists and it is not an ending.
+
+    A caller polling for a result treats both as *not yet*, and bounds its own polling:
+    ``UNKNOWN`` can be permanent, because the writer drops events under pressure and
+    retention prunes them. An operator reading ``unknown`` a minute later knows to look at
+    whether the log dropped the event rather than at the queue.
     """
 
     SENT = 'sent'
