@@ -54,6 +54,10 @@ Project uses django-aiogram 4.x. Rules:
   in the bot container, so do it only on a queue nothing untrusted can write to.
 - A queued send cannot raise in the caller. Failures are logged by the worker.
   Use bot.send_raw with RAISE_EXCEPTION only when the caller must see the error.
+- To edit or delete a message you queued, read its `message_id` back with
+  `bot.outcome(identifier)` — the id `send()` returned is a correlation id and not
+  Telegram's. It needs EVENT_LOG=True, and a state of `pending` or `unknown` means
+  ask again later. Do not write a loop that blocks a request waiting for it.
 - `python manage.py check` validates the settings; treat its E0xx/W0xx output as
   the spec.
 - Run `python manage.py migrate` after upgrading. The package ships one table,

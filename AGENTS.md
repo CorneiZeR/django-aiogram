@@ -54,9 +54,10 @@ src/django_aiogram/
         pacing.py       the writer's numbers, and the promise that reading one never raises
         bookkeeping.py  the drop ledger and the thread marks, one lock each
         publishing.py   the fan-out to events_recorded, which cannot raise
-        writer.py       the only module that touches the ORM
+        writer.py       the only module that *writes* through the ORM; outcomes reads
         events.py       the event-kind registry and the correlation id
         instrumentation.py  the update middleware and the storage wrapper
+        outcomes.py     reading one message's fate back out, by correlation id
         signals.py      events_recorded, the metrics seam; imports only django.dispatch
         moving.py       what 3.x's table was, and what the two tables share
         dbrouter.py     optional routing of the log to its own database

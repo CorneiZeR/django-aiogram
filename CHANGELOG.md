@@ -4,6 +4,34 @@
 
 ### Added
 
+- **A caller can find out which message its send produced.** `bot.send()` answers with a
+  correlation id, and the reply Telegram gave is produced in the bot container — so a message
+  queued from a web request could never be edited or deleted by whoever queued it, for want
+  of the one id Telegram will ever give it.
+
+  Nothing new is stored: the `outbound.sent` row has carried `message_id` and `chat_id` since
+  the log existed, which is everything an edit needs. What was missing was a way to ask, and
+  any statement that it was there. `bot.outcome(identifier)` — `bot.aoutcome()` awaiting, and
+  `django_aiogram.eventlog.outcomes.outcome()` for code with no bot to hand — answers with a
+  `state` of `sent`, `failed`, `pending` or `unknown`, the ids Telegram gave, `at`, `error`
+  and `attempt`.
+
+  `sent` wins over anything written after it, because an id is not one per message: a
+  handler's replies inherit the id of the update that caused them, so a later `retried` may
+  belong to a different message under the same id. `Outcome.sent` is all of them, newest
+  first, and the convenience readers take the newest.
+
+  **The feed is the only source, and that is a decision.** The recorder drops an event rather
+  than let a send wait for the database, so a store that always holds the answer would be a
+  promise this package refuses to make everywhere else. `unknown` therefore has three causes
+  it cannot tell apart — not yet, dropped under pressure, or pruned — and the page says so:
+  treat it as *not yet* and give up on a bound of your own.
+
+  The two configurations where no outcome can ever exist raise `OutcomesUnavailableError` at
+  the call instead of answering `unknown` for ever: `EVENT_LOG` off, and an `EVENT_LOG_KINDS`
+  that leaves `outbound.sent` out. There is no built-in wait, deliberately — blocking a
+  request on the bot container is what the queue exists to avoid.
+
 - **A send inside `transaction.atomic()` can now wait for the commit.** `bot.send()` writes
   to the broker as it is called, and that write was never part of the caller's transaction:
   a block that created a row, announced it in Telegram and then raised left the message sent

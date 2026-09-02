@@ -36,7 +36,7 @@ import uuid
 from asyncio import AbstractEventLoop
 from collections.abc import Callable, Coroutine, Iterable
 from concurrent import futures
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from aiogram import Bot, Dispatcher, Router, exceptions
 from aiogram.types import Update
@@ -60,6 +60,12 @@ from django_aiogram.producer.queueing import Queueing, chunks, publishing, seria
 from django_aiogram.producer.routing import RouterShortcuts
 from django_aiogram.producer.throttling import RateLimiter, get_rate_limiter
 from django_aiogram.redis import aclose_redis
+
+if TYPE_CHECKING:
+    # `outcomes` reaches the ORM through `writer`, and this module is imported by
+    # `_singleton` on the first touch of `bot` — earlier than the app registry in a process
+    # that only ever queues. The two methods below import it when they are called
+    from django_aiogram.eventlog.outcomes import Outcome
 
 logger = logging.getLogger('django_aiogram')
 
@@ -704,7 +710,9 @@ class TelegramBot(RouterShortcuts):
                         outbound,
                         attempt=retries,
                         # the return value used to be thrown away, and it carries
-                        # the only id Telegram will ever give for this message
+                        # the only id Telegram will ever give for this message.
+                        # `eventlog.outcomes` is what reads it back out, in the process
+                        # that queued the send and never saw the reply
                         message_id=getattr(result, 'message_id', None),
                         duration_ms=int((time.monotonic() - started) * 1000),
                         detail={
@@ -1254,6 +1262,30 @@ class TelegramBot(RouterShortcuts):
         has one, and from anything that runs a loop per unit of work.
         """
         await aclose_redis()
+
+    @staticmethod
+    def outcome(correlation_id: uuid.UUID | str) -> 'Outcome':
+        """Report what became of the message this id names, read back from the event log.
+
+        The id :meth:`send` returned, and the answer carries the ``message_id`` Telegram
+        gave — which is what an edit or a delete needs and what a process that only queued
+        the send never had. See :mod:`django_aiogram.eventlog.outcomes` for what the four
+        states mean and for why an absent row is not a failed send.
+
+        A ``staticmethod`` because it reads a table and nothing this instance holds. It is a
+        method anyway, and not only a function in that module, because ``bot.send()`` is
+        where the id came from and this is the same object it should be handed back to.
+        """
+        from django_aiogram.eventlog.outcomes import outcome  # noqa: PLC0415 - django.db, not at import
+
+        return outcome(correlation_id)
+
+    @staticmethod
+    async def aoutcome(correlation_id: uuid.UUID | str) -> 'Outcome':
+        """:meth:`outcome` without blocking the loop this coroutine runs on."""
+        from django_aiogram.eventlog.outcomes import aoutcome  # noqa: PLC0415 - as above
+
+        return await aoutcome(correlation_id)
 
     def queue_depth(self) -> int:
         """How many messages are waiting for a worker to take them.

@@ -75,6 +75,14 @@ class DeliveryNotConfiguredError(DjangoRedisAiogramError, ValueError):
         super().__init__(f"{SETTINGS_NAME}['DELIVERY'] is {path!r}: {detail}")
 
 
+class OutcomesUnavailableError(DjangoRedisAiogramError, LookupError):
+    """An outcome was asked for in a configuration that never records one.
+
+    A refusal rather than a permanent ``unknown``: that state means *not yet*, and a caller
+    polling for a result it will never get has no way to tell the two apart.
+    """
+
+
 class SerializationError(DjangoRedisAiogramError):
     """A payload could not be encoded or decoded."""
 

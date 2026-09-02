@@ -271,6 +271,23 @@ transaction does not run commit hooks when it ends, `atomic()` blocks inside it 
 the write is made immediately and the log says so once: *publishing without waiting for a
 commit*.
 
+## `bot.outcome()` says `unknown` for a message that was delivered
+
+`unknown` means nothing has been recorded against that correlation id, and three different
+things produce it. The row has not been written yet — the writer batches, so allow
+`EVENT_LOG_FLUSH_INTERVAL`. Or the event was dropped under pressure, which leaves a
+`log.dropped` row behind it; check for one around that time. Or
+`EVENT_LOG_RETENTION_DAYS` has pruned it.
+
+None of those are the two configurations where an outcome cannot exist at all: `EVENT_LOG`
+off, and an `EVENT_LOG_KINDS` that leaves `outbound.sent` out. Both raise
+`OutcomesUnavailableError` rather than answering, so if you are seeing `unknown` the
+recording is switched on and the row is simply not there.
+
+Reading `unknown` for everything, on a project with `EVENT_LOG_DATABASE` set, means the
+query is going to the wrong alias — `outcome()` uses the log's, so this is a sign of a
+hand-written query rather than of this one.
+
 ## The bot ignores ENABLED
 
 `ENABLED` is parsed, so `'false'` disables. If a value cannot be parsed you get

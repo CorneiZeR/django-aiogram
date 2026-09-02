@@ -104,6 +104,52 @@ container's admin filter. Namespace as `<app>.<noun>.<verb>` and keep the total
 in the tens: `kind` leads an index, and that index is only worth having while
 its cardinality stays low.
 
+## What became of one message
+
+`bot.send()` answers with a correlation id, and the reply Telegram gave is produced in the
+bot container — a different process from the one that queued the call. So the `message_id`
+was out of reach of whoever sent the message, which is the id an edit or a delete needs.
+
+It has been in the table all along. `bot.outcome()` is what asks:
+
+```python
+from django_aiogram import bot
+
+identifier = bot.send(chat_id=CHAT_ID, text='Working…')
+...
+answer = bot.outcome(identifier)
+if answer.state == 'sent':
+    bot.send('edit_message_text', chat_id=answer.chat_id, message_id=answer.message_id, text='Done')
+```
+
+Four states, and the last two are not the same question:
+
+| `state` | what the feed holds | what it means |
+| --- | --- | --- |
+| `sent` | an `outbound.sent` row | Telegram accepted it; `message_id` and `chat_id` are set |
+| `failed` | `outbound.failed` or `outbound.dropped`, and no `sent` | it will not arrive; `error` says why |
+| `pending` | only `queued`, `consumed` or `retried` | on its way — ask again |
+| `unknown` | nothing at all | nothing has been recorded **yet**, or nothing ever will be |
+
+`sent` wins over anything written after it, because an id is not one per message: a
+handler's replies inherit the id of the update that caused them, so a later `retried` may
+belong to a different message under the same id. `answer.sent` is every message recorded
+under it, newest first, and `message_id`, `chat_id` and `at` read the newest — which is the
+answer when one `send()` produced one message.
+
+**`unknown` has three causes and the feed cannot tell them apart.** The message has not got
+there yet; or the writer dropped the event under pressure, which the section below explains
+and a `log.dropped` row marks; or `EVENT_LOG_RETENTION_DAYS` has pruned it. So treat it as
+*not yet* and give up after a bound of your own — this is a feed, not a receipt.
+
+The two configurations where no outcome can ever exist are refused rather than answered
+`unknown` for ever: `EVENT_LOG` off, and an `EVENT_LOG_KINDS` that leaves `outbound.sent`
+out. Both raise `OutcomesUnavailableError` at the call.
+
+`await bot.aoutcome(identifier)` is the same read without blocking the loop, and
+`django_aiogram.eventlog.outcomes.outcome()` is the function behind both for code that has
+no bot to hand.
+
 ## Nothing waits for the database
 
 Recording hands the event to a bounded in-memory queue; one background thread

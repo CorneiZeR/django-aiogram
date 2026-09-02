@@ -50,6 +50,9 @@ it, and `django_aiogram.redis.redis_conn` is the same object in the module that 
 | `bot.send_raw(...)` | always call Telegram from this process |
 | `bot.send_many(chat_ids, function='send_message', *, chunk_size=100, **kwargs)` | queue rather than call, one message per chat, a chunk per round trip |
 
+| `bot.outcome(correlation_id)` | what became of the message that id names, read from the event log |
+| `bot.aoutcome(correlation_id)` | as `outcome`, without blocking the loop |
+
 `function` must name a Telegram API method aiogram exposes; anything else raises
 `ValueError` before it reaches the queue. See **[Sending messages](Sending-messages.md)**.
 
@@ -263,6 +266,7 @@ TELEGRAM_BOT = {
 | `RateLimitKey` | the three `RATE_LIMIT` keys |
 | `SerializationTag` | the `__model__`-style markers a queued payload carries |
 | `EventKind` | what an event log row can be: `outbound.*`, `inbound.*`, `fsm.transition`, `queue.*`, `log.dropped` |
+| `OutcomeState` | what `bot.outcome()` can answer: `SENT`, `FAILED`, `PENDING`, `UNKNOWN` |
 
 They are `(str, Enum)`, so a member compares equal to its string and works
 anywhere the string does. `choices(SerializerKind)` gives the plain-string set,
@@ -281,6 +285,7 @@ member may be renamed but never revalued.
 
 ```python
 from django_aiogram.eventlog.events import failure_kinds, kind_choices, register_kind
+from django_aiogram.eventlog.outcomes import Outcome, SentMessage, aoutcome, outcome
 from django_aiogram.models import TelegramEvent
 from django_aiogram.eventlog.signals import events_recorded
 ```
@@ -298,6 +303,13 @@ one message's history, and what a chat has seen:
 TelegramEvent.objects.filter(correlation_id=identifier).order_by('id')
 TelegramEvent.objects.filter(chat_id=chat_id).order_by('-id')[:50]
 ```
+
+The first of those two has an answer written for it. `bot.outcome(identifier)` — or
+`outcome()`, the function behind it — returns an `Outcome`: a `state` of `sent`, `failed`,
+`pending` or `unknown`, the `message_id` and `chat_id` Telegram gave, `at`, `error`,
+`attempt`, and `sent` for every message recorded under the id. `bot.aoutcome()` is the
+awaiting twin. See **[Event log](Event-log.md#what-became-of-one-message)** for what each
+state means and what `unknown` does not mean.
 
 A row written since the column arrived also carries a **short id**: the same
 message in twelve characters a person can read out, which is what the admin's

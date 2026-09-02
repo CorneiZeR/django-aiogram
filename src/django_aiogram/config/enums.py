@@ -58,6 +58,21 @@ class RateLimitKey(str, Enum):
 
 
 @unique
+class OutcomeState(str, Enum):
+    """What the feed can say about one correlation id, and the four are exhaustive.
+
+    ``UNKNOWN`` and ``PENDING`` are deliberately apart: nothing has been recorded against
+    the id at all, against something has and it has not finished. A caller polling for a
+    result treats both as *not yet*, and an operator reading ``unknown`` a minute later
+    knows to look at whether the log dropped it rather than at the queue.
+    """
+
+    SENT = 'sent'
+    FAILED = 'failed'
+    PENDING = 'pending'
+    UNKNOWN = 'unknown'
+
+
 class EventKind(str, Enum):
     """What one row of the event log records.
 

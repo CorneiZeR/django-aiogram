@@ -138,6 +138,32 @@ bot.send('send_photo', chat_id=CHAT_ID, photo=BufferedInputFile(data, filename='
 `FSInputFile` carries a path, so the file has to exist in the **bot container**
 too — share a volume, or send bytes with `BufferedInputFile`.
 
+## Editing a message you queued
+
+`send()` hands back a correlation id, not a `message_id` — the reply Telegram gave belongs
+to the bot container, and the caller is somewhere else. The id an edit needs is recorded
+against that correlation id, and `bot.outcome()` reads it back:
+
+```python
+identifier = bot.send(chat_id=CHAT_ID, text='Import started…')
+Job.objects.filter(pk=job.pk).update(telegram_correlation_id=identifier)
+
+# later, in the task that finishes the work
+answer = bot.outcome(job.telegram_correlation_id)
+if answer.state == 'sent':
+    bot.send(
+        'edit_message_text',
+        chat_id=answer.chat_id,
+        message_id=answer.message_id,
+        text='Import finished',
+    )
+```
+
+It needs the event log on, and `pending` or `unknown` means ask again rather than never —
+**[Event log](Event-log.md#what-became-of-one-message)** has the four states and what
+`unknown` does not tell you. There is no waiting built in on purpose: blocking a request on
+the bot container is what the queue exists to avoid.
+
 ## Inside a transaction
 
 A send writes to the broker as it is called, and that write is not part of your

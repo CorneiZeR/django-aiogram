@@ -10,6 +10,13 @@ Nothing is required. Every setting 4.0 had keeps its meaning and its default, no
 runs, and the wire format is unchanged — so the bot container and the web tier may be
 deployed in either order.
 
+## `bot.outcome()` is new, and needs the event log
+
+Nothing to do, but worth knowing it exists: the `message_id` Telegram gave for a queued
+message is readable by the process that queued it now, which is what an edit or a delete
+needs. It reads the `outbound.sent` row, so it wants `EVENT_LOG` on — see
+**[Event log](Event-log.md#what-became-of-one-message)**.
+
 ## Decide about `TRANSACTIONAL`
 
 New, and `False`, so an upgrade changes nothing until you say otherwise. It is worth a
