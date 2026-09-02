@@ -279,10 +279,13 @@ things produce it. The row has not been written yet — the writer batches, so a
 `log.dropped` row behind it; check for one around that time. Or
 `EVENT_LOG_RETENTION_DAYS` has pruned it.
 
-None of those are the two configurations where an outcome cannot exist at all: `EVENT_LOG`
-off, and an `EVENT_LOG_KINDS` that leaves `outbound.sent` out. Both raise
-`OutcomesUnavailableError` rather than answering, so if you are seeing `unknown` the
-recording is switched on and the row is simply not there.
+Getting `unknown` rather than `OutcomesUnavailableError` says only that **this** process is
+configured to record outcomes — `EVENT_LOG` on, and `outbound.sent` among the kinds it
+keeps. It says nothing about the process that sent the message: the bot container reads its
+own settings, so a container with the log off, or with a narrower `EVENT_LOG_KINDS`, writes
+no row for a message it delivered perfectly well. Nor does it say the writer succeeded;
+that is what the `log.dropped` row above is for. Compare the two processes' settings before
+concluding the message never went out.
 
 Reading `unknown` for everything, on a project with `EVENT_LOG_DATABASE` set, means the
 query is going to the wrong alias — `outcome()` uses the log's, so this is a sign of a

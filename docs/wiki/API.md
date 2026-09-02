@@ -266,7 +266,6 @@ TELEGRAM_BOT = {
 | `RateLimitKey` | the three `RATE_LIMIT` keys |
 | `SerializationTag` | the `__model__`-style markers a queued payload carries |
 | `EventKind` | what an event log row can be: `outbound.*`, `inbound.*`, `fsm.transition`, `queue.*`, `log.dropped` |
-| `OutcomeState` | what `bot.outcome()` can answer: `SENT`, `FAILED`, `PENDING`, `UNKNOWN` |
 
 They are `(str, Enum)`, so a member compares equal to its string and works
 anywhere the string does. `choices(SerializerKind)` gives the plain-string set,
@@ -310,6 +309,14 @@ The first of those two has an answer written for it. `bot.outcome(identifier)` â
 `attempt`, and `sent` for every message recorded under the id. `bot.aoutcome()` is the
 awaiting twin. See **[Event log](Event-log.md#what-became-of-one-message)** for what each
 state means and what `unknown` does not mean.
+
+`state` is an `OutcomeState`, which is `(str, Enum)` like the rest â€” so `== 'sent'` and
+`is OutcomeState.SENT` are the same test. It is not a value any setting accepts, which is
+why it is here rather than in the table above.
+
+It reads the `outbound.sent` row, so it needs `EVENT_LOG` on **and** an `EVENT_LOG_KINDS`
+that is empty or includes `outbound.sent`. Either one missing raises
+`OutcomesUnavailableError` at the call rather than answering `unknown` for ever.
 
 A row written since the column arrived also carries a **short id**: the same
 message in twelve characters a person can read out, which is what the admin's

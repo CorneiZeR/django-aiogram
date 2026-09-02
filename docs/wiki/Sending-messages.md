@@ -159,7 +159,9 @@ if answer.state == 'sent':
     )
 ```
 
-It needs the event log on, and `pending` or `unknown` means ask again rather than never —
+It needs `EVENT_LOG` on and an `EVENT_LOG_KINDS` that is empty or includes
+`outbound.sent`; either one missing raises `OutcomesUnavailableError` at the call. A state
+of `pending` or `unknown` means ask again rather than never —
 **[Event log](Event-log.md#what-became-of-one-message)** has the four states and what
 `unknown` does not tell you. There is no waiting built in on purpose: blocking a request on
 the bot container is what the queue exists to avoid.

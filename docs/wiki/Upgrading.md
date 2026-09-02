@@ -14,7 +14,9 @@ deployed in either order.
 
 Nothing to do, but worth knowing it exists: the `message_id` Telegram gave for a queued
 message is readable by the process that queued it now, which is what an edit or a delete
-needs. It reads the `outbound.sent` row, so it wants `EVENT_LOG` on — see
+needs. It reads the `outbound.sent` row, so it wants `EVENT_LOG` on and an
+`EVENT_LOG_KINDS` that is empty or includes that kind — either one missing raises
+`OutcomesUnavailableError` at the call. See
 **[Event log](Event-log.md#what-became-of-one-message)**.
 
 ## Decide about `TRANSACTIONAL`
