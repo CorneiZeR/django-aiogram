@@ -21,6 +21,15 @@
   belong to a different message under the same id. `Outcome.sent` is all of them, newest
   first, and the convenience readers take the newest.
 
+  **`failed` means it will not arrive, so a drop is weighed rather than counted.**
+  `outbound.dropped` is written from three places and only some of them are the end of the
+  message: retries exhausted and a `serialising` stage are, while a `queueing` stage means
+  the publish raised and may still have been applied — the one case a caller must not
+  re-send — and a shutdown's `NotScheduled` depends on where the send came from, which the
+  feed says. A message that came off the queue was refused without being acknowledged and
+  the next start reclaims it; a direct `send_raw` was never on a queue and nothing will.
+  Both read as `pending` and `failed` respectively, and `Event log` has the table.
+
   **The feed is the only source, and that is a decision.** The recorder drops an event rather
   than let a send wait for the database, so a store that always holds the answer would be a
   promise this package refuses to make everywhere else. `unknown` therefore has three causes

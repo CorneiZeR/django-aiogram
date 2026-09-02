@@ -127,9 +127,20 @@ Four states, and the last two are not the same question:
 | `state` | what the feed holds | what it means |
 | --- | --- | --- |
 | `sent` | an `outbound.sent` row | Telegram accepted it; `message_id` and `chat_id` are set |
-| `failed` | `outbound.failed` or `outbound.dropped`, and no `sent` | it will not arrive; `error` says why |
-| `pending` | only `queued`, `consumed` or `retried` | on its way — ask again |
+| `failed` | `outbound.failed`, or a drop the row says is the end | it will not arrive; `error` says why |
+| `pending` | `queued`, `consumed`, `retried`, or a drop that may still be delivered | on its way — ask again |
 | `unknown` | nothing at all | nothing has been recorded **yet**, or nothing ever will be |
+
+**Not every `outbound.dropped` row is a failure**, and the difference matters because a
+caller told `failed` re-sends. That kind is written from three places:
+
+| the row says | state | why |
+| --- | --- | --- |
+| `detail.max_retries` | `failed` | Telegram kept refusing and the message was acknowledged |
+| `detail.stage` is `serialising` | `failed` | the payload never left the process; re-sending is safe |
+| `detail.stage` is `queueing` | `pending` | the publish raised and **may still have been applied** — this is the one not to re-send |
+| `NotScheduled`, with an `outbound.queued` row | `pending` | a shutdown refused it without acknowledging, so the next start reclaims it |
+| `NotScheduled`, with no `queued` row | `failed` | a direct `send_raw` was never on a queue, so nothing will reclaim it |
 
 `sent` wins over anything written after it, because an id is not one per message: a
 handler's replies inherit the id of the update that caused them, so a later `retried` may

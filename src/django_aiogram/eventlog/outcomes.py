@@ -139,6 +139,39 @@ def _rows(identifier: uuid.UUID) -> 'Iterator[TelegramEvent]':
     )
 
 
+def _cannot_come_back(row: 'TelegramEvent', *, queued: bool) -> bool:
+    """Whether this drop row means the message will never arrive.
+
+    ``outbound.dropped`` is written from three places and only some of them are the end of
+    the message, which is why this reads the row rather than the kind. Calling the others
+    ``failed`` is not a cosmetic mistake: a caller told a message will not arrive re-sends
+    it, and two of these three are cases where the first one still might.
+
+    * **Retries exhausted** — ``detail`` carries ``max_retries``. Telegram kept refusing and
+      the consumer has acknowledged the message. Nothing will try again.
+    * **``stage`` is ``serialising``** — the payload never left the process, so there is
+      nothing on any queue. Nothing will try again, and re-sending is safe.
+    * **``stage`` is ``queueing``** — the publish raised, and a publish that raised may
+      still have been applied. The message may yet be delivered by a worker, so this is
+      *pending*: the one thing a caller must not do is re-send it.
+    * **``NotScheduled``** — refused or cancelled by a shutdown. Whether it comes back
+      depends on where the send came from, and the feed says which: a message that came off
+      the queue was refused *without* being acknowledged, so it is still in the in-flight
+      list for the next start to reclaim, and one row proves it was queued. A direct
+      ``send_raw`` was never on a queue, so nothing will reclaim it and this row is the only
+      one it will ever have.
+    """
+    detail = row.detail or {}
+    if 'max_retries' in detail:
+        return True
+    stage = detail.get('stage')
+    if stage is not None:
+        # a JSONField holds whatever was written, so the comparison is against the string
+        # this package writes and not against the column's type
+        return str(stage) != 'queueing'
+    return not queued
+
+
 def _decide(identifier: uuid.UUID, rows: 'Iterable[TelegramEvent]') -> Outcome:
     """Reduce the rows to one answer, from the newest backwards.
 
@@ -146,19 +179,35 @@ def _decide(identifier: uuid.UUID, rows: 'Iterable[TelegramEvent]') -> Outcome:
     them again. A ``sent`` row anywhere in the set settles the state whatever came after
     it — a later ``retried`` belongs to a different message under the same id, and a send
     Telegram accepted is not made pending by one that did not.
+
+    A drop is weighed by :func:`_cannot_come_back` rather than counted as a failure, and the
+    ``queued`` row it needs is in the same set — which is why the query asks for that kind
+    even though a queued row alone only ever means *pending*.
     """
     sent: list[SentMessage] = []
     newest_sent: TelegramEvent | None = None
     failure: TelegramEvent | None = None
+    dropped: TelegramEvent | None = None
     progress: TelegramEvent | None = None
+    queued = False
     for row in rows:
         if row.kind == EventKind.OUTBOUND_SENT.value:
             sent.append(SentMessage(chat_id=row.chat_id, message_id=row.message_id, at=row.created_at))
             newest_sent = newest_sent or row
-        elif row.kind in (EventKind.OUTBOUND_FAILED.value, EventKind.OUTBOUND_DROPPED.value):
+        elif row.kind == EventKind.OUTBOUND_FAILED.value:
             failure = failure or row
+        elif row.kind == EventKind.OUTBOUND_DROPPED.value:
+            dropped = dropped or row
         else:
+            queued = queued or row.kind == EventKind.OUTBOUND_QUEUED.value
             progress = progress or row
+    if failure is None and dropped is not None:
+        # weighed after the loop, because the rule needs to know whether the message was
+        # ever queued and that row may come later in the walk than the drop
+        if _cannot_come_back(dropped, queued=queued):
+            failure = dropped
+        else:
+            progress = progress or dropped
     if newest_sent is not None:
         return Outcome(
             state=OutcomeState.SENT,

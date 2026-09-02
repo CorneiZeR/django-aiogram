@@ -168,6 +168,74 @@ def test_the_awaiting_twin_answers_the_same():
     assert answer.message_id == 11
 
 
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+@pytest.mark.parametrize('reader', ['outcome', 'aoutcome'])
+def test_the_methods_on_the_bot_reach_the_functions_behind_them(reader):
+    """Both delegates, driven rather than introspected.
+
+    `test_public_surface` asserts `aoutcome` is a coroutine function, and the test above
+    calls the module function -- so a wrapper that awaited nothing, or passed the wrong
+    argument, would have passed both.
+    """
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_SENT, chat_id=7, message_id=11)
+
+    call = getattr(TelegramBot(), reader)
+    answer = asyncio.run(call(identifier)) if reader == 'aoutcome' else call(identifier)
+
+    assert answer.state is OutcomeState.SENT
+    assert answer.message_id == 11
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_publish_that_may_still_have_landed_is_pending_and_not_failed():
+    """The one drop a caller must not re-send: `queueing` means the write may have applied.
+
+    Told `failed`, which is documented as "it will not arrive", a caller re-sends and the
+    chat gets the message twice.
+    """
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_DROPPED, error='the broker refused', detail={'stage': 'queueing'})
+
+    assert outcome(identifier).state is OutcomeState.PENDING
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+@pytest.mark.parametrize(
+    ('fields', 'why'),
+    [
+        ({'detail': {'stage': 'serialising'}}, 'the payload never left the process'),
+        ({'detail': {'max_retries': 10}}, 'telegram kept refusing and the message was acknowledged'),
+    ],
+)
+def test_a_drop_the_row_says_is_the_end_is_a_failure(fields, why):
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_DROPPED, error='no', **fields)
+
+    assert outcome(identifier).state is OutcomeState.FAILED, why
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_shutdown_drop_is_pending_for_a_queued_send_and_failed_for_a_direct_one():
+    """Same kind, same error code, opposite answers -- and the feed says which.
+
+    A message that came off the queue is refused without being acknowledged, so it is still
+    in the in-flight list and the next start reclaims it. A direct `send_raw` was never on a
+    queue, so nothing will, and its drop row is the only one it will ever have.
+    """
+    queued, direct = uuid.uuid4(), uuid.uuid4()
+    record(queued, EventKind.OUTBOUND_QUEUED)
+    record(queued, EventKind.OUTBOUND_DROPPED, error='cancelled at shutdown', error_code='NotScheduled')
+    record(direct, EventKind.OUTBOUND_DROPPED, error='cancelled at shutdown', error_code='NotScheduled')
+
+    assert outcome(queued).state is OutcomeState.PENDING
+    assert outcome(direct).state is OutcomeState.FAILED
+
+
 @pytest.mark.django_db(transaction=True, databases=['default', 'logs'])
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_DATABASE': 'logs'})
 def test_it_reads_the_alias_the_log_is_written_to():
