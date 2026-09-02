@@ -145,7 +145,10 @@ to the bot container, and the caller is somewhere else. The id an edit needs is 
 against that correlation id, and `bot.outcome()` reads it back:
 
 ```python
-identifier = bot.send(chat_id=CHAT_ID, text='Import started…')
+from uuid import uuid4
+
+# an id of its own, so the outcome is about this message and no other
+identifier = bot.send(chat_id=CHAT_ID, text='Import started…', correlation_id=uuid4())
 Job.objects.filter(pk=job.pk).update(telegram_correlation_id=identifier)
 
 # later, in the task that finishes the work
@@ -159,13 +162,17 @@ if answer.state == 'sent':
     )
 ```
 
-It needs `EVENT_LOG` on and an `EVENT_LOG_KINDS` that is empty or keeps the four kinds an
-outcome is decided from, **in the bot container as well as here** — the rows are written by
+It needs `EVENT_LOG` on and an `EVENT_LOG_KINDS` that is empty or keeps the four kinds a
+correct outcome requires, **in the bot container as well as here** — the rows are written by
 whichever process sent the message, and the refusal can only speak for the process that
 asks. A `log.dropped` row is the other reason a delivered message has none. A state of
 `pending` or `unknown` means ask again — within a bound of your own, because `unknown` can
 be permanent and after that bound the honest answer is *unresolved* rather than another
-poll. See
+poll.
+
+**Pass an explicit `correlation_id` to any send whose own outcome you will use.** Inside a
+handler the id is inherited from the update, so every reply shares one and `outcome()`
+answers about the newest of them — an edit built on that can reach the wrong message.
 **[Event log](Event-log.md#what-became-of-one-message)** has the four states and what
 `unknown` does not tell you. There is no waiting built in on purpose: blocking a request on
 the bot container is what the queue exists to avoid.

@@ -315,7 +315,7 @@ state means and what `unknown` does not mean.
 why it is here rather than in the table above.
 
 It reads the feed, so it needs `EVENT_LOG` on **and** an `EVENT_LOG_KINDS` that is empty or
-keeps the four kinds an outcome is decided from. Either one missing raises
+keeps the four kinds a correct outcome requires. Either one missing raises
 `OutcomesUnavailableError` at the call, naming what to add, rather than answering `unknown`
 for ever.
 

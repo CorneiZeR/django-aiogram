@@ -172,7 +172,9 @@ walks the list. This is a feed, not a receipt.
 
 **A configuration that cannot answer refuses instead**, rather than reporting `unknown` for
 ever — the one word that means *not yet*. `EVENT_LOG` off is one. The other is an
-`EVENT_LOG_KINDS` that leaves out any kind an outcome is decided from, and there are four:
+`EVENT_LOG_KINDS` that leaves out any of the four kinds a **correct** outcome requires.
+Six kinds are read; these four are the ones whose absence changes an answer rather than
+sharpening it:
 
 The call refuses, so none of the rows below is something you can observe — each is what the
 refusal is *for*, which is why it demands the kind rather than answering without it:
@@ -184,9 +186,10 @@ refusal is *for*, which is why it demands the kind rather than answering without
 | `outbound.dropped` | the same, for the drops above |
 | `outbound.queued` | not a missing answer but a **wrong** one: the shutdown-drop rule reads this row, so without it a message the next start will deliver would be reported `failed` — and a caller acts on `failed` by re-sending |
 
-`outbound.consumed` and `outbound.retried` are not among them. They can only ever produce
-`pending`, so leaving them out moves an in-flight message to `unknown` — a different word
-for the same instruction — and costs precision rather than correctness.
+`outbound.consumed` and `outbound.retried` are the other two read, and are **not** required.
+They can only ever produce `pending`, so leaving them out moves an in-flight message to
+`unknown` — a different word for the same instruction — and costs precision rather than
+correctness.
 
 Either refusal is an `OutcomesUnavailableError` at the call, naming every kind that is
 missing at once. It is checked when asked rather than at boot on purpose: narrowing

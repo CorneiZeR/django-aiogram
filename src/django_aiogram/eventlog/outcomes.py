@@ -215,58 +215,58 @@ def _cannot_come_back(row: 'TelegramEvent', *, queued: bool) -> bool:
     return not queued
 
 
+def _is_ending(row: 'TelegramEvent', *, queued: bool) -> bool:
+    """Whether this row says the message will never arrive."""
+    if row.kind == EventKind.OUTBOUND_FAILED.value:
+        return True
+    if row.kind == EventKind.OUTBOUND_DROPPED.value:
+        return _cannot_come_back(row, queued=queued)
+    return False
+
+
 def _decide(identifier: uuid.UUID, rows: 'Iterable[TelegramEvent]') -> Outcome:
-    """Reduce the rows to one answer, from the newest backwards.
+    """Reduce the rows to one answer, newest first.
 
-    Ordered by ``-id`` and read once, so this walks a handful of rows rather than sorting
-    them again. A ``sent`` row anywhere in the set settles the state whatever came after
-    it — a later ``retried`` belongs to a different message under the same id, and a send
-    Telegram accepted is not made pending by one that did not.
+    A ``sent`` row anywhere in the set settles the state whatever came after it — a later
+    ``retried`` belongs to a different message under the same id, and a send Telegram
+    accepted is not made pending by one that did not.
 
-    A drop is weighed by :func:`_cannot_come_back` rather than counted as a failure, and the
-    ``queued`` row it needs is in the same set — which is why the query asks for that kind
-    even though a queued row alone only ever means *pending*.
+    Every other state takes its ``error`` and ``attempt`` from the **newest** row that bears
+    it, which is what the ordering is for. Classifying a drop inside the walk and keeping the
+    first failure found separately got that wrong in both directions: an older
+    ``outbound.failed`` beside a newer terminal drop described the older one, and an older
+    ``queued`` beside a newer drop that may still land kept the older attempt count. So the
+    drop is weighed here rather than after, and each answer is one scan for the newest row
+    that qualifies.
+
+    ``queued`` is read first because :func:`_cannot_come_back` needs it, and the row that
+    proves it may sit anywhere in the walk.
     """
-    sent: list[SentMessage] = []
-    newest_sent: TelegramEvent | None = None
-    failure: TelegramEvent | None = None
-    dropped: TelegramEvent | None = None
-    progress: TelegramEvent | None = None
-    queued = False
-    for row in rows:
-        if row.kind == EventKind.OUTBOUND_SENT.value:
-            sent.append(SentMessage(chat_id=row.chat_id, message_id=row.message_id, at=row.created_at))
-            newest_sent = newest_sent or row
-        elif row.kind == EventKind.OUTBOUND_FAILED.value:
-            failure = failure or row
-        elif row.kind == EventKind.OUTBOUND_DROPPED.value:
-            dropped = dropped or row
-        else:
-            queued = queued or row.kind == EventKind.OUTBOUND_QUEUED.value
-            progress = progress or row
-    if failure is None and dropped is not None:
-        # weighed after the loop, because the rule needs to know whether the message was
-        # ever queued and that row may come later in the walk than the drop
-        if _cannot_come_back(dropped, queued=queued):
-            failure = dropped
-        else:
-            progress = progress or dropped
-    if newest_sent is not None:
+    ordered = list(rows)
+    queued = any(row.kind == EventKind.OUTBOUND_QUEUED.value for row in ordered)
+
+    delivered = [row for row in ordered if row.kind == EventKind.OUTBOUND_SENT.value]
+    if delivered:
         return Outcome(
             state=OutcomeState.SENT,
             correlation_id=identifier,
-            sent=tuple(sent),
-            attempt=newest_sent.attempt,
+            sent=tuple(
+                SentMessage(chat_id=row.chat_id, message_id=row.message_id, at=row.created_at) for row in delivered
+            ),
+            attempt=delivered[0].attempt,
         )
-    if failure is not None:
+
+    ended = next((row for row in ordered if _is_ending(row, queued=queued)), None)
+    if ended is not None:
         return Outcome(
             state=OutcomeState.FAILED,
             correlation_id=identifier,
-            error=failure.error or failure.error_code,
-            attempt=failure.attempt,
+            error=ended.error or ended.error_code,
+            attempt=ended.attempt,
         )
-    if progress is not None:
-        return Outcome(state=OutcomeState.PENDING, correlation_id=identifier, attempt=progress.attempt)
+
+    if ordered:
+        return Outcome(state=OutcomeState.PENDING, correlation_id=identifier, attempt=ordered[0].attempt)
     return Outcome(state=OutcomeState.UNKNOWN, correlation_id=identifier)
 
 

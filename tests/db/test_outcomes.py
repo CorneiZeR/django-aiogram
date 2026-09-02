@@ -233,6 +233,40 @@ def test_the_methods_on_the_bot_reach_the_functions_behind_them(reader):
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_failure_describes_the_newest_row_that_ended_it():
+    """An older `failed` beside a newer terminal drop described the older one.
+
+    Both are endings, so the state was right either way and the `error` was a stale sentence
+    about a different attempt -- which is what an operator reads to know why.
+    """
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_FAILED, error='the first attempt', attempt=1)
+    record(identifier, EventKind.OUTBOUND_DROPPED, error='gave up', attempt=9, detail={'max_retries': 9})
+
+    answer = outcome(identifier)
+
+    assert answer.state is OutcomeState.FAILED
+    assert answer.error == 'gave up', 'the older failure was described'
+    assert answer.attempt == 9
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_pending_answer_describes_the_newest_row_too():
+    """The same defect facing the other way: a drop that may still land is newer than the
+    `queued` row before it, and the attempt count came from the older one."""
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_QUEUED, attempt=0)
+    record(identifier, EventKind.OUTBOUND_DROPPED, error='the broker refused', attempt=4, detail={'stage': 'queueing'})
+
+    answer = outcome(identifier)
+
+    assert answer.state is OutcomeState.PENDING
+    assert answer.attempt == 4, 'the older progress row was described'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
 def test_a_shared_id_resolves_the_drop_the_way_that_cannot_duplicate_a_message():
     """Two messages under one id, one queued and one direct, both dropped by a shutdown.
 

@@ -40,7 +40,7 @@
 
   A configuration that cannot answer raises `OutcomesUnavailableError` at the call instead of
   reporting `unknown` for ever: `EVENT_LOG` off, or an `EVENT_LOG_KINDS` that leaves out any
-  of the four kinds an outcome is decided from. `outbound.sent` is the obvious one;
+  of the four kinds a correct outcome requires. `outbound.sent` is the obvious one;
   `outbound.failed` and `outbound.dropped` matter because their absence makes a message that
   will never arrive read as *not yet*, and `outbound.queued` because the shutdown-drop rule
   reads that row — without it a send the next start will deliver is reported `failed`, which
