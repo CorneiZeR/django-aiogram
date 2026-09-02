@@ -253,6 +253,24 @@ duplicates. So the question is which duplicates *this* transport produces:
 The Kafka row is the one to read before assuming a bug. Nothing there is per-message, so a
 handler that is not idempotent on its own business key will send innocent messages twice.
 
+## A message went out for a transaction that rolled back
+
+`bot.send()` writes to the broker where it is called, so an `atomic()` block that raises
+after a send leaves the message queued and its row gone. Set `TRANSACTIONAL` to `True` to
+hold the write until the commit — see
+**[Sending messages](Sending-messages.md#inside-a-transaction)**.
+
+It covers the queue route only. Inside the bot container `send` calls Telegram itself, and
+`send_raw` does so from anywhere: there is no queue write to hold back, so a message sent
+that way still goes out when the block rolls back.
+
+With it already on and the message still going out, check which connection the block is on:
+the setting watches `default`, and a transaction opened on another alias is not one it can
+see. An alias configured `AUTOCOMMIT: False` is the other case — a manually managed
+transaction does not run commit hooks when it ends, `atomic()` blocks inside it included, so
+the write is made immediately and the log says so once: *publishing without waiting for a
+commit*.
+
 ## The bot ignores ENABLED
 
 `ENABLED` is parsed, so `'false'` disables. If a value cannot be parsed you get

@@ -54,6 +54,55 @@ was the last setting read that way, and no longer is. See **[Deployment](Deploym
 | `FSM_STORAGE` | `'redis'` | `'redis'`, `'memory'`, or a dotted path |
 | `MAX_RETRIES` | `10` | Retries after a Telegram rate-limit refusal |
 | `RAISE_EXCEPTION` | `False` | Let `send_raw` propagate failures |
+| `TRANSACTIONAL` | `False` | Hold the queue write until the caller's transaction commits |
+
+`TRANSACTIONAL` is about a send made inside `transaction.atomic()`. With it off — which
+is what every release before 4.1 did, and what an upgrade keeps doing — the write reaches
+the broker immediately, and a block that raises afterwards leaves the message sent and the
+row it announced rolled back. With it on, the write waits for the commit on the `default`
+connection and a rolled-back block queues nothing at all.
+
+```python
+TELEGRAM_BOT = {'TRANSACTIONAL': True}
+```
+
+What it does not change, and what to expect:
+
+- **Outside a transaction nothing moves.** A send with no `atomic()` around it publishes
+  where it stands, on either setting.
+- **The correlation id is the same value either way.** It is resolved before the write is
+  attempted, not derived from it, so a caller storing it beside its own row is unaffected —
+  and it is the *deferred* call that returns sooner, because the immediate one waits for the
+  broker to acknowledge the write before `send()` returns at all.
+- **A broadcast holds its payloads until the commit, and only the immediate path is
+  chunk-bounded.** `send_many` serializes a chunk at a time and publishes it before
+  preparing the next, so peak memory is one chunk — with the write deferred there is nothing
+  to publish yet, and every payload waits in memory until the block ends. Fifty thousand
+  chats inside a long transaction is the shape to avoid. One commit hook is registered per
+  call, so a chunk the broker refuses stops the ones behind it, exactly as the immediate
+  path does.
+- **A send never opens a database connection.** The `default` connection is inspected only
+  when it is already established: a process that touches no database keeps not touching one,
+  and a connection nothing has run on cannot be inside a transaction anyway.
+- **The `outbound.queued` row waits too**, and carries the time of the *call* rather than
+  of the commit — a message deferred for the length of a transaction reads as that much
+  queue latency. Nothing is recorded for a block that rolled back, because nothing was
+  queued.
+- **A payload that cannot be serialized still raises at the call.** Only the write waits.
+- **The async twins never defer.** Django has no asynchronous transactions, and a coroutine
+  holds its own database connection rather than the one a surrounding block opened — so
+  `await bot.asend()` has no commit to wait for and publishes where it stands.
+- **A publish that fails after the commit cannot undo it.** The drop is recorded, and
+  `RAISE_EXCEPTION` decides whether the exception also leaves the `atomic()` block — where
+  it would take any commit hook queued behind this one with it.
+- **`AUTOCOMMIT: False` on the alias is not supported by this**, with or without an
+  `atomic()` block inside it. Without one, Django's `on_commit` refuses a manually managed
+  transaction outright; with one, it accepts the hook and then runs it on
+  `set_autocommit(True)` rather than when the block ends — a moment no caller chose, and one
+  a process that keeps autocommit off never reaches. Both publish immediately instead, and a
+  line in the log says so once per process.
+- **Inside the bot container it does nothing.** A send there reaches Telegram directly and
+  there is no queue write to hold back.
 
 `DEFAULT_BOT_PROPERTIES` accepts every field aiogram defines: `parse_mode`,
 `disable_notification`, `protect_content`, `allow_sending_without_reply`,
@@ -282,7 +331,7 @@ entry naming a retired one is dead but harmless.
 | `W001` / `W002` | `TOKEN` / `REDIS_URL` empty while the bot is enabled |
 | `W003` | `TELEGRAM_BOT` contains unknown keys |
 | `W004` | `BLPOP_TIMEOUT` is **above** the ceiling the consumer applies — `min(HEARTBEAT_INTERVAL, floor(<the transport timeout>) - 1)`, never below 1 — so the take is silently shortened to it. Equal to the ceiling is not warned about and is not shortened. The hint names whichever of the two binds, and the transport term is the one `BROKER` names rather than always `REDIS_TIMEOUT` |
-| `E001`–`E003`, `E017` | a boolean setting holds something that cannot be read as true or false. `ENABLED` and `AUTODISCOVER` are read while the app loads, so in practice those two refuse the boot with the same message before `check` runs at all |
+| `E001`–`E003`, `E017`, `E049` | a boolean setting holds something that cannot be read as true or false. `ENABLED` and `AUTODISCOVER` are read while the app loads, so in practice those two refuse the boot with the same message before `check` runs at all |
 | `E004`–`E007`, `E009`–`E011` | a string setting is wrong, or not one of the allowed values |
 | `E012`, `E014` | an integer setting is wrong or below its minimum |
 | `E015` / `E016` | `DEFAULT_KWARGS` not callable / `DEFAULT_BOT_PROPERTIES` not a mapping |

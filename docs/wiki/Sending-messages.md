@@ -138,6 +138,35 @@ bot.send('send_photo', chat_id=CHAT_ID, photo=BufferedInputFile(data, filename='
 `FSInputFile` carries a path, so the file has to exist in the **bot container**
 too — share a volume, or send bytes with `BufferedInputFile`.
 
+## Inside a transaction
+
+A send writes to the broker as it is called, and that write is not part of your
+transaction:
+
+```python
+with transaction.atomic():
+    order = Order.objects.create(...)
+    bot.send(chat_id=CHAT_ID, text=f'Order {order.pk} accepted')
+    charge(order)  # raises
+```
+
+The row is gone and the message is not. `TRANSACTIONAL` holds the **queue** write until the
+commit, so the block above announces nothing when it rolls back:
+
+```python
+TELEGRAM_BOT = {'TRANSACTIONAL': True}
+```
+
+It is off by default because it moves when a message reaches the queue.
+**[Settings](Settings.md#bot-behavior)** has what changes with it on — the event row waits
+too, and a publish that fails after the commit cannot undo it. Without the setting, the
+same guarantee is `transaction.on_commit(lambda: bot.send(...))` written at each call site.
+
+The other route is unaffected, and deliberately: `send_raw` — and `send` inside the bot
+container, which is the same thing by
+[the rule above](#choosing-the-route-yourself) — calls Telegram rather than the broker, so a
+handler replying to an update does not wait for anything to commit.
+
 ## Errors
 
 Queued messages are delivered by the worker; failures are logged there, not

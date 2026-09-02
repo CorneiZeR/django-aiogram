@@ -23,6 +23,24 @@ wrong if any test asserts that a message was queued — those assertions would p
 over nothing, and they would pass over nothing *quietly*, because each call still
 returns the id it would have used.
 
+## `TRANSACTIONAL` and `TestCase`
+
+If the project sets `TRANSACTIONAL` to `True`, a send made inside Django's `TestCase`
+never reaches the broker: `TestCase` wraps each test in a transaction it rolls back, so
+the commit the write is waiting for never comes. That is the setting working, not a bug — but an assertion
+that a message was queued will fail, and it will fail in a way that reads like the code
+under test never sent one.
+
+Two ways out. `TransactionTestCase` (or `@pytest.mark.django_db(transaction=True)`) commits
+for real, so the write happens where a deployment would make it. Or
+`captureOnCommitCallbacks(execute=True)`, which runs the hooks the block queued and is
+cheaper:
+
+```python
+with self.captureOnCommitCallbacks(execute=True):
+    accept_order(order)
+```
+
 ## Asserting that your code queued a message
 
 Point the connection at [fakeredis](https://pypi.org/project/fakeredis/) and

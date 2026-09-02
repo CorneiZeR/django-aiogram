@@ -26,7 +26,7 @@ src/django_aiogram/
         settings.py     lazy settings with an environment fallback
         defaults.py     the only place a default lives
         enums.py        the values a setting accepts
-        checks/         system checks E001-E048, W001-W009, I001-I003:
+        checks/         system checks E001-E049, W001-W009, I001-I003:
                         the registry in __init__, rules beside their subject
                         (bot, transport, eventlog), shapes for what a value
                         must look like, conditions for what a rule asks first
@@ -36,6 +36,7 @@ src/django_aiogram/
         outbound.py     what names one send in flight, and what settles it
         looping.py      who may drive the loop, and for how long
         queueing.py     everything a queue write does except the write
+        committing.py   whether that write waits for the caller's transaction
         from_settings.py  the aiogram objects the settings describe, and their refusals
         routing.py      the handler decorators, which read the router and nothing else
         throttling.py   GCRA reservations, one budget per name

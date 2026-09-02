@@ -1,5 +1,63 @@
 # Changelog
 
+## 4.1.0 - unreleased
+
+### Added
+
+- **A send inside `transaction.atomic()` can now wait for the commit.** `bot.send()` writes
+  to the broker as it is called, and that write was never part of the caller's transaction:
+  a block that created a row, announced it in Telegram and then raised left the message sent
+  and the row gone. The event log's writer already reasons about a caller's open transaction
+  — it will not recycle a connection inside one, because on PostgreSQL that marks the whole
+  transaction for rollback. The producer had no equivalent.
+
+  `TRANSACTIONAL` defaults to `False`, which publishes where the call is made and is what
+  every release before this one did, so an upgrade changes nothing until the setting is
+  turned on. Set to `True`, it holds the queue write until the `default` connection commits,
+  and a rolled-back block queues nothing at all.
+
+  It governs the synchronous producers and only those, which are the ones a view and a
+  Celery task reach for. Measured, a coroutine holds its own connection — inside
+  `asyncio.run` the `default` connection is a different object with `in_atomic_block` False
+  — so `await bot.asend()` cannot see a surrounding transaction, and Django has no
+  asynchronous transactions for it to be inside.
+
+  What moves with it is written down rather than discovered. The `outbound.queued` row waits
+  for the commit too and carries the time of the *call*, so a deferred message reads as that
+  much queue latency. Serialization does not wait — a payload the project cannot serialize
+  still raises where the call was written, and the arguments are encoded there. That second
+  half is not the mapping, which `**kwargs` already copies: it is the values under it, the
+  keyboard or the list of entities a project builds and reuses, which a hook running after
+  the caller moved on would otherwise read again. A publish
+  that fails after the commit has nothing left to roll back: the drop is recorded and
+  `RAISE_EXCEPTION` decides whether the exception also leaves the `atomic()` block, where it
+  would take every commit hook queued behind it.
+
+  A fan-out registers one commit hook for the call rather than one per chunk, which is what
+  keeps a chunk the broker refuses from letting the ones behind it through — the immediate
+  path raises and never reaches them. It is registered before the first chunk and handed the
+  list it reads at commit time, so a payload that cannot be serialized half way through does
+  not take the chunks already prepared with it: a caller that catches that inside its own
+  block and commits anyway sends what the immediate path had already published. The cost is
+  that a deferred broadcast holds every payload until the block ends, where an immediate one
+  holds a chunk.
+
+  The `queued` row is summarized beside the payload rather than when the write goes out, for
+  the reason the arguments are encoded there: described from the commit hook, a nested value
+  the caller changed in the meantime is the one the row would carry, and the row would then
+  disagree with the bytes on the queue about the same message.
+
+  Two cases it does not cover, both said out loud instead of assumed. Manual transaction
+  management, in either shape: with no block, `in_atomic_block` is False and Django's
+  `on_commit` refuses outright; with an `atomic()` inside it, the hook is accepted and then
+  runs on `set_autocommit(True)` rather than when the block ends — measured, and neither
+  leaving the block nor `transaction.commit()` runs it. `get_autocommit()` cannot tell that
+  apart from an ordinary block, where it is False too, so `commit_on_exit` is what decides.
+  Both publish immediately and say so once per process. And inside the bot container a send
+  reaches Telegram directly, where there is no queue write to hold back.
+
+  `E049` reports a `TRANSACTIONAL` that cannot be read as a boolean.
+
 ## 4.0.0.post1 - 2026-09-01
 
 **Documentation, and one fix in the seam that publishes it.** What this release is *for* is

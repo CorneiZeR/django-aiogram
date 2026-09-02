@@ -46,6 +46,10 @@ DEFAULTS: dict[str, Any] = {
     },
     'MAX_RETRIES': 10,
     'RAISE_EXCEPTION': False,
+    # hold the queue write until the transaction the caller is inside commits, so a
+    # rolled-back block announces nothing. Off by default: it moves when a message
+    # reaches the queue, which anything measuring queue latency will see
+    'TRANSACTIONAL': False,
     # names this worker's in-flight list; defaults to the hostname. Set it when
     # several workers share a host, so they cannot reclaim each other's messages
     'WORKER_NAME': '',
