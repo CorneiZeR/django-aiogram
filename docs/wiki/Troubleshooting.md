@@ -273,19 +273,29 @@ commit*.
 
 ## `bot.outcome()` says `unknown` for a message that was delivered
 
-`unknown` means nothing has been recorded against that correlation id, and three different
-things produce it. The row has not been written yet — the writer batches, so allow
-`EVENT_LOG_FLUSH_INTERVAL`. Or the event was dropped under pressure, which leaves a
-`log.dropped` row behind it; check for one around that time. Or
-`EVENT_LOG_RETENTION_DAYS` has pruned it.
+`unknown` means nothing has been recorded against that correlation id, and several things
+produce that:
 
-Getting `unknown` rather than `OutcomesUnavailableError` says only that **this** process is
-configured to record outcomes — `EVENT_LOG` on, and `outbound.sent` among the kinds it
-keeps. It says nothing about the process that sent the message: the bot container reads its
-own settings, so a container with the log off, or with a narrower `EVENT_LOG_KINDS`, writes
-no row for a message it delivered perfectly well. Nor does it say the writer succeeded;
-that is what the `log.dropped` row above is for. Compare the two processes' settings before
-concluding the message never went out.
+- **The row has not been written yet.** The writer batches, so allow
+  `EVENT_LOG_FLUSH_INTERVAL`.
+- **The event was dropped under pressure.** That leaves a `log.dropped` row behind it; look
+  for one around that time.
+- **`EVENT_LOG_RETENTION_DAYS` has pruned it.**
+- **The process that *sent* the message does not record outcomes.** This is the one that
+  looks least like a configuration problem, because the reading process is configured
+  correctly — see below.
+
+**Two processes, two settings files, and the reading one cannot see the other's.** Getting
+`unknown` rather than `OutcomesUnavailableError` says only that **this** process could
+record an outcome: `EVENT_LOG` on, and `EVENT_LOG_KINDS` empty or keeping all four of
+`outbound.sent`, `outbound.failed`, `outbound.dropped` and `outbound.queued` —
+**[Event log](Event-log.md#what-became-of-one-message)** says what each is for. The bot
+container reads its own `TELEGRAM_BOT`, so the refusal cannot fire for *its* configuration:
+that is [the event log writes nothing](#the-event-log-writes-nothing) below, item 3, and the
+half-a-story it describes is exactly this symptom seen from the reading end. Nor does the
+refusal say the writer succeeded; that is what the `log.dropped` row above is for.
+
+So check the sending container's settings before concluding the message never went out.
 
 Reading `unknown` for everything, on a project with `EVENT_LOG_DATABASE` set, means the
 query is going to the wrong alias — `outcome()` uses the log's, so this is a sign of a
