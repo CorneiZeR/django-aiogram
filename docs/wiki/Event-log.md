@@ -126,10 +126,10 @@ Four states, and the last two are not the same question:
 
 | `state` | what the feed holds | what it means |
 | --- | --- | --- |
-| `sent` | an `outbound.sent` row | Telegram accepted it; `message_id` and `chat_id` are set |
+| `sent` | an `outbound.sent` row | Telegram accepted the call. `message_id` and `chat_id` are set where it produced a message — a `send_chat_action` has neither, and `answer.sent` still holds an entry for it |
 | `failed` | `outbound.failed`, or a drop the row says is the end | it will not arrive; `error` says why |
 | `pending` | `queued`, `consumed`, `retried`, or a drop that may still be delivered | on its way — ask again |
-| `unknown` | nothing at all | nothing has been recorded **yet**, or nothing ever will be |
+| `unknown` | no outbound row an outcome is decided from | nothing has been recorded **yet**, or nothing ever will be. Other rows may exist under the id — a handler's `inbound.*` share it — and none of them decides an outcome |
 
 **Not every `outbound.dropped` row is a failure**, and the difference matters because a
 caller told `failed` re-sends. That kind is written from three places:

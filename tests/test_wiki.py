@@ -99,11 +99,23 @@ def test_the_slugs_match_the_ones_the_build_publishes(path):
     built = ROOT / 'site' / path.stem / 'index.html'
     if not built.exists():
         pytest.skip('site/ is not built in this run')
-    published = set(re.findall(r'<h[1-6][^>]*\bid="([^"]+)"', built.read_text(encoding='utf-8')))
+    # `_1` and `_2` are what the toc extension appends to a repeated heading, and `headings_of`
+    # answers with a set -- so the suffixes are dropped rather than modelled, and a page with
+    # two `## Run migrate` sections still compares equal
+    published = {
+        re.sub(r'_\d+$', '', found)
+        for found in re.findall(r'<h[1-6][^>]*\bid="([^"]+)"', built.read_text(encoding='utf-8'))
+    }
     computed = headings_of(path)
 
-    assert computed <= published, (
-        f'slugs this file computes that the build does not have: {sorted(computed - published)}'
+    # both directions, and non-empty. `computed <= published` was the first draft, and it holds
+    # for a `headings_of` that computes nothing at all -- which is the shape of the very bug this
+    # is here to catch, since a slug this file cannot compute is one `test_every_anchor_resolves`
+    # reports as dangling
+    assert computed, f'{path.name} has headings and this file computed none'
+    assert computed == published, (
+        f'computed but not published: {sorted(computed - published)}; '
+        f'published but not computed: {sorted(published - computed)}'
     )
 
 

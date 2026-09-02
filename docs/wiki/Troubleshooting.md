@@ -273,8 +273,9 @@ commit*.
 
 ## `bot.outcome()` says `unknown` for a message that was delivered
 
-`unknown` means nothing has been recorded against that correlation id, and several things
-produce that:
+`unknown` means none of the outbound rows an outcome is decided from has been recorded
+against that correlation id — other kinds may well exist under it, a handler's `inbound.*`
+among them, and none of those decides anything. Several things produce that:
 
 - **The row has not been written yet.** The writer batches, so allow
   `EVENT_LOG_FLUSH_INTERVAL`.
