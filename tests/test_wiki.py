@@ -12,12 +12,12 @@ what a contributor sees before pushing.
 """
 
 import re
-import unicodedata
 from datetime import date
 from pathlib import Path
 
 import pytest
 import yaml
+from markdown.extensions.toc import slugify, unique
 
 ROOT = Path(__file__).resolve().parent.parent
 WIKI = ROOT / 'docs' / 'wiki'
@@ -46,16 +46,24 @@ def page_files() -> set[str]:
 
 
 def headings_of(path: Path) -> set[str]:
-    """The anchors a page offers, slugified the way the toc extension does it.
+    """The anchors a page offers, from the toc extension's own `slugify` and `unique`.
 
-    Its algorithm, not an approximation of it: punctuation is **removed** and only
-    whitespace becomes a dash. `[^a-z0-9]+ -> -` was close enough while no heading held a
-    dot inside a word, and wrong the day one did -- `bot.outcome()` publishes as
-    `botoutcome-...`, where that rule computed `bot-outcome-...` and reported a live anchor
-    as dangling. Checked against the ids in `site/` by
-    `test_the_slugs_match_the_ones_the_build_publishes`.
+    The functions themselves, imported, rather than a model of them -- because a model is
+    what went wrong twice on one branch. It turned punctuation into dashes where the real one
+    removes it, so `bot.outcome()` computed `bot-outcome-...` against a published
+    `botoutcome-...`; and then it folded `_1` tails it could not tell from a heading named
+    that way. Both reported a live anchor as dangling, which is the failure this function
+    exists to prevent.
+
+    `mkdocs.yml` configures `toc` with `permalink` alone, so these defaults are the ones the
+    build uses, and `test_the_slugs_match_the_ones_the_build_publishes` holds that to the
+    output rather than to this docstring.
+
+    In document order, because `unique` numbers a repeated heading by what it has seen: two
+    `## Result` sections publish `result` and `result_1`, and a third takes `result_2` --
+    measured, along with `## Result_1` after them taking `result_2` as well.
     """
-    slugs = set()
+    slugs: set[str] = set()
     for line in visible(path.read_text(encoding='utf-8')).splitlines():
         found = ATX.match(line)
         if found:
@@ -64,33 +72,19 @@ def headings_of(path: Path) -> set[str]:
             # `install` where the build publishes `install-optional`
             linked = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', found.group(1))
             text = re.sub(r'[`*\[\]]', '', linked)
-            slugs.add(slugify(text))
+            # mutates `slugs`, which is what numbers a repeat against the ones before it
+            unique(slugify(text, '-'), slugs)
     return slugs
 
 
 def published_ids(html: str) -> set[str]:
-    """The heading ids a built page carries, with duplicate suffixes folded onto their base.
+    """The heading ids a built page carries, exactly as the build wrote them.
 
-    A heading that appears twice publishes `slug` and then `slug_1`, and `headings_of` answers
-    with a set -- so the suffixed ones fold in rather than being modelled.
-
-    **Only where the base is published too.** A heading named `result_1` slugifies to
-    `result_1` and is nobody's duplicate, so folding every `_1`-shaped tail unconditionally
-    turned a valid id into one the page does not have, and failed the comparison for a page
-    whose anchors were all correct.
+    Nothing is folded here any more. `headings_of` numbers repeats the way the build does,
+    so the two sides are directly comparable -- and every attempt to reconcile them
+    afterwards had to guess whether a `_1` was a duplicate's mark or part of a name.
     """
-    found = set(re.findall(r'<h[1-6][^>]*\bid="([^"]+)"', html))
-    folded = set()
-    for one in found:
-        suffixed = re.fullmatch(r'(.*)_\d+', one)
-        folded.add(suffixed.group(1) if suffixed and suffixed.group(1) in found else one)
-    return folded
-
-
-def slugify(text: str) -> str:
-    """Turn heading text into its anchor, as `markdown.extensions.toc.slugify` does."""
-    stripped = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('ascii')
-    return re.sub(r'[\s-]+', '-', re.sub(r'[^\w\s-]', '', stripped).strip().lower())
+    return set(re.findall(r'<h[1-6][^>]*\bid="([^"]+)"', html))
 
 
 def test_the_wiki_has_pages():
@@ -570,24 +564,27 @@ def test_a_parenthetical_is_only_stripped_when_it_is_a_link_target(heading, slug
 
 
 @pytest.mark.parametrize(
-    ('ids', 'folded'),
+    ('source', 'ids'),
     [
-        (['run-migrate', 'run-migrate_1', 'run-migrate_2'], {'run-migrate'}),
-        (['result_1'], {'result_1'}),
-        (['result', 'result_1'], {'result'}),
-        (['a_1', 'b'], {'a_1', 'b'}),
+        ('## Result\n\n## Result\n', {'result', 'result_1'}),
+        ('## Result\n\n## Result_1\n', {'result', 'result_1'}),
+        ('## Result\n\n## Result\n\n## Result\n', {'result', 'result_1', 'result_2'}),
+        ('## Result\n\n## Result\n\n## Result_1\n', {'result', 'result_1', 'result_2'}),
     ],
 )
-def test_a_suffixed_id_is_a_duplicate_only_when_its_base_is_published(ids, folded):
-    """`_1` is the toc extension's mark for a repeat, and also a legal part of a heading.
+def test_a_repeated_heading_is_numbered_the_way_the_build_numbers_it(source, ids, tmp_path):
+    """The last case is why this cannot be reconciled after the fact.
 
-    Stripping it unconditionally turned `result_1` -- which is what a heading of that name
-    slugifies to, and nobody's duplicate -- into `result`, so the comparison failed for a
-    page whose anchors were all correct.
+    `## Result_1` arriving behind two `## Result` sections takes `result_2`, because `unique`
+    increments the numeric tail it finds rather than counting occurrences -- so a published
+    `result_1` is a duplicate's mark in one page and a heading's own name in another, and
+    nothing about the id says which. Computing them in order the way the build does is what
+    removes the question; every value here is measured against `markdown` itself.
     """
-    html = ''.join(f'<h2 id="{one}">x</h2>' for one in ids)
+    page = tmp_path / 'Page.md'
+    page.write_text(source, encoding='utf-8')
 
-    assert published_ids(html) == folded
+    assert headings_of(page) == ids
 
 
 def test_a_link_in_the_wrong_case_does_not_count(tmp_path, monkeypatch):

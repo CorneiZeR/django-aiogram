@@ -118,6 +118,12 @@ dev = [
     # can be silently invalid. Asserting on the text cannot tell an active setting from
     # the same words in a comment either. Test-time only; mypy runs on `src` alone
     "pyyaml>=6",
+    # tests/test_wiki.py computes a heading's anchor with the toc extension's *own* `slugify`
+    # and `unique` rather than a model of them -- twice a model was close and wrong, and an
+    # anchor this suite cannot compute is a live link it reports as broken. In `dev` and not
+    # only `docs` because the anchor cases run on every unit leg; `docs` gets it through
+    # mkdocs regardless
+    "markdown>=3.5",
 ]
 
 # what builds the documentation site. A group and not an extra for the reason `dev` is one:

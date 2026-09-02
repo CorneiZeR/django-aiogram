@@ -78,8 +78,11 @@ class DeliveryNotConfiguredError(DjangoRedisAiogramError, ValueError):
 class OutcomesUnavailableError(DjangoRedisAiogramError, LookupError):
     """An outcome was asked for in a configuration that never records one.
 
-    A refusal rather than a permanent ``unknown``: that state means *not yet*, and a caller
-    polling for a result it will never get has no way to tell the two apart.
+    A refusal rather than an ``unknown``, because this is the one case the *settings* make
+    permanent and therefore the one that can be named at the call. It is not the only way
+    ``unknown`` lasts — the writer drops events under pressure and retention prunes them, so
+    a caller bounds its polling regardless — but those cannot be told from *not yet* by
+    looking, and this can.
     """
 
 
