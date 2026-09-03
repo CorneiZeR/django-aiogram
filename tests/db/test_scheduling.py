@@ -700,11 +700,9 @@ def test_naming_the_default_alias_for_the_log_still_leaves_the_schedule_somewher
     is, so `migrate` created the table nowhere and every `eta` send failed on its first
     write. The refusal is about a log database *of its own*.
     """
-    from django_aiogram.eventlog.dbrouter import TelegramEventLogRouter
+    from django.db import router
 
-    router = TelegramEventLogRouter()
-
-    assert router.allow_migrate('default', 'django_aiogram', model=TelegramScheduledSend) is None
+    assert router.allow_migrate('default', 'django_aiogram', model=TelegramScheduledSend) is True
     assert router.allow_migrate('default', 'django_aiogram', model=TelegramEvent) is True
 
     identifier = TelegramBot().send(chat_id=7, text='later', eta=in_a_while())
@@ -721,14 +719,18 @@ def test_the_schedule_is_not_created_on_the_log_database(published):
 
     Measured before the fix: the table existed on `default` and on `logs`, and the copy on
     the log alias is never read or written -- which is why it should not be there.
+
+    **Introspection cannot answer this here, which is why the assertions are about the
+    decision instead.** The suite's databases are migrated when the runner sets them up,
+    before any `override_settings` router exists, so `django_aiogram_scheduled` is present on
+    every alias whatever this router says -- a `not in table_names()` case would fail with the
+    fix in place, and an `in table_names()` one passes without it. What decides at migrate
+    time is `django.db.router`, so that is what is asked, through the settings rather than by
+    hand: a class that returns the right answers while nothing consults it is the failure this
+    shape rules out.
     """
-    from django.db import connections
-
-    from django_aiogram.eventlog.dbrouter import TelegramEventLogRouter
-
-    router = TelegramEventLogRouter()
+    from django.db import router
 
     assert router.allow_migrate('logs', 'django_aiogram', model=TelegramScheduledSend) is False
-    assert router.allow_migrate('default', 'django_aiogram', model=TelegramScheduledSend) is None
+    assert router.allow_migrate('default', 'django_aiogram', model=TelegramScheduledSend) is True
     assert router.allow_migrate('logs', 'django_aiogram', model=TelegramEvent) is True
-    assert 'django_aiogram_scheduled' in connections['default'].introspection.table_names()
