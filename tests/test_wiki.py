@@ -49,39 +49,40 @@ def headings_of(path: Path) -> set[str]:
     """The anchors a page offers, from the toc extension's own `slugify` and `unique`.
 
     The functions themselves, imported, rather than a model of them -- because a model is
-    what went wrong twice on one branch. It turned punctuation into dashes where the real one
-    removes it, so `bot.outcome()` computed `bot-outcome-...` against a published
-    `botoutcome-...`; and then it folded `_1` tails it could not tell from a heading named
-    that way. Both reported a live anchor as dangling, which is the failure this function
-    exists to prevent.
+    what went wrong three times on one branch. It turned punctuation into dashes where the
+    real one removes it, so `bot.outcome()` computed `bot-outcome-...` against a published
+    `botoutcome-...`; it folded `_1` tails it could not tell from a heading named that way;
+    and it slugified a heading that had declared its own id. Each reported a live anchor as
+    dangling, which is the failure this function exists to prevent.
 
-    `mkdocs.yml` configures `toc` with `permalink` alone, so these defaults are the ones the
-    build uses, and `test_the_slugs_match_the_ones_the_build_publishes` holds that to the
-    output rather than to this docstring.
+    `mkdocs.yml` configures `toc` with `permalink` alone and enables `attr_list`, so these
+    defaults are the ones the build uses, and
+    `test_the_slugs_match_the_ones_the_build_publishes` holds that to the output rather than
+    to this docstring.
 
-    In document order, because `unique` numbers a repeated heading by what it has seen: two
-    `## Result` sections publish `result` and `result_1`, and a third takes `result_2` --
-    measured, along with `## Result_1` after them taking `result_2` as well.
+    **Declared ids are collected first, all of them, before any slug is generated.**
+    `attr_list` runs before `toc` numbers anything, so a declared `#download` takes the bare
+    id and an ordinary `## Download` is pushed to `download_1` -- measured, and in either
+    document order. Generating in one pass gave the bare id to whichever came first.
     """
-    slugs: set[str] = set()
+    headings = []
     for line in visible(path.read_text(encoding='utf-8')).splitlines():
         found = ATX.match(line)
         if found:
-            heading = found.group(1)
-            # `attr_list` is enabled, so a heading may name its own id and the slug is then
-            # not computed at all -- measured, `## Download {#download}` publishes `download`
-            # where slugifying the whole line gives `download-download`
-            declared = ATTR_ID.search(heading)
-            if declared:
-                slugs.add(declared.group(1))
-                continue
-            # a link becomes its own text, which is what the renderer slugifies. Deleting
-            # every parenthetical instead ate literal ones: `## Install (optional)` computed
-            # `install` where the build publishes `install-optional`
-            linked = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', heading)
-            text = re.sub(r'[`*\[\]]', '', linked)
-            # mutates `slugs`, which is what numbers a repeat against the ones before it
-            unique(slugify(text, '-'), slugs)
+            headings.append(found.group(1))
+
+    declared = [ATTR_ID.search(heading) for heading in headings]
+    slugs = {found.group(1) for found in declared if found}
+    for heading, names_itself in zip(headings, declared, strict=True):
+        if names_itself:
+            continue
+        # a link becomes its own text, which is what the renderer slugifies. Deleting
+        # every parenthetical instead ate literal ones: `## Install (optional)` computed
+        # `install` where the build publishes `install-optional`
+        linked = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', heading)
+        text = re.sub(r'[`*\[\]]', '', linked)
+        # mutates `slugs`, which is what numbers a repeat against the ones before it
+        unique(slugify(text, '-'), slugs)
     return slugs
 
 
@@ -605,6 +606,24 @@ def test_a_parenthetical_is_only_stripped_when_it_is_a_link_target(heading, slug
     page.write_text(f'{heading}\n', encoding='utf-8')
 
     assert headings_of(page) == {slug}
+
+
+def test_a_declared_id_is_reserved_before_any_slug_is_generated(tmp_path):
+    """`attr_list` runs before `toc`, so a declared id wins the bare one either way round.
+
+    Measured against `markdown`: `## Download` beside `## Alternate {#download}` publishes
+    `download_1` and `download` -- the declared one takes the bare id even when it comes
+    *second* in the document. Generating in one pass handed the bare id to whichever heading
+    the walk reached first, so a link to `#download_1` read as dangling.
+    """
+    for name, source in (
+        ('First', '## Download\n\n## Alternate {#download}\n'),
+        ('Second', '## Alternate {#download}\n\n## Download\n'),
+    ):
+        page = tmp_path / f'{name}.md'
+        page.write_text(source, encoding='utf-8')
+
+        assert headings_of(page) == {'download', 'download_1'}, name
 
 
 @pytest.mark.parametrize(
