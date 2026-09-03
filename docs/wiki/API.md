@@ -315,8 +315,9 @@ why it is here rather than in the table above.
 
 It reads the feed, so it needs `EVENT_LOG` on **and** an `EVENT_LOG_KINDS` that is empty or
 keeps the four kinds a correct outcome requires. Either one missing raises
-`OutcomesUnavailableError` at the call, naming what to add, rather than answering `unknown`
-for ever.
+`OutcomesUnavailableError` at the call rather than answering `unknown` for ever — the log
+being off is reported as itself, and the missing kinds are named only once it is on, because
+a set of kinds means nothing while nothing is recorded.
 
 **That guard is about the reading process only.** The rows are written by whichever process
 *sent* the message, and it reads its own settings — so a bot container with the log off, or

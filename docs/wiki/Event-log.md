@@ -195,10 +195,14 @@ They can only ever produce `pending`, so leaving them out moves an in-flight mes
 `unknown` — a different word for the same instruction — and costs precision rather than
 correctness.
 
-Either refusal is an `OutcomesUnavailableError` at the call, naming every kind that is
-missing at once. It is checked when asked rather than at boot on purpose: narrowing
-`EVENT_LOG_KINDS` is a reasonable thing to do in a project that never reads an outcome, and
-a system check cannot tell whether this one does.
+Either refusal is an `OutcomesUnavailableError` at the call, and they are two messages
+rather than one: `EVENT_LOG` off is reported as that and stops there, since a set of kinds
+means nothing while nothing is recorded at all. Only with the log on does the second run,
+and it names every required kind that is missing at once.
+
+Checked when asked rather than at boot on purpose: narrowing `EVENT_LOG_KINDS` is a
+reasonable thing to do in a project that never reads an outcome, and a system check cannot
+tell whether this one does.
 
 `await bot.aoutcome(identifier)` is the same read without blocking the loop. Code with no
 bot to hand imports the functions behind them —

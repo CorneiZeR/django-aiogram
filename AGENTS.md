@@ -60,7 +60,10 @@ src/django_aiogram/
         outcomes.py     what a correlation id's outbound rows add up to; an id may
                         name several messages, so a per-message edit passes its own --
                         and so may one row, since a media group is an `Outcome.sent`
-                        entry per message and `message_id` is the first of them
+                        entry per message and `message_id` is the first of them.
+                        Reads the rows the *sending* process wrote, so its
+                        EVENT_LOG settings are the ones that decide whether there
+                        is an outcome at all
         signals.py      events_recorded, the metrics seam; imports only django.dispatch
         moving.py       what 3.x's table was, and what the two tables share
         dbrouter.py     optional routing of the log to its own database
