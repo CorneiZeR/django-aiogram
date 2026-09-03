@@ -76,10 +76,15 @@ def headings_of(path: Path) -> set[str]:
     for heading, names_itself in zip(headings, declared, strict=True):
         if names_itself:
             continue
+        # the attribute block is not part of the text either -- `attr_list` takes it off
+        # before `toc` sees the heading, so `## Heading {data-id=other}` publishes `heading`
+        # and not a slug of the braces. Stripped even when it declared no id, which is the
+        # case that reaches here
+        bare = ATTR_BLOCK.sub('', heading)
         # a link becomes its own text, which is what the renderer slugifies. Deleting
         # every parenthetical instead ate literal ones: `## Install (optional)` computed
         # `install` where the build publishes `install-optional`
-        linked = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', heading)
+        linked = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', bare)
         text = re.sub(r'[`*\[\]]', '', linked)
         # mutates `slugs`, which is what numbers a repeat against the ones before it
         unique(slugify(text, '-'), slugs)
@@ -91,13 +96,23 @@ def declared_id(heading: str) -> str | None:
 
     Two spellings, because `attr_list` reads both: `{#download}` and `{id=download}`, the
     second quoted or bare. The **last** assignment wins -- measured, `{#hash id=other}`
-    publishes `other` -- and classes may sit among them in any order, so the block is scanned
-    rather than matched from its start.
+    publishes `other` -- and classes may sit among them in any order.
+
+    Tokenised rather than searched, which is the whole of it. Scanning the block for `#` or
+    `\bid=` read three things as ids that are not: `data-id=other` (a different attribute
+    whose name ends in the one we want), and a `#` inside a quoted value, as in
+    `title="a #hash"` -- measured, all three headings publish their ordinary slug. A quoted
+    value is one token however much space it holds.
     """
     block = ATTR_BLOCK.search(heading)
     if not block:
         return None
-    names = [next(one for one in found.groups() if one is not None) for found in ATTR_ID.finditer(block.group(1))]
+    names = []
+    for token in ATTR_TOKEN.findall(block.group(1)):
+        found = ATTR_ID.match(token)
+        if found:
+            name = found.group('hash') or found.group('named') or ''
+            names.append(name.strip('"\''))
     return names[-1] if names else None
 
 
@@ -501,9 +516,12 @@ README_BUDGET = 148
 #: `## Title`, with the three leading spaces markdown still renders as a heading
 #: the `{...}` block `attr_list` reads off the end of a heading
 ATTR_BLOCK = re.compile(r'\{:?\s*([^}]*)\}\s*$')
-#: the two ways that block names an id, and a later one wins -- measured, `{#hash id=other}`
-#: publishes `other`. Classes and other attributes may sit around them in any order
-ATTR_ID = re.compile(r'#([^\s}]+)|\bid=(?:"([^"]*)"|\'([^\']*)\'|([^\s}]+))')
+#: one attribute of that block. A quoted value is one token however much space it holds, so
+#: `title="a #hash"` cannot be read as an id -- which `\bid=` and a bare `#` both did
+ATTR_TOKEN = re.compile(r'(?:[^\s"\']|"[^"]*"|\'[^\']*\')+')
+#: the two tokens that name an id, and neither may be a suffix of something else:
+#: `data-id=other` names no id at all, measured -- that heading publishes its slug
+ATTR_ID = re.compile(r'^(?:#(?P<hash>.+)|id=(?P<named>.*))$')
 ATX = re.compile(r'^ {0,3}#{1,6}\s+(.+?)\s*$', re.MULTILINE)
 #: `Title` underlined with `===` or `---`, which renders as one too
 SETEXT = re.compile(r'^ {0,3}(\S.*?)\s*\n {0,3}(?:=+|-+)\s*$', re.MULTILINE)
@@ -656,6 +674,12 @@ def test_a_declared_id_is_reserved_before_any_slug_is_generated(tmp_path):
         ('## Download {#hash id=other}', 'other'),
         # a class may sit beside it, in either order
         ('## Download {.cls #hash}', 'hash'),
+        ('## Download {#a #b}', 'b'),
+        # none of these names an id, measured: an attribute whose name merely *ends* in
+        # `id`, and a `#` inside a quoted value. All three publish the ordinary slug
+        ('## Heading {data-id=other}', 'heading'),
+        ('## Heading {title="a #hash"}', 'heading'),
+        ('## Heading {#real data-id=x}', 'real'),
         ('## Plain heading', 'plain-heading'),
     ],
 )

@@ -131,8 +131,10 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
           # the floor this repository documents: --group is PEP 735, which
-          # pip understands from 25.1. Every other job runs the runner's own
-          # pip, so CI still exercises the one contributors actually have
+          # pip understands from 25.1. The test matrix runs the runner's own
+          # pip, so CI still exercises the one contributors actually have --
+          # this job and `docs` are the two that pin, this one to *be* the
+          # floor and that one because its checks exist nowhere else
           pip-version: '25.1'
       - run: pip install -e '.[redis]' --group dev 'django==5.2.0' 'aiogram==3.30.0' 'redis==6.2.0'
       - run: python -m pytest -q
@@ -405,6 +407,12 @@ jobs:
           python-version: '3.13'
           cache: pip
           cache-dependency-path: pyproject.toml
+          # pinned here as well as in `floors`, and for the opposite reason. This job
+          # installs two dependency groups and runs part of the suite against the site it
+          # built, so a runner pip too old for PEP 735 would take the install down and the
+          # anchor checks that exist nowhere else with it -- a failure about pip, reported
+          # as a documentation failure
+          pip-version: '25.1'
       - run: pip install --group docs
       - run: mkdocs build --strict
       # what `--strict` cannot say: that the site is the pages. One directory per page, under

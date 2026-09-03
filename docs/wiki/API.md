@@ -303,7 +303,7 @@ TelegramEvent.objects.filter(chat_id=chat_id).order_by('-id')[:50]
 ```
 
 The first of those two has an answer written for it. `bot.outcome(identifier)` — or
-`outcome()`, the function behind it — returns an `Outcome`: a `state` of `sent`, `failed`,
+`outcome(identifier)`, the function behind it — returns an `Outcome`: a `state` of `sent`, `failed`,
 `pending` or `unknown`, the `message_id` and `chat_id` Telegram gave, `at`, `error`,
 `attempt`, and `sent` for every message recorded under the id. `bot.aoutcome()` is the
 awaiting twin. See **[Event log](Event-log.md#what-became-of-one-message)** for what each
