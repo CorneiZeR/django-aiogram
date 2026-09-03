@@ -168,6 +168,12 @@ history lives, as it does for everything else here.
 Zero means nothing was waiting — which is also the answer once a mover has claimed the row,
 because by then the message is on its way and deleting the row would not stop it.
 
+**A count can be partial where an id names more than one waiting send.** `send_many` is not
+that case: it gives every chat its own id. It happens where a caller passed one explicit
+`correlation_id` to several scheduled sends, or where a handler's replies inherited the
+update's — then some rows may be claimed and some not, and the number is only what went. Pass
+an id per send if you need to call them off one at a time.
+
 **Why a table and not the transport.** Of the four only RabbitMQ can delay a message, and
 only with a plugin or a dead-letter detour; a Redis list, a stream and a Kafka topic cannot.
 Building on the one that almost can would make `eta` work on a quarter of the deployments,

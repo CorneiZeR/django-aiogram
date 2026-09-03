@@ -59,7 +59,7 @@ from django_aiogram.producer.looping import LOOP_THREAD, RUNNER_TIMEOUT, drain_b
 from django_aiogram.producer.outbound import TASK_PREFIX, Outbound, completion, resolve_correlation_id, settle
 from django_aiogram.producer.queueing import Queueing, chunks, publishing, serialise
 from django_aiogram.producer.routing import RouterShortcuts
-from django_aiogram.producer.scheduling import cancel, due_moment, schedule
+from django_aiogram.producer.scheduling import aschedule, cancel, due_moment, schedule
 from django_aiogram.producer.throttling import RateLimiter, get_rate_limiter
 from django_aiogram.redis import aclose_redis
 
@@ -1180,11 +1180,11 @@ class TelegramBot(RouterShortcuts):
         if not accepted:
             return identifier
         if eta is not None:
-            # the write is the ORM's, so this one blocks like its synchronous twin. Named
-            # here rather than left for a caller to find out: a scheduled send is a database
-            # insert, and Django has no asynchronous `bulk_create`
+            # `abulk_create`, because the synchronous one raises `SynchronousOnlyOperation`
+            # from a coroutine -- measured. An earlier comment here claimed this path merely
+            # blocked like its twin, and an `eta` on this method simply raised
             due_at = due_moment(eta)
-            schedule(function, serialise(function, [(identifier, kwargs)], due_at.timestamp()), due_at)
+            await aschedule(function, serialise(function, [(identifier, kwargs)], due_at.timestamp()), due_at)
             return identifier
 
         broker = get_broker()
@@ -1299,7 +1299,7 @@ class TelegramBot(RouterShortcuts):
         identifiers: list[uuid.UUID] = []
         for chunk in chunks(chat_ids, chunk_size, kwargs):
             if writing and due_at is not None:
-                schedule(function, serialise(function, chunk, due_at.timestamp()), due_at)
+                await aschedule(function, serialise(function, chunk, due_at.timestamp()), due_at)
             elif broker is not None:
                 write = serialise(function, chunk)
                 if waiting:

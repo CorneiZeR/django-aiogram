@@ -315,9 +315,16 @@ Then, in the order these bite:
   have nowhere to go. It says so and claims nothing.
 - **`--grace` dropped it.** A row more than that many seconds overdue is recorded as a drop
   with `TooLate` rather than sent late; the feed says which and by how much.
-- **A row is claimed and still there.** Its mover died between publishing and deleting, or
-  the publish failed — the drop row says which. Clearing `claimed_at` makes it eligible
-  again, and if the publish had already landed the message goes out twice.
+- **A row is claimed and still there.** Wait one `--lease` (300 seconds by default) and
+  another mover takes it back: a claim is a lease, not a deed, because a mover that died
+  holding a row would otherwise strand the message for ever. What that costs is a second
+  copy where the mover died *after* publishing, which is the trade this package makes
+  everywhere — at-least-once, never silent loss.
+
+  Whether to expect a drop row depends on which happened. A publish that *failed* records
+  one and says why; a mover that was **killed** between publishing and deleting records
+  nothing at all, so do not go looking for a row that explains it. `--lease 0` trusts a
+  claim for ever, and then a crash does need an operator.
 - **The row is in the wrong database.** The schedule is *not* routed to
   `EVENT_LOG_DATABASE`; it lives with the project's own tables. A project that pointed a
   router at this app by label before 4.1 should check `migrate` created

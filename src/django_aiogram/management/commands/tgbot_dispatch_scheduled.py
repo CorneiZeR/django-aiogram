@@ -38,7 +38,7 @@ from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 from django_aiogram.eventlog.recorder import recorder
 from django_aiogram.eventlog.records import Event
 from django_aiogram.producer.queueing import Queueing, publishing
-from django_aiogram.producer.scheduling import claim
+from django_aiogram.producer.scheduling import DEFAULT_LEASE, claim
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -76,6 +76,15 @@ class Command(BaseCommand):
             'its own; use the plain form from cron',
         )
         parser.add_argument(
+            '--lease',
+            type=int,
+            default=DEFAULT_LEASE,
+            help='seconds a claim is believed before another mover may take the row back. A '
+            f'mover killed between publishing and deleting strands its rows until this expires '
+            f'(default {DEFAULT_LEASE}); 0 trusts a claim for ever, which means a crash needs '
+            'an operator',
+        )
+        parser.add_argument(
             '--grace',
             type=int,
             default=0,
@@ -106,9 +115,16 @@ class Command(BaseCommand):
 
         limit = max(1, int(options['limit']))
         grace = max(0, int(options['grace']))
+        lease = max(0, int(options['lease']))
         previous = self._install_sigterm_handler()
         try:
-            self._run(limit=limit, grace=grace, loop=options['loop'], interval=max(0.0, options['interval']))
+            self._run(
+                limit=limit,
+                grace=grace,
+                lease=lease,
+                loop=options['loop'],
+                interval=max(0.0, options['interval']),
+            )
         finally:
             recorder.stop()
             if previous is not None:
@@ -117,11 +133,11 @@ class Command(BaseCommand):
                 with contextlib.suppress(ValueError):
                     signal.signal(signal.SIGTERM, previous)
 
-    def _run(self, *, limit: int, grace: int, loop: bool, interval: float) -> None:
+    def _run(self, *, limit: int, grace: int, lease: int, loop: bool, interval: float) -> None:
         """Pass after pass, or one, unwinding on the signal either way."""
         with contextlib.suppress(KeyboardInterrupt):
             while True:
-                published = self._one_pass(limit=limit, grace=grace)
+                published = self._one_pass(limit=limit, grace=grace, lease=lease)
                 if not loop:
                     return
                 # a pass that filled its bound has more waiting, so it goes straight round
@@ -129,14 +145,14 @@ class Command(BaseCommand):
                 if published < limit:
                     time.sleep(interval)
 
-    def _one_pass(self, *, limit: int, grace: int) -> int:
+    def _one_pass(self, *, limit: int, grace: int, lease: int) -> int:
         """Claim what is due, publish it, and delete what went out. Returns the count."""
         # before the claim, and this is the same rule `enqueue` follows: a `BROKER` that
         # cannot be resolved is a misconfiguration, not a message that failed to publish.
         # Claimed first, its rows would keep the claim with no drop row and no later pass
         # willing to look at them -- invisible until an operator cleared them by hand
         broker = get_broker()
-        rows = claim(limit)
+        rows = claim(limit, lease=lease)
         if not rows:
             return 0
         published = 0

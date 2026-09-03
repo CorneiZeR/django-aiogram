@@ -6,6 +6,7 @@ publish itself is the same one every other send makes, and the point is that it 
 exactly once, at the right moment, with the bytes the caller meant.
 """
 
+import asyncio
 import datetime
 import uuid
 
@@ -23,7 +24,7 @@ from django_aiogram.config.enums import EventKind
 from django_aiogram.eventlog.recorder import recorder
 from django_aiogram.models import TelegramEvent, TelegramScheduledSend
 from django_aiogram.producer import scheduling
-from django_aiogram.producer.scheduling import claim
+from django_aiogram.producer.scheduling import DEFAULT_LEASE, claim
 from django_aiogram.wire.envelope import unpack
 from django_aiogram.wire.serializers import loads
 
@@ -340,6 +341,10 @@ def test_a_scheduled_fan_out_writes_a_row_per_chat(published):
     identifiers = TelegramBot().send_many([1, 2, 3], chunk_size=2, text='digest', eta=a_while_ago())
 
     assert len(identifiers) == 3
+    # each chat gets its own id, which is what makes a per-message cancellation possible --
+    # the model's own comment claimed they shared one, and they do not
+    assert len(set(identifiers)) == 3
+    assert TelegramScheduledSend.objects.values('correlation_id').distinct().count() == 3
     assert TelegramScheduledSend.objects.count() == 3
     assert published == []
 
@@ -347,3 +352,120 @@ def test_a_scheduled_fan_out_writes_a_row_per_chat(published):
 
     assert len(published) == 3
     assert not TelegramScheduledSend.objects.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_the_awaiting_producers_can_schedule_at_all(published):
+    """`bulk_create` from a coroutine raises `SynchronousOnlyOperation` -- measured.
+
+    So `aenqueue(eta=...)` did not merely block where its twin blocks, as a comment here
+    claimed: it raised, and the whole awaiting half of the surface was unusable.
+    """
+    identifier = asyncio.run(TelegramBot().aenqueue(chat_id=7, text='awaited', eta=in_a_while()))
+
+    assert TelegramScheduledSend.objects.get().correlation_id == identifier
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_the_awaiting_fan_out_can_schedule_too(published):
+    identifiers = asyncio.run(TelegramBot().asend_many([1, 2], chunk_size=1, text='awaited', eta=in_a_while()))
+
+    assert len(identifiers) == 2
+    assert TelegramScheduledSend.objects.count() == 2
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS, USE_TZ=False)
+def test_an_aware_eta_is_refused_where_the_database_would_refuse_it(published):
+    """Measured: SQLite answers *does not support timezone-aware datetimes when USE_TZ is
+    False*, from inside `bulk_create` -- a long way from the `eta` that caused it."""
+    with pytest.raises(ImproperlyConfigured, match='naive datetime while USE_TZ is False'):
+        TelegramBot().send(chat_id=7, text='when?', eta=datetime.datetime.now(datetime.timezone.utc))
+
+    assert not TelegramScheduledSend.objects.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_stranded_claim_is_taken_back_after_its_lease(published):
+    """A mover that died holding a row must not strand the message for ever.
+
+    The recovery on offer was "an operator clears the claim by hand", which is not one -- so
+    a claim is a lease. What it costs is a message going out twice where the mover died
+    *after* publishing, which is the trade this package makes everywhere.
+    """
+    TelegramBot().send(chat_id=7, text='stranded', eta=a_while_ago(3600))
+    dead = claim(10)
+    assert len(dead) == 1
+
+    assert claim(10) == [], 'a fresh claim was taken back before its lease expired'
+
+    TelegramScheduledSend.objects.update(claimed_at=timezone.now() - datetime.timedelta(seconds=DEFAULT_LEASE + 60))
+    assert len(claim(10)) == 1, 'a claim older than its lease was never taken back'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_lease_of_zero_trusts_a_claim_for_ever(published):
+    """The escape hatch for an operator who would rather nothing be re-sent."""
+    TelegramBot().send(chat_id=7, text='held', eta=a_while_ago(3600))
+    claim(10)
+    TelegramScheduledSend.objects.update(claimed_at=timezone.now() - datetime.timedelta(days=7))
+
+    assert claim(10, lease=0) == []
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_SYNC': False})
+def test_no_event_outlives_the_block_that_rolled_the_schedule_back(published):
+    """The rows are the caller's write; the recorder's writer commits on its own.
+
+    Recorded before the commit, the feed keeps a durable `outbound.scheduled` row about a
+    send that never existed, and nothing will ever take it back.
+
+    **`EVENT_LOG_SYNC` has to be off for this to be a test at all.** With it on the row is
+    written on the calling thread, inside the caller's block, so the rollback removes it
+    whatever this code does -- the first draft of this case ran that way and passed with
+    `after_commit` taken out.
+    """
+    with pytest.raises(RuntimeError):
+        schedule_and_then_fail()
+    recorder.flush(timeout=5)
+
+    assert not TelegramEvent.objects.filter(kind=EventKind.OUTBOUND_SCHEDULED.value).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_SYNC': False})
+def test_the_event_does_land_once_the_block_commits(published):
+    """The other half: waiting for the commit must not mean waiting for ever."""
+    with transaction.atomic():
+        TelegramBot().send(chat_id=7, text='later', eta=in_a_while())
+    recorder.flush(timeout=5)
+
+    assert TelegramEvent.objects.filter(kind=EventKind.OUTBOUND_SCHEDULED.value).count() == 1
+
+
+@pytest.mark.django_db(transaction=True, databases=['default', 'logs'])
+@override_settings(
+    TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_DATABASE': 'logs'},
+    DATABASE_ROUTERS=['django_aiogram.eventlog.dbrouter.TelegramEventLogRouter'],
+)
+def test_the_schedule_is_not_created_on_the_log_database(published):
+    """`None` from `allow_migrate` means *no opinion*, so Django created it on both.
+
+    Measured before the fix: the table existed on `default` and on `logs`, and the copy on
+    the log alias is never read or written -- which is why it should not be there.
+    """
+    from django.db import connections
+
+    from django_aiogram.eventlog.dbrouter import TelegramEventLogRouter
+
+    router = TelegramEventLogRouter()
+
+    assert router.allow_migrate('logs', 'django_aiogram', model=TelegramScheduledSend) is False
+    assert router.allow_migrate('default', 'django_aiogram', model=TelegramScheduledSend) is None
+    assert router.allow_migrate('logs', 'django_aiogram', model=TelegramEvent) is True
+    assert 'django_aiogram_scheduled' in connections['default'].introspection.table_names()

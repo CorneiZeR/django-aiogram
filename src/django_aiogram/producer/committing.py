@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger('django_aiogram')
 
-__all__ = ('defer',)
+__all__ = ('after_commit', 'defer')
 
 #: said once per process, like `mention_asend`: the condition is a deployment's database
 #: configuration, so a line per send is noise nobody can act on twice
@@ -46,24 +46,49 @@ _manual_guard = threading.Lock()
 
 
 def defer(publish: Callable[[], None]) -> bool:
-    """Arrange for ``publish`` to run when the caller's transaction commits.
+    """Hold the queue write for the caller's transaction, where ``TRANSACTIONAL`` asks.
 
-    ``False`` means nothing was arranged and the caller has to publish now.
-
-    The default alias, because a send names no database. It is the connection a view's
-    ``atomic()`` opens and the one whose rollback the message would outlive; a project
-    writing to a second alias inside a block of its own gets the immediate write, which is
-    what happened before this setting existed.
+    ``False`` means nothing was arranged and **the caller publishes now** -- this never runs
+    the write itself, which is the difference from :func:`after_commit` and the reason the two
+    are not one function. A version that did both duplicated every immediate send.
     """
     if not coerce_bool(conf['TRANSACTIONAL'], f"{SETTINGS_NAME}['TRANSACTIONAL']"):
         return False
+    if not _will_commit():
+        return False
+    transaction.on_commit(publish, using=DEFAULT_DB_ALIAS)
+    return True
+
+
+def after_commit(work: Callable[[], None]) -> bool:
+    """Run ``work`` when the caller's transaction commits, or **now** where none will.
+
+    ``True`` means it was arranged for later, ``False`` that it has already run. Gated by no
+    setting, because two callers want different things of the same mechanism: :func:`defer`
+    waits only where ``TRANSACTIONAL`` says to, while a scheduled send's *event* has to wait
+    unconditionally -- the row it describes is rolled back by a failing block, and a durable
+    event about a send that never existed is worse than no event at all.
+    """
+    if not _will_commit():
+        work()
+        return False
+    transaction.on_commit(work, using=DEFAULT_DB_ALIAS)
+    return True
+
+
+def _will_commit() -> bool:
+    """Whether a commit is coming on the default connection that will run its hooks.
+
+    The default alias, because a send names no database. It is the connection a view's
+    ``atomic()`` opens and the one whose rollback the work would outlive; a project writing to
+    a second alias inside a block of its own is not one this can see.
+    """
     connection = connections[DEFAULT_DB_ALIAS]
     if connection.in_atomic_block:
-        if not _commits_on_exit(connection):
-            _mention_manual_transactions()
-            return False
-        transaction.on_commit(publish, using=DEFAULT_DB_ALIAS)
-        return True
+        if _commits_on_exit(connection):
+            return True
+        _mention_manual_transactions()
+        return False
     # only a connection that is already open, because asking an unopened one opens it:
     # a send would connect to a database the process never otherwise touches, and from a
     # coroutine that is `SynchronousOnlyOperation`. Nothing has run on it, so there is no

@@ -112,7 +112,9 @@ class TelegramScheduledSend(models.Model):
     id = models.BigAutoField(primary_key=True)
     created_at = models.DateTimeField(default=timezone.now)
     #: the same id the queued and delivered rows will carry, and the handle a cancellation
-    #: names. Not unique: `send_many` schedules one row per chat under one id
+    #: names. Not unique, though **not** because of `send_many` -- that gives every chat its
+    #: own, measured. Two rows share one where a caller passed an explicit `correlation_id`
+    #: to more than one scheduled send, or where a handler's replies inherited an update's
     correlation_id = models.UUIDField(db_index=True)
     #: when it may be published. Indexed with `claimed_at`, which is the mover's only query
     due_at = models.DateTimeField()

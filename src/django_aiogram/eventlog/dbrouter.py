@@ -60,10 +60,13 @@ class TelegramEventLogRouter:
         """Create the log's table on the log database only, and only when one is set.
 
         None rather than False for other apps: where somebody else's table belongs is not
-        this router's decision to make. And None for this app's *other* table too -- Django
-        passes the model as a hint, and a migration that names none is one this router has
-        nothing to say about, so the schedule keeps being created wherever the project's own
-        tables go.
+        this router's decision to make.
+
+        This app's *other* table is refused on the log alias and left alone everywhere else.
+        Django passes the model as a migration hint, so the two are separable -- and `None`
+        for the schedule was not enough: no opinion means Django creates it, so with a log
+        database configured the table appeared on **both** aliases, measured. The copy on the
+        log alias is never read or written, which is exactly why it should not exist.
         """
         alias = event_log_database()
         if alias is None or app_label != APP_LABEL:
@@ -71,5 +74,7 @@ class TelegramEventLogRouter:
         model = hints.get('model')
         name = getattr(getattr(model, '_meta', None), 'model_name', None)
         if name is not None and name not in LOG_MODELS:
-            return None
+            # not the log's table: keep it off the log's database, and say nothing about
+            # where else it goes -- that is the project's own routing to decide
+            return False if db == alias else None
         return db == alias
