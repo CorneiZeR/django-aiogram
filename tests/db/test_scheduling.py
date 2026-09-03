@@ -316,6 +316,23 @@ def test_a_disabled_process_writes_no_row_and_still_answers(published):
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'ENABLED': False})
+def test_a_disabled_fan_out_does_not_judge_an_eta_it_will_not_use(published):
+    """`send` returns before looking at anything; the fan-out was refusing first.
+
+    Two producers judging one argument differently is the defect, whichever of them is
+    right -- a disabled process is meant to do nothing and answer with the ids.
+    """
+    naive = datetime.datetime(2030, 1, 1, 9, 0)  # noqa: DTZ001 - the shape `due_moment` refuses
+
+    assert TelegramBot().send(chat_id=7, text='x', eta=naive) is not None
+    identifiers = TelegramBot().send_many([1, 2], text='x', eta=naive)
+
+    assert len(identifiers) == 2
+    assert not TelegramScheduledSend.objects.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'ENABLED': False})
 def test_the_mover_refuses_where_nothing_can_be_sent(published):
     with pytest.raises(CommandError, match='disabled'):
         call_command('tgbot_dispatch_scheduled')

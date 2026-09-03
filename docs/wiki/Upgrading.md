@@ -19,11 +19,13 @@ web tier may be deployed in either order.
 it until a caller passes one, so the migration is safe on a running deployment — it creates
 an empty table and one index.
 
-**It is created wherever your own tables go**, not on `EVENT_LOG_DATABASE`. The router that
-sends the event log to its own alias routes by *model* from 4.1 rather than by app label; a
-project that installed `TelegramEventLogRouter` gets this for free, and one that wrote its own
-router matching on `app_label == 'django_aiogram'` should narrow it to `TelegramEvent`, or the
-schedule will be created somewhere the mover does not read.
+**It is created wherever your own tables go.** The router that sends the event log to its
+own alias routes by *model* from 4.1 rather than by app label: it keeps the schedule off a
+**separate** event-log database and says nothing about it otherwise, so with
+`EVENT_LOG_DATABASE` unset — or naming `default` — the table lands on `default` like any of
+your own. A project that installed `TelegramEventLogRouter` gets this for free; one that wrote
+its own router matching `app_label == 'django_aiogram'` should narrow it to `TelegramEvent`,
+or the schedule will be created somewhere the mover does not read.
 
 And if you use `eta`, schedule `manage.py tgbot_dispatch_scheduled` —
 **[Deployment](Deployment.md)** has the container.

@@ -1239,7 +1239,10 @@ class TelegramBot(RouterShortcuts):
         is why the drops are recorded rather than left to the caller to infer.
         """
         writing = self._accept_bulk(function)
-        due_at = None if eta is None else due_moment(eta)
+        # only where this process writes, or a disabled fan-out would refuse an `eta`
+        # that the single-send path never looks at -- `_accept` returns before its own
+        # validation, and two producers judging one argument differently is the defect
+        due_at = due_moment(eta) if writing and eta is not None else None
         # resolved before the first chunk, as above: a broker that cannot be resolved is not
         # a chunk that failed to write. Not resolved at all for a scheduled batch, which
         # reaches no transport today and takes whichever one is configured when it comes due
@@ -1288,7 +1291,10 @@ class TelegramBot(RouterShortcuts):
         often than a single send does.
         """
         writing = self._accept_bulk(function)
-        due_at = None if eta is None else due_moment(eta)
+        # only where this process writes, or a disabled fan-out would refuse an `eta`
+        # that the single-send path never looks at -- `_accept` returns before its own
+        # validation, and two producers judging one argument differently is the defect
+        due_at = due_moment(eta) if writing and eta is not None else None
         # after the decision, not before: a disabled process may have no transport
         # configured at all, and resolving one would raise where the point is to do nothing.
         # A scheduled batch is the same case for a different reason -- see the twin above

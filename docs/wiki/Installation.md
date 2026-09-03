@@ -119,8 +119,8 @@ That is the whole minimum, and both values may be empty at startup. The
 package needs them only when something actually reaches Telegram or Redis, so
 tests, migrations and a build all run without them.
 
-The package ships two tables — the event log and the schedule an `eta` writes to — so run
-migrations after adding it:
+The package ships two tables — the event log, and the schedule table that an `eta` writes
+to — so run migrations after adding it:
 
 ```shell
 python manage.py migrate

@@ -155,10 +155,10 @@ identifier = bot.send(
 )
 ```
 
-Nothing happens until `manage.py tgbot_dispatch_scheduled` runs, so **schedule that** — from
-cron, or with `--loop` in a container of its own. Until it does, the row is visible with
-`--dry-run` and the feed carries an `outbound.scheduled` row saying what is waiting and for
-when.
+The row and its `outbound.scheduled` event are written at once; what waits is the delivery.
+Nothing is published until `manage.py tgbot_dispatch_scheduled` runs, so **schedule that** —
+from cron, or with `--loop` in a container of its own. Until it does, the row is visible with
+`--dry-run` and the feed says what is waiting and for when.
 
 There is no admin page for the schedule: `--dry-run` is how you look at what is waiting, and
 `bot.cancel_scheduled(identifier)` is how you take something out of it. The feed is where the
