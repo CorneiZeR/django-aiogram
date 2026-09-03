@@ -147,11 +147,13 @@ against that correlation id, and `bot.outcome()` reads it back:
 ```python
 from uuid import uuid4
 
+
 def start_the_import(job):
     # an id of its own, so the outcome is about this message and no other
     identifier = bot.send(chat_id=CHAT_ID, text='Import started…', correlation_id=uuid4())
     Job.objects.filter(pk=job.pk).update(telegram_correlation_id=identifier)
     finish_the_import.delay(job.pk)
+
 
 @app.task
 def finish_the_import(job_pk):
