@@ -162,16 +162,24 @@ class Command(BaseCommand):
         """Pass after pass, or one, unwinding on the signal either way."""
         with contextlib.suppress(KeyboardInterrupt):
             while True:
-                published = self._one_pass(bounds)
+                claimed = self._one_pass(bounds)
                 if not loop:
                     return
                 # a pass that filled its bound has more waiting, so it goes straight round
-                # again rather than sleeping on a backlog it already knows about
-                if published < bounds.limit:
+                # again rather than sleeping on a backlog it already knows about. What was
+                # *claimed* and not what was published: a full batch that was all dropped as
+                # too late, or all refused by the broker, is still a full batch, and sleeping
+                # on it delays every row behind it by an interval for no reason
+                if claimed < bounds.limit:
                     time.sleep(interval)
 
     def _one_pass(self, bounds: Bounds) -> int:
-        """Claim what is due, publish it, and delete what went out. Returns the count."""
+        """Claim what is due, publish it, and delete what went out.
+
+        Returns how many rows it **claimed**, which is what tells the loop whether there is
+        more waiting. How many were published is what the log and the command's own output
+        report, and the two differ by every row dropped as late or refused by the broker.
+        """
         # before the claim, and this is the same rule `enqueue` follows: a `BROKER` that
         # cannot be resolved is a misconfiguration, not a message that failed to publish.
         # Claimed first, its rows would keep the claim with no drop row and no later pass
@@ -190,7 +198,7 @@ class Command(BaseCommand):
                 published += 1
         logger.info('published scheduled sends', extra={'tg_published': published, 'tg_claimed': len(rows)})
         self.stdout.write(f'Published {published} of {len(rows)} claimed.')
-        return published
+        return len(rows)
 
     @staticmethod
     def _warn_about_a_lease_shorter_than_a_publish(broker: 'Broker', lease: int) -> None:

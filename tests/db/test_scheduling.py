@@ -23,6 +23,7 @@ from django_aiogram.broker.exceptions import BrokerNotConfiguredError
 from django_aiogram.broker.redis_list import RedisListBroker
 from django_aiogram.config.enums import EventKind
 from django_aiogram.eventlog.recorder import recorder
+from django_aiogram.management.commands import tgbot_dispatch_scheduled as dispatch_command
 from django_aiogram.management.commands.tgbot_dispatch_scheduled import Command
 from django_aiogram.models import TelegramEvent, TelegramScheduledSend
 from django_aiogram.producer import scheduling
@@ -380,6 +381,7 @@ def test_a_scheduled_send_rolls_back_with_the_transaction_that_made_it(published
         schedule_and_then_fail()
 
     assert not TelegramScheduledSend.objects.exists(), 'a rolled-back block left a send scheduled'
+    assert published == [], 'the eta path published instead of waiting for the mover'
 
 
 @pytest.mark.django_db(transaction=True)
@@ -626,6 +628,7 @@ def test_no_event_outlives_the_block_that_rolled_the_schedule_back(published):
     recorder.flush(timeout=5)
 
     assert not TelegramEvent.objects.filter(kind=EventKind.OUTBOUND_SCHEDULED.value).exists()
+    assert published == [], 'the eta path published instead of waiting for the mover'
 
 
 @pytest.mark.django_db(transaction=True)
@@ -637,6 +640,7 @@ def test_the_event_does_land_once_the_block_commits(published):
     recorder.flush(timeout=5)
 
     assert TelegramEvent.objects.filter(kind=EventKind.OUTBOUND_SCHEDULED.value).count() == 1
+    assert published == [], 'the eta path published instead of waiting for the mover'
 
 
 @pytest.mark.django_db(transaction=True)
@@ -665,6 +669,7 @@ def test_no_event_outlives_a_manually_managed_rollback(published):
 
     assert not TelegramScheduledSend.objects.exists(), 'the rollback left the row behind'
     assert not TelegramEvent.objects.filter(kind=EventKind.OUTBOUND_SCHEDULED.value).exists()
+    assert published == [], 'the eta path published instead of waiting for the mover'
 
 
 @pytest.mark.django_db(transaction=True)
@@ -681,6 +686,7 @@ def test_the_event_lands_when_a_manually_managed_block_commits(published):
     recorder.flush(timeout=5)
 
     assert TelegramEvent.objects.filter(kind=EventKind.OUTBOUND_SCHEDULED.value).count() == 1
+    assert published == [], 'the eta path published instead of waiting for the mover'
 
 
 @pytest.mark.django_db(transaction=True)
@@ -706,6 +712,7 @@ def test_no_event_survives_a_rollback_with_no_block_of_the_caller_s_own(publishe
 
     assert not TelegramScheduledSend.objects.exists(), 'the rollback left the row behind'
     assert not TelegramEvent.objects.filter(kind=EventKind.OUTBOUND_SCHEDULED.value).exists()
+    assert published == [], 'the eta path published instead of waiting for the mover'
 
 
 @pytest.mark.django_db(transaction=True)
@@ -773,6 +780,37 @@ def test_a_cancellation_that_wins_the_race_still_lets_the_message_out(published)
     assert RecordingBroker.cancelled == [1], 'the cancellation did not win the race it is here to lose'
     assert len(published) == 1, 'the message did not go out, so this is no longer the window it documents'
     assert not TelegramScheduledSend.objects.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_full_batch_of_drops_does_not_send_the_loop_to_sleep(published, monkeypatch):
+    """What tells `--loop` there is more waiting is the claim, not the publish.
+
+    A batch that filled its bound has a backlog behind it by definition. Decided on the
+    *published* count, a full batch that was all dropped as too late -- or all refused by the
+    broker -- looked like an empty one, and every row behind it waited an extra `--interval`
+    for no reason. With `--limit 1` that is one interval per stale row.
+
+    The sleep is patched to stop the loop, so the case is "what happened before the first
+    sleep": with the fix, the second row is published on the pass that follows the drop;
+    without it, the loop sleeps on a full batch and nothing is published at all.
+    """
+    slept = []
+    monkeypatch.setattr(dispatch_command.time, 'sleep', lambda seconds: slept.append(seconds) or _stop())
+
+    TelegramBot().send(chat_id=7, text='far too late', eta=a_while_ago(86400))
+    TelegramBot().send(chat_id=8, text='due now', eta=a_while_ago(5))
+
+    call_command('tgbot_dispatch_scheduled', '--loop', '--limit', '1', '--grace', '60', '--interval', '30')
+
+    assert len(published) == 1, 'the loop slept on a full batch of drops instead of coming straight round'
+    assert slept == [30.0], slept
+
+
+def _stop():
+    """End a patched `--loop` the way a signal would, from inside the sleep it replaced."""
+    raise KeyboardInterrupt
 
 
 def test_an_unlimited_retry_count_has_no_column_to_overflow():

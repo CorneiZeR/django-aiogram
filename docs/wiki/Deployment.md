@@ -236,6 +236,12 @@ guard.
 once, `--max-attempts` gives up on a row the broker keeps refusing, `--limit` bounds one pass,
 and `--dry-run` says what is waiting without claiming anything.
 
+Under `--loop`, a pass that filled `--limit` goes straight round again rather than sleeping,
+because a full batch means there is a backlog behind it. Full is counted in rows *claimed*,
+not rows published — a batch that was all dropped past its grace, or all refused by the
+broker, is still a full batch, and a backlog of those would otherwise clear at one `--limit`
+per `--interval`.
+
 ## What ENABLED=0 turns off
 
 - no router autodiscovery, so those modules are never imported

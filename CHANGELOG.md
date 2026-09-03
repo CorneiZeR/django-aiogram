@@ -82,7 +82,10 @@
   still — widening that is a rewrite of the largest table here — so the event log saturates
   the value at 32767 and keeps the exact count in `detail.attempts`. `--grace` refuses a row too far overdue and records the
   drop, because a mover that was down for a day should not deliver a day of stale messages at
-  once; `--grace 0`, the default, refuses nothing.
+  once; `--grace 0`, the default, refuses nothing. `--loop` sleeps only after a pass that did
+  *not* fill `--limit`, and fullness is counted in rows claimed rather than rows published:
+  a batch dropped as late or refused by the broker is still a batch, and counting the publish
+  would hold every row behind it for another `--interval`.
 
 - **A second table, and the router narrowed to match.** `django_aiogram_scheduled` is where
   those rows wait, and it is **not** routed to `EVENT_LOG_DATABASE`: the feed is a record and
