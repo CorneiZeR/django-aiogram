@@ -70,6 +70,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger('django_aiogram')
 
 
+def _message_ids(result: object) -> list[int] | None:
+    """Return the ids in a result that is a collection of messages, or ``None`` otherwise.
+
+    Only ``send_media_group`` and its siblings answer with a list; everything else has its id
+    in the ``message_id`` column, and a key that repeated it would be a second place to read
+    the same thing from.
+    """
+    if not isinstance(result, (list, tuple)):
+        return None
+    found = [getattr(message, 'message_id', None) for message in result]
+    return [one for one in found if isinstance(one, int)] or None
+
+
 class TelegramBot(RouterShortcuts):
     """Facade over an aiogram bot, dispatcher and router.
 
@@ -718,6 +731,11 @@ class TelegramBot(RouterShortcuts):
                         detail={
                             'paced_ms': int((paced - attempted) * 1000),
                             'queue_ms': int((time.time() - queued_at) * 1000) if queued_at else None,
+                            # `send_media_group` answers with a *list* of messages, so the
+                            # column above is None for it and every id would be lost. One row
+                            # still, because one call happened and a receiver counting sends
+                            # must not see ten for an album -- the ids go here instead
+                            'message_ids': _message_ids(result),
                         },
                     )
                     logger.info('message sent', extra={'tg_function': function})

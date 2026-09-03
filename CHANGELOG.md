@@ -21,6 +21,11 @@
   belong to a different message under the same id. `Outcome.sent` is all of them, newest
   first, and the convenience readers take the newest.
 
+  One call can be several messages too. `send_media_group` answers with a list, so the
+  `message_id` column is empty for it and every id would have been lost — they are kept in
+  the row's `detail` and read back as one `Outcome.sent` entry each. One row still, because
+  one call happened and a receiver counting `outbound.sent` must not see ten for an album.
+
   **`failed` means it will not arrive, so a drop is weighed rather than counted.**
   `outbound.dropped` is written from three places and only some of them are the end of the
   message: retries exhausted and a `serialising` stage are, while a `queueing` stage means

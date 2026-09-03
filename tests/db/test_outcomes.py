@@ -74,6 +74,66 @@ def test_a_send_and_then_its_outcome_is_the_whole_point():
     assert answer.at is not None
 
 
+class Album:
+    """What `send_media_group` hands back: a list, not a message."""
+
+    def __init__(self, *ids):
+        self.messages = [type('M', (), {'message_id': one})() for one in ids]
+
+
+def an_album_bot(messages):
+    """A stand-in whose `send_media_group` answers the way Telegram does."""
+
+    class Fake:
+        async def send_media_group(self, **kwargs):
+            return messages
+
+        class session:
+            @staticmethod
+            async def close():
+                return None
+
+    return Fake()
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_an_album_keeps_every_id_telegram_gave():
+    """`send_media_group` answers with a list, so the `message_id` column is empty for it.
+
+    Read off that column alone the outcome said `sent` and handed back nothing to edit --
+    for a method whose whole result is several editable messages.
+    """
+    instance = TelegramBot()
+    instance._bot = an_album_bot(Album(11, 12, 13).messages)
+    try:
+        identifier = instance.send_raw('send_media_group', chat_id=7, media=[])
+        recorder.flush(timeout=5)
+    finally:
+        instance._bot = None
+        instance.close()
+
+    answer = instance.outcome(identifier)
+
+    assert answer.state is OutcomeState.SENT
+    assert [message.message_id for message in answer.sent] == [11, 12, 13]
+    assert all(message.chat_id == 7 for message in answer.sent)
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_call_that_produced_no_message_still_says_it_went_out():
+    """`send_chat_action` answers `True`, so there is no id and the entry is what matters."""
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_SENT, chat_id=7)
+
+    answer = outcome(identifier)
+
+    assert answer.state is OutcomeState.SENT
+    assert answer.message_id is None
+    assert len(answer.sent) == 1, 'the entry that says the call went out was dropped'
+
+
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT=SETTINGS)
 def test_a_failed_send_is_told_apart_from_one_nothing_recorded():

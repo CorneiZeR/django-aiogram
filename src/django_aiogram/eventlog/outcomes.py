@@ -215,6 +215,25 @@ def _cannot_come_back(row: 'TelegramEvent', *, queued: bool) -> bool:
     return not queued
 
 
+def _messages_in(row: 'TelegramEvent') -> 'Iterator[SentMessage]':
+    """Yield the messages one ``outbound.sent`` row stands for, which is not always one.
+
+    ``send_media_group`` answers with a list, so its row carries the ids under
+    ``detail['message_ids']`` and its ``message_id`` column is empty — see
+    ``producer.client._message_ids`` for why they are not a row each. In the order Telegram
+    returned them, which for an album is the order it posted them in.
+
+    A row for a call that produced no message at all — ``send_chat_action`` — still yields
+    one entry, with both ids ``None``. That entry is what says the call went out.
+    """
+    ids = (row.detail or {}).get('message_ids')
+    if isinstance(ids, list) and ids:
+        for one in ids:
+            yield SentMessage(chat_id=row.chat_id, message_id=one, at=row.created_at)
+        return
+    yield SentMessage(chat_id=row.chat_id, message_id=row.message_id, at=row.created_at)
+
+
 def _is_ending(row: 'TelegramEvent', *, queued: bool) -> bool:
     """Whether this row says the message will never arrive."""
     if row.kind == EventKind.OUTBOUND_FAILED.value:
@@ -250,9 +269,7 @@ def _decide(identifier: uuid.UUID, rows: 'Iterable[TelegramEvent]') -> Outcome:
         return Outcome(
             state=OutcomeState.SENT,
             correlation_id=identifier,
-            sent=tuple(
-                SentMessage(chat_id=row.chat_id, message_id=row.message_id, at=row.created_at) for row in delivered
-            ),
+            sent=tuple(message for row in delivered for message in _messages_in(row)),
             attempt=delivered[0].attempt,
         )
 

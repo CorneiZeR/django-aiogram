@@ -126,7 +126,7 @@ Four states, and the last two are not the same question:
 
 | `state` | what the feed holds | what it means |
 | --- | --- | --- |
-| `sent` | an `outbound.sent` row | Telegram accepted the call. `message_id` and `chat_id` are set where it produced a message — a `send_chat_action` has neither, and `answer.sent` still holds an entry for it |
+| `sent` | an `outbound.sent` row | Telegram accepted the call. `message_id` and `chat_id` are set where it produced a message — a `send_chat_action` has neither, and `answer.sent` still holds an entry for it. A `send_media_group` produces several, and all of them are there |
 | `failed` | `outbound.failed`, or a drop the row says is the end | it will not arrive; `error` says why |
 | `pending` | `queued`, `consumed`, `retried`, or a drop that may still be delivered | on its way — ask again, within a bound of your own |
 | `unknown` | no outbound row an outcome is decided from | nothing has been recorded **yet**, or nothing ever will be. Other rows may exist under the id — a handler's `inbound.*` share it — and none of them decides an outcome |
@@ -147,6 +147,10 @@ handler's replies inherit the id of the update that caused them, so a later `ret
 belong to a different message under the same id. `answer.sent` is every message recorded
 under it, newest first, and `message_id`, `chat_id` and `at` read the newest — which is the
 answer when one `send()` produced one message.
+
+One call can also be several messages on its own: `send_media_group` answers with a list, so
+its row keeps every id and `answer.sent` holds one entry each, in the order Telegram posted
+them. `answer.message_id` is then the first of the album rather than a choice between them.
 
 **Where an id does name several, the state is about the id and not about one of them**, and
 the feed holds nothing finer to narrow it with. The case that shows: one message queued and
