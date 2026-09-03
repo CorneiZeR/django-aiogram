@@ -58,6 +58,28 @@ class RateLimitKey(str, Enum):
 
 
 @unique
+class OutcomeState(str, Enum):
+    """What the feed can say about one correlation id, and the four are exhaustive.
+
+    ``UNKNOWN`` and ``PENDING`` are deliberately apart. Under ``UNKNOWN`` no *outbound* row
+    an outcome is decided from **exists** — not "was never written", which is a different
+    claim this cannot make: retention prunes rows, so one recorded weeks ago and pruned since
+    reads the same as one nothing ever wrote. Others may well exist under the id, a handler's
+    ``inbound.*`` among them, and none of those decides anything. Under ``PENDING`` a
+    deciding row exists and it is not an ending.
+
+    A caller polling for a result treats both as *not yet*, and bounds its own polling:
+    ``UNKNOWN`` can be permanent, because the writer drops events under pressure and
+    retention prunes them. An operator reading ``unknown`` a minute later knows to look at
+    whether the log dropped the event rather than at the queue.
+    """
+
+    SENT = 'sent'
+    FAILED = 'failed'
+    PENDING = 'pending'
+    UNKNOWN = 'unknown'
+
+
 class EventKind(str, Enum):
     """What one row of the event log records.
 

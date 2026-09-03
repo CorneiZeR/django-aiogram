@@ -104,6 +104,112 @@ container's admin filter. Namespace as `<app>.<noun>.<verb>` and keep the total
 in the tens: `kind` leads an index, and that index is only worth having while
 its cardinality stays low.
 
+## What became of one message
+
+`bot.send()` answers with a correlation id, and the reply Telegram gave is produced in the
+bot container — a different process from the one that queued the call. So the `message_id`
+was out of reach of whoever sent the message, which is the id an edit or a delete needs.
+
+It has been in the table all along. `bot.outcome()` is what asks:
+
+```python
+from django_aiogram import bot
+
+identifier = bot.send(chat_id=CHAT_ID, text='Working…')
+...
+answer = bot.outcome(identifier)
+if answer.state == 'sent':
+    bot.send('edit_message_text', chat_id=answer.chat_id, message_id=answer.message_id, text='Done')
+```
+
+Four states, and the last two are not the same question:
+
+| `state` | what the feed holds | what it means |
+| --- | --- | --- |
+| `sent` | an `outbound.sent` row | Telegram accepted the call. `message_id` and `chat_id` are set where it produced a message — a `send_chat_action` has neither, and `answer.sent` still holds an entry for it. A `send_media_group` produces several, and all of them are there |
+| `failed` | `outbound.failed`, or a drop the row says is the end | it will not arrive; `error` says why |
+| `pending` | `queued`, `consumed`, `retried`, or a drop that may still be delivered | on its way — ask again, within a bound of your own |
+| `unknown` | no outbound row an outcome is decided from | nothing has been recorded **yet**, or nothing ever will be. Other rows may exist under the id — a handler's `inbound.*` share it — and none of them decides an outcome |
+
+**Not every `outbound.dropped` row is a failure**, and the difference matters because a
+caller told `failed` re-sends. That kind is written from three places:
+
+| the row says | state | why |
+| --- | --- | --- |
+| `detail.max_retries` | `failed` | Telegram kept refusing and the message was acknowledged |
+| `detail.stage` is `serialising` | `failed` | the payload never left the process; re-sending is safe |
+| `detail.stage` is `queueing` | `pending` | the publish raised and **may still have been applied** — this is the one not to re-send |
+| `NotScheduled`, with an `outbound.queued` row | `pending` | a shutdown refused it without acknowledging, so the next start reclaims it |
+| `NotScheduled`, with no `queued` row | `failed` | a send that took the direct route — `send_raw` anywhere, or `send` inside the bot container — was never on a queue, so nothing will reclaim it |
+
+`sent` wins over anything written after it, because an id is not one per message: a
+handler's replies inherit the id of the update that caused them, so a later `retried` may
+belong to a different message under the same id. `answer.sent` is every message recorded
+under it, newest first, and `message_id`, `chat_id` and `at` read the newest — which is the
+answer when one `send()` produced one message.
+
+One call can also be several messages on its own: `send_media_group` answers with a list, so
+its row keeps every id and `answer.sent` holds one entry each, in the order Telegram posted
+them. `answer.message_id` is then the first of the album rather than a choice between them.
+
+**Where an id does name several, the state is about the id and not about one of them**, and
+the feed holds nothing finer to narrow it with. The case that shows: one message queued and
+another sent directly, both dropped by a shutdown — the queued one is reclaimed by the next
+start and the direct one is not, and the rule above can only see that *something* under this
+id was queued. It answers `pending` for both, which is the side that cannot duplicate a
+message: a caller waiting for a send that is already finished loses a wait, where one told
+`failed` about a message the next start will deliver re-sends it and the chat gets two. Pass
+an explicit `correlation_id` per send where you need the states apart.
+
+**`unknown` has several causes and the feed cannot tell them apart.** The message has not
+got there yet; or the writer dropped the event under pressure, which the section below
+explains and a `log.dropped` row marks; or `EVENT_LOG_RETENTION_DAYS` has pruned it; or —
+the one that looks least like a misconfiguration — **the process that sent the message does
+not record outcomes.** The bot container reads its own `TELEGRAM_BOT`, so one with the log
+off or with a narrower `EVENT_LOG_KINDS` writes no row for a message it delivered perfectly
+well, and the refusal below cannot fire for a configuration this process cannot see.
+
+So treat `unknown` as *not yet*, give up after a bound of your own, and check the sending
+container's settings before concluding anything —
+**[Troubleshooting](Troubleshooting.md#botoutcome-says-unknown-for-a-message-that-was-delivered)**
+walks the list. This is a feed, not a receipt.
+
+**A configuration that cannot answer refuses instead**, rather than reporting `unknown` for
+ever — the one word that means *not yet*. `EVENT_LOG` off is one. The other is an
+`EVENT_LOG_KINDS` that leaves out any of the four kinds a **correct** outcome requires.
+Six kinds are read; these four are the ones whose absence changes an answer rather than
+sharpening it:
+
+The call refuses, so none of the rows below is something you can observe — each is what the
+refusal is *for*, which is why it demands the kind rather than answering without it:
+
+| kind | what answering without it would do |
+| --- | --- |
+| `outbound.sent` | there would be no result at all |
+| `outbound.failed` | a refused message would read `unknown`, so a caller polling for an end never reaches one |
+| `outbound.dropped` | the same, for the drops above |
+| `outbound.queued` | not a missing answer but a **wrong** one: the shutdown-drop rule reads this row, so without it a message the next start will deliver would be reported `failed` — and a caller acts on `failed` by re-sending |
+
+`outbound.consumed` and `outbound.retried` are the other two read, and are **not** required.
+They can only ever produce `pending`, so leaving them out moves an in-flight message to
+`unknown` — a different word for the same instruction — and costs precision rather than
+correctness.
+
+Either refusal is an `OutcomesUnavailableError` at the call, and they are two messages
+rather than one: `EVENT_LOG` off is reported as that and stops there, since a set of kinds
+means nothing while nothing is recorded at all. Only with the log on does the second run,
+and it names every required kind that is missing at once.
+
+Checked when asked rather than at boot on purpose: narrowing `EVENT_LOG_KINDS` is a
+reasonable thing to do in a project that never reads an outcome, and a system check cannot
+tell whether this one does.
+
+`await bot.aoutcome(identifier)` is the same read without blocking the loop. Code with no
+bot to hand imports the functions behind them —
+`django_aiogram.eventlog.outcomes.outcome(identifier)` synchronously, and
+`await aoutcome(identifier)` from a coroutine; the second is not a wrapper over the first,
+so an async caller does not have to reach for the blocking one.
+
 ## Nothing waits for the database
 
 Recording hands the event to a bounded in-memory queue; one background thread

@@ -54,6 +54,26 @@ Project uses django-aiogram 4.x. Rules:
   in the bot container, so do it only on a queue nothing untrusted can write to.
 - A queued send cannot raise in the caller. Failures are logged by the worker.
   Use bot.send_raw with RAISE_EXCEPTION only when the caller must see the error.
+- To edit or delete a message you queued, read its `message_id` back with
+  `bot.outcome(identifier)` — the id `send()` returned is a correlation id and not
+  Telegram's. Pass an explicit `correlation_id=uuid4()` to any send whose own
+  outcome you will use: inside a handler the id is inherited from the update, so
+  every reply shares it and `outcome()` answers about the newest of them. For a
+  send_media_group read `answer.sent`, which holds an entry per message of the
+  album; `answer.message_id` is only its first.
+- Branch on the outcome's state before acting on it, all four of them. Only
+  `sent` may be edited, and check `message_id` and `chat_id` are not None even
+  then — a call that produced no message, such as send_chat_action, is `sent`
+  with neither. `failed` means stop. `pending` and `unknown` mean ask again
+  later, within a bound of your own: `unknown` can be permanent, so past that
+  bound treat it as unresolved rather than polling on. Do not write a loop that
+  blocks a request waiting for it.
+- It needs EVENT_LOG=True and an EVENT_LOG_KINDS that is either empty or keeps
+  outbound.sent, outbound.failed, outbound.dropped and outbound.queued — **in the
+  start_tgbot container as well as in the process that asks.** The rows are
+  written by whichever process sent the message, and the refusal can only speak
+  for the settings it can see: a bot container with the log off leaves the
+  lookup answering `unknown` with nothing to refuse.
 - `python manage.py check` validates the settings; treat its E0xx/W0xx output as
   the spec.
 - Run `python manage.py migrate` after upgrading. The package ships one table,

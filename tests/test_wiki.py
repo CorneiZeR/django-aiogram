@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from markdown.extensions.toc import slugify, unique
 
 ROOT = Path(__file__).resolve().parent.parent
 WIKI = ROOT / 'docs' / 'wiki'
@@ -45,14 +46,99 @@ def page_files() -> set[str]:
 
 
 def headings_of(path: Path) -> set[str]:
-    """The anchors a page offers, slugified the way the toc extension does it."""
-    slugs = set()
+    """The anchors a page offers, from the toc extension's own `slugify` and `unique`.
+
+    The functions themselves, imported, rather than a model of them -- because a model is
+    what went wrong three times on one branch. It turned punctuation into dashes where the
+    real one removes it, so `bot.outcome()` computed `bot-outcome-...` against a published
+    `botoutcome-...`; it folded `_1` tails it could not tell from a heading named that way;
+    and it slugified a heading that had declared its own id. Each reported a live anchor as
+    dangling, which is the failure this function exists to prevent.
+
+    `mkdocs.yml` configures `toc` with `permalink` alone and enables `attr_list`, so these
+    defaults are the ones the build uses, and
+    `test_the_slugs_match_the_ones_the_build_publishes` holds that to the output rather than
+    to this docstring.
+
+    **Declared ids are collected first, all of them, before any slug is generated.**
+    `attr_list` runs before `toc` numbers anything, so a declared `#download` takes the bare
+    id and an ordinary `## Download` is pushed to `download_1` -- measured, and in either
+    document order. Generating in one pass gave the bare id to whichever came first.
+    """
+    headings = []
     for line in visible(path.read_text(encoding='utf-8')).splitlines():
         found = ATX.match(line)
         if found:
-            text = re.sub(r'`|\*|\[|\]|\(.*?\)', '', found.group(1))
-            slugs.add(re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-'))
+            headings.append(found.group(1))
+
+    declared = [declared_id(heading) for heading in headings]
+    slugs = {found for found in declared if found}
+    for heading, names_itself in zip(headings, declared, strict=True):
+        if names_itself:
+            continue
+        # the attribute block is not part of the text either -- `attr_list` takes it off
+        # before `toc` sees the heading, so `## Heading {data-id=other}` publishes `heading`
+        # and not a slug of the braces. Stripped even when it declared no id, which is the
+        # case that reaches here
+        bare = ATTR_BLOCK.sub('', heading)
+        # a link becomes its own text, which is what the renderer slugifies. Deleting
+        # every parenthetical instead ate literal ones: `## Install (optional)` computed
+        # `install` where the build publishes `install-optional`
+        linked = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', bare)
+        text = re.sub(r'[`*\[\]]', '', linked)
+        # mutates `slugs`, which is what numbers a repeat against the ones before it
+        unique(slugify(text, '-'), slugs)
     return slugs
+
+
+def declared_id(heading: str) -> str | None:
+    """The id a heading names for itself, or ``None`` where it names none.
+
+    Two spellings, because `attr_list` reads both: `{#download}` and `{id=download}`, the
+    second quoted or bare. The **last** assignment wins -- measured, `{#hash id=other}`
+    publishes `other` -- and classes may sit among them in any order.
+
+    Tokenised rather than searched, which is the whole of it. Scanning the block for `#` or
+    `\bid=` read three things as ids that are not: `data-id=other` (a different attribute
+    whose name ends in the one we want), and a `#` inside a quoted value, as in
+    `title="a #hash"` -- measured, all three headings publish their ordinary slug. A quoted
+    value is one token however much space it holds.
+    """
+    block = ATTR_BLOCK.search(heading)
+    if not block:
+        return None
+    names = []
+    for token in ATTR_TOKEN.findall(block.group(1)):
+        found = ATTR_ID.match(token)
+        if found:
+            name = found.group('hash') or found.group('named') or ''
+            names.append(name.strip('"\''))
+    return names[-1] if names else None
+
+
+def built_page(path: Path) -> Path | None:
+    """Where the build put this page, or ``None`` when there is no build to look at.
+
+    `index.md` is the site root rather than a directory of its own, and asking for
+    `site/index/index.html` skipped the front page for as long as the answer was "no file, no
+    check" -- so a missing page is an assertion and only an unbuilt `site/` is a skip. The
+    `docs` job's own shell step spells the same exception, which is where this one came from.
+    """
+    if not (ROOT / 'site').exists():
+        return None
+    built = ROOT / 'site' / ('index.html' if path.stem == 'index' else f'{path.stem}/index.html')
+    assert built.exists(), f'site/ is built and has no page for {path.name}: expected {built}'
+    return built
+
+
+def published_ids(html: str) -> set[str]:
+    """The heading ids a built page carries, exactly as the build wrote them.
+
+    Nothing is folded here any more. `headings_of` numbers repeats the way the build does,
+    so the two sides are directly comparable -- and every attempt to reconcile them
+    afterwards had to guess whether a `_1` was a duplicate's mark or part of a name.
+    """
+    return set(re.findall(r'<h[1-6][^>]*\bid="([^"]+)"', html))
 
 
 def test_the_wiki_has_pages():
@@ -70,6 +156,55 @@ def test_every_link_resolves(path):
     known = page_files()
     broken = [target for target, _ in LINK.findall(path.read_text(encoding='utf-8')) if target and target not in known]
     assert not broken, f'{path.name} links to missing pages: {broken}'
+
+
+@pytest.mark.parametrize('path', PAGES, ids=lambda path: path.name)
+def test_the_slugs_match_the_ones_the_build_publishes(path):
+    """`headings_of` models the toc extension, so the model is held to the output.
+
+    Skipped where `site/` has not been built, which is most runs -- the point is the CI leg
+    that builds the docs, where a heading whose anchor this file cannot compute would
+    otherwise make `test_every_anchor_resolves` report a live link as dangling. That is what
+    happened to a heading holding `bot.outcome()`.
+    """
+    built = built_page(path)
+    if built is None:
+        pytest.skip('site/ is not built in this run')
+    published = published_ids(built.read_text(encoding='utf-8'))
+    computed = headings_of(path)
+
+    # both directions, and non-empty. `computed <= published` was the first draft, and it holds
+    # for a `headings_of` that computes nothing at all -- which is the shape of the very bug this
+    # is here to catch, since a slug this file cannot compute is one `test_every_anchor_resolves`
+    # reports as dangling
+    assert computed, f'{path.name} has headings and this file computed none'
+    assert computed == published, (
+        f'computed but not published: {sorted(computed - published)}; '
+        f'published but not computed: {sorted(published - computed)}'
+    )
+
+
+@pytest.mark.parametrize('path', PAGES, ids=lambda path: path.name)
+def test_no_table_row_rendered_as_a_paragraph(path):
+    """A row separated from its table by a blank line renders as literal pipes.
+
+    Markdown ends a table at the first blank line, so rows appended after one become a
+    paragraph of `| text |` -- visible on the page, and invisible to everything else: the
+    build is not wrong about anything, so `--strict` says nothing, and the source still looks
+    like a table. Two rows shipped that way on `API.md` before this existed.
+
+    Skipped without a built `site/`, like the parity case above, and run by the `docs` job.
+    """
+    built = built_page(path)
+    if built is None:
+        pytest.skip('site/ is not built in this run')
+    stray = [
+        re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', '', para).strip())[:80]
+        for para in re.findall(r'<p>(.*?)</p>', built.read_text(encoding='utf-8'), re.DOTALL)
+        if re.sub(r'<[^>]+>', '', para).strip().startswith('|')
+    ]
+
+    assert not stray, f'{path.name} renders a table row as text: {stray}'
 
 
 @pytest.mark.parametrize('path', PAGES, ids=lambda path: path.name)
@@ -379,6 +514,14 @@ def test_the_config_validates_what_it_claims():
 #: refuse a second copy of the documentation, and it still does.
 README_BUDGET = 148
 #: `## Title`, with the three leading spaces markdown still renders as a heading
+#: the `{...}` block `attr_list` reads off the end of a heading
+ATTR_BLOCK = re.compile(r'\{:?\s*([^}]*)\}\s*$')
+#: one attribute of that block. A quoted value is one token however much space it holds, so
+#: `title="a #hash"` cannot be read as an id -- which `\bid=` and a bare `#` both did
+ATTR_TOKEN = re.compile(r'(?:[^\s"\']|"[^"]*"|\'[^\']*\')+')
+#: the two tokens that name an id, and neither may be a suffix of something else:
+#: `data-id=other` names no id at all, measured -- that heading publishes its slug
+ATTR_ID = re.compile(r'^(?:#(?P<hash>.+)|id=(?P<named>.*))$')
 ATX = re.compile(r'^ {0,3}#{1,6}\s+(.+?)\s*$', re.MULTILINE)
 #: `Title` underlined with `===` or `---`, which renders as one too
 SETEXT = re.compile(r'^ {0,3}(\S.*?)\s*\n {0,3}(?:=+|-+)\s*$', re.MULTILINE)
@@ -476,6 +619,105 @@ def test_the_readme_links_to_every_page():
     missing = page_names() - linked - {'index'}
 
     assert not missing, f'pages the README does not link to: {sorted(missing)}'
+
+
+@pytest.mark.parametrize(
+    ('heading', 'slug'),
+    [
+        ('## Install (optional)', 'install-optional'),
+        ('## See [the page](Other.md)', 'see-the-page'),
+        ('## `bot.outcome()` says `unknown`', 'botoutcome-says-unknown'),
+        ('## E001-E049, W001', 'e001-e049-w001'),
+    ],
+)
+def test_a_parenthetical_is_only_stripped_when_it_is_a_link_target(heading, slug, tmp_path):
+    """Two jobs one regex was doing, and it got the second wrong.
+
+    `[text](target)` has to become its text, because that is what the renderer slugifies.
+    Deleting every parenthetical did that and also ate literal ones, so a heading holding
+    `(optional)` computed a slug the build does not publish -- and
+    `test_every_anchor_resolves` would have called a live link dangling.
+    """
+    page = tmp_path / 'Page.md'
+    page.write_text(f'{heading}\n', encoding='utf-8')
+
+    assert headings_of(page) == {slug}
+
+
+def test_a_declared_id_is_reserved_before_any_slug_is_generated(tmp_path):
+    """`attr_list` runs before `toc`, so a declared id wins the bare one either way round.
+
+    Measured against `markdown`: `## Download` beside `## Alternate {#download}` publishes
+    `download_1` and `download` -- the declared one takes the bare id even when it comes
+    *second* in the document. Generating in one pass handed the bare id to whichever heading
+    the walk reached first, so a link to `#download_1` read as dangling.
+    """
+    for name, source in (
+        ('First', '## Download\n\n## Alternate {#download}\n'),
+        ('Second', '## Alternate {#download}\n\n## Download\n'),
+    ):
+        page = tmp_path / f'{name}.md'
+        page.write_text(source, encoding='utf-8')
+
+        assert headings_of(page) == {'download', 'download_1'}, name
+
+
+@pytest.mark.parametrize(
+    ('heading', 'slug'),
+    [
+        ('## Download {#download}', 'download'),
+        ('## Download {: #dl-page }', 'dl-page'),
+        # `attr_list` reads `id=` as readily as `#`, quoted or bare
+        ('## Download {id=dl-page}', 'dl-page'),
+        ('## Download {: id="dl" }', 'dl'),
+        # the last assignment wins, measured: this publishes `other` and not `hash`
+        ('## Download {#hash id=other}', 'other'),
+        # a class may sit beside it, in either order
+        ('## Download {.cls #hash}', 'hash'),
+        ('## Download {#a #b}', 'b'),
+        # none of these names an id, measured: an attribute whose name merely *ends* in
+        # `id`, and a `#` inside a quoted value. All three publish the ordinary slug
+        ('## Heading {data-id=other}', 'heading'),
+        ('## Heading {title="a #hash"}', 'heading'),
+        ('## Heading {#real data-id=x}', 'real'),
+        ('## Plain heading', 'plain-heading'),
+    ],
+)
+def test_a_heading_that_names_its_own_id_keeps_it(heading, slug, tmp_path):
+    """`attr_list` is enabled, so a heading may declare an id and no slug is computed.
+
+    Slugified along with the rest of the line, `## Download {#download}` came out as
+    `download-download` -- a slug the page does not have, so a live link to it reads as
+    dangling. Every value here is measured against `markdown` with `toc` and `attr_list`.
+    """
+    page = tmp_path / 'Page.md'
+    page.write_text(f'{heading}\n', encoding='utf-8')
+
+    assert headings_of(page) == {slug}
+
+
+@pytest.mark.parametrize(
+    ('source', 'ids'),
+    [
+        ('## Result\n\n## Result\n', {'result', 'result_1'}),
+        ('## Result\n\n## Result_1\n', {'result', 'result_1'}),
+        ('## Result\n\n## Result\n\n## Result\n', {'result', 'result_1', 'result_2'}),
+        ('## Result\n\n## Result\n\n## Result_1\n', {'result', 'result_1', 'result_2'}),
+    ],
+)
+def test_a_repeated_heading_is_numbered_the_way_the_build_numbers_it(source, ids, tmp_path):
+    """The last case is why this cannot be reconciled after the fact.
+
+    `## Result_1` arriving behind two `## Result` sections takes `result_2`, because `unique`
+    increments the numeric tail it finds rather than counting occurrences -- so a published
+    `result_1` is a duplicate's mark in one page and a heading's own name in another, and
+    nothing about the id says which. Computing them in order the way the build does is what
+    removes the question; every value here is measured against `markdown` itself.
+    """
+    page = tmp_path / 'Page.md'
+    page.write_text(source, encoding='utf-8')
+
+    assert headings_of(page) == ids
 
 
 def test_a_link_in_the_wrong_case_does_not_count(tmp_path, monkeypatch):

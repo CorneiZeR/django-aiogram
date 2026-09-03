@@ -49,6 +49,8 @@ it, and `django_aiogram.redis.redis_conn` is the same object in the module that 
 | `bot.enqueue(...)` | always queue |
 | `bot.send_raw(...)` | always call Telegram from this process |
 | `bot.send_many(chat_ids, function='send_message', *, chunk_size=100, **kwargs)` | queue rather than call, one message per chat, a chunk per round trip |
+| `bot.outcome(correlation_id)` | what became of the message that id names, read from the event log |
+| `await bot.aoutcome(correlation_id)` | as `outcome`, without blocking the loop |
 
 `function` must name a Telegram API method aiogram exposes; anything else raises
 `ValueError` before it reaches the queue. See **[Sending messages](Sending-messages.md)**.
@@ -281,6 +283,7 @@ member may be renamed but never revalued.
 
 ```python
 from django_aiogram.eventlog.events import failure_kinds, kind_choices, register_kind
+from django_aiogram.eventlog.outcomes import Outcome, SentMessage, aoutcome, outcome
 from django_aiogram.models import TelegramEvent
 from django_aiogram.eventlog.signals import events_recorded
 ```
@@ -298,6 +301,28 @@ one message's history, and what a chat has seen:
 TelegramEvent.objects.filter(correlation_id=identifier).order_by('id')
 TelegramEvent.objects.filter(chat_id=chat_id).order_by('-id')[:50]
 ```
+
+The first of those two has an answer written for it. `bot.outcome(identifier)` — or
+`outcome(identifier)`, the function behind it — returns an `Outcome`: a `state` of `sent`, `failed`,
+`pending` or `unknown`, the `message_id` and `chat_id` Telegram gave, `at`, `error`,
+`attempt`, and `sent` for every message recorded under the id. `bot.aoutcome()` is the
+awaiting twin. See **[Event log](Event-log.md#what-became-of-one-message)** for what each
+state means and what `unknown` does not mean.
+
+`state` is an `OutcomeState`, which is `(str, Enum)` like the rest — so `== 'sent'` and
+`is OutcomeState.SENT` are the same test. It is not a value any setting accepts, which is
+why it is here rather than in the table above.
+
+It reads the feed, so it needs `EVENT_LOG` on **and** an `EVENT_LOG_KINDS` that is empty or
+keeps the four kinds a correct outcome requires. Either one missing raises
+`OutcomesUnavailableError` at the call rather than answering `unknown` for ever — the log
+being off is reported as itself, and the missing kinds are named only once it is on, because
+a set of kinds means nothing while nothing is recorded.
+
+**That guard is about the reading process only.** The rows are written by whichever process
+*sent* the message, and it reads its own settings — so a bot container with the log off, or
+with a narrower `EVENT_LOG_KINDS`, leaves the call answering `unknown` with nothing to
+refuse. Both processes have to be configured to record the deciding kinds.
 
 A row written since the column arrived also carries a **short id**: the same
 message in twelve characters a person can read out, which is what the admin's

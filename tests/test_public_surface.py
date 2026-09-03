@@ -72,6 +72,12 @@ THREE_ONE_ADDITIONS = ('asend', 'aenqueue', 'send_many', 'asend_many')
 THREE_ONE_COROUTINES = ('asend', 'aenqueue', 'asend_many', 'aqueue_depth', 'ainflight_depth', 'aclose')
 THREE_ONE_INTROSPECTION = ('queue_depth', 'inflight_depth')
 
+#: 4.1's additions, apart for the same reason: what a release added is a record of that
+#: release, and editing an older tuple to carry a newer name loses which contract a caller
+#: can rely on
+FOUR_ONE_ADDITIONS = ('outcome',)
+FOUR_ONE_COROUTINES = ('aoutcome',)
+
 #: what `import django_aiogram` gives you. `redis_conn` and `get_redis` left in 4.0: one
 #: transport's client is not the package's business to export, and both are still importable
 #: from `django_aiogram.redis`, which the case below pins
@@ -110,7 +116,10 @@ EVENT_FIELDS = (
 SETTINGS = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'FSM_STORAGE': 'memory'}
 
 
-@pytest.mark.parametrize('name', INHERITED_ATTRIBUTES + TWO_X_ADDITIONS + THREE_ONE_ADDITIONS + THREE_ONE_INTROSPECTION)
+@pytest.mark.parametrize(
+    'name',
+    INHERITED_ATTRIBUTES + TWO_X_ADDITIONS + THREE_ONE_ADDITIONS + THREE_ONE_INTROSPECTION + FOUR_ONE_ADDITIONS,
+)
 def test_the_attribute_is_still_there(name):
     assert hasattr(TelegramBot, name), f'{name} disappeared from the public surface'
 
@@ -365,7 +374,7 @@ def test_the_2_0_string_alias_stays_gone(module_name, alias):
     assert alias not in getattr(module, '__all__', ()), f'{alias} is back in {module_name}.__all__'
 
 
-@pytest.mark.parametrize('name', THREE_ONE_COROUTINES)
+@pytest.mark.parametrize('name', THREE_ONE_COROUTINES + FOUR_ONE_COROUTINES)
 def test_the_async_member_is_a_coroutine_function(name):
     """`callable()` would pass a synchronous method of the same name.
 

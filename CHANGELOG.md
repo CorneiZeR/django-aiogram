@@ -4,6 +4,64 @@
 
 ### Added
 
+- **A caller can find out which message its send produced.** `bot.send()` answers with a
+  correlation id, and the reply Telegram gave is produced in the bot container — so a message
+  queued from a web request could never be edited or deleted by whoever queued it, for want
+  of the one id Telegram will ever give it.
+
+  No new table and no separate result store: the `outbound.sent` row has carried `message_id`
+  and `chat_id` since the log existed, which is everything an edit needs. What was missing was
+  a way to ask, and any statement that it was there. The one thing the row gains is an album's
+  ids under `detail`, for the method whose column cannot hold them — below. `bot.outcome(identifier)` — `bot.aoutcome()` awaiting, and
+  `django_aiogram.eventlog.outcomes.outcome()` for code with no bot to hand — answers with a
+  `state` of `sent`, `failed`, `pending` or `unknown`, the ids Telegram gave, `at`, `error`
+  and `attempt`.
+
+  `sent` wins over anything written after it, because an id is not one per message: a
+  handler's replies inherit the id of the update that caused them, so a later `retried` may
+  belong to a different message under the same id. `Outcome.sent` is all of them and the
+  convenience readers take the first — **rows** newest first, and the messages within one row
+  in the order Telegram returned them, which is the album case below.
+
+  One call can be several messages too. `send_media_group` answers with a list, so the
+  `message_id` column is empty for it and every id would have been lost — they are kept in
+  the row's `detail` and read back as one `Outcome.sent` entry each. One row still, because
+  one call happened and a receiver counting `outbound.sent` must not see ten for an album.
+
+  **`failed` means it will not arrive, so a drop is weighed rather than counted.**
+  `outbound.dropped` is written from three places and only some of them are the end of the
+  message: retries exhausted and a `serialising` stage are, while a `queueing` stage means
+  the publish raised and may still have been applied — the one case a caller must not
+  re-send — and a shutdown's `NotScheduled` depends on where the send came from, which the
+  feed says. A message that came off the queue was refused without being acknowledged and
+  the next start reclaims it; one that took the direct route — `send_raw` anywhere, or
+  `send` inside the bot container — was never on a queue and nothing will.
+  Both read as `pending` and `failed` respectively, and `Event log` has the table.
+
+  That last rule is about the id rather than one message under it, and the feed holds nothing
+  finer: where several sends share an id, a queued row anywhere in the set makes every
+  `NotScheduled` drop read as reclaimable. It resolves toward `pending` deliberately, because
+  a caller told `failed` re-sends and the chat gets two copies. An explicit `correlation_id`
+  per send is what keeps the states apart.
+
+  **The feed is the only source, and that is a decision.** The recorder drops an event rather
+  than let a send wait for the database, so a store that always holds the answer would be a
+  promise this package refuses to make everywhere else. `unknown` therefore has causes it
+  cannot tell apart — not yet, dropped under pressure, pruned, or a *sending* process whose
+  own settings record no outcome, which no guard in the reading process can see — and the
+  page says so: treat it as *not yet* and give up on a bound of your own.
+
+  A configuration that cannot answer raises `OutcomesUnavailableError` at the call instead of
+  reporting `unknown` for ever: `EVENT_LOG` off, or an `EVENT_LOG_KINDS` that leaves out any
+  of the four kinds a correct outcome requires. `outbound.sent` is the obvious one;
+  `outbound.failed` and `outbound.dropped` matter because their absence makes a message that
+  will never arrive read as *not yet*, and `outbound.queued` because the shutdown-drop rule
+  reads that row — without it a send the next start will deliver is reported `failed`, which
+  is a wrong answer rather than a missing one. Refused when asked rather than at boot,
+  because narrowing the kinds is reasonable in a project that never reads an outcome and a
+  check cannot tell whether one does. There is no built-in wait, deliberately — blocking a
+  request on the bot container is what the queue exists to avoid.
+
 - **A send inside `transaction.atomic()` can now wait for the commit.** `bot.send()` writes
   to the broker as it is called, and that write was never part of the caller's transaction:
   a block that created a row, announced it in Telegram and then raised left the message sent

@@ -138,6 +138,63 @@ bot.send('send_photo', chat_id=CHAT_ID, photo=BufferedInputFile(data, filename='
 `FSInputFile` carries a path, so the file has to exist in the **bot container**
 too — share a volume, or send bytes with `BufferedInputFile`.
 
+## Editing a message you queued
+
+`send()` hands back a correlation id, not a `message_id` — the reply Telegram gave belongs
+to the bot container, and the caller is somewhere else. The id an edit needs is recorded
+against that correlation id, and `bot.outcome()` reads it back:
+
+```python
+from uuid import uuid4
+
+
+def start_the_import(job):
+    # an id of its own, so the outcome is about this message and no other
+    identifier = bot.send(chat_id=CHAT_ID, text='Import started…', correlation_id=uuid4())
+    Job.objects.filter(pk=job.pk).update(telegram_correlation_id=identifier)
+    # after the commit: called inside `atomic()`, `delay()` can start the task before the
+    # update above has landed, and it would read the id the row held before -- None
+    transaction.on_commit(lambda: finish_the_import.delay(job.pk))
+
+
+@app.task(bind=True, max_retries=5)
+def finish_the_import(self, job_pk):
+    # the row, not the instance `update()` left behind: a queryset update writes to the
+    # database and touches nothing in memory, so `job.telegram_correlation_id` on a stale
+    # instance is whatever it held before -- usually None
+    job = Job.objects.get(pk=job_pk)
+    answer = bot.outcome(job.telegram_correlation_id)
+    if answer.state == 'failed':
+        return
+    if answer.state != 'sent':
+        # `pending` and `unknown` both mean ask again, and `max_retries` is the bound past
+        # which the honest answer is unresolved rather than another poll
+        raise self.retry(countdown=5)
+    bot.send(
+        'edit_message_text',
+        chat_id=answer.chat_id,
+        message_id=answer.message_id,
+        text='Import finished',
+    )
+```
+
+It needs `EVENT_LOG` on and an `EVENT_LOG_KINDS` that is empty or keeps the four kinds a
+correct outcome requires, **in the bot container as well as here** — the rows are written by
+whichever process sent the message, and the refusal can only speak for the process that
+asks. A `log.dropped` row is the other reason a delivered message has none. A state of
+`pending` or `unknown` means ask again — within a bound of your own, because `unknown` can
+be permanent and after that bound the honest answer is *unresolved* rather than another
+poll.
+
+**Pass an explicit `correlation_id` to any send whose own outcome you will use.** Inside a
+handler the id is inherited from the update, so every reply shares one and `outcome()`
+answers about the newest of them — an edit built on that can reach the wrong message. A
+`send_media_group` is the other multiple: one call, one row, and an `answer.sent` entry per
+message, where `answer.message_id` is only the first of the album.
+**[Event log](Event-log.md#what-became-of-one-message)** has the four states and what
+`unknown` does not tell you. There is no waiting built in on purpose: blocking a request on
+the bot container is what the queue exists to avoid.
+
 ## Inside a transaction
 
 A send writes to the broker as it is called, and that write is not part of your

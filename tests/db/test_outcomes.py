@@ -1,0 +1,414 @@
+"""Reading back what became of one message, by the id `send()` handed out.
+
+The write side is `test_outbound.py`'s subject; this one is about the answer a process that
+only queued the send can get, and about the two configurations where there is no answer to
+be had and saying so beats a permanent `unknown`.
+"""
+
+import asyncio
+import datetime
+import uuid
+
+import pytest
+from django.test import override_settings
+
+from django_aiogram import TelegramBot
+from django_aiogram.config.enums import EventKind, OutcomeState
+from django_aiogram.eventlog.outcomes import REQUIRED_KINDS, aoutcome, outcome
+from django_aiogram.eventlog.recorder import recorder
+from django_aiogram.eventlog.records import Event
+from django_aiogram.exceptions import OutcomesUnavailableError
+from django_aiogram.models import TelegramEvent
+
+SETTINGS = {'EVENT_LOG': True, 'EVENT_LOG_SYNC': True, 'TOKEN': '42:x', 'FSM_STORAGE': 'memory', 'RATE_LIMIT': None}
+
+
+class Sent:
+    """What aiogram hands back, carrying the only id Telegram gives."""
+
+    message_id = 4321
+
+
+def a_bot(behavior):
+    """A stand-in for the aiogram Bot, with a session close() that does nothing."""
+
+    class Fake:
+        async def send_message(self, **kwargs):
+            return behavior(kwargs)
+
+        class session:
+            @staticmethod
+            async def close():
+                return None
+
+    return Fake()
+
+
+def record(identifier, kind, **fields):
+    """Write one row through the recorder, which is the path a real send takes."""
+    recorder.record(Event(kind=kind.value, correlation_id=identifier, function='send_message', **fields))
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_send_and_then_its_outcome_is_the_whole_point():
+    """End to end, because every test below builds the rows by hand instead.
+
+    `send_raw` is what the bot container runs; `outcome` is what the web tier asks. Nothing
+    passes between them but the correlation id and the table.
+    """
+    instance = TelegramBot()
+    instance._bot = a_bot(lambda _kwargs: Sent())
+    try:
+        identifier = instance.send_raw(chat_id=7, text='hi')
+        recorder.flush(timeout=5)
+    finally:
+        instance._bot = None
+        instance.close()
+
+    answer = instance.outcome(identifier)
+
+    assert answer.state is OutcomeState.SENT
+    assert answer.message_id == Sent.message_id, 'the id Telegram gave did not come back'
+    assert answer.chat_id == 7
+    assert answer.at is not None
+
+
+class Album:
+    """What `send_media_group` hands back: a list, not a message."""
+
+    def __init__(self, *ids):
+        self.messages = [type('M', (), {'message_id': one})() for one in ids]
+
+
+def an_album_bot(messages):
+    """A stand-in whose `send_media_group` answers the way Telegram does."""
+
+    class Fake:
+        async def send_media_group(self, **kwargs):
+            return messages
+
+        class session:
+            @staticmethod
+            async def close():
+                return None
+
+    return Fake()
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_an_album_keeps_every_id_telegram_gave():
+    """`send_media_group` answers with a list, so the `message_id` column is empty for it.
+
+    Read off that column alone the outcome said `sent` and handed back nothing to edit --
+    for a method whose whole result is several editable messages.
+    """
+    instance = TelegramBot()
+    instance._bot = an_album_bot(Album(11, 12, 13).messages)
+    try:
+        identifier = instance.send_raw('send_media_group', chat_id=7, media=[])
+        recorder.flush(timeout=5)
+    finally:
+        instance._bot = None
+        instance.close()
+
+    answer = instance.outcome(identifier)
+
+    assert answer.state is OutcomeState.SENT
+    assert [message.message_id for message in answer.sent] == [11, 12, 13]
+    assert all(message.chat_id == 7 for message in answer.sent)
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_call_that_produced_no_message_still_says_it_went_out():
+    """`send_chat_action` answers `True`, so there is no id and the entry is what matters."""
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_SENT, chat_id=7)
+
+    answer = outcome(identifier)
+
+    assert answer.state is OutcomeState.SENT
+    assert answer.message_id is None
+    assert len(answer.sent) == 1, 'the entry that says the call went out was dropped'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_failed_send_is_told_apart_from_one_nothing_recorded():
+    failed, silent = uuid.uuid4(), uuid.uuid4()
+    record(failed, EventKind.OUTBOUND_FAILED, error='telegram said no', error_code='RuntimeError', attempt=3)
+
+    assert outcome(failed).state is OutcomeState.FAILED
+    assert outcome(failed).error == 'telegram said no'
+    assert outcome(failed).attempt == 3
+    assert outcome(failed).message_id is None
+    assert outcome(silent).state is OutcomeState.UNKNOWN
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+@pytest.mark.parametrize(
+    'kind',
+    [EventKind.OUTBOUND_QUEUED, EventKind.OUTBOUND_CONSUMED, EventKind.OUTBOUND_RETRIED],
+)
+def test_a_message_still_on_its_way_is_pending(kind):
+    identifier = uuid.uuid4()
+    record(identifier, kind)
+
+    assert outcome(identifier).state is OutcomeState.PENDING
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_sent_row_settles_the_state_whatever_was_written_after_it():
+    """A later `retried` belongs to another message under the same id, not to this one.
+
+    Deciding from the newest row alone would call a delivered message pending, which is the
+    one answer a caller acts on by waiting for something that already happened.
+    """
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_SENT, chat_id=7, message_id=11)
+    record(identifier, EventKind.OUTBOUND_RETRIED, chat_id=8, attempt=1)
+
+    assert outcome(identifier).state is OutcomeState.SENT
+    assert outcome(identifier).message_id == 11
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_several_messages_under_one_id_all_come_back_newest_first():
+    """A handler's replies inherit the update's id, so one id can name several messages."""
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_SENT, chat_id=7, message_id=11)
+    record(identifier, EventKind.OUTBOUND_SENT, chat_id=7, message_id=12)
+
+    answer = outcome(identifier)
+
+    assert [message.message_id for message in answer.sent] == [12, 11]
+    assert answer.message_id == 12, 'the convenience reader is not the newest message'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': False})
+def test_the_log_being_off_is_a_refusal_rather_than_a_permanent_unknown():
+    with pytest.raises(OutcomesUnavailableError, match='EVENT_LOG'):
+        outcome(uuid.uuid4())
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_KINDS': ('outbound.queued',)})
+def test_kinds_that_leave_the_result_out_are_refused_too():
+    """The send is recorded and its result is not, so the answer would never arrive."""
+    with pytest.raises(OutcomesUnavailableError, match='EVENT_LOG_KINDS'):
+        outcome(uuid.uuid4())
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize('absent', REQUIRED_KINDS)
+def test_a_kind_an_answer_needs_is_refused_by_name_even_with_the_result_kept(absent):
+    """Keeping `outbound.sent` is not enough, and each of the four earns its place.
+
+    Without `failed` or `dropped` a message that will never arrive reads `unknown`, which
+    means *ask again* -- so a caller polling for an end never reaches one. Without `queued`
+    the answer is not missing but wrong: the shutdown-drop rule reads that row to tell a
+    message the next start reclaims from one nothing will.
+    """
+    kept = tuple(kind for kind in REQUIRED_KINDS if kind != absent)
+    with (
+        override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_KINDS': kept}),
+        pytest.raises(OutcomesUnavailableError, match=absent),
+    ):
+        outcome(uuid.uuid4())
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_KINDS': REQUIRED_KINDS})
+def test_the_four_kinds_an_answer_needs_are_enough_on_their_own():
+    """`consumed` and `retried` are precision, not correctness, so they are not demanded.
+
+    A project narrowing its kinds to what an outcome is decided from is a working
+    configuration, and refusing it would be asking for rows nothing reads.
+    """
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_SENT, chat_id=7, message_id=11)
+
+    assert outcome(identifier).message_id == 11
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_KINDS': ('outbound.sent',)})
+def test_the_refusal_names_every_missing_kind_at_once():
+    """Four exceptions in turn is four deploys for one mistake."""
+    with pytest.raises(OutcomesUnavailableError) as refused:
+        outcome(uuid.uuid4())
+
+    for kind in ('outbound.failed', 'outbound.dropped', 'outbound.queued'):
+        assert kind in str(refused.value)
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_the_id_may_arrive_as_the_string_a_project_stored():
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_SENT, chat_id=7, message_id=11)
+
+    assert outcome(str(identifier)).message_id == 11
+    with pytest.raises(ValueError, match='must be a UUID'):
+        outcome('not an id')
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_the_awaiting_twin_answers_the_same():
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_SENT, chat_id=7, message_id=11)
+
+    answer = asyncio.run(aoutcome(identifier))
+
+    assert answer.state is OutcomeState.SENT
+    assert answer.message_id == 11
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+@pytest.mark.parametrize('reader', ['outcome', 'aoutcome'])
+def test_the_methods_on_the_bot_reach_the_functions_behind_them(reader):
+    """Both delegates, driven rather than introspected.
+
+    `test_public_surface` asserts `aoutcome` is a coroutine function, and the test above
+    calls the module function -- so a wrapper that awaited nothing, or passed the wrong
+    argument, would have passed both.
+    """
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_SENT, chat_id=7, message_id=11)
+
+    call = getattr(TelegramBot(), reader)
+    answer = asyncio.run(call(identifier)) if reader == 'aoutcome' else call(identifier)
+
+    assert answer.state is OutcomeState.SENT
+    assert answer.message_id == 11
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_failure_describes_the_newest_row_that_ended_it():
+    """An older `failed` beside a newer terminal drop described the older one.
+
+    Both are endings, so the state was right either way and the `error` was a stale sentence
+    about a different attempt -- which is what an operator reads to know why.
+    """
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_FAILED, error='the first attempt', attempt=1)
+    record(identifier, EventKind.OUTBOUND_DROPPED, error='gave up', attempt=9, detail={'max_retries': 9})
+
+    answer = outcome(identifier)
+
+    assert answer.state is OutcomeState.FAILED
+    assert answer.error == 'gave up', 'the older failure was described'
+    assert answer.attempt == 9
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_pending_answer_describes_the_newest_row_too():
+    """The same defect facing the other way: a drop that may still land is newer than the
+    `queued` row before it, and the attempt count came from the older one."""
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_QUEUED, attempt=0)
+    record(identifier, EventKind.OUTBOUND_DROPPED, error='the broker refused', attempt=4, detail={'stage': 'queueing'})
+
+    answer = outcome(identifier)
+
+    assert answer.state is OutcomeState.PENDING
+    assert answer.attempt == 4, 'the older progress row was described'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_shared_id_resolves_the_drop_the_way_that_cannot_duplicate_a_message():
+    """Two messages under one id, one queued and one direct, both dropped by a shutdown.
+
+    The feed holds nothing finer than the id, so the rule can only see that *something*
+    under it was queued -- and it answers `pending` for both. That is the deliberate side of
+    an ambiguity it cannot resolve: a caller waiting for a send that is already finished
+    loses a wait, where one told `failed` about a message the next start will deliver
+    re-sends it and the chat gets two copies.
+    """
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_QUEUED, chat_id=7)
+    record(identifier, EventKind.OUTBOUND_DROPPED, chat_id=8, error='cancelled at shutdown', error_code='NotScheduled')
+
+    assert outcome(identifier).state is OutcomeState.PENDING, 'the safe side of a shared id was not taken'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_publish_that_may_still_have_landed_is_pending_and_not_failed():
+    """The one drop a caller must not re-send: `queueing` means the write may have applied.
+
+    Told `failed`, which is documented as "it will not arrive", a caller re-sends and the
+    chat gets the message twice.
+    """
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_DROPPED, error='the broker refused', detail={'stage': 'queueing'})
+
+    assert outcome(identifier).state is OutcomeState.PENDING
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+@pytest.mark.parametrize(
+    ('fields', 'why'),
+    [
+        ({'detail': {'stage': 'serialising'}}, 'the payload never left the process'),
+        ({'detail': {'max_retries': 10}}, 'telegram kept refusing and the message was acknowledged'),
+    ],
+)
+def test_a_drop_the_row_says_is_the_end_is_a_failure(fields, why):
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_DROPPED, error='no', **fields)
+
+    assert outcome(identifier).state is OutcomeState.FAILED, why
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_shutdown_drop_is_pending_for_a_queued_send_and_failed_for_a_direct_one():
+    """Same kind, same error code, opposite answers -- and the feed says which.
+
+    A message that came off the queue is refused without being acknowledged, so it is still
+    in the in-flight list and the next start reclaims it. A direct `send_raw` was never on a
+    queue, so nothing will, and its drop row is the only one it will ever have.
+    """
+    queued, direct = uuid.uuid4(), uuid.uuid4()
+    record(queued, EventKind.OUTBOUND_QUEUED)
+    record(queued, EventKind.OUTBOUND_DROPPED, error='cancelled at shutdown', error_code='NotScheduled')
+    record(direct, EventKind.OUTBOUND_DROPPED, error='cancelled at shutdown', error_code='NotScheduled')
+
+    assert outcome(queued).state is OutcomeState.PENDING
+    assert outcome(direct).state is OutcomeState.FAILED
+
+
+@pytest.mark.django_db(transaction=True, databases=['default', 'logs'])
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_DATABASE': 'logs'})
+def test_it_reads_the_alias_the_log_is_written_to():
+    """Read from `default`, every outcome on a project with a log database of its own is
+    `unknown` -- which reads as "not yet" for a message that was delivered."""
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_SENT, chat_id=7, message_id=11)
+
+    assert TelegramEvent.objects.using('logs').filter(correlation_id=identifier).exists()
+    assert not TelegramEvent.objects.using('default').filter(correlation_id=identifier).exists()
+    assert outcome(identifier).message_id == 11
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_the_recorded_instant_comes_back_as_a_datetime():
+    """`at` is what a caller compares against its own timestamps, so it is not a float."""
+    identifier = uuid.uuid4()
+    record(identifier, EventKind.OUTBOUND_SENT, chat_id=7, message_id=11)
+
+    assert isinstance(outcome(identifier).at, datetime.datetime)

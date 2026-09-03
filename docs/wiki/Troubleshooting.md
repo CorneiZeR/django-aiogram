@@ -271,6 +271,37 @@ transaction does not run commit hooks when it ends, `atomic()` blocks inside it 
 the write is made immediately and the log says so once: *publishing without waiting for a
 commit*.
 
+## `bot.outcome()` says `unknown` for a message that was delivered
+
+`unknown` means none of the outbound rows an outcome is decided from has been recorded
+against that correlation id — other kinds may well exist under it, a handler's `inbound.*`
+among them, and none of those decides anything. Several things produce that:
+
+- **The row has not been written yet.** The writer batches, so allow
+  `EVENT_LOG_FLUSH_INTERVAL`.
+- **The event was dropped under pressure.** That leaves a `log.dropped` row behind it; look
+  for one around that time.
+- **`EVENT_LOG_RETENTION_DAYS` has pruned it.**
+- **The process that *sent* the message does not record outcomes.** This is the one that
+  looks least like a configuration problem, because the reading process is configured
+  correctly — see below.
+
+**Two processes, two settings files, and the reading one cannot see the other's.** Getting
+`unknown` rather than `OutcomesUnavailableError` says only that **this** process could
+record an outcome: `EVENT_LOG` on, and `EVENT_LOG_KINDS` empty or keeping all four of
+`outbound.sent`, `outbound.failed`, `outbound.dropped` and `outbound.queued` —
+**[Event log](Event-log.md#what-became-of-one-message)** says what each is for. The bot
+container reads its own `TELEGRAM_BOT`, so the refusal cannot fire for *its* configuration:
+that is [the event log writes nothing](#the-event-log-writes-nothing) below, item 3, and the
+half-a-story it describes is exactly this symptom seen from the reading end. Nor does the
+refusal say the writer succeeded; that is what the `log.dropped` row above is for.
+
+So check the sending container's settings before concluding the message never went out.
+
+Reading `unknown` for everything, on a project with `EVENT_LOG_DATABASE` set, means the
+query is going to the wrong alias — `outcome()` uses the log's, so this is a sign of a
+hand-written query rather than of this one.
+
 ## The bot ignores ENABLED
 
 `ENABLED` is parsed, so `'false'` disables. If a value cannot be parsed you get

@@ -131,8 +131,10 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
           # the floor this repository documents: --group is PEP 735, which
-          # pip understands from 25.1. Every other job runs the runner's own
-          # pip, so CI still exercises the one contributors actually have
+          # pip understands from 25.1. The test matrix runs the runner's own
+          # pip, so CI still exercises the one contributors actually have --
+          # this job and `docs` are the two that pin, this one to *be* the
+          # floor and that one because its checks exist nowhere else
           pip-version: '25.1'
       - run: pip install -e '.[redis]' --group dev 'django==5.2.0' 'aiogram==3.30.0' 'redis==6.2.0'
       - run: python -m pytest -q
@@ -388,6 +390,10 @@ jobs:
     # turns MkDocs' warnings into a failure: a link to a page that does not exist, an anchor
     # that no heading offers, a page missing from the nav. `tests/test_wiki.py` says the same
     # about links and anchors without mkdocs installed; this says it about the rendering.
+    #
+    # It also runs that file again at the end, with a site on disk: one case there compares
+    # the anchors the suite computes against the ids the build wrote, and nowhere else in this
+    # workflow has a `site/` for it to read.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -401,6 +407,12 @@ jobs:
           python-version: '3.13'
           cache: pip
           cache-dependency-path: pyproject.toml
+          # pinned here as well as in `floors`, and for the opposite reason. This job
+          # installs two dependency groups and runs part of the suite against the site it
+          # built, so a runner pip too old for PEP 735 would take the install down and the
+          # anchor checks that exist nowhere else with it -- a failure about pip, reported
+          # as a documentation failure
+          pip-version: '25.1'
       - run: pip install --group docs
       - run: mkdocs build --strict
       # what `--strict` cannot say: that the site is the pages. One directory per page, under
@@ -446,6 +458,15 @@ jobs:
           done < <(find site -type f -name '*.html')
           test -f site/assets/social-card.png || { echo '::error::the card itself is not in the site'; missing=1; }
           exit "$missing"
+
+      # `tests/test_wiki.py` computes each heading's anchor with the toc extension's own
+      # `slugify` and `unique`, and one case compares that against the ids in `site/`. It
+      # skips where no site has been built, which is every other job in this file -- so
+      # without this step the case that holds the model to the output never runs anywhere,
+      # and two wrong models reached a pull request before it existed
+      - run: pip install -e '.[redis]' --group dev
+      - name: The heading model answers what the build published
+        run: python -m pytest tests/test_wiki.py -q
 
   smoke:
     # the unit suite imports from src/, so only an install can catch a packaging
