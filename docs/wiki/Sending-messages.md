@@ -147,19 +147,26 @@ against that correlation id, and `bot.outcome()` reads it back:
 ```python
 from uuid import uuid4
 
-# an id of its own, so the outcome is about this message and no other
-identifier = bot.send(chat_id=CHAT_ID, text='Import started…', correlation_id=uuid4())
-Job.objects.filter(pk=job.pk).update(telegram_correlation_id=identifier)
+def start_the_import(job):
+    # an id of its own, so the outcome is about this message and no other
+    identifier = bot.send(chat_id=CHAT_ID, text='Import started…', correlation_id=uuid4())
+    Job.objects.filter(pk=job.pk).update(telegram_correlation_id=identifier)
+    finish_the_import.delay(job.pk)
 
-# later, in the task that finishes the work
-answer = bot.outcome(job.telegram_correlation_id)
-if answer.state == 'sent':
-    bot.send(
-        'edit_message_text',
-        chat_id=answer.chat_id,
-        message_id=answer.message_id,
-        text='Import finished',
-    )
+@app.task
+def finish_the_import(job_pk):
+    # the row, not the instance `update()` left behind: a queryset update writes to the
+    # database and touches nothing in memory, so `job.telegram_correlation_id` on a stale
+    # instance is whatever it held before -- usually None
+    job = Job.objects.get(pk=job_pk)
+    answer = bot.outcome(job.telegram_correlation_id)
+    if answer.state == 'sent':
+        bot.send(
+            'edit_message_text',
+            chat_id=answer.chat_id,
+            message_id=answer.message_id,
+            text='Import finished',
+        )
 ```
 
 It needs `EVENT_LOG` on and an `EVENT_LOG_KINDS` that is empty or keeps the four kinds a
