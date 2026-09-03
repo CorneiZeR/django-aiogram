@@ -54,7 +54,9 @@ Project uses django-aiogram 4.x. Rules:
   in the bot container, so do it only on a queue nothing untrusted can write to.
 - A queued send cannot raise in the caller. Failures are logged by the worker.
   Use bot.send_raw with RAISE_EXCEPTION only when the caller must see the error.
-- To send later, pass an aware datetime as `eta` to any of the sending forms:
+- To send later, pass an aware datetime as `eta` to any form that **queues** —
+  send, enqueue, send_many and their awaiting twins, but never send_raw, which
+  reaches Telegram from this process and has nothing to schedule:
   `bot.send(chat_id=..., text=..., eta=timezone.now() + timedelta(hours=1))`. It
   writes a row and publishes nothing, so the deployment must run
   `manage.py tgbot_dispatch_scheduled` — from cron or with `--loop` — or the

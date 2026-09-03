@@ -184,7 +184,7 @@ Four things worth knowing before you use it:
 
 - **A scheduled send is a database write**, on the caller's own connection. So it rolls back
   with the transaction that made it and needs nothing from `TRANSACTIONAL` — and the awaiting
-  twins block on it, because Django has no asynchronous `bulk_create`.
+  twins await `abulk_create`, so an `eta` works from a coroutine as it does anywhere else.
 - **The payload is frozen when you call.** A payload the project cannot serialize raises
   there rather than out of a mover hours later, and the bytes cannot drift if the settings
   change in between.

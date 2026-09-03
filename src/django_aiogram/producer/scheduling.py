@@ -99,9 +99,11 @@ def schedule(function: str, write: 'Queueing', due_at: datetime.datetime) -> Non
 async def aschedule(function: str, write: 'Queueing', due_at: datetime.datetime) -> None:
     """Write the same rows, awaited, because the synchronous ones cannot come from a loop.
 
-    Measured: ``bulk_create`` from a coroutine raises ``SynchronousOnlyOperation``, so the
-    awaiting producers did not "block like their synchronous twins" -- a comment that said so
-    was simply wrong, and an ``eta`` on ``aenqueue`` raised.
+    Measured: the synchronous ``bulk_create`` from a coroutine raises
+    ``SynchronousOnlyOperation``, so the awaiting producers did not "block like their
+    synchronous twins" -- a comment that said so was simply wrong, and an ``eta`` on
+    ``aenqueue`` raised. ``abulk_create`` has been there since Django 4.1 and this package
+    floors at 5.2, so there was never a reason to reach for the blocking one.
 
     The event is still recorded through :func:`~django_aiogram.producer.committing.after_commit`,
     which is synchronous and touches no ORM: it hands a callback to Django or calls it, and the

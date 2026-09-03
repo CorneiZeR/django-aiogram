@@ -448,6 +448,29 @@ def test_the_event_does_land_once_the_block_commits(published):
     assert TelegramEvent.objects.filter(kind=EventKind.OUTBOUND_SCHEDULED.value).count() == 1
 
 
+@pytest.mark.django_db(transaction=True)
+@override_settings(
+    TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_DATABASE': 'default'},
+    DATABASE_ROUTERS=['django_aiogram.eventlog.dbrouter.TelegramEventLogRouter'],
+)
+def test_naming_the_default_alias_for_the_log_still_leaves_the_schedule_somewhere(published):
+    """`EVENT_LOG_DATABASE: 'default'` says the log lives with everything else.
+
+    Keeping the schedule off "the log's database" then refused it on the only database there
+    is, so `migrate` created the table nowhere and every `eta` send failed on its first
+    write. The refusal is about a log database *of its own*.
+    """
+    from django_aiogram.eventlog.dbrouter import TelegramEventLogRouter
+
+    router = TelegramEventLogRouter()
+
+    assert router.allow_migrate('default', 'django_aiogram', model=TelegramScheduledSend) is None
+    assert router.allow_migrate('default', 'django_aiogram', model=TelegramEvent) is True
+
+    identifier = TelegramBot().send(chat_id=7, text='later', eta=in_a_while())
+    assert TelegramScheduledSend.objects.get().correlation_id == identifier
+
+
 @pytest.mark.django_db(transaction=True, databases=['default', 'logs'])
 @override_settings(
     TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_DATABASE': 'logs'},

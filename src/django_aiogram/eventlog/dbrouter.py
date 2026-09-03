@@ -10,6 +10,7 @@ Not ``routers.py``: that name already means aiogram router autodiscovery.
 
 from typing import Any
 
+from django.db import DEFAULT_DB_ALIAS
 from django.db.models import Model
 
 from django_aiogram.config.settings import conf
@@ -74,7 +75,12 @@ class TelegramEventLogRouter:
         model = hints.get('model')
         name = getattr(getattr(model, '_meta', None), 'model_name', None)
         if name is not None and name not in LOG_MODELS:
-            # not the log's table: keep it off the log's database, and say nothing about
-            # where else it goes -- that is the project's own routing to decide
-            return False if db == alias else None
+            # not the log's table: keep it off a log database *of its own*, and say nothing
+            # about where else it goes -- that is the project's own routing to decide.
+            #
+            # The alias check is not belt and braces. `EVENT_LOG_DATABASE: 'default'` is a
+            # legitimate way to say "the log lives with everything else", and refusing the
+            # schedule there left the table created nowhere at all -- every `eta` send then
+            # failing on its first write. Introduced by the fix above and caught in review
+            return False if db == alias and alias != DEFAULT_DB_ALIAS else None
         return db == alias
