@@ -17,6 +17,7 @@ from django.test import override_settings
 from django.utils import timezone
 
 from django_aiogram import TelegramBot
+from django_aiogram.broker.exceptions import BrokerNotConfiguredError
 from django_aiogram.broker.redis_list import RedisListBroker
 from django_aiogram.config.enums import EventKind
 from django_aiogram.eventlog.recorder import recorder
@@ -296,6 +297,27 @@ def test_scheduling_is_recorded_with_the_time_it_waits_for(published):
     row = TelegramEvent.objects.get(kind=EventKind.OUTBOUND_SCHEDULED.value)
     assert row.chat_id == 7
     assert row.detail['due_at'].startswith(due.isoformat()[:16])
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_broker_that_cannot_be_resolved_claims_nothing(published):
+    """A misconfiguration is not a message that failed, and must not cost one.
+
+    Claimed first, the rows would keep a claim nobody owns: no drop row explains them and
+    every later pass filters them out, so the messages are invisible until an operator
+    clears the claims by hand. `enqueue` resolves the broker before it writes for the same
+    reason.
+    """
+    with override_settings(TELEGRAM_BOT=SETTINGS):
+        TelegramBot().send(chat_id=7, text='now', eta=a_while_ago())
+
+    with (
+        override_settings(TELEGRAM_BOT={**SETTINGS, 'BROKER': 'tests.db.test_scheduling.NoSuchBroker'}),
+        pytest.raises(BrokerNotConfiguredError),
+    ):
+        call_command('tgbot_dispatch_scheduled')
+
+    assert TelegramScheduledSend.objects.get().claimed_at is None, 'a row was claimed for a broker that does not exist'
 
 
 @pytest.mark.django_db(transaction=True)

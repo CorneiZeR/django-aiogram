@@ -6,9 +6,12 @@ at a time: each covers a single hop and assumes the ones below it are done.
 
 # From 4.0 to 4.1
 
-Nothing is required. Every setting 4.0 had keeps its meaning and its default, no migration
-runs, and the wire format is unchanged — so the bot container and the web tier may be
-deployed in either order.
+**One required step: run `migrate`.** 4.1 adds a table, and a project that skips the
+migration and then passes an `eta` gets an error rather than a scheduled message.
+
+Everything else is optional. Every setting 4.0 had keeps its meaning and its default, no
+existing behaviour changes, and the wire format is unchanged — so the bot container and the
+web tier may be deployed in either order.
 
 ## Run `migrate`: there is a second table
 

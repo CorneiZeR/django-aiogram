@@ -131,10 +131,14 @@ class Command(BaseCommand):
 
     def _one_pass(self, *, limit: int, grace: int) -> int:
         """Claim what is due, publish it, and delete what went out. Returns the count."""
+        # before the claim, and this is the same rule `enqueue` follows: a `BROKER` that
+        # cannot be resolved is a misconfiguration, not a message that failed to publish.
+        # Claimed first, its rows would keep the claim with no drop row and no later pass
+        # willing to look at them -- invisible until an operator cleared them by hand
+        broker = get_broker()
         rows = claim(limit)
         if not rows:
             return 0
-        broker = get_broker()
         published = 0
         for row in rows:
             if grace and (timezone.now() - row.due_at).total_seconds() > grace:

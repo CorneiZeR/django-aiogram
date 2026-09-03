@@ -180,26 +180,6 @@ production answer.
 schedule an `eta` writes to, arrived in 4.1 — and the event log's is created whether or not
 you turn the log on.
 
-**And schedule the two jobs, or they never run.** `manage.py tgbot_prune_events` bounds the
-event log; `manage.py tgbot_dispatch_scheduled` publishes the sends an `eta` wrote down, and
-without it a scheduled message waits for ever. From cron, or as a container of its own:
-
-```yaml
-  scheduler:
-    image: your-image
-    command: python manage.py tgbot_dispatch_scheduled --loop --interval 5
-    # no token and no bot here: a due row already holds the bytes the queue wants, so this
-    # needs the database and the broker and nothing else
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_URL: ${REDIS_URL}
-```
-
-Several are safe: each row is claimed by a compare-and-set update, so two movers racing for
-one produce one winner. `--grace` is what keeps a mover that was down for a day from
-delivering a day of stale messages at once, and `--dry-run` says what is waiting without
-claiming anything.
-
 **Then deploy the bot container before the web tier.** 3.0 nests a queued call
 inside an envelope. The new consumer reads the old flat shape, so a backlog
 drains across the upgrade — the reverse does not hold: a 2.x consumer handed a
@@ -219,6 +199,34 @@ messages would vanish with a debug line and nothing else. The flag is for
 processes that must not **send** — not to Telegram, not into the broker: image builds, a
 migration container, CI. Not "reach nothing at all": the depth reads answer either way, on
 purpose. See below.
+
+## The jobs nothing runs for you
+
+Two commands do work no request path does, so a deployment that never schedules them is a
+deployment where that work never happens:
+
+| command | what waits on it |
+| --- | --- |
+| `manage.py tgbot_prune_events` | the event log's size. `W006` warns while `EVENT_LOG_RETENTION_DAYS` is unset |
+| `manage.py tgbot_dispatch_scheduled` | every send made with an `eta`. Without it a scheduled message waits for ever |
+
+From cron, or as a container of its own:
+
+```yaml
+  scheduler:
+    image: your-image
+    command: python manage.py tgbot_dispatch_scheduled --loop --interval 5
+    # no token and no bot here: a due row already holds the bytes the queue wants, so this
+    # container needs the database and the broker and nothing else
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+```
+
+Several movers are safe: each row is claimed by a compare-and-set update, so two racing for
+one produce a winner and a loser. `--grace` keeps a mover that was down for a day from
+delivering a day of stale messages at once, `--limit` bounds one pass, and `--dry-run` says
+what is waiting without claiming anything.
 
 ## What ENABLED=0 turns off
 
