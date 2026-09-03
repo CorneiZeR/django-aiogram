@@ -58,9 +58,16 @@ def test_the_index_names_fit_oracle():
 def test_the_permissions_are_the_stock_four_plus_one():
     """Only one custom permission, and only because Django has no equivalent:
     there are no field-level permissions, so 'saw that it went out' and 'read
-    what it said' cannot otherwise be granted separately."""
+    what it said' cannot otherwise be granted separately.
+
+    Scoped to this model rather than to the app. Asked of the app it broke the day a second
+    table arrived -- and it would break again for a third, over a set it was never about.
+    """
     codenames = set(
-        Permission.objects.filter(content_type__app_label='django_aiogram').values_list('codename', flat=True)
+        Permission.objects.filter(
+            content_type__app_label='django_aiogram',
+            content_type__model='telegramevent',
+        ).values_list('codename', flat=True)
     )
 
     assert codenames == {

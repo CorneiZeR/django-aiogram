@@ -176,8 +176,29 @@ production answer.
 
 ## Upgrading to 3.0: order matters, once
 
-**Run `manage.py migrate` first.** The package ships one table from 3.0, and it
-is created whether or not you turn the event log on.
+**Run `manage.py migrate` first.** The package shipped one table from 3.0 — a second, the
+schedule an `eta` writes to, arrived in 4.1 — and the event log's is created whether or not
+you turn the log on.
+
+**And schedule the two jobs, or they never run.** `manage.py tgbot_prune_events` bounds the
+event log; `manage.py tgbot_dispatch_scheduled` publishes the sends an `eta` wrote down, and
+without it a scheduled message waits for ever. From cron, or as a container of its own:
+
+```yaml
+  scheduler:
+    image: your-image
+    command: python manage.py tgbot_dispatch_scheduled --loop --interval 5
+    # no token and no bot here: a due row already holds the bytes the queue wants, so this
+    # needs the database and the broker and nothing else
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+```
+
+Several are safe: each row is claimed by a compare-and-set update, so two movers racing for
+one produce one winner. `--grace` is what keeps a mover that was down for a day from
+delivering a day of stale messages at once, and `--dry-run` says what is waiting without
+claiming anything.
 
 **Then deploy the bot container before the web tier.** 3.0 nests a queued call
 inside an envelope. The new consumer reads the old flat shape, so a backlog

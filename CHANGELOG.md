@@ -4,6 +4,53 @@
 
 ### Added
 
+- **A send can name a time instead of going now.** `eta` on every form that queues -- `send`,
+  `enqueue`, `send_many` and their awaiting twins, but not `send_raw`, which reaches Telegram
+  from this process and has nothing to schedule -- writes the call to a table, and
+  `manage.py tgbot_dispatch_scheduled` publishes it when the time comes. Reminders, follow-ups and digests stopped needing Celery for the one thing this
+  package could not do.
+
+  **The wait cannot live in the transport, which is the whole design.** Of the four only
+  RabbitMQ delays a message at all, and only through a plugin or a dead-letter detour — a
+  Redis list, a stream and a Kafka topic have nothing to offer. Building on the one that
+  almost can would make `eta` work on a quarter of the deployments, against everything
+  `BROKER` promises. So the wait sits above the broker contract and a row that comes due
+  becomes an ordinary queued message on whichever transport is configured.
+
+  The payload is stored as `serialise` produced it, so a payload the project cannot serialize
+  raises where the call was written rather than out of a mover hours later, and the bytes
+  cannot drift if the settings change in between. Its envelope is stamped with the **due**
+  time rather than the scheduling time — stamped now, a message scheduled for tomorrow would
+  arrive reporting a day of queue latency, which is the number an operator reads to know
+  whether delivery is keeping up.
+
+  A scheduled send is a database write on the caller's own connection, so it rolls back with
+  the transaction that made it and needs nothing from `TRANSACTIONAL`. Inside the bot
+  container it still schedules: that is the one case where `send` does not call Telegram
+  directly, because sending now cannot be what an `eta` meant. An `eta` already past comes due
+  at once rather than being refused, and a naive datetime is refused rather than read in the
+  project's `TIME_ZONE`.
+
+  `bot.cancel_scheduled(identifier)` calls off what is still waiting and answers with how
+  many rows went. Zero is the answer both for an id that was never scheduled and for one a
+  mover already owns — by then the message is on its way, and deleting the row would not stop
+  it.
+
+  Several movers are safe: each row is claimed by a compare-and-set update, so two racing for
+  one produce a winner and a loser on every database this package supports — no
+  `SKIP LOCKED`, which SQLite does not have. The row is deleted *after* the publish, which
+  makes this at-least-once like everything else here. `--grace` refuses a row too far overdue
+  and records the drop, because a mover that was down for a day should not deliver a day of
+  stale messages at once.
+
+- **A second table, and the router narrowed to match.** `django_aiogram_scheduled` is where
+  those rows wait, and it is **not** routed to `EVENT_LOG_DATABASE`: the feed is a record and
+  may live in a warehouse of its own, while this is operational state a producer writes and a
+  mover consumes. `TelegramEventLogRouter` therefore routes by *model* rather than by app
+  label — routed as before, a project with a log database would have had this table created
+  only there, and nothing on `default` would have had one at all. A project with its own
+  router matching `app_label == 'django_aiogram'` should narrow it the same way.
+
 - **A caller can find out which message its send produced.** `bot.send()` answers with a
   correlation id, and the reply Telegram gave is produced in the bot container — so a message
   queued from a web request could never be edited or deleted by whoever queued it, for want

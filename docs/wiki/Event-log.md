@@ -50,6 +50,7 @@ gives you `sent` rows with no `queued` rows to match. That is not a bug.
 
 | Kind | When |
 | ---- | ---- |
+| `outbound.scheduled` | a send named an `eta`, so it waits for a time rather than for a worker. `detail.due_at` says when |
 | `outbound.queued` | a send was written to the queue — a Redis list or stream, an AMQP queue, a Kafka topic |
 | `outbound.consumed` | the bot container read it off the queue. Not the same as settled: on Kafka an uncommitted offset is redelivered to whoever takes the partition, and on Redis Streams and RabbitMQ unacknowledged work comes back — `outbound.sent` is the row that says the work is done. The exception is a Redis server without `BLMOVE`, where the list transport's read *is* the removal and a crash mid-send loses the message; the consumer says so at startup |
 | `outbound.sent` | Telegram accepted it |

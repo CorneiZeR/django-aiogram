@@ -51,6 +51,8 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_batch` | how many rows the batch held, when part of it was refused |
 | `tg_worker` | the worker name an in-flight list is keyed on |
 | `tg_messages` | how many messages a deferred publish was carrying when it failed: every chunk of a fan-out, not one of them |
+| `tg_published` / `tg_claimed` | how many scheduled sends one dispatch pass put on the queue, of how many it claimed |
+| `tg_overdue` / `tg_grace` | how late a scheduled send was, against the `--grace` that refused it |
 | `tg_database` | the connection alias a decision about a transaction was made on |
 | `tg_entry` | the id of a stream entry this package did not write, left pending rather than acknowledged |
 | `tg_count` | events in the batch being written, or kafka messages left unsent when a producer was replaced or the process shut down |

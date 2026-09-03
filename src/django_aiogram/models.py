@@ -1,8 +1,11 @@
-"""The append-only feed of what the bot did.
+"""The two tables this app ships: the append-only feed, and the sends waiting for a time.
 
 Django imports this on every ``django.setup()`` — before ``AppConfig.ready()``
 and regardless of ``ENABLED`` — so it may not reach aiogram, directly or
 otherwise, and may not read settings at import time.
+
+`TelegramScheduledSend` is the second, and the only mutable row this app has: a mover
+claims one, publishes it and deletes it. Everything below is about the feed.
 
 Rows are inserted and never updated. The stages of one outbound message are
 three rows sharing a ``correlation_id``: the web process writes the queued row
@@ -83,3 +86,60 @@ class TelegramEvent(models.Model):
     def __str__(self) -> str:
         """Name the event the way an admin row reads."""
         return f'{self.kind} {self.function}'.strip()
+
+
+class TelegramScheduledSend(models.Model):
+    """One send that is not due yet, and the payload it will go out as.
+
+    **Why a table and not a transport feature.** Of the four transports only RabbitMQ can
+    delay a message at all, and only with a plugin or a dead-letter detour; a Redis list, a
+    stream and a Kafka topic cannot. Building on the one that almost can would make ``eta``
+    a setting that works on a quarter of the deployments, which is the opposite of what
+    ``BROKER`` promises. So the wait happens above the broker contract, and the moment a row
+    comes due it becomes an ordinary queued message on whichever transport is configured.
+
+    **The payload is stored serialized**, exactly as an immediate send would have written it.
+    Two things follow. A payload the project cannot serialize raises where the call was
+    written rather than out of a mover hours later; and the bytes cannot drift, so the
+    consumer receives what the caller meant even if the settings changed in between.
+
+    Not routed to ``EVENT_LOG_DATABASE``. The feed is a record and may live in a warehouse of
+    its own; this is operational state a producer writes and a mover consumes, and it belongs
+    with the caller's other writes -- which is also what makes a scheduled send inside
+    ``atomic()`` roll back with the transaction, needing nothing from ``TRANSACTIONAL``.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    #: the same id the queued and delivered rows will carry, and the handle a cancellation
+    #: names. Not unique: `send_many` schedules one row per chat under one id
+    correlation_id = models.UUIDField(db_index=True)
+    #: when it may be published. Indexed with `claimed_at`, which is the mover's only query
+    due_at = models.DateTimeField()
+    function = models.CharField(max_length=64)
+    #: for the admin and for a drop row; the payload is the authority
+    chat_id = models.BigIntegerField(null=True, blank=True)
+    #: the envelope as `serialise` produced it, ready for `Broker.publish`
+    payload = models.BinaryField()
+    #: set by the mover that owns this row, and never cleared: the row is deleted once
+    #: published. A second mover skips a claimed row rather than waiting for it
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    claimed_by = models.CharField(max_length=128, blank=True)
+
+    class Meta:
+        """Portable everywhere, and one index: the query the mover runs."""
+
+        db_table = 'django_aiogram_scheduled'
+        ordering = ('due_at', 'id')
+        verbose_name = 'scheduled telegram send'
+        verbose_name_plural = 'scheduled telegram sends'
+        indexes = (
+            # the mover asks for unclaimed rows that are due, oldest first. `claimed_at`
+            # leads because it is the more selective of the two once a backlog builds:
+            # everything claimed is on its way out
+            models.Index(fields=('claimed_at', 'due_at'), name='dja_scheduled_due'),
+        )
+
+    def __str__(self) -> str:
+        """Name the row the way an admin list reads."""
+        return f'{self.function} at {self.due_at:%Y-%m-%d %H:%M:%S}'

@@ -54,6 +54,13 @@ Project uses django-aiogram 4.x. Rules:
   in the bot container, so do it only on a queue nothing untrusted can write to.
 - A queued send cannot raise in the caller. Failures are logged by the worker.
   Use bot.send_raw with RAISE_EXCEPTION only when the caller must see the error.
+- To send later, pass an aware datetime as `eta` to any of the sending forms:
+  `bot.send(chat_id=..., text=..., eta=timezone.now() + timedelta(hours=1))`. It
+  writes a row and publishes nothing, so the deployment must run
+  `manage.py tgbot_dispatch_scheduled` — from cron or with `--loop` — or the
+  message waits for ever. `bot.cancel_scheduled(identifier)` calls it off while it
+  is still waiting. Do not reach for Celery's countdown for this; do not pass a
+  naive datetime, which is refused.
 - To edit or delete a message you queued, read its `message_id` back with
   `bot.outcome(identifier)` — the id `send()` returned is a correlation id and not
   Telegram's. Pass an explicit `correlation_id=uuid4()` to any send whose own
@@ -76,7 +83,7 @@ Project uses django-aiogram 4.x. Rules:
   lookup answering `unknown` with nothing to refuse.
 - `python manage.py check` validates the settings; treat its E0xx/W0xx output as
   the spec.
-- Run `python manage.py migrate` after upgrading. The package ships one table,
+- Run `python manage.py migrate` after upgrading. The package ships two tables,
   created whether or not you turn the event log on.
 - bot.send() returns a correlation id. Store it next to your own model if you
   want to join your records to the event log later.

@@ -302,6 +302,27 @@ Reading `unknown` for everything, on a project with `EVENT_LOG_DATABASE` set, me
 query is going to the wrong alias — `outcome()` uses the log's, so this is a sign of a
 hand-written query rather than of this one.
 
+## A scheduled send never goes out
+
+Nothing on the write path publishes one, so check first that
+`manage.py tgbot_dispatch_scheduled` is actually scheduled — from cron, or running with
+`--loop`. `--dry-run` answers the question directly: it counts what is due, what is not due
+yet and what a mover has claimed, and claims nothing itself.
+
+Then, in the order these bite:
+
+- **The mover refuses to start** where `ENABLED` is false, because a scheduled send would
+  have nowhere to go. It says so and claims nothing.
+- **`--grace` dropped it.** A row more than that many seconds overdue is recorded as a drop
+  with `TooLate` rather than sent late; the feed says which and by how much.
+- **A row is claimed and still there.** Its mover died between publishing and deleting, or
+  the publish failed — the drop row says which. Clearing `claimed_at` makes it eligible
+  again, and if the publish had already landed the message goes out twice.
+- **The row is in the wrong database.** The schedule is *not* routed to
+  `EVENT_LOG_DATABASE`; it lives with the project's own tables. A project that pointed a
+  router at this app by label before 4.1 should check `migrate` created
+  `django_aiogram_scheduled` where the mover reads it.
+
 ## The bot ignores ENABLED
 
 `ENABLED` is parsed, so `'false'` disables. If a value cannot be parsed you get

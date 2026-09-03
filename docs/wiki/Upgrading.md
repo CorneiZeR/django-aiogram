@@ -10,6 +10,21 @@ Nothing is required. Every setting 4.0 had keeps its meaning and its default, no
 runs, and the wire format is unchanged — so the bot container and the web tier may be
 deployed in either order.
 
+## Run `migrate`: there is a second table
+
+4.1 adds `django_aiogram_scheduled`, which is where a send with an `eta` waits. Nothing uses
+it until a caller passes one, so the migration is safe on a running deployment — it creates
+an empty table and one index.
+
+**It is created wherever your own tables go**, not on `EVENT_LOG_DATABASE`. The router that
+sends the event log to its own alias routes by *model* from 4.1 rather than by app label; a
+project that installed `TelegramEventLogRouter` gets this for free, and one that wrote its own
+router matching on `app_label == 'django_aiogram'` should narrow it to `TelegramEvent`, or the
+schedule will be created somewhere the mover does not read.
+
+And if you use `eta`, schedule `manage.py tgbot_dispatch_scheduled` —
+**[Deployment](Deployment.md)** has the container.
+
 ## `bot.outcome()` is new, and needs the event log
 
 Nothing to do, but worth knowing it exists: the `message_id` Telegram gave for a queued
@@ -529,7 +544,7 @@ payloads is fine; the reverse is not.
 
 ## Run migrate
 
-The package ships one table now, and `migrate` creates it whether or not you
+The package shipped one table at 4.0, and `migrate` creates it whether or not you
 turn the event log on. Creating it later on a live database is the more
 expensive order, so do it with the upgrade — see **[Event log](Event-log.md)**
 before switching the feature on.
