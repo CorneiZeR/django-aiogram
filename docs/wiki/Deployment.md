@@ -177,8 +177,8 @@ production answer.
 ## Upgrading to 3.0: order matters, once
 
 **Run `manage.py migrate` first.** The package shipped one table from 3.0 — a second, the
-schedule an `eta` writes to, arrived in 4.1 — and the event log's is created whether or not
-you turn the log on.
+schedule an `eta` writes to, arrived in 4.1 — and the event log's table is created whether
+or not you turn the log on.
 
 **Then deploy the bot container before the web tier.** 3.0 nests a queued call
 inside an envelope. The new consumer reads the old flat shape, so a backlog

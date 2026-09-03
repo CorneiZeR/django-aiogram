@@ -39,7 +39,7 @@ from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 from django_aiogram.eventlog.recorder import recorder
 from django_aiogram.eventlog.records import Event
 from django_aiogram.producer.queueing import Queueing, publishing
-from django_aiogram.producer.scheduling import DEFAULT_LEASE, claim
+from django_aiogram.producer.scheduling import DEFAULT_LEASE, claim, unheld
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -174,6 +174,7 @@ class Command(BaseCommand):
         # Claimed first, its rows would keep the claim with no drop row and no later pass
         # willing to look at them -- invisible until an operator cleared them by hand
         broker = get_broker()
+        self._warn_about_a_lease_shorter_than_a_publish(broker, bounds.lease)
         rows = claim(bounds.limit, lease=bounds.lease)
         if not rows:
             return 0
@@ -187,6 +188,30 @@ class Command(BaseCommand):
         logger.info('published scheduled sends', extra={'tg_published': published, 'tg_claimed': len(rows)})
         self.stdout.write(f'Published {published} of {len(rows)} claimed.')
         return published
+
+    @staticmethod
+    def _warn_about_a_lease_shorter_than_a_publish(broker: 'Broker', lease: int) -> None:
+        """Say so where a publish may outlive the claim that protects it.
+
+        A claim cannot be exclusive *through* a call into the broker -- nothing fences an
+        external call, and a token checked before or after it does not change that. What can
+        be checked is the arithmetic: the transport declares how long one call may take, and
+        while the lease is comfortably longer than that the window does not open in practice.
+
+        Warned rather than refused. The numbers come from two settings an operator sets
+        independently, a short lease is a legitimate choice for a queue that never blocks,
+        and this is a mover that should keep moving -- but nobody would guess the connection
+        between `KAFKA_TIMEOUT` and a duplicate message without being told.
+        """
+        if not lease:
+            return
+        ceiling = broker.call_ceiling
+        if lease > ceiling:
+            return
+        logger.warning(
+            'the lease is not longer than a single publish, so a slow one may outlive its claim',
+            extra={'tg_lease': lease, 'tg_call_ceiling': ceiling},
+        )
 
     def _publish(self, broker: 'Broker', row: 'TelegramScheduledSend', attempts: int) -> bool:
         """Put one row on the queue and delete it, or count the failure and say why.
@@ -202,6 +227,13 @@ class Command(BaseCommand):
         payload the broker refuses permanently would be retried every lease for ever, writing
         one more drop row each time: an event log growing without end over one message, and
         an operator reading the same failure a hundred times.
+
+        The claim is not exclusive *through* this call, and cannot be made so: nothing fences
+        a request already in flight to another system, so a publish that outlives its lease
+        can be joined by a second mover taking the row back. What guards that is arithmetic
+        rather than a lock -- the lease is 300 seconds by default against a call the transport
+        itself bounds at ten -- and :meth:`_warn_about_a_lease_shorter_than_a_publish` says so
+        where the two are set the other way round.
         """
         # every field `publishing` reads, and none of them defaulted. `details` is one
         # entry per message or the zip inside it refuses the pair, and `queued_at` is the
@@ -280,9 +312,13 @@ class Command(BaseCommand):
         from django_aiogram.models import TelegramScheduledSend  # noqa: PLC0415 - django.db, not at import
 
         now = timezone.now()
-        due = TelegramScheduledSend.objects.filter(claimed_at__isnull=True, due_at__lte=now)
-        waiting = TelegramScheduledSend.objects.filter(claimed_at__isnull=True, due_at__gt=now).count()
-        claimed = TelegramScheduledSend.objects.filter(claimed_at__isnull=False).count()
+        # `unheld()` and not `claimed_at__isnull`, or the two readers disagree: a row whose
+        # claim has lapsed is one the next pass publishes, and reporting it as held would
+        # understate what a real pass takes -- the one thing this output is for
+        free = unheld(now)
+        due = TelegramScheduledSend.objects.filter(free, due_at__lte=now)
+        waiting = TelegramScheduledSend.objects.filter(free, due_at__gt=now).count()
+        claimed = TelegramScheduledSend.objects.exclude(free).count()
         self.stdout.write(f'{due.count()} due now, of which a pass would take {limit}.')
         self.stdout.write(f'{waiting} not due yet, {claimed} claimed by a mover.')
         for row in due.order_by('due_at', 'id')[:limit]:

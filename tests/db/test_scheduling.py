@@ -8,6 +8,7 @@ exactly once, at the right moment, with the bytes the caller meant.
 
 import asyncio
 import datetime
+import logging
 import uuid
 
 import pytest
@@ -223,6 +224,48 @@ def test_a_row_past_its_grace_is_dropped_rather_than_sent_late(published):
     dropped = TelegramEvent.objects.get(kind=EventKind.OUTBOUND_DROPPED.value)
     assert dropped.detail['stage'] == 'scheduling'
     assert dropped.error_code == 'TooLate'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_TIMEOUT': 30})
+def test_a_lease_no_longer_than_a_publish_is_reported(published, caplog):
+    """Nothing can fence a call already in flight to another system, so this is arithmetic.
+
+    While the lease is comfortably longer than the deadline the transport puts on one call,
+    the window where a second mover joins a publish in progress does not open. Set the other
+    way round it does, and nobody would guess the connection between a transport timeout and
+    a duplicate message without being told.
+    """
+    TelegramBot().send(chat_id=7, text='now', eta=a_while_ago())
+
+    with caplog.at_level(logging.WARNING, logger='django_aiogram'):
+        call_command('tgbot_dispatch_scheduled', '--lease', '10')
+
+    assert 'may outlive its claim' in caplog.text
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_TIMEOUT': 10})
+def test_a_lease_longer_than_a_publish_says_nothing(published, caplog):
+    TelegramBot().send(chat_id=7, text='now', eta=a_while_ago())
+
+    with caplog.at_level(logging.WARNING, logger='django_aiogram'):
+        call_command('tgbot_dispatch_scheduled')
+
+    assert 'may outlive its claim' not in caplog.text
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_dry_run_reports_a_lapsed_claim_as_work_it_would_take(published, capsys):
+    """The dry run has to ask what a real pass asks, or it understates what one takes."""
+    TelegramBot().send(chat_id=7, text='now', eta=a_while_ago())
+    claim(10)
+    TelegramScheduledSend.objects.update(claimed_until=timezone.now() - datetime.timedelta(seconds=1))
+
+    call_command('tgbot_dispatch_scheduled', '--dry-run')
+
+    assert '1 due now' in capsys.readouterr().out, 'a row the next pass would publish was reported as held'
 
 
 @pytest.mark.django_db(transaction=True)
@@ -482,7 +525,7 @@ def test_a_lapsed_claim_can_be_called_off_again(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_SYNC': False})
 def test_no_event_outlives_the_block_that_rolled_the_schedule_back(published):
     """The rows are the caller's write; the recorder's writer commits on its own.
 

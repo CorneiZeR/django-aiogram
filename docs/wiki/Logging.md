@@ -54,6 +54,7 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_published` / `tg_claimed` | how many scheduled sends one dispatch pass put on the queue, of how many it claimed |
 | `tg_overdue` / `tg_grace` | how late a scheduled send was, against the `--grace` that refused it |
 | `tg_attempts` | how many failed publishes a scheduled send had had when the mover gave up on it |
+| `tg_lease` / `tg_call_ceiling` | the `--lease` a mover is running with, against the deadline the transport puts on one publish — reported where the first is not longer than the second |
 | `tg_database` | the connection alias a decision about a transaction was made on |
 | `tg_entry` | the id of a stream entry this package did not write, left pending rather than acknowledged |
 | `tg_count` | events in the batch being written, or kafka messages left unsent when a producer was replaced or the process shut down |

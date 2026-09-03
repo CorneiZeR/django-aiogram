@@ -323,7 +323,10 @@ Then, in the order these bite:
   another mover takes it back: a claim is a lease, not a deed, because a mover that died
   holding a row would otherwise strand the message for ever. What that costs is a second
   copy where the mover died *after* publishing, which is the trade this package makes
-  everywhere — at-least-once, never silent loss, **with a finite lease**. Under `--lease 0`
+  everywhere — at-least-once, never silent loss, **with a finite lease**. A publish that
+  outlives its own lease is the same exposure from the other end: nothing fences a request
+  already in flight to another system, so keep `--lease` comfortably above the deadline the
+  transport puts on one call. The mover says so in the log when it is not. Under `--lease 0`
   a claim never lapses, so a mover that died holding one leaves that row where it is until
   somebody clears `claimed_at`; that is the exception, and it is the reason the default is
   not zero.
