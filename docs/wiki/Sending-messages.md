@@ -168,6 +168,15 @@ history lives, as it does for everything else here.
 Zero means nothing was waiting — which is also the answer once a mover has claimed the row,
 because by then the message is on its way and deleting the row would not stop it.
 
+**A positive count is not a promise that nothing went out.** A claim that has lapsed makes its
+row cancellable again, since any mover may publish it — and the mover that held it may still be
+inside the transport's own publish call, which nothing here can fence or hear from. So the row
+is deleted, the count says one, and the message goes out anyway. This is the same window the
+mover warns about in the log, and it is closed by arithmetic rather than by a lock: keep
+`--lease` comfortably longer than the deadline the transport puts on one call
+(`--lease 300` against a `KAFKA_TIMEOUT` of 10 leaves no practical window) and a live publish
+is never behind a lapsed claim.
+
 **A count can be partial where an id names more than one waiting send.** `send_many` is not
 that case: it gives every chat its own id. It happens where a caller passed one explicit
 `correlation_id` to several scheduled sends, or where a handler's replies inherited the
@@ -191,8 +200,10 @@ Four things worth knowing before you use it:
 - **An `eta` already past comes due at once** rather than being refused: clock skew between a
   web tier and a database is not a caller's problem, and "as soon as possible" is a
   reasonable thing to schedule. It is still never faster than the mover's interval.
-- **A naive datetime is refused** under `USE_TZ`. Django would attach the project's
-  `TIME_ZONE` to it, and a message an hour early is not worth guessing at.
+- **The `eta` has to match the project's `USE_TZ`.** Under it a naive datetime is refused,
+  because Django would attach the project's `TIME_ZONE` to it and a message an hour early is
+  not worth guessing at. With `USE_TZ` off an *aware* one is refused instead — the project's
+  own datetime columns hold naive values, and the database refuses the rest.
 
 Inside the bot container `eta` schedules like anywhere else — it is the one case where `send`
 does not call Telegram directly, because sending now cannot be what an `eta` meant.

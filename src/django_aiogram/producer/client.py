@@ -1337,10 +1337,17 @@ class TelegramBot(RouterShortcuts):
     def cancel_scheduled(correlation_id: uuid.UUID | str) -> int:
         """Call off the sends this id still has waiting, and say how many there were.
 
-        Unclaimed rows only: a mover that already owns one is on its way to the broker, and
-        deleting the row here would neither stop the message nor be visible to it. So zero
-        is the answer for an id that was never scheduled *and* for one whose message is
-        already going out -- see :func:`~django_aiogram.producer.scheduling.cancel`.
+        Rows nobody effectively holds -- not "unclaimed", which this said before and is a
+        stronger promise than the predicate makes: a claim that has *lapsed* is cancellable,
+        because such a row is publishable again by any mover. A live claim is not, so zero is
+        the answer for an id that was never scheduled *and* for one whose message is on its
+        way.
+
+        **A positive count therefore is not a promise that nothing went out**, in the one case
+        where a mover's lease lapsed while it was inside ``Broker.publish``: nothing fences a
+        call already in flight, so the row goes and the message goes too. The window is closed
+        by arithmetic rather than a lock -- see
+        :func:`~django_aiogram.producer.scheduling.cancel`, which carries it in full.
         """
         return cancel(resolve_correlation_id(correlation_id))
 

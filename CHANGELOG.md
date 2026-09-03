@@ -34,8 +34,10 @@
   run. There is no alias configuration on which that event can outlive its row. Inside the bot
   container it still schedules: that is the one case where `send` does not call Telegram
   directly, because sending now cannot be what an `eta` meant. An `eta` already past comes due
-  at once rather than being refused, and a naive datetime is refused rather than read in the
-  project's `TIME_ZONE`.
+  at once rather than being refused. A datetime that does not match the project's `USE_TZ` is
+  refused either way round: a naive one under it, rather than being read in the project's
+  `TIME_ZONE`, and an aware one without it, which the datetime columns of such a project
+  cannot hold anyway.
 
   `bot.cancel_scheduled(identifier)` calls off what is still waiting and answers with how
   many rows went. Zero is the answer both for an id that was never scheduled and for one a

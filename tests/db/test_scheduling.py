@@ -45,6 +45,8 @@ class RecordingBroker(RedisListBroker):
     """Keeps what it was asked to publish, and refuses on demand, without a server."""
 
     published: list[bytes] = []  # noqa: RUF012 - one list for the process, cleared per test
+    cancelled: list[int] = []  # noqa: RUF012 - what `CancellingBroker` was told mid-publish
+    identifier = None
     refuses = False
 
     def publish(self, payloads):
@@ -54,6 +56,19 @@ class RecordingBroker(RedisListBroker):
 
     async def apublish(self, payloads):
         self.publish(payloads)
+
+
+class CancellingBroker(RecordingBroker):
+    """Calls the send off, from inside the publish it is too late to stop.
+
+    The window `cancel` documents, made reachable: the mover's lease has lapsed, so the row is
+    cancellable again while the publish it belongs to is already in flight to another system.
+    """
+
+    def publish(self, payloads):
+        TelegramScheduledSend.objects.update(claimed_until=timezone.now() - datetime.timedelta(seconds=1))
+        RecordingBroker.cancelled.append(TelegramBot().cancel_scheduled(RecordingBroker.identifier))
+        RecordingBroker.published.extend(payloads)
 
 
 class StealingBroker(RecordingBroker):
@@ -77,9 +92,11 @@ class StealingBroker(RecordingBroker):
 def published():
     """The payloads the mover put on the queue during this test."""
     RecordingBroker.published.clear()
+    RecordingBroker.cancelled.clear()
     RecordingBroker.refuses = False
     yield RecordingBroker.published
     RecordingBroker.published.clear()
+    RecordingBroker.cancelled.clear()
     RecordingBroker.refuses = False
 
 
@@ -731,6 +748,31 @@ def test_a_mover_that_lost_its_claim_drops_nothing_as_late_either(published):
 
     assert TelegramScheduledSend.objects.filter(correlation_id=identifier).exists()
     assert not TelegramEvent.objects.filter(error_code='TooLate').exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'BROKER': 'tests.db.test_scheduling.CancellingBroker'})
+def test_a_cancellation_that_wins_the_race_still_lets_the_message_out(published):
+    """The boundary, pinned rather than apologised for.
+
+    A claim that lapses while its mover is inside `Broker.publish` makes the row cancellable
+    again, and nothing fences a call already in flight to another system -- so `cancel` deletes
+    the row, answers `1`, and the message goes out anyway. That is the documented cost of
+    closing this window by arithmetic (`--lease` longer than the transport's own deadline for
+    one call) rather than by a lock held across an external call.
+
+    Written down as a test because the alternative is an apology in prose that nobody can
+    check: if a later change makes cancellation exclusive with publication, this case is where
+    it says so, and the docs it contradicts are named in the same breath -- `cancel`'s
+    docstring and **Sending messages**.
+    """
+    RecordingBroker.identifier = TelegramBot().send(chat_id=7, text='too late to stop', eta=a_while_ago())
+
+    call_command('tgbot_dispatch_scheduled')
+
+    assert RecordingBroker.cancelled == [1], 'the cancellation did not win the race it is here to lose'
+    assert len(published) == 1, 'the message did not go out, so this is no longer the window it documents'
+    assert not TelegramScheduledSend.objects.exists()
 
 
 def test_an_unlimited_retry_count_has_no_column_to_overflow():
