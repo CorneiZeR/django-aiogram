@@ -320,6 +320,14 @@ Then, in the order these bite:
   publishes, five by default, the row is deleted with a `TooManyAttempts` drop naming the
   count in `detail.attempts`. `--max-attempts 0` retries without end instead — the row's own
   counter has no ceiling to reach, while the drop event's `attempt` column stops at 32767.
+- **A row is gone and there is no drop row for it at all.** Two causes, both by design. A
+  mover killed between publishing and deleting leaves the row for its lease to lapse, and the
+  next pass publishes it again — a duplicate rather than a drop, which is what at-least-once
+  means here. And a mover whose lease lapsed *while* it was publishing no longer owns the row,
+  so it records no `TooManyAttempts` or `TooLate` about it: the mover that does own it decides
+  what happens, and a drop row from the one that lost the race would be a claim about a
+  message the winner may have delivered. Look for the `outbound.sent` under the correlation id
+  before looking for a drop.
 - **A row is claimed and still there.** Wait one `--lease` (300 seconds by default) and
   another mover takes it back: a claim is a lease, not a deed, because a mover that died
   holding a row would otherwise strand the message for ever. What that costs is a second

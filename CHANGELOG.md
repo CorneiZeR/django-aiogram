@@ -28,10 +28,10 @@
   the transaction that made it and needs nothing from `TRANSACTIONAL`. Its `outbound.scheduled`
   event waits for that commit, and on a *weaker* condition than a publish may: the event log
   writes on its own connection and would keep a durable row about a send the block took away,
-  while arriving late costs a record nothing. So under manual transaction management an
-  `atomic()` block defers the event where it cannot defer a message — leaving only autocommit
-  off with no block at all, where Django has no hook to offer and the event is recorded at
-  once. Inside the bot
+  while arriving late costs a record nothing. So under manual transaction management the event
+  defers where a message cannot — and the write and its record share a block `schedule` opens
+  itself, so that a caller who left no block anywhere still leaves Django a commit hook to
+  run. There is no alias configuration on which that event can outlive its row. Inside the bot
   container it still schedules: that is the one case where `send` does not call Telegram
   directly, because sending now cannot be what an `eta` meant. An `eta` already past comes due
   at once rather than being refused, and a naive datetime is refused rather than read in the
@@ -57,6 +57,12 @@
   report a row deleted while that publish is still going. What closes the window is
   arithmetic rather than a lock: keep `--lease` comfortably above the deadline the transport
   puts on one call, which the mover warns about when it is not.
+
+  What *is* fenced is every judgement the mover passes on a row. A publish may happen twice,
+  but only the mover that still holds the claim counts a failure against a row, records
+  `TooManyAttempts` or `TooLate` for it, or deletes it as either — each of those is conditional
+  on the exact claim the row was handed out with. Unconditional, a mover whose lease lapsed
+  mid-publish would file a drop about a message the mover that took over went on to deliver.
 
   A claim's expiry lives **on the row**, not in a setting, and that is what lets `cancel` and
   the mover agree about it: the lease is a command flag, so a producer asking whether a row

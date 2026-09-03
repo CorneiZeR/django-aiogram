@@ -56,6 +56,23 @@ class RecordingBroker(RedisListBroker):
         self.publish(payloads)
 
 
+class StealingBroker(RecordingBroker):
+    """Refuses the write, and takes the row's claim while doing it.
+
+    What a lease that lapses mid-publish looks like from inside one pass: by the time this
+    mover comes to account for the failure, another one owns the row and may be publishing it
+    successfully. Doing it in `publish` is what makes the case reachable through the real
+    command rather than by calling `_count_failure` by hand.
+    """
+
+    def publish(self, payloads):
+        TelegramScheduledSend.objects.update(
+            claimed_at=timezone.now(), claimed_by='another-mover', claimed_until=in_a_while(300)
+        )
+        msg = 'the broker refused the write'
+        raise ConnectionError(msg)
+
+
 @pytest.fixture
 def published():
     """The payloads the mover put on the queue during this test."""
@@ -647,6 +664,73 @@ def test_the_event_lands_when_a_manually_managed_block_commits(published):
     recorder.flush(timeout=5)
 
     assert TelegramEvent.objects.filter(kind=EventKind.OUTBOUND_SCHEDULED.value).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_SYNC': False})
+def test_no_event_survives_a_rollback_with_no_block_of_the_caller_s_own(published):
+    """The case that had no commit hook to wait for, and now has one.
+
+    Autocommit off with no `atomic()` anywhere is where Django's `on_commit` raises rather
+    than deferring, so the durable event had to be written inline and a rollback then left the
+    feed claiming a send it took away. `schedule` opens its own block around the row and the
+    record, which is enough for Django to take the hook -- and enough for the caller's
+    rollback to reach both writes.
+
+    Falsifiable: with that block taken out, the event is recorded inline and survives.
+    """
+    transaction.set_autocommit(False)
+    try:
+        TelegramBot().send(chat_id=7, text='announced too early', eta=in_a_while())
+        transaction.rollback()
+    finally:
+        transaction.set_autocommit(True)
+    recorder.flush(timeout=5)
+
+    assert not TelegramScheduledSend.objects.exists(), 'the rollback left the row behind'
+    assert not TelegramEvent.objects.filter(kind=EventKind.OUTBOUND_SCHEDULED.value).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'BROKER': 'tests.db.test_scheduling.StealingBroker'})
+def test_a_mover_that_lost_its_claim_gives_up_on_nothing(published):
+    """A publish this mover cannot account for is one it says nothing about.
+
+    `--max-attempts 1` means this failure is terminal, so without the claim condition the
+    mover would count it, record `TooManyAttempts` and delete the row -- while the mover that
+    now holds it goes on to publish the message. A drop row about a delivered send, and the
+    row gone from under the mover that owned it.
+    """
+    identifier = TelegramBot().send(chat_id=7, text='contested', eta=a_while_ago())
+
+    call_command('tgbot_dispatch_scheduled', '--max-attempts', '1')
+    recorder.flush(timeout=5)
+
+    row = TelegramScheduledSend.objects.get(correlation_id=identifier)
+    assert row.claimed_by == 'another-mover', 'the row was taken back from the mover that holds it'
+    assert row.attempts == 0, 'a failure was counted against a claim this mover no longer held'
+    assert not TelegramEvent.objects.filter(error_code='TooManyAttempts').exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_mover_that_lost_its_claim_drops_nothing_as_late_either(published):
+    """The same condition on the other judgement the mover passes.
+
+    Driven directly rather than through the command: `--grace` is decided before the publish,
+    so there is no call to interleave a stolen claim with from outside -- unlike the failure
+    path above, which `StealingBroker` reaches through the real pass.
+    """
+    identifier = TelegramBot().send(chat_id=7, text='very late', eta=a_while_ago(86400))
+    [row] = claim(10)
+    TelegramScheduledSend.objects.update(claimed_at=timezone.now(), claimed_by='another-mover')
+
+    # the unit the interleaving happens in; the command decides `--grace` before any publish
+    Command()._drop_late(row, grace=60)
+    recorder.flush(timeout=5)
+
+    assert TelegramScheduledSend.objects.filter(correlation_id=identifier).exists()
+    assert not TelegramEvent.objects.filter(error_code='TooLate').exists()
 
 
 def test_an_unlimited_retry_count_has_no_column_to_overflow():

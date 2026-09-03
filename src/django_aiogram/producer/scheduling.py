@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 from django.conf import settings as django_settings
 from django.core.exceptions import ImproperlyConfigured
-from django.db import transaction
+from django.db import DEFAULT_DB_ALIAS, transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -89,11 +89,22 @@ def schedule(function: str, write: 'Queueing', due_at: datetime.datetime) -> Non
 
     On the caller's connection, deliberately: a scheduled send made inside ``atomic()`` is
     rolled back by the transaction that made it, needing nothing from ``TRANSACTIONAL``.
+
+    **The block is what gives the event something to wait for**, and it is the whole reason
+    one is opened here. Without it a connection under manual transaction management with no
+    block of its own has no commit hook available -- ``on_commit`` raises there rather than
+    deferring -- so the durable ``outbound.scheduled`` event had to be written inline and
+    could outlive a rollback. Inside one, Django takes the hook and runs it on the caller's
+    commit and not on its rollback, measured on both. ``savepoint=False`` because
+    ``bulk_create`` already opens exactly this block for a multi-row insert: nested in a
+    caller's ``atomic()`` this adds no round trip and changes nothing, and on its own it is
+    the transaction the two writes belong in anyway.
     """
     from django_aiogram.models import TelegramScheduledSend  # noqa: PLC0415 - django.db, not at import
 
-    TelegramScheduledSend.objects.bulk_create(_rows(function, write, due_at))
-    _record(function, write, due_at)
+    with transaction.atomic(using=DEFAULT_DB_ALIAS, savepoint=False):
+        TelegramScheduledSend.objects.bulk_create(_rows(function, write, due_at))
+        _record(function, write, due_at)
 
 
 async def aschedule(function: str, write: 'Queueing', due_at: datetime.datetime) -> None:
@@ -139,14 +150,13 @@ def _record(function: str, write: 'Queueing', due_at: datetime.datetime) -> None
     recorder's writer commits on its own connection and on its own schedule, so nothing else
     would ever take that event back -- a durable row about a send that never existed.
 
-    **Autocommit off with no block anywhere is the one place this cannot hold**, and it is
-    narrower than the exception ``TRANSACTIONAL`` carries. There Django's ``on_commit`` raises
-    rather than deferring, so the event is recorded immediately and a caller that then rolls
-    back leaves the feed claiming a send it took away; nothing here can do better, since
-    skipping it would lose a real event for every send that *does* commit, and a line in the
-    log says so once per process. With an ``atomic()`` block inside that management the hook is
-    taken -- see :func:`~django_aiogram.producer.committing.after_commit`, which waits on a
-    weaker condition than a publish may. ``Settings.md`` carries both.
+    **There is no configuration this fails on**, which took two goes to get right. The hook
+    needs a block to be registered in, and a caller with autocommit off and no block of its
+    own leaves none -- so this used to be recorded inline there, and a rollback then left the
+    feed claiming a send it took away. :func:`schedule` opens that block itself now, which is
+    the whole reason it has one. What is left is the weaker condition
+    :func:`~django_aiogram.producer.committing.after_commit` waits on, and why an event may
+    wait where a message may not; ``Settings.md`` carries it.
     """
     if not recorder.active:
         return
@@ -191,6 +201,11 @@ def claim(
 
     One transaction per row rather than one for the batch: a mover that dies holding a batch
     releases them one lease later either way, and one row is one message.
+
+    Each row that is won comes back **stamped with the claim that won it**, which is what lets
+    the mover write conditions against it later: see :func:`still_held_by` for what that is
+    for. Read straight from the select, those fields would still hold the values from before
+    the update -- ``claimed_at`` of ``None`` on a row this call now owns.
     """
     from django_aiogram.models import TelegramScheduledSend  # noqa: PLC0415 - as above
 
@@ -209,8 +224,28 @@ def claim(
                 claimed_at=moment, claimed_by=worker, claimed_until=lapses
             )
         if taken:
+            # stamp the object with the claim it just won, so the mover carries a token it can
+            # write conditions against. Read from the select, these three are the values from
+            # *before* the update -- `claimed_at` of None on a row this call now holds
+            row.claimed_at, row.claimed_by, row.claimed_until = moment, worker, lapses
             won.append(row)
     return won
+
+
+def still_held_by(row: 'TelegramScheduledSend') -> Q:
+    """Match the row only while it is held by the exact claim ``row`` carries.
+
+    A lease that lapses mid-pass means two movers can hold one row, and each of them is then
+    entitled to publish it -- that is the at-least-once trade this package makes everywhere.
+    What neither is entitled to do is pass *judgement* on the row: counting a failure against
+    it, recording that it was given up on, or deleting it as too late. Those are statements
+    about a row the mover may no longer own, and the loser's copy would contradict the
+    winner's delivery -- a ``TooManyAttempts`` drop about a message that went out fine.
+
+    ``claimed_by`` alone is not a token: the same mover reclaiming its own lapsed row would
+    match it. The moment it was claimed at is what makes the pair unique to one claim.
+    """
+    return Q(pk=row.pk, claimed_at=row.claimed_at, claimed_by=row.claimed_by)
 
 
 def unheld(moment: datetime.datetime | None = None) -> Q:

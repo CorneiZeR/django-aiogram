@@ -17,9 +17,11 @@ management publishes immediately and says so once, because its hooks wait for
 ``set_autocommit(True)`` rather than for the block.
 
 That last answer belongs to the publish alone. :func:`after_commit`, which the event log uses
-to keep a durable row from outliving the write it describes, takes the deferral there anyway —
-arriving late costs an event nothing and existing when the row does not costs it everything.
-The two conditions and why they differ are in the functions.
+to keep a durable row from outliving the write it describes, takes the deferral there anyway --
+arriving late costs an event nothing and existing when the row does not costs it everything. It
+has no unsupported configuration of its own as a result: where a caller leaves no block for a
+hook to live in, ``scheduling.schedule`` opens one. The two conditions and why they differ are
+in the functions.
 
 And only a synchronous one. ``connections`` is context-aware, so a coroutine holds its own
 connection rather than the one a surrounding ``atomic()`` opened -- measured: inside
@@ -82,7 +84,11 @@ def after_commit(work: Callable[[], None]) -> bool:
     event it is exactly right: late is harmless, and existing when the row does not is not.
 
     The one case with no hook at all is autocommit off with no block anywhere, where
-    ``on_commit`` raises rather than deferring. There the work is done now and said once.
+    ``on_commit`` raises rather than deferring. There the work is done now and said once --
+    a fallback no caller in this package reaches any more, because
+    :func:`~django_aiogram.producer.scheduling.schedule` opens a block of its own precisely so
+    that a hook exists to take. It stays because this is a helper about a connection's state
+    and not about that one caller.
     """
     connection = connections[DEFAULT_DB_ALIAS]
     if connection.in_atomic_block:

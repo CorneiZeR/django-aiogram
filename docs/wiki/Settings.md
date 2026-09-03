@@ -104,10 +104,10 @@ What it does not change, and what to expect:
 - **A scheduled send's `outbound.scheduled` event waits on a weaker condition than this**, and
   deliberately: it is durable, the schedule row it describes is the caller's own write, and
   nothing would ever take the event back if the block rolled that row away. Arriving on
-  `set_autocommit(True)` is a real cost for a message and none at all for a record, so with an
-  `atomic()` block the event takes the deferral this setting refuses. The one case left is
-  autocommit off with no block at all, where there is no hook to take: the event is recorded
-  immediately, and a rollback then leaves the feed claiming a send it took away.
+  `set_autocommit(True)` is a real cost for a message and none at all for a record, so the
+  event takes the deferral this setting refuses — and it has no unsupported configuration of
+  its own, because a caller that leaves no block for a hook to live in gets one from
+  `schedule` itself. This bullet is about the message; the event is safe on every alias.
 - **Inside the bot container it does nothing.** A send there reaches Telegram directly and
   there is no queue write to hold back.
 

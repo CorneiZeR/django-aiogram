@@ -41,7 +41,7 @@ from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 from django_aiogram.eventlog.recorder import recorder
 from django_aiogram.eventlog.records import Event
 from django_aiogram.producer.queueing import Queueing, publishing
-from django_aiogram.producer.scheduling import DEFAULT_LEASE, claim, unheld
+from django_aiogram.producer.scheduling import DEFAULT_LEASE, claim, still_held_by, unheld
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -265,18 +265,30 @@ class Command(BaseCommand):
 
         The row is left claimed either way: its lease is what paces the next attempt, so a
         broker that is down for a minute costs a minute rather than a pass per interval.
+
+        **Every write here is conditional on still holding the claim.** A lease that lapsed
+        mid-publish means another mover owns the row now, and it may well be publishing it
+        successfully -- so counting a failure against it, or recording that it was given up
+        on, would put a ``TooManyAttempts`` drop in the feed about a message that went out.
+        A publish this mover cannot account for is one it says nothing about.
         """
         from django_aiogram.models import TelegramScheduledSend  # noqa: PLC0415 - django.db, not at import
 
         # `F` and not `row.attempts + 1`: after a lease lapses two movers can be here for
         # the same row, and an absolute value written twice loses one failure -- so the bound
         # is reached later than it says, or never on a row that keeps being retried
+        held = still_held_by(row)
         with transaction.atomic():
-            TelegramScheduledSend.objects.filter(pk=row.pk).update(attempts=F('attempts') + 1)
+            counted = TelegramScheduledSend.objects.filter(held).update(attempts=F('attempts') + 1)
             # read back inside the same transaction, because the number this decides on is
             # the one the database now holds rather than the one this process last saw
-            failed = TelegramScheduledSend.objects.filter(pk=row.pk).values_list('attempts', flat=True).first()
-        if failed is None or not attempts or failed < attempts:
+            failed = TelegramScheduledSend.objects.filter(held).values_list('attempts', flat=True).first()
+        if not counted or failed is None or not attempts or failed < attempts:
+            return
+        # and again for the delete, because the claim can lapse between the two. Recording the
+        # drop only when this took the row is what keeps the feed from claiming a give-up
+        # twice, or at all where another mover went on to publish the message
+        if not TelegramScheduledSend.objects.filter(held).delete()[0]:
             return
         recorder.record(
             Event(
@@ -291,7 +303,6 @@ class Command(BaseCommand):
             )
         )
         logger.error('giving up on a scheduled send', extra={'tg_attempts': failed, 'tg_function': row.function})
-        row.delete()
 
     @staticmethod
     def _drop_late(row: 'TelegramScheduledSend', grace: int) -> None:
@@ -300,7 +311,15 @@ class Command(BaseCommand):
         `--grace` exists because a mover that was down for a day would otherwise deliver a
         day of messages at once, all of them about a moment that has passed. Recorded rather
         than silently dropped: the row is gone, and the feed says which and why.
+
+        Deleted first and recorded second, conditionally, for the reason `_count_failure`
+        gives: a row this mover's claim no longer covers is one another mover may be
+        publishing, and a ``TooLate`` drop about a delivered message is worse than no row.
         """
+        from django_aiogram.models import TelegramScheduledSend  # noqa: PLC0415 - django.db, not at import
+
+        if not TelegramScheduledSend.objects.filter(still_held_by(row)).delete()[0]:
+            return
         overdue = int((timezone.now() - row.due_at).total_seconds())
         recorder.record(
             Event(
@@ -314,7 +333,6 @@ class Command(BaseCommand):
             )
         )
         logger.warning('dropped a scheduled send past its grace', extra={'tg_overdue': overdue, 'tg_grace': grace})
-        row.delete()
 
     def _report_due(self, limit: int) -> None:
         """Say what a real pass would take, claiming nothing."""
