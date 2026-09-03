@@ -71,8 +71,8 @@ def headings_of(path: Path) -> set[str]:
         if found:
             headings.append(found.group(1))
 
-    declared = [ATTR_ID.search(heading) for heading in headings]
-    slugs = {found.group(1) for found in declared if found}
+    declared = [declared_id(heading) for heading in headings]
+    slugs = {found for found in declared if found}
     for heading, names_itself in zip(headings, declared, strict=True):
         if names_itself:
             continue
@@ -84,6 +84,21 @@ def headings_of(path: Path) -> set[str]:
         # mutates `slugs`, which is what numbers a repeat against the ones before it
         unique(slugify(text, '-'), slugs)
     return slugs
+
+
+def declared_id(heading: str) -> str | None:
+    """The id a heading names for itself, or ``None`` where it names none.
+
+    Two spellings, because `attr_list` reads both: `{#download}` and `{id=download}`, the
+    second quoted or bare. The **last** assignment wins -- measured, `{#hash id=other}`
+    publishes `other` -- and classes may sit among them in any order, so the block is scanned
+    rather than matched from its start.
+    """
+    block = ATTR_BLOCK.search(heading)
+    if not block:
+        return None
+    names = [next(one for one in found.groups() if one is not None) for found in ATTR_ID.finditer(block.group(1))]
+    return names[-1] if names else None
 
 
 def built_page(path: Path) -> Path | None:
@@ -484,8 +499,11 @@ def test_the_config_validates_what_it_claims():
 #: refuse a second copy of the documentation, and it still does.
 README_BUDGET = 148
 #: `## Title`, with the three leading spaces markdown still renders as a heading
-#: an id the heading names for itself, which `attr_list` honours over any slug
-ATTR_ID = re.compile(r'\{:?\s*#([A-Za-z0-9_-]+)[^}]*\}\s*$')
+#: the `{...}` block `attr_list` reads off the end of a heading
+ATTR_BLOCK = re.compile(r'\{:?\s*([^}]*)\}\s*$')
+#: the two ways that block names an id, and a later one wins -- measured, `{#hash id=other}`
+#: publishes `other`. Classes and other attributes may sit around them in any order
+ATTR_ID = re.compile(r'#([^\s}]+)|\bid=(?:"([^"]*)"|\'([^\']*)\'|([^\s}]+))')
 ATX = re.compile(r'^ {0,3}#{1,6}\s+(.+?)\s*$', re.MULTILINE)
 #: `Title` underlined with `===` or `---`, which renders as one too
 SETEXT = re.compile(r'^ {0,3}(\S.*?)\s*\n {0,3}(?:=+|-+)\s*$', re.MULTILINE)
@@ -631,6 +649,13 @@ def test_a_declared_id_is_reserved_before_any_slug_is_generated(tmp_path):
     [
         ('## Download {#download}', 'download'),
         ('## Download {: #dl-page }', 'dl-page'),
+        # `attr_list` reads `id=` as readily as `#`, quoted or bare
+        ('## Download {id=dl-page}', 'dl-page'),
+        ('## Download {: id="dl" }', 'dl'),
+        # the last assignment wins, measured: this publishes `other` and not `hash`
+        ('## Download {#hash id=other}', 'other'),
+        # a class may sit beside it, in either order
+        ('## Download {.cls #hash}', 'hash'),
         ('## Plain heading', 'plain-heading'),
     ],
 )

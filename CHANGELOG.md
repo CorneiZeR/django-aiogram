@@ -9,9 +9,10 @@
   queued from a web request could never be edited or deleted by whoever queued it, for want
   of the one id Telegram will ever give it.
 
-  Nothing new is stored: the `outbound.sent` row has carried `message_id` and `chat_id` since
-  the log existed, which is everything an edit needs. What was missing was a way to ask, and
-  any statement that it was there. `bot.outcome(identifier)` — `bot.aoutcome()` awaiting, and
+  No new table and no separate result store: the `outbound.sent` row has carried `message_id`
+  and `chat_id` since the log existed, which is everything an edit needs. What was missing was
+  a way to ask, and any statement that it was there. The one thing the row gains is an album's
+  ids under `detail`, for the method whose column cannot hold them — below. `bot.outcome(identifier)` — `bot.aoutcome()` awaiting, and
   `django_aiogram.eventlog.outcomes.outcome()` for code with no bot to hand — answers with a
   `state` of `sent`, `failed`, `pending` or `unknown`, the ids Telegram gave, `at`, `error`
   and `attempt`.
