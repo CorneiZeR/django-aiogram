@@ -223,10 +223,18 @@ From cron, or as a container of its own:
       REDIS_URL: ${REDIS_URL}
 ```
 
-Several movers are safe: each row is claimed by a compare-and-set update, so two racing for
-one produce a winner and a loser. `--grace` keeps a mover that was down for a day from
-delivering a day of stale messages at once, `--limit` bounds one pass, and `--dry-run` says
-what is waiting without claiming anything.
+Several movers are safe **while a claim is live**: each row is claimed by a compare-and-set
+update, so two racing for one produce a winner and a loser. Delivery here is at-least-once,
+like every transport this package carries — a claim is a lease, and a publish that outlives
+its own lease can be joined by a mover taking the row back, which sends the message twice.
+Nothing fences a call already in flight to another system, so **keep `--lease` comfortably
+above the deadline the transport puts on one call** (`REDIS_TIMEOUT`, `RABBITMQ_TIMEOUT`,
+`KAFKA_TIMEOUT`); the mover warns when it is not, and the warning is a warning rather than a
+guard.
+
+`--grace` keeps a mover that was down for a day from delivering a day of stale messages at
+once, `--max-attempts` gives up on a row the broker keeps refusing, `--limit` bounds one pass,
+and `--dry-run` says what is waiting without claiming anything.
 
 ## What ENABLED=0 turns off
 

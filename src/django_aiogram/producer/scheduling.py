@@ -138,6 +138,15 @@ def _record(function: str, write: 'Queueing', due_at: datetime.datetime) -> None
     that rolls back removes them, and an event queued already would outlive them. The
     recorder's writer commits on its own connection and on its own schedule, so nothing else
     would ever take that event back -- a durable row about a send that never existed.
+
+    **Manual transaction management is the one place this cannot hold**, and it is the same
+    exception ``TRANSACTIONAL`` already documents. With autocommit off there is no commit hook
+    to wait for, so the event is recorded immediately; a caller that then rolls back leaves
+    the feed claiming a send it took away. Nothing here can do better -- deferring is what the
+    configuration refuses, and skipping the event would lose a real one for every send that
+    *does* commit. The mover says so once per process through
+    :func:`~django_aiogram.producer.committing.after_commit`, and ``Settings.md`` carries the
+    exception beside the rest of that setting's.
     """
     if not recorder.active:
         return
@@ -231,6 +240,13 @@ def cancel(correlation_id: uuid.UUID) -> int:
     difference is what a caller has to read: zero means nothing was waiting, which is the
     same answer for an id that was never scheduled and for one whose message is already
     going out.
+
+    **A positive count is not a promise that nothing went out.** Where the row's claim had
+    lapsed, the mover holding it may still be inside ``Broker.publish`` -- nothing fences a
+    call already in flight to another system, so deleting the row here neither reaches it nor
+    hears from it. The window is the same one the mover warns about, and it is closed by
+    arithmetic rather than by a lock: keep the lease comfortably longer than the deadline the
+    transport puts on one call, and a live publish is never behind a lapsed claim.
     """
     from django_aiogram.models import TelegramScheduledSend  # noqa: PLC0415 - as above
 

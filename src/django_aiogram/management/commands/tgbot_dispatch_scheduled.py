@@ -31,6 +31,8 @@ from types import FrameType
 from typing import TYPE_CHECKING, Any
 
 from django.core.management import BaseCommand, CommandError
+from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 
 from django_aiogram.broker.registry import get_broker
@@ -134,16 +136,17 @@ class Command(BaseCommand):
                 'so a scheduled send has nowhere to go. Nothing was claimed.'
             )
             raise CommandError(msg)
-        if options['dry_run']:
-            self._report_due(options['limit'])
-            return
-
         bounds = Bounds(
             limit=max(1, int(options['limit'])),
             lease=max(0, int(options['lease'])),
             grace=max(0, int(options['grace'])),
             attempts=max(0, int(options['max_attempts'])),
         )
+        if options['dry_run']:
+            # the clamped limit, like the real pass: the raw one reached a queryset slice,
+            # where Django refuses a negative index outright and 0 reported nothing at all
+            self._report_due(bounds.limit)
+            return
         previous = self._install_sigterm_handler()
         try:
             self._run(bounds, loop=options['loop'], interval=max(0.0, options['interval']))
@@ -265,9 +268,15 @@ class Command(BaseCommand):
         """
         from django_aiogram.models import TelegramScheduledSend  # noqa: PLC0415 - django.db, not at import
 
-        failed = row.attempts + 1
-        TelegramScheduledSend.objects.filter(pk=row.pk).update(attempts=failed)
-        if not attempts or failed < attempts:
+        # `F` and not `row.attempts + 1`: after a lease lapses two movers can be here for
+        # the same row, and an absolute value written twice loses one failure -- so the bound
+        # is reached later than it says, or never on a row that keeps being retried
+        with transaction.atomic():
+            TelegramScheduledSend.objects.filter(pk=row.pk).update(attempts=F('attempts') + 1)
+            # read back inside the same transaction, because the number this decides on is
+            # the one the database now holds rather than the one this process last saw
+            failed = TelegramScheduledSend.objects.filter(pk=row.pk).values_list('attempts', flat=True).first()
+        if failed is None or not attempts or failed < attempts:
             return
         recorder.record(
             Event(

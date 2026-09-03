@@ -45,6 +45,13 @@
   this package makes everywhere. `--lease 0` trusts a claim for ever, and then a crash needs
   an operator.
 
+  **Delivery here is at-least-once, like every transport this package carries.** A claim is a
+  lease, and nothing fences a call already in flight to another system -- so a publish that
+  outlives its own lease can be joined by a mover taking the row back, and a cancellation can
+  report a row deleted while that publish is still going. What closes the window is
+  arithmetic rather than a lock: keep `--lease` comfortably above the deadline the transport
+  puts on one call, which the mover warns about when it is not.
+
   A claim's expiry lives **on the row**, not in a setting, and that is what lets `cancel` and
   the mover agree about it: the lease is a command flag, so a producer asking whether a row
   may still be called off would have had to guess at the mover's. A row nobody effectively

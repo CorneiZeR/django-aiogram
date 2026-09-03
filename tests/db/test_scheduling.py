@@ -23,6 +23,7 @@ from django_aiogram.broker.exceptions import BrokerNotConfiguredError
 from django_aiogram.broker.redis_list import RedisListBroker
 from django_aiogram.config.enums import EventKind
 from django_aiogram.eventlog.recorder import recorder
+from django_aiogram.management.commands.tgbot_dispatch_scheduled import Command
 from django_aiogram.models import TelegramEvent, TelegramScheduledSend
 from django_aiogram.producer import scheduling
 from django_aiogram.producer.scheduling import claim
@@ -399,6 +400,38 @@ def test_a_row_the_broker_keeps_refusing_is_given_up_on(published):
     given_up = TelegramEvent.objects.get(error_code='TooManyAttempts')
     assert given_up.attempt == 3
     assert given_up.detail['stage'] == 'scheduling'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_two_movers_failing_on_one_row_both_count(published):
+    """`row.attempts + 1` written twice loses a failure, so the bound arrives late or never.
+
+    After a lease lapses two movers can be counting the same row, and each would write the
+    same absolute number over the other's. `F('attempts') + 1` is the database doing the
+    arithmetic it is holding the row for.
+    """
+    TelegramBot().send(chat_id=7, text='doomed', eta=a_while_ago())
+    RecordingBroker.refuses = True
+    row = TelegramScheduledSend.objects.get()
+
+    # both movers are inside `_count_failure` for the same row, each holding the copy it
+    # loaded before the other wrote
+    Command()._count_failure(row, attempts=0)
+    Command()._count_failure(row, attempts=0)
+
+    assert TelegramScheduledSend.objects.get().attempts == 2, 'one failure was written over the other'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_dry_run_survives_a_limit_the_real_pass_would_clamp(published, capsys):
+    """The raw value reached a queryset slice, where Django refuses a negative index."""
+    TelegramBot().send(chat_id=7, text='now', eta=a_while_ago())
+
+    call_command('tgbot_dispatch_scheduled', '--dry-run', '--limit', '-1')
+
+    assert '1 due now' in capsys.readouterr().out
 
 
 @pytest.mark.django_db(transaction=True)

@@ -96,7 +96,10 @@ What it does not change, and what to expect:
   `RAISE_EXCEPTION` decides whether the exception also leaves the `atomic()` block — where
   it would take any commit hook queued behind this one with it.
 - **`AUTOCOMMIT: False` on the alias is not supported by this**, with or without an
-  `atomic()` block inside it. Without one, Django's `on_commit` refuses a manually managed
+  `atomic()` block inside it. The same exception reaches a scheduled send's
+  `outbound.scheduled` event, which is recorded immediately there rather than after a commit
+  that never comes — so a caller that rolls back leaves the feed claiming a send it took
+  away. Without one, Django's `on_commit` refuses a manually managed
   transaction outright; with one, it accepts the hook and then runs it on
   `set_autocommit(True)` rather than when the block ends — a moment no caller chose, and one
   a process that keeps autocommit off never reaches. Both publish immediately instead, and a
