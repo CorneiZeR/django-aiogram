@@ -38,10 +38,16 @@
 
   Several movers are safe: each row is claimed by a compare-and-set update, so two racing for
   one produce a winner and a loser on every database this package supports — no
-  `SKIP LOCKED`, which SQLite does not have. The row is deleted *after* the publish, which
-  makes this at-least-once like everything else here. `--grace` refuses a row too far overdue
-  and records the drop, because a mover that was down for a day should not deliver a day of
-  stale messages at once.
+  `SKIP LOCKED`, which SQLite does not have. **A claim is a lease**, `--lease` seconds long
+  and 300 by default: a mover killed between publishing a row and deleting it would otherwise
+  strand that message for ever, since every later pass filters claimed rows out. What the
+  lease costs is a second copy where the mover died *after* publishing, which is the trade
+  this package makes everywhere. `--lease 0` trusts a claim for ever, and then a crash needs
+  an operator.
+
+  The row is deleted *after* the publish, which is what makes this at-least-once like
+  everything else here. `--grace` refuses a row too far overdue and records the drop, because
+  a mover that was down for a day should not deliver a day of stale messages at once.
 
 - **A second table, and the router narrowed to match.** `django_aiogram_scheduled` is where
   those rows wait, and it is **not** routed to `EVENT_LOG_DATABASE`: the feed is a record and
