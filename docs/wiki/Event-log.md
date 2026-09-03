@@ -200,9 +200,11 @@ missing at once. It is checked when asked rather than at boot on purpose: narrow
 `EVENT_LOG_KINDS` is a reasonable thing to do in a project that never reads an outcome, and
 a system check cannot tell whether this one does.
 
-`await bot.aoutcome(identifier)` is the same read without blocking the loop, and
-`django_aiogram.eventlog.outcomes.outcome()` is the function behind both for code that has
-no bot to hand.
+`await bot.aoutcome(identifier)` is the same read without blocking the loop. Code with no
+bot to hand imports the functions behind them —
+`django_aiogram.eventlog.outcomes.outcome(identifier)` synchronously, and
+`await aoutcome(identifier)` from a coroutine; the second is not a wrapper over the first,
+so an async caller does not have to reach for the blocking one.
 
 ## Nothing waits for the database
 

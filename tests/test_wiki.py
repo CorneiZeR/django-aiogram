@@ -67,10 +67,18 @@ def headings_of(path: Path) -> set[str]:
     for line in visible(path.read_text(encoding='utf-8')).splitlines():
         found = ATX.match(line)
         if found:
+            heading = found.group(1)
+            # `attr_list` is enabled, so a heading may name its own id and the slug is then
+            # not computed at all -- measured, `## Download {#download}` publishes `download`
+            # where slugifying the whole line gives `download-download`
+            declared = ATTR_ID.search(heading)
+            if declared:
+                slugs.add(declared.group(1))
+                continue
             # a link becomes its own text, which is what the renderer slugifies. Deleting
             # every parenthetical instead ate literal ones: `## Install (optional)` computed
             # `install` where the build publishes `install-optional`
-            linked = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', found.group(1))
+            linked = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', heading)
             text = re.sub(r'[`*\[\]]', '', linked)
             # mutates `slugs`, which is what numbers a repeat against the ones before it
             unique(slugify(text, '-'), slugs)
@@ -475,6 +483,8 @@ def test_the_config_validates_what_it_claims():
 #: refuse a second copy of the documentation, and it still does.
 README_BUDGET = 148
 #: `## Title`, with the three leading spaces markdown still renders as a heading
+#: an id the heading names for itself, which `attr_list` honours over any slug
+ATTR_ID = re.compile(r'\{:?\s*#([A-Za-z0-9_-]+)[^}]*\}\s*$')
 ATX = re.compile(r'^ {0,3}#{1,6}\s+(.+?)\s*$', re.MULTILINE)
 #: `Title` underlined with `===` or `---`, which renders as one too
 SETEXT = re.compile(r'^ {0,3}(\S.*?)\s*\n {0,3}(?:=+|-+)\s*$', re.MULTILINE)
@@ -590,6 +600,27 @@ def test_a_parenthetical_is_only_stripped_when_it_is_a_link_target(heading, slug
     Deleting every parenthetical did that and also ate literal ones, so a heading holding
     `(optional)` computed a slug the build does not publish -- and
     `test_every_anchor_resolves` would have called a live link dangling.
+    """
+    page = tmp_path / 'Page.md'
+    page.write_text(f'{heading}\n', encoding='utf-8')
+
+    assert headings_of(page) == {slug}
+
+
+@pytest.mark.parametrize(
+    ('heading', 'slug'),
+    [
+        ('## Download {#download}', 'download'),
+        ('## Download {: #dl-page }', 'dl-page'),
+        ('## Plain heading', 'plain-heading'),
+    ],
+)
+def test_a_heading_that_names_its_own_id_keeps_it(heading, slug, tmp_path):
+    """`attr_list` is enabled, so a heading may declare an id and no slug is computed.
+
+    Slugified along with the rest of the line, `## Download {#download}` came out as
+    `download-download` -- a slug the page does not have, so a live link to it reads as
+    dangling. Every value here is measured against `markdown` with `toc` and `attr_list`.
     """
     page = tmp_path / 'Page.md'
     page.write_text(f'{heading}\n', encoding='utf-8')
