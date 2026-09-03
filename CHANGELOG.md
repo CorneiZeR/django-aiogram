@@ -18,8 +18,9 @@
 
   `sent` wins over anything written after it, because an id is not one per message: a
   handler's replies inherit the id of the update that caused them, so a later `retried` may
-  belong to a different message under the same id. `Outcome.sent` is all of them, newest
-  first, and the convenience readers take the newest.
+  belong to a different message under the same id. `Outcome.sent` is all of them and the
+  convenience readers take the first — **rows** newest first, and the messages within one row
+  in the order Telegram returned them, which is the album case below.
 
   One call can be several messages too. `send_media_group` answers with a list, so the
   `message_id` column is empty for it and every id would have been lost — they are kept in

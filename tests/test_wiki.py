@@ -77,6 +77,21 @@ def headings_of(path: Path) -> set[str]:
     return slugs
 
 
+def built_page(path: Path) -> Path | None:
+    """Where the build put this page, or ``None`` when there is no build to look at.
+
+    `index.md` is the site root rather than a directory of its own, and asking for
+    `site/index/index.html` skipped the front page for as long as the answer was "no file, no
+    check" -- so a missing page is an assertion and only an unbuilt `site/` is a skip. The
+    `docs` job's own shell step spells the same exception, which is where this one came from.
+    """
+    if not (ROOT / 'site').exists():
+        return None
+    built = ROOT / 'site' / ('index.html' if path.stem == 'index' else f'{path.stem}/index.html')
+    assert built.exists(), f'site/ is built and has no page for {path.name}: expected {built}'
+    return built
+
+
 def published_ids(html: str) -> set[str]:
     """The heading ids a built page carries, exactly as the build wrote them.
 
@@ -113,13 +128,9 @@ def test_the_slugs_match_the_ones_the_build_publishes(path):
     otherwise make `test_every_anchor_resolves` report a live link as dangling. That is what
     happened to a heading holding `bot.outcome()`.
     """
-    if not (ROOT / 'site').exists():
+    built = built_page(path)
+    if built is None:
         pytest.skip('site/ is not built in this run')
-    # `index.md` is the site root rather than a directory of its own, and asking for
-    # `site/index/index.html` skipped the front page for as long as the skip was per file --
-    # so a missing page is a failure now and only an unbuilt `site/` is a skip
-    built = ROOT / 'site' / ('index.html' if path.stem == 'index' else f'{path.stem}/index.html')
-    assert built.exists(), f'site/ is built and has no page for {path.name}: expected {built}'
     published = published_ids(built.read_text(encoding='utf-8'))
     computed = headings_of(path)
 
@@ -132,6 +143,29 @@ def test_the_slugs_match_the_ones_the_build_publishes(path):
         f'computed but not published: {sorted(computed - published)}; '
         f'published but not computed: {sorted(published - computed)}'
     )
+
+
+@pytest.mark.parametrize('path', PAGES, ids=lambda path: path.name)
+def test_no_table_row_rendered_as_a_paragraph(path):
+    """A row separated from its table by a blank line renders as literal pipes.
+
+    Markdown ends a table at the first blank line, so rows appended after one become a
+    paragraph of `| text |` -- visible on the page, and invisible to everything else: the
+    build is not wrong about anything, so `--strict` says nothing, and the source still looks
+    like a table. Two rows shipped that way on `API.md` before this existed.
+
+    Skipped without a built `site/`, like the parity case above, and run by the `docs` job.
+    """
+    built = built_page(path)
+    if built is None:
+        pytest.skip('site/ is not built in this run')
+    stray = [
+        re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', '', para).strip())[:80]
+        for para in re.findall(r'<p>(.*?)</p>', built.read_text(encoding='utf-8'), re.DOTALL)
+        if re.sub(r'<[^>]+>', '', para).strip().startswith('|')
+    ]
+
+    assert not stray, f'{path.name} renders a table row as text: {stray}'
 
 
 @pytest.mark.parametrize('path', PAGES, ids=lambda path: path.name)

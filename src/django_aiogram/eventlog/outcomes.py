@@ -80,10 +80,15 @@ class SentMessage:
 class Outcome:
     """What the feed knows about one correlation id.
 
-    ``sent`` is every message recorded under it, newest first, because an id is not one per
-    message: a handler's replies inherit the id of the update that caused them, so one id
-    can name several. :attr:`message_id` and :attr:`chat_id` read the newest of them, which
-    is the answer for the ordinary case of one ``send()`` and its one message.
+    ``sent`` is every message recorded under it, because an id is not one per message: a
+    handler's replies inherit the id of the update that caused them, so one id can name
+    several. :attr:`message_id` and :attr:`chat_id` read the *first* entry, which is the
+    answer for the ordinary case of one ``send()`` and its one message.
+
+    Two orderings, and they are not the same one. The **rows** come newest first, so the
+    latest send under this id leads. The messages *within* one row keep the order Telegram
+    returned them, because a ``send_media_group`` row carries a whole album and none of its
+    messages is newer than another.
     """
 
     state: OutcomeState

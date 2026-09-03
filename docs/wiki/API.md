@@ -49,9 +49,8 @@ it, and `django_aiogram.redis.redis_conn` is the same object in the module that 
 | `bot.enqueue(...)` | always queue |
 | `bot.send_raw(...)` | always call Telegram from this process |
 | `bot.send_many(chat_ids, function='send_message', *, chunk_size=100, **kwargs)` | queue rather than call, one message per chat, a chunk per round trip |
-
 | `bot.outcome(correlation_id)` | what became of the message that id names, read from the event log |
-| `bot.aoutcome(correlation_id)` | as `outcome`, without blocking the loop |
+| `await bot.aoutcome(correlation_id)` | as `outcome`, without blocking the loop |
 
 `function` must name a Telegram API method aiogram exposes; anything else raises
 `ValueError` before it reaches the queue. See **[Sending messages](Sending-messages.md)**.
