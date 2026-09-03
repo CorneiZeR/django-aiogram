@@ -123,10 +123,22 @@ class TelegramScheduledSend(models.Model):
     chat_id = models.BigIntegerField(null=True, blank=True)
     #: the envelope as `serialise` produced it, ready for `Broker.publish`
     payload = models.BinaryField()
-    #: set by the mover that owns this row, and never cleared: the row is deleted once
-    #: published. A second mover skips a claimed row rather than waiting for it
+    #: set by the mover that owns this row. A second mover skips a claimed row rather than
+    #: waiting for it -- until the claim lapses, which is what `claimed_until` is for
     claimed_at = models.DateTimeField(null=True, blank=True)
     claimed_by = models.CharField(max_length=128, blank=True)
+    #: when this claim stops being believed, or ``None`` for a claim that never lapses.
+    #: **On the row rather than in a setting**, and that is the whole point: the mover's
+    #: lease is a command flag, so a producer asking "may this be cancelled?" would have had
+    #: to guess at it. The row says when it comes free, and `claim` and `cancel` read the
+    #: same fact. ``None`` beside a set `claimed_at` means `--lease 0`: held until an
+    #: operator says otherwise
+    claimed_until = models.DateTimeField(null=True, blank=True)
+    #: how many times a mover has tried to publish this and failed. Bounded by
+    #: ``--max-attempts``, because a lease turns "the claim stays and nothing retries it"
+    #: into "every lease, for ever" -- a payload the broker refuses permanently would
+    #: otherwise write one more drop row per lease until somebody noticed
+    attempts = models.PositiveSmallIntegerField(default=0)
 
     class Meta:
         """Portable everywhere, and one index: the query the mover runs."""

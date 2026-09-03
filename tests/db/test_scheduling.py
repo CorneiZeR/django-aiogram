@@ -24,7 +24,7 @@ from django_aiogram.config.enums import EventKind
 from django_aiogram.eventlog.recorder import recorder
 from django_aiogram.models import TelegramEvent, TelegramScheduledSend
 from django_aiogram.producer import scheduling
-from django_aiogram.producer.scheduling import DEFAULT_LEASE, claim
+from django_aiogram.producer.scheduling import claim
 from django_aiogram.wire.envelope import unpack
 from django_aiogram.wire.serializers import loads
 
@@ -323,8 +323,8 @@ def test_a_broker_that_cannot_be_resolved_claims_nothing(published):
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT=SETTINGS)
-def test_a_publish_that_fails_leaves_the_row_claimed_and_says_so(published):
-    """Not retried by the next pass: the claim stays, and the drop row is the decision."""
+def test_a_publish_that_fails_is_counted_and_left_for_its_lease(published):
+    """The claim stays so the lease paces the retry, and the attempt is counted."""
     TelegramBot().send(chat_id=7, text='doomed', eta=a_while_ago())
     RecordingBroker.refuses = True
 
@@ -332,7 +332,45 @@ def test_a_publish_that_fails_leaves_the_row_claimed_and_says_so(published):
 
     row = TelegramScheduledSend.objects.get()
     assert row.claimed_at is not None
-    assert TelegramEvent.objects.filter(kind=EventKind.OUTBOUND_DROPPED.value).exists()
+    assert row.attempts == 1, 'the failure was not counted'
+    assert TelegramEvent.objects.filter(kind=EventKind.OUTBOUND_DROPPED.value).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_row_the_broker_keeps_refusing_is_given_up_on(published):
+    """The lease turned "not retried" into "every lease, for ever", which needs a bound.
+
+    Without one, a payload the broker refuses permanently writes another drop row every
+    lease: an event log growing without end over one message, and an operator reading the
+    same failure a hundred times.
+    """
+    TelegramBot().send(chat_id=7, text='doomed', eta=a_while_ago())
+    RecordingBroker.refuses = True
+
+    for _ in range(3):
+        call_command('tgbot_dispatch_scheduled', '--max-attempts', '3')
+        TelegramScheduledSend.objects.update(claimed_until=timezone.now() - datetime.timedelta(seconds=1))
+
+    assert not TelegramScheduledSend.objects.exists(), 'the row is still being retried'
+    given_up = TelegramEvent.objects.get(error_code='TooManyAttempts')
+    assert given_up.attempt == 3
+    assert given_up.detail['stage'] == 'scheduling'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_max_attempts_of_zero_retries_without_end(published):
+    """The escape hatch, for a queue an operator would rather never give up on."""
+    TelegramBot().send(chat_id=7, text='doomed', eta=a_while_ago())
+    RecordingBroker.refuses = True
+
+    for _ in range(4):
+        call_command('tgbot_dispatch_scheduled', '--max-attempts', '0')
+        TelegramScheduledSend.objects.update(claimed_until=timezone.now() - datetime.timedelta(seconds=1))
+
+    assert TelegramScheduledSend.objects.get().attempts == 4
+    assert not TelegramEvent.objects.filter(error_code='TooManyAttempts').exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -398,27 +436,53 @@ def test_a_stranded_claim_is_taken_back_after_its_lease(published):
     """
     TelegramBot().send(chat_id=7, text='stranded', eta=a_while_ago(3600))
     dead = claim(10)
-    assert len(dead) == 1
 
+    assert len(dead) == 1
+    assert TelegramScheduledSend.objects.get().claimed_until is not None, 'the claim carries no expiry'
     assert claim(10) == [], 'a fresh claim was taken back before its lease expired'
 
-    TelegramScheduledSend.objects.update(claimed_at=timezone.now() - datetime.timedelta(seconds=DEFAULT_LEASE + 60))
-    assert len(claim(10)) == 1, 'a claim older than its lease was never taken back'
+    # the row carries its own expiry, so this is the mechanism rather than a stand-in for it
+    TelegramScheduledSend.objects.update(claimed_until=timezone.now() - datetime.timedelta(seconds=1))
+
+    assert len(claim(10)) == 1, 'a claim past the expiry on its own row was never taken back'
 
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT=SETTINGS)
-def test_a_lease_of_zero_trusts_a_claim_for_ever(published):
+def test_a_lease_of_zero_claims_with_no_expiry_at_all(published):
     """The escape hatch for an operator who would rather nothing be re-sent."""
     TelegramBot().send(chat_id=7, text='held', eta=a_while_ago(3600))
-    claim(10)
+
+    assert len(claim(10, lease=0)) == 1
+    assert TelegramScheduledSend.objects.get().claimed_until is None, 'lease 0 still wrote an expiry'
+
     TelegramScheduledSend.objects.update(claimed_at=timezone.now() - datetime.timedelta(days=7))
 
-    assert claim(10, lease=0) == []
+    assert claim(10) == [], 'a claim taken with no expiry was taken back anyway'
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_SYNC': False})
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_lapsed_claim_can_be_called_off_again(published):
+    """`claim` and `cancel` have to read the same fact, or they disagree about one row.
+
+    They did: `claim` honoured the lease and `cancel` looked only at `claimed_at`, so a row
+    that had come free was publishable and not cancellable -- a caller told "nothing was
+    waiting" about a message that was about to go out.
+    """
+    identifier = TelegramBot().send(chat_id=7, text='lapsing', eta=a_while_ago())
+    claim(10)
+
+    assert TelegramBot().cancel_scheduled(identifier) == 0, 'a live claim was cancelled'
+
+    TelegramScheduledSend.objects.update(claimed_until=timezone.now() - datetime.timedelta(seconds=1))
+
+    assert TelegramBot().cancel_scheduled(identifier) == 1, 'a row nobody holds was not cancellable'
+    assert not TelegramScheduledSend.objects.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
 def test_no_event_outlives_the_block_that_rolled_the_schedule_back(published):
     """The rows are the caller's write; the recorder's writer commits on its own.
 

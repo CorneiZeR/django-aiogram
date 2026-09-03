@@ -314,12 +314,19 @@ Then, in the order these bite:
 - **The mover refuses to start** where `ENABLED` is false, because a scheduled send would
   have nowhere to go. It says so and claims nothing.
 - **`--grace` dropped it.** A row more than that many seconds overdue is recorded as a drop
-  with `TooLate` rather than sent late; the feed says which and by how much.
+  with `TooLate` rather than sent late; the feed says which and by how much. `--grace 0` is
+  the default and refuses nothing — however overdue a row is, it goes out.
+- **The broker kept refusing it and the mover gave up.** After `--max-attempts` failed
+  publishes, five by default, the row is deleted with a `TooManyAttempts` drop naming the
+  count. `--max-attempts 0` retries without end instead.
 - **A row is claimed and still there.** Wait one `--lease` (300 seconds by default) and
   another mover takes it back: a claim is a lease, not a deed, because a mover that died
   holding a row would otherwise strand the message for ever. What that costs is a second
   copy where the mover died *after* publishing, which is the trade this package makes
-  everywhere — at-least-once, never silent loss.
+  everywhere — at-least-once, never silent loss, **with a finite lease**. Under `--lease 0`
+  a claim never lapses, so a mover that died holding one leaves that row where it is until
+  somebody clears `claimed_at`; that is the exception, and it is the reason the default is
+  not zero.
 
   Whether to expect a drop row depends on which happened. A publish that *failed* records
   one and says why; a mover that was **killed** between publishing and deleting records

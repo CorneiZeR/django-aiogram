@@ -45,9 +45,19 @@
   this package makes everywhere. `--lease 0` trusts a claim for ever, and then a crash needs
   an operator.
 
+  A claim's expiry lives **on the row**, not in a setting, and that is what lets `cancel` and
+  the mover agree about it: the lease is a command flag, so a producer asking whether a row
+  may still be called off would have had to guess at the mover's. A row nobody effectively
+  holds is publishable again *and* cancellable again, by the same predicate.
+
   The row is deleted *after* the publish, which is what makes this at-least-once like
-  everything else here. `--grace` refuses a row too far overdue and records the drop, because
-  a mover that was down for a day should not deliver a day of stale messages at once.
+  everything else here. A publish that fails counts the attempt and leaves the row for its
+  claim to lapse, so the lease paces the retry — bounded by `--max-attempts`, five by
+  default, because a lease turns "the claim stays and nothing retries it" into "every lease,
+  for ever": a payload the broker refuses permanently would otherwise write one more drop row
+  per pass until somebody noticed. `--grace` refuses a row too far overdue and records the
+  drop, because a mover that was down for a day should not deliver a day of stale messages at
+  once; `--grace 0`, the default, refuses nothing.
 
 - **A second table, and the router narrowed to match.** `django_aiogram_scheduled` is where
   those rows wait, and it is **not** routed to `EVENT_LOG_DATABASE`: the feed is a record and

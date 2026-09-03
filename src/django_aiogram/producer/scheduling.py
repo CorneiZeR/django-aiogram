@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger('django_aiogram')
 
-__all__ = ('DEFAULT_LEASE', 'aschedule', 'cancel', 'claim', 'due_moment', 'schedule')
+__all__ = ('DEFAULT_LEASE', 'aschedule', 'cancel', 'claim', 'due_moment', 'schedule', 'unheld')
 
 #: how long a claim is believed before another mover may take the row back. A mover that dies
 #: between claiming and deleting would otherwise strand its rows for ever -- the recovery on
@@ -187,34 +187,52 @@ def claim(
 
     moment = timezone.now() if now is None else now
     worker = worker_identity()
-    # never claimed, or claimed so long ago that the mover holding it is not coming back
-    unheld = Q(claimed_at__isnull=True)
-    if lease > 0:
-        unheld |= Q(claimed_at__lt=moment - datetime.timedelta(seconds=lease))
-    available = TelegramScheduledSend.objects.filter(unheld, due_at__lte=moment).order_by('due_at', 'id')
+    free = unheld(moment)
+    lapses = None if lease <= 0 else moment + datetime.timedelta(seconds=lease)
+    available = TelegramScheduledSend.objects.filter(free, due_at__lte=moment).order_by('due_at', 'id')
     won = []
     # the ids first, so the loop below is not walking a queryset it is also mutating
     for row in list(available[:limit]):
         with transaction.atomic():
             # the *same* condition, or a lease taken back would always lose the race with
-            # itself: filtering on `claimed_at__isnull` alone can never match a stale claim
-            taken = TelegramScheduledSend.objects.filter(unheld, pk=row.pk).update(claimed_at=moment, claimed_by=worker)
+            # itself: filtering on `claimed_at__isnull` alone can never match a lapsed claim
+            taken = TelegramScheduledSend.objects.filter(free, pk=row.pk).update(
+                claimed_at=moment, claimed_by=worker, claimed_until=lapses
+            )
         if taken:
             won.append(row)
     return won
 
 
+def unheld(moment: datetime.datetime | None = None) -> Q:
+    """Rows nobody effectively holds: never claimed, or holding a claim that has lapsed.
+
+    One predicate for both readers, and that is the point. `claim` and `cancel` were asking
+    different questions of the same row -- one honoured a lease and the other only looked at
+    `claimed_at` -- so a row that had come free again was publishable and *not* cancellable,
+    which is a caller told "nothing was waiting" about a message that is about to go out.
+
+    Read off the row rather than computed from a setting: the lease is a command flag, so a
+    producer would have had to guess at the mover's. ``claimed_until`` of ``None`` beside a
+    set ``claimed_at`` is a claim that never lapses -- ``--lease 0``.
+    """
+    return Q(claimed_at__isnull=True) | Q(claimed_until__lte=timezone.now() if moment is None else moment)
+
+
 def cancel(correlation_id: uuid.UUID) -> int:
     """Delete the rows this id still has waiting, and say how many there were.
 
-    Unclaimed rows only. A claimed one is already on its way to the broker -- or has reached
-    it and is waiting to be deleted -- and deleting it here would neither stop the message
-    nor be visible to the mover that owns it. So the number this returns is what was called
-    off, not what was scheduled, and the difference is what a caller has to read: zero means
-    nothing was waiting, which is the same answer for an id that was never scheduled and for
-    one whose message is already going out.
+    Rows nobody holds -- see :func:`unheld`. A live claim is on its way to the broker, or has
+    reached it and is waiting to be deleted, and deleting the row here would neither stop the
+    message nor be visible to the mover that owns it. A **lapsed** claim is a different thing:
+    that row is publishable again by any mover, so it is cancellable again too.
+
+    The number this returns is what was called off, not what was scheduled, and the
+    difference is what a caller has to read: zero means nothing was waiting, which is the
+    same answer for an id that was never scheduled and for one whose message is already
+    going out.
     """
     from django_aiogram.models import TelegramScheduledSend  # noqa: PLC0415 - as above
 
-    deleted, _ = TelegramScheduledSend.objects.filter(correlation_id=correlation_id, claimed_at__isnull=True).delete()
+    deleted, _ = TelegramScheduledSend.objects.filter(unheld(), correlation_id=correlation_id).delete()
     return deleted

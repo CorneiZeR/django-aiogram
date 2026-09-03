@@ -26,6 +26,7 @@ import logging
 import signal
 import time
 from argparse import ArgumentParser
+from dataclasses import dataclass
 from types import FrameType
 from typing import TYPE_CHECKING, Any
 
@@ -47,6 +48,21 @@ if TYPE_CHECKING:
     from django_aiogram.models import TelegramScheduledSend
 
 logger = logging.getLogger('django_aiogram')
+
+
+@dataclass(frozen=True)
+class Bounds:
+    """The four numbers one pass runs by, so the signatures below stop growing.
+
+    Every one of them is a bound rather than a target, and each answers a different way for
+    a pass to go wrong: too much work at once, a claim believed too long, a row too old to
+    be worth sending, and a failure repeated too often.
+    """
+
+    limit: int
+    lease: int
+    grace: int
+    attempts: int
 
 
 class Command(BaseCommand):
@@ -85,6 +101,15 @@ class Command(BaseCommand):
             'an operator',
         )
         parser.add_argument(
+            '--max-attempts',
+            type=int,
+            default=5,
+            help='give up on a row after this many failed publishes, recording why and '
+            'deleting it (default 5). A lease means a failure is retried every lease, so '
+            'without a bound a payload the broker refuses for ever writes one more drop row '
+            'per pass. 0 retries without end',
+        )
+        parser.add_argument(
             '--grace',
             type=int,
             default=0,
@@ -113,18 +138,15 @@ class Command(BaseCommand):
             self._report_due(options['limit'])
             return
 
-        limit = max(1, int(options['limit']))
-        grace = max(0, int(options['grace']))
-        lease = max(0, int(options['lease']))
+        bounds = Bounds(
+            limit=max(1, int(options['limit'])),
+            lease=max(0, int(options['lease'])),
+            grace=max(0, int(options['grace'])),
+            attempts=max(0, int(options['max_attempts'])),
+        )
         previous = self._install_sigterm_handler()
         try:
-            self._run(
-                limit=limit,
-                grace=grace,
-                lease=lease,
-                loop=options['loop'],
-                interval=max(0.0, options['interval']),
-            )
+            self._run(bounds, loop=options['loop'], interval=max(0.0, options['interval']))
         finally:
             recorder.stop()
             if previous is not None:
@@ -133,47 +155,53 @@ class Command(BaseCommand):
                 with contextlib.suppress(ValueError):
                     signal.signal(signal.SIGTERM, previous)
 
-    def _run(self, *, limit: int, grace: int, lease: int, loop: bool, interval: float) -> None:
+    def _run(self, bounds: Bounds, *, loop: bool, interval: float) -> None:
         """Pass after pass, or one, unwinding on the signal either way."""
         with contextlib.suppress(KeyboardInterrupt):
             while True:
-                published = self._one_pass(limit=limit, grace=grace, lease=lease)
+                published = self._one_pass(bounds)
                 if not loop:
                     return
                 # a pass that filled its bound has more waiting, so it goes straight round
                 # again rather than sleeping on a backlog it already knows about
-                if published < limit:
+                if published < bounds.limit:
                     time.sleep(interval)
 
-    def _one_pass(self, *, limit: int, grace: int, lease: int) -> int:
+    def _one_pass(self, bounds: Bounds) -> int:
         """Claim what is due, publish it, and delete what went out. Returns the count."""
         # before the claim, and this is the same rule `enqueue` follows: a `BROKER` that
         # cannot be resolved is a misconfiguration, not a message that failed to publish.
         # Claimed first, its rows would keep the claim with no drop row and no later pass
         # willing to look at them -- invisible until an operator cleared them by hand
         broker = get_broker()
-        rows = claim(limit, lease=lease)
+        rows = claim(bounds.limit, lease=bounds.lease)
         if not rows:
             return 0
         published = 0
         for row in rows:
-            if grace and (timezone.now() - row.due_at).total_seconds() > grace:
-                self._drop_late(row, grace)
+            if bounds.grace and (timezone.now() - row.due_at).total_seconds() > bounds.grace:
+                self._drop_late(row, bounds.grace)
                 continue
-            if self._publish(broker, row):
+            if self._publish(broker, row, bounds.attempts):
                 published += 1
         logger.info('published scheduled sends', extra={'tg_published': published, 'tg_claimed': len(rows)})
         self.stdout.write(f'Published {published} of {len(rows)} claimed.')
         return published
 
-    def _publish(self, broker: 'Broker', row: 'TelegramScheduledSend') -> bool:
-        """Put one row on the queue and delete it, or leave it claimed and say why.
+    def _publish(self, broker: 'Broker', row: 'TelegramScheduledSend', attempts: int) -> bool:
+        """Put one row on the queue and delete it, or count the failure and say why.
 
         The row is deleted **after** the publish, which is what makes this at-least-once
         like everything else here: a mover killed in between leaves a claimed row whose
-        message is already on the queue, and an operator clearing that claim gets the
-        message twice. The other order would lose it silently, and this package has
-        nowhere it prefers loss to duplication.
+        message is already on the queue, and the next mover to take the lapsed claim sends
+        it twice. The other order would lose it silently, and this package has nowhere it
+        prefers loss to duplication.
+
+        A publish that *fails* leaves the row for its claim to lapse, so the lease paces the
+        retries rather than the interval -- and ``attempts`` bounds them. Without the bound a
+        payload the broker refuses permanently would be retried every lease for ever, writing
+        one more drop row each time: an event log growing without end over one message, and
+        an operator reading the same failure a hundred times.
         """
         # every field `publishing` reads, and none of them defaulted. `details` is one
         # entry per message or the zip inside it refuses the pair, and `queued_at` is the
@@ -189,12 +217,40 @@ class Command(BaseCommand):
             with publishing(row.function, write):
                 broker.publish(write.payloads)
         except Exception:
-            # `publishing` has recorded the drop; the claim stays, so this row is not
-            # retried by the next pass. An operator reading the drop decides
+            # `publishing` has already recorded the drop for this attempt
             logger.exception('a scheduled send could not be published', extra={'tg_function': row.function})
+            self._count_failure(row, attempts)
             return False
         row.delete()
         return True
+
+    @staticmethod
+    def _count_failure(row: 'TelegramScheduledSend', attempts: int) -> None:
+        """Record one failed publish against the row, and give up where the bound says to.
+
+        The row is left claimed either way: its lease is what paces the next attempt, so a
+        broker that is down for a minute costs a minute rather than a pass per interval.
+        """
+        from django_aiogram.models import TelegramScheduledSend  # noqa: PLC0415 - django.db, not at import
+
+        failed = row.attempts + 1
+        TelegramScheduledSend.objects.filter(pk=row.pk).update(attempts=failed)
+        if not attempts or failed < attempts:
+            return
+        recorder.record(
+            Event(
+                kind=EventKind.OUTBOUND_DROPPED.value,
+                correlation_id=row.correlation_id,
+                function=row.function,
+                chat_id=row.chat_id,
+                attempt=failed,
+                error_code='TooManyAttempts',
+                error=f'given up on after {failed} failed publishes',
+                detail={'stage': 'scheduling', 'attempts': failed},
+            )
+        )
+        logger.error('giving up on a scheduled send', extra={'tg_attempts': failed, 'tg_function': row.function})
+        row.delete()
 
     @staticmethod
     def _drop_late(row: 'TelegramScheduledSend', grace: int) -> None:
