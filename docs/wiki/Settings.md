@@ -96,14 +96,18 @@ What it does not change, and what to expect:
   `RAISE_EXCEPTION` decides whether the exception also leaves the `atomic()` block — where
   it would take any commit hook queued behind this one with it.
 - **`AUTOCOMMIT: False` on the alias is not supported by this**, with or without an
-  `atomic()` block inside it. The same exception reaches a scheduled send's
-  `outbound.scheduled` event, which is recorded immediately there rather than after a commit
-  that never comes — so a caller that rolls back leaves the feed claiming a send it took
-  away. Without one, Django's `on_commit` refuses a manually managed
+  `atomic()` block inside it. Without one, Django's `on_commit` refuses a manually managed
   transaction outright; with one, it accepts the hook and then runs it on
   `set_autocommit(True)` rather than when the block ends — a moment no caller chose, and one
   a process that keeps autocommit off never reaches. Both publish immediately instead, and a
   line in the log says so once per process.
+- **A scheduled send's `outbound.scheduled` event waits on a weaker condition than this**, and
+  deliberately: it is durable, the schedule row it describes is the caller's own write, and
+  nothing would ever take the event back if the block rolled that row away. Arriving on
+  `set_autocommit(True)` is a real cost for a message and none at all for a record, so with an
+  `atomic()` block the event takes the deferral this setting refuses. The one case left is
+  autocommit off with no block at all, where there is no hook to take: the event is recorded
+  immediately, and a rollback then leaves the feed claiming a send it took away.
 - **Inside the bot container it does nothing.** A send there reaches Telegram directly and
   there is no queue write to hold back.
 

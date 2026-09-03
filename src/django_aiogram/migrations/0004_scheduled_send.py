@@ -42,7 +42,7 @@ class Migration(migrations.Migration):
                 ('claimed_at', models.DateTimeField(blank=True, null=True)),
                 ('claimed_by', models.CharField(blank=True, max_length=128)),
                 ('claimed_until', models.DateTimeField(blank=True, null=True)),
-                ('attempts', models.PositiveSmallIntegerField(default=0)),
+                ('attempts', models.PositiveBigIntegerField(default=0)),
             ],
             options={
                 'db_table': 'django_aiogram_scheduled',

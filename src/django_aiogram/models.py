@@ -137,8 +137,14 @@ class TelegramScheduledSend(models.Model):
     #: how many times a mover has tried to publish this and failed. Bounded by
     #: ``--max-attempts``, because a lease turns "the claim stays and nothing retries it"
     #: into "every lease, for ever" -- a payload the broker refuses permanently would
-    #: otherwise write one more drop row per lease until somebody noticed
-    attempts = models.PositiveSmallIntegerField(default=0)
+    #: otherwise write one more drop row per lease until somebody noticed.
+    #:
+    #: A ``BigInteger`` because ``--max-attempts 0`` retries without end, so this counter has
+    #: no bound of its own to stop at. A ``SmallInteger`` stops at 32767 -- four months of a
+    #: 300-second lease -- and then a database that enforces the column range refuses the
+    #: increment and takes the whole pass down with it. There is no lease short enough or
+    #: deployment long enough to reach the end of this one
+    attempts = models.PositiveBigIntegerField(default=0)
 
     class Meta:
         """Portable everywhere, and one index: the query the mover runs."""

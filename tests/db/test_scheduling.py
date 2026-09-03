@@ -606,6 +606,89 @@ def test_the_event_does_land_once_the_block_commits(published):
 
 
 @pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_SYNC': False})
+def test_no_event_outlives_a_manually_managed_rollback(published):
+    """Autocommit off is not an excuse to record a send that never existed.
+
+    An `atomic()` entered while autocommit is off does not commit on exit, and `TRANSACTIONAL`
+    refuses to defer a *publish* there for good reason -- the message would leave when the
+    caller happened to restore autocommit. An *event* has no such objection to arriving late,
+    and every objection to arriving at all when the row was rolled back. So `after_commit`
+    tests a weaker condition than `defer` does, and this is the case that separates them:
+    measured, the hook queued here runs after `commit()` and not after `rollback()`.
+
+    Falsifiable: with `after_commit` reading `defer`'s predicate, the event is recorded inline
+    and this row survives the rollback.
+    """
+    transaction.set_autocommit(False)
+    try:
+        with pytest.raises(RuntimeError):
+            schedule_and_then_fail()
+        transaction.rollback()
+    finally:
+        transaction.set_autocommit(True)
+    recorder.flush(timeout=5)
+
+    assert not TelegramScheduledSend.objects.exists(), 'the rollback left the row behind'
+    assert not TelegramEvent.objects.filter(kind=EventKind.OUTBOUND_SCHEDULED.value).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_SYNC': False})
+def test_the_event_lands_when_a_manually_managed_block_commits(published):
+    """The other half again: the weaker condition must not swallow the event either."""
+    transaction.set_autocommit(False)
+    try:
+        with transaction.atomic():
+            TelegramBot().send(chat_id=7, text='later', eta=in_a_while())
+        transaction.commit()
+    finally:
+        transaction.set_autocommit(True)
+    recorder.flush(timeout=5)
+
+    assert TelegramEvent.objects.filter(kind=EventKind.OUTBOUND_SCHEDULED.value).count() == 1
+
+
+def test_an_unlimited_retry_count_has_no_column_to_overflow():
+    """`--max-attempts 0` retries for ever, so `attempts` must have nowhere to stop.
+
+    A `PositiveSmallIntegerField` ends at 32767 -- four months of the default 300-second lease
+    -- and PostgreSQL then refuses the increment, which fails the pass rather than the row.
+    Asserted against Django's own portable ranges and not against this backend: SQLite
+    enforces no range at all and reports none, so a case that drove the real column here would
+    have been green with the narrow field in place.
+    """
+    from django.db.backends.base.operations import BaseDatabaseOperations
+
+    field = TelegramScheduledSend._meta.get_field('attempts')
+    floor, ceiling = BaseDatabaseOperations.integer_field_ranges[field.get_internal_type()]
+
+    assert floor == 0, 'a count of failures went signed'
+    assert ceiling == 2**63 - 1, 'the retry counter has a ceiling a failing row can reach'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_bound_past_the_feed_s_column_still_records_the_give_up(published):
+    """`--max-attempts` takes any number, and the event it writes has the narrow column.
+
+    Widening that one is a rewrite of the largest table the package has, for a value nobody
+    reads past a handful -- so `eventlog.writer` saturates it, the way it already truncates
+    text to its width. The exact count stays on the schedule row, which is where the mover
+    reads it from anyway.
+    """
+    identifier = TelegramBot().send(chat_id=7, text='hopeless', eta=a_while_ago())
+    TelegramScheduledSend.objects.update(attempts=40000)
+    RecordingBroker.refuses = True
+    call_command('tgbot_dispatch_scheduled', '--max-attempts', '40001')
+
+    # by its code and not its kind: the failed publish itself records a drop as well
+    dropped = TelegramEvent.objects.get(error_code='TooManyAttempts', correlation_id=identifier)
+    assert dropped.attempt == 32767, 'the feed stored a count its column cannot hold'
+    assert dropped.detail['attempts'] == 40001, 'the exact count was lost as well as saturated'
+
+
+@pytest.mark.django_db(transaction=True)
 @override_settings(
     TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_DATABASE': 'default'},
     DATABASE_ROUTERS=['django_aiogram.eventlog.dbrouter.TelegramEventLogRouter'],

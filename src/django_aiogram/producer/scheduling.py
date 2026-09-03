@@ -139,14 +139,14 @@ def _record(function: str, write: 'Queueing', due_at: datetime.datetime) -> None
     recorder's writer commits on its own connection and on its own schedule, so nothing else
     would ever take that event back -- a durable row about a send that never existed.
 
-    **Manual transaction management is the one place this cannot hold**, and it is the same
-    exception ``TRANSACTIONAL`` already documents. With autocommit off there is no commit hook
-    to wait for, so the event is recorded immediately; a caller that then rolls back leaves
-    the feed claiming a send it took away. Nothing here can do better -- deferring is what the
-    configuration refuses, and skipping the event would lose a real one for every send that
-    *does* commit. The mover says so once per process through
-    :func:`~django_aiogram.producer.committing.after_commit`, and ``Settings.md`` carries the
-    exception beside the rest of that setting's.
+    **Autocommit off with no block anywhere is the one place this cannot hold**, and it is
+    narrower than the exception ``TRANSACTIONAL`` carries. There Django's ``on_commit`` raises
+    rather than deferring, so the event is recorded immediately and a caller that then rolls
+    back leaves the feed claiming a send it took away; nothing here can do better, since
+    skipping it would lose a real event for every send that *does* commit, and a line in the
+    log says so once per process. With an ``atomic()`` block inside that management the hook is
+    taken -- see :func:`~django_aiogram.producer.committing.after_commit`, which waits on a
+    weaker condition than a publish may. ``Settings.md`` carries both.
     """
     if not recorder.active:
         return

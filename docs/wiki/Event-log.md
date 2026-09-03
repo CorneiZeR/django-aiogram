@@ -34,7 +34,7 @@ not the flag is on; nothing reads or writes it until you turn it on.
 | `function` | the aiogram method, when there is one |
 | `chat_id`, `user_id`, `message_id`, `update_id` | the identifiers Telegram issued |
 | `worker` | which container recorded it |
-| `attempt`, `duration_ms` | how many tries, and how long |
+| `attempt`, `duration_ms` | how many tries, and how long. `attempt` stops counting at 32767, which is its column: a value that does not fit fails the whole batch it travelled in rather than its own row, so the writer saturates it. Only `tgbot_dispatch_scheduled --max-attempts` above that reaches it, and its drop keeps the exact number in `detail.attempts` |
 | `error_code`, `error` | why it failed |
 | `detail` | everything kind-specific, as JSON |
 

@@ -25,7 +25,13 @@
   whether delivery is keeping up.
 
   A scheduled send is a database write on the caller's own connection, so it rolls back with
-  the transaction that made it and needs nothing from `TRANSACTIONAL`. Inside the bot
+  the transaction that made it and needs nothing from `TRANSACTIONAL`. Its `outbound.scheduled`
+  event waits for that commit, and on a *weaker* condition than a publish may: the event log
+  writes on its own connection and would keep a durable row about a send the block took away,
+  while arriving late costs a record nothing. So under manual transaction management an
+  `atomic()` block defers the event where it cannot defer a message — leaving only autocommit
+  off with no block at all, where Django has no hook to offer and the event is recorded at
+  once. Inside the bot
   container it still schedules: that is the one case where `send` does not call Telegram
   directly, because sending now cannot be what an `eta` meant. An `eta` already past comes due
   at once rather than being refused, and a naive datetime is refused rather than read in the
@@ -62,7 +68,11 @@
   claim to lapse, so the lease paces the retry — bounded by `--max-attempts`, five by
   default, because a lease turns "the claim stays and nothing retries it" into "every lease,
   for ever": a payload the broker refuses permanently would otherwise write one more drop row
-  per pass until somebody noticed. `--grace` refuses a row too far overdue and records the
+  per pass until somebody noticed. The counter behind it is a `BigInteger`, because
+  `--max-attempts 0` retries a row without end and a narrower column would eventually refuse
+  the increment and take the whole pass down with it. The feed's `attempt` is the narrow one
+  still — widening that is a rewrite of the largest table here — so the event log saturates
+  the value at 32767 and keeps the exact count in `detail.attempts`. `--grace` refuses a row too far overdue and records the
   drop, because a mover that was down for a day should not deliver a day of stale messages at
   once; `--grace 0`, the default, refuses nothing.
 

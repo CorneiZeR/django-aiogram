@@ -318,7 +318,8 @@ Then, in the order these bite:
   the default and refuses nothing — however overdue a row is, it goes out.
 - **The broker kept refusing it and the mover gave up.** After `--max-attempts` failed
   publishes, five by default, the row is deleted with a `TooManyAttempts` drop naming the
-  count. `--max-attempts 0` retries without end instead.
+  count in `detail.attempts`. `--max-attempts 0` retries without end instead — the row's own
+  counter has no ceiling to reach, while the drop event's `attempt` column stops at 32767.
 - **A row is claimed and still there.** Wait one `--lease` (300 seconds by default) and
   another mover takes it back: a claim is a lease, not a deed, because a mover that died
   holding a row would otherwise strand the message for ever. What that costs is a second

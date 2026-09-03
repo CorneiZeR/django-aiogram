@@ -16,6 +16,11 @@ And only where a commit will actually happen: a connection under manual transact
 management publishes immediately and says so once, because its hooks wait for
 ``set_autocommit(True)`` rather than for the block.
 
+That last answer belongs to the publish alone. :func:`after_commit`, which the event log uses
+to keep a durable row from outliving the write it describes, takes the deferral there anyway —
+arriving late costs an event nothing and existing when the row does not costs it everything.
+The two conditions and why they differ are in the functions.
+
 And only a synchronous one. ``connections`` is context-aware, so a coroutine holds its own
 connection rather than the one a surrounding ``atomic()`` opened -- measured: inside
 ``asyncio.run`` the object differs and ``in_atomic_block`` is False. That is not a gap this
@@ -61,19 +66,32 @@ def defer(publish: Callable[[], None]) -> bool:
 
 
 def after_commit(work: Callable[[], None]) -> bool:
-    """Run ``work`` when the caller's transaction commits, or **now** where none will.
+    """Run ``work`` when the caller's transaction commits, or **now** where none can.
 
     ``True`` means it was arranged for later, ``False`` that it has already run. Gated by no
     setting, because two callers want different things of the same mechanism: :func:`defer`
     waits only where ``TRANSACTIONAL`` says to, while a scheduled send's *event* has to wait
     unconditionally -- the row it describes is rolled back by a failing block, and a durable
     event about a send that never existed is worse than no event at all.
+
+    **A weaker condition than :func:`defer` uses, and the difference is the point.** Under
+    manual transaction management an ``atomic()`` block does not commit on exit, so its hooks
+    wait for ``set_autocommit(True)`` -- measured: they run after the caller's ``commit()``
+    and *not* after its ``rollback()``. For a publish that is unacceptable, because the
+    message would leave at a moment nobody chose, which is why ``defer`` refuses there. For an
+    event it is exactly right: late is harmless, and existing when the row does not is not.
+
+    The one case with no hook at all is autocommit off with no block anywhere, where
+    ``on_commit`` raises rather than deferring. There the work is done now and said once.
     """
-    if not _will_commit():
-        work()
-        return False
-    transaction.on_commit(work, using=DEFAULT_DB_ALIAS)
-    return True
+    connection = connections[DEFAULT_DB_ALIAS]
+    if connection.in_atomic_block:
+        transaction.on_commit(work, using=DEFAULT_DB_ALIAS)
+        return True
+    if connection.connection is not None and not connection.get_autocommit():
+        _mention_manual_transactions()
+    work()
+    return False
 
 
 def _will_commit() -> bool:
@@ -129,6 +147,9 @@ def _mention_manual_transactions() -> None:
     ``TransactionManagementError`` rather than deferring, so honouring the setting would turn
     every send on such an alias into a failure. With a block inside that, the hook is
     accepted and then runs at a moment nobody chose; see :func:`_commits_on_exit`.
+
+    Both shapes are about the *publish*. :func:`after_commit` reaches this only in the first
+    of them, because the second is a moment it is happy to wait for.
 
     Publishing now is the same behaviour the deployment had before the setting, said out loud
     rather than assumed.
