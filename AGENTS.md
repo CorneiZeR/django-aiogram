@@ -58,7 +58,9 @@ src/django_aiogram/
         events.py       the event-kind registry and the correlation id
         instrumentation.py  the update middleware and the storage wrapper
         outcomes.py     what a correlation id's outbound rows add up to; an id may
-                        name several messages, so a per-message edit passes its own
+                        name several messages, so a per-message edit passes its own --
+                        and so may one row, since a media group is an `Outcome.sent`
+                        entry per message and `message_id` is the first of them
         signals.py      events_recorded, the metrics seam; imports only django.dispatch
         moving.py       what 3.x's table was, and what the two tables share
         dbrouter.py     optional routing of the log to its own database

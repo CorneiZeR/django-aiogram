@@ -37,6 +37,12 @@
   `send` inside the bot container — was never on a queue and nothing will.
   Both read as `pending` and `failed` respectively, and `Event log` has the table.
 
+  That last rule is about the id rather than one message under it, and the feed holds nothing
+  finer: where several sends share an id, a queued row anywhere in the set makes every
+  `NotScheduled` drop read as reclaimable. It resolves toward `pending` deliberately, because
+  a caller told `failed` re-sends and the chat gets two copies. An explicit `correlation_id`
+  per send is what keeps the states apart.
+
   **The feed is the only source, and that is a decision.** The recorder drops an event rather
   than let a send wait for the database, so a store that always holds the answer would be a
   promise this package refuses to make everywhere else. `unknown` therefore has causes it

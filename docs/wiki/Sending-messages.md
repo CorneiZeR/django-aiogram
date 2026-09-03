@@ -152,23 +152,30 @@ def start_the_import(job):
     # an id of its own, so the outcome is about this message and no other
     identifier = bot.send(chat_id=CHAT_ID, text='Import started…', correlation_id=uuid4())
     Job.objects.filter(pk=job.pk).update(telegram_correlation_id=identifier)
-    finish_the_import.delay(job.pk)
+    # after the commit: called inside `atomic()`, `delay()` can start the task before the
+    # update above has landed, and it would read the id the row held before -- None
+    transaction.on_commit(lambda: finish_the_import.delay(job.pk))
 
 
-@app.task
-def finish_the_import(job_pk):
+@app.task(bind=True, max_retries=5)
+def finish_the_import(self, job_pk):
     # the row, not the instance `update()` left behind: a queryset update writes to the
     # database and touches nothing in memory, so `job.telegram_correlation_id` on a stale
     # instance is whatever it held before -- usually None
     job = Job.objects.get(pk=job_pk)
     answer = bot.outcome(job.telegram_correlation_id)
-    if answer.state == 'sent':
-        bot.send(
-            'edit_message_text',
-            chat_id=answer.chat_id,
-            message_id=answer.message_id,
-            text='Import finished',
-        )
+    if answer.state == 'failed':
+        return
+    if answer.state != 'sent':
+        # `pending` and `unknown` both mean ask again, and `max_retries` is the bound past
+        # which the honest answer is unresolved rather than another poll
+        raise self.retry(countdown=5)
+    bot.send(
+        'edit_message_text',
+        chat_id=answer.chat_id,
+        message_id=answer.message_id,
+        text='Import finished',
+    )
 ```
 
 It needs `EVENT_LOG` on and an `EVENT_LOG_KINDS` that is empty or keeps the four kinds a
@@ -181,7 +188,9 @@ poll.
 
 **Pass an explicit `correlation_id` to any send whose own outcome you will use.** Inside a
 handler the id is inherited from the update, so every reply shares one and `outcome()`
-answers about the newest of them — an edit built on that can reach the wrong message.
+answers about the newest of them — an edit built on that can reach the wrong message. A
+`send_media_group` is the other multiple: one call, one row, and an `answer.sent` entry per
+message, where `answer.message_id` is only the first of the album.
 **[Event log](Event-log.md#what-became-of-one-message)** has the four states and what
 `unknown` does not tell you. There is no waiting built in on purpose: blocking a request on
 the bot container is what the queue exists to avoid.
