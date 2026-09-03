@@ -2,86 +2,86 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/AI-assistants/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/API/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/Delivery/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/Deployment/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/Event-log/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/Handlers/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/Installation/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/Kafka/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/Logging/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/RabbitMQ/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/Rate-limits/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/Redis-Streams/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/Redis-list/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/Sending-messages/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/Serialization/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/Settings/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/Testing/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/Troubleshooting/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/Upgrading/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
     <url>
          <loc>https://corneizer.github.io/django-aiogram/latest/4.1/Webhook/</loc>
-         <lastmod>2026-09-02</lastmod>
+         <lastmod>2026-09-03</lastmod>
     </url>
 </urlset>

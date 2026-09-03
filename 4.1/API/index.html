@@ -1562,6 +1562,14 @@ it, and <code>django_aiogram.redis.redis_conn</code> is the same object in the m
 <td><code>bot.send_many(chat_ids, function='send_message', *, chunk_size=100, **kwargs)</code></td>
 <td>queue rather than call, one message per chat, a chunk per round trip</td>
 </tr>
+<tr>
+<td><code>bot.outcome(correlation_id)</code></td>
+<td>what became of the message that id names, read from the event log</td>
+</tr>
+<tr>
+<td><code>await bot.aoutcome(correlation_id)</code></td>
+<td>as <code>outcome</code>, without blocking the loop</td>
+</tr>
 </tbody>
 </table>
 <p><code>function</code> must name a Telegram API method aiogram exposes; anything else raises
@@ -1799,8 +1807,9 @@ look for; write the path, and see <strong><a href="../Delivery/">Delivery</a></s
 member may be renamed but never revalued.</p>
 <h2 id="the-event-log">The event log<a class="headerlink" href="#the-event-log" title="Link to this section">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.eventlog.events</span><span class="w"> </span><span class="kn">import</span> <span class="n">failure_kinds</span><span class="p">,</span> <span class="n">kind_choices</span><span class="p">,</span> <span class="n">register_kind</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">TelegramEvent</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.eventlog.signals</span><span class="w"> </span><span class="kn">import</span> <span class="n">events_recorded</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.eventlog.outcomes</span><span class="w"> </span><span class="kn">import</span> <span class="n">Outcome</span><span class="p">,</span> <span class="n">SentMessage</span><span class="p">,</span> <span class="n">aoutcome</span><span class="p">,</span> <span class="n">outcome</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">TelegramEvent</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.eventlog.signals</span><span class="w"> </span><span class="kn">import</span> <span class="n">events_recorded</span>
 </span></code></pre></div>
 <p><code>TelegramEvent</code> is the append-only feed: one row per thing that happened, insert
 only, and <code>kind</code> is an unconstrained <code>CharField</code> whose legal values live in a
@@ -1812,6 +1821,24 @@ one message's history, and what a chat has seen:</p>
 <div class="highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">TelegramEvent</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">correlation_id</span><span class="o">=</span><span class="n">identifier</span><span class="p">)</span><span class="o">.</span><span class="n">order_by</span><span class="p">(</span><span class="s1">'id'</span><span class="p">)</span>
 </span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">TelegramEvent</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="n">chat_id</span><span class="p">)</span><span class="o">.</span><span class="n">order_by</span><span class="p">(</span><span class="s1">'-id'</span><span class="p">)[:</span><span class="mi">50</span><span class="p">]</span>
 </span></code></pre></div>
+<p>The first of those two has an answer written for it. <code>bot.outcome(identifier)</code> — or
+<code>outcome(identifier)</code>, the function behind it — returns an <code>Outcome</code>: a <code>state</code> of <code>sent</code>, <code>failed</code>,
+<code>pending</code> or <code>unknown</code>, the <code>message_id</code> and <code>chat_id</code> Telegram gave, <code>at</code>, <code>error</code>,
+<code>attempt</code>, and <code>sent</code> for every message recorded under the id. <code>bot.aoutcome()</code> is the
+awaiting twin. See <strong><a href="../Event-log/#what-became-of-one-message">Event log</a></strong> for what each
+state means and what <code>unknown</code> does not mean.</p>
+<p><code>state</code> is an <code>OutcomeState</code>, which is <code>(str, Enum)</code> like the rest — so <code>== 'sent'</code> and
+<code>is OutcomeState.SENT</code> are the same test. It is not a value any setting accepts, which is
+why it is here rather than in the table above.</p>
+<p>It reads the feed, so it needs <code>EVENT_LOG</code> on <strong>and</strong> an <code>EVENT_LOG_KINDS</code> that is empty or
+keeps the four kinds a correct outcome requires. Either one missing raises
+<code>OutcomesUnavailableError</code> at the call rather than answering <code>unknown</code> for ever — the log
+being off is reported as itself, and the missing kinds are named only once it is on, because
+a set of kinds means nothing while nothing is recorded.</p>
+<p><strong>That guard is about the reading process only.</strong> The rows are written by whichever process
+<em>sent</em> the message, and it reads its own settings — so a bot container with the log off, or
+with a narrower <code>EVENT_LOG_KINDS</code>, leaves the call answering <code>unknown</code> with nothing to
+refuse. Both processes have to be configured to record the deciding kinds.</p>
 <p>A row written since the column arrived also carries a <strong>short id</strong>: the same
 message in twelve characters a person can read out, which is what the admin's
 thread column shows and what its search box takes. Rows already in the table when
@@ -1960,7 +1987,7 @@ what <code>manage.py check</code> and Django's own machinery expect.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 2, 2026 07:45:06 UTC">September 2, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 3, 2026 13:07:09 UTC">September 3, 2026</span>
   </span>
 
     

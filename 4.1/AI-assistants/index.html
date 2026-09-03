@@ -1346,21 +1346,41 @@ correctly, short enough to sit in a system prompt or a <code>CLAUDE.md</code> /
 </span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40" href="#__codelineno-0-40"></a>  in the bot container, so do it only on a queue nothing untrusted can write to.
 </span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41" href="#__codelineno-0-41"></a>- A queued send cannot raise in the caller. Failures are logged by the worker.
 </span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a>  Use bot.send_raw with RAISE_EXCEPTION only when the caller must see the error.
-</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43" href="#__codelineno-0-43"></a>- `python manage.py check` validates the settings; treat its E0xx/W0xx output as
-</span><span id="__span-0-44"><a id="__codelineno-0-44" name="__codelineno-0-44" href="#__codelineno-0-44"></a>  the spec.
-</span><span id="__span-0-45"><a id="__codelineno-0-45" name="__codelineno-0-45" href="#__codelineno-0-45"></a>- Run `python manage.py migrate` after upgrading. The package ships one table,
-</span><span id="__span-0-46"><a id="__codelineno-0-46" name="__codelineno-0-46" href="#__codelineno-0-46"></a>  created whether or not you turn the event log on.
-</span><span id="__span-0-47"><a id="__codelineno-0-47" name="__codelineno-0-47" href="#__codelineno-0-47"></a>- bot.send() returns a correlation id. Store it next to your own model if you
-</span><span id="__span-0-48"><a id="__codelineno-0-48" name="__codelineno-0-48" href="#__codelineno-0-48"></a>  want to join your records to the event log later.
-</span><span id="__span-0-49"><a id="__codelineno-0-49" name="__codelineno-0-49" href="#__codelineno-0-49"></a>- For metrics, connect a receiver to `events_recorded` from
-</span><span id="__span-0-50"><a id="__codelineno-0-50" name="__codelineno-0-50" href="#__codelineno-0-50"></a>  `django_aiogram.eventlog.signals` in an AppConfig.ready(). Do not invent a settings
-</span><span id="__span-0-51"><a id="__codelineno-0-51" name="__codelineno-0-51" href="#__codelineno-0-51"></a>  hook: there is none. It fires with EVENT_LOG off, so metrics need no table and no
-</span><span id="__span-0-52"><a id="__codelineno-0-52" name="__codelineno-0-52" href="#__codelineno-0-52"></a>  migration, and the exporter must run in the start_tgbot container because that is
-</span><span id="__span-0-53"><a id="__codelineno-0-53" name="__codelineno-0-53" href="#__codelineno-0-53"></a>  where send outcomes are recorded.
-</span><span id="__span-0-54"><a id="__codelineno-0-54" name="__codelineno-0-54" href="#__codelineno-0-54"></a>- The event log is off by default (TELEGRAM_BOT['EVENT_LOG']). Turning it on
-</span><span id="__span-0-55"><a id="__codelineno-0-55" name="__codelineno-0-55" href="#__codelineno-0-55"></a>  needs a retention job — `manage.py tgbot_prune_events` — or the table grows
-</span><span id="__span-0-56"><a id="__codelineno-0-56" name="__codelineno-0-56" href="#__codelineno-0-56"></a>  without bound. Message bodies are not stored unless EVENT_LOG_PAYLOAD='full',
-</span><span id="__span-0-57"><a id="__codelineno-0-57" name="__codelineno-0-57" href="#__codelineno-0-57"></a>  which is a personal-data decision, not a verbosity one.
+</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43" href="#__codelineno-0-43"></a>- To edit or delete a message you queued, read its `message_id` back with
+</span><span id="__span-0-44"><a id="__codelineno-0-44" name="__codelineno-0-44" href="#__codelineno-0-44"></a>  `bot.outcome(identifier)` — the id `send()` returned is a correlation id and not
+</span><span id="__span-0-45"><a id="__codelineno-0-45" name="__codelineno-0-45" href="#__codelineno-0-45"></a>  Telegram's. Pass an explicit `correlation_id=uuid4()` to any send whose own
+</span><span id="__span-0-46"><a id="__codelineno-0-46" name="__codelineno-0-46" href="#__codelineno-0-46"></a>  outcome you will use: inside a handler the id is inherited from the update, so
+</span><span id="__span-0-47"><a id="__codelineno-0-47" name="__codelineno-0-47" href="#__codelineno-0-47"></a>  every reply shares it and `outcome()` answers about the newest of them. For a
+</span><span id="__span-0-48"><a id="__codelineno-0-48" name="__codelineno-0-48" href="#__codelineno-0-48"></a>  send_media_group read `answer.sent`, which holds an entry per message of the
+</span><span id="__span-0-49"><a id="__codelineno-0-49" name="__codelineno-0-49" href="#__codelineno-0-49"></a>  album; `answer.message_id` is only its first.
+</span><span id="__span-0-50"><a id="__codelineno-0-50" name="__codelineno-0-50" href="#__codelineno-0-50"></a>- Branch on the outcome's state before acting on it, all four of them. Only
+</span><span id="__span-0-51"><a id="__codelineno-0-51" name="__codelineno-0-51" href="#__codelineno-0-51"></a>  `sent` may be edited, and check `message_id` and `chat_id` are not None even
+</span><span id="__span-0-52"><a id="__codelineno-0-52" name="__codelineno-0-52" href="#__codelineno-0-52"></a>  then — a call that produced no message, such as send_chat_action, is `sent`
+</span><span id="__span-0-53"><a id="__codelineno-0-53" name="__codelineno-0-53" href="#__codelineno-0-53"></a>  with neither. `failed` means stop. `pending` and `unknown` mean ask again
+</span><span id="__span-0-54"><a id="__codelineno-0-54" name="__codelineno-0-54" href="#__codelineno-0-54"></a>  later, within a bound of your own: `unknown` can be permanent, so past that
+</span><span id="__span-0-55"><a id="__codelineno-0-55" name="__codelineno-0-55" href="#__codelineno-0-55"></a>  bound treat it as unresolved rather than polling on. Do not write a loop that
+</span><span id="__span-0-56"><a id="__codelineno-0-56" name="__codelineno-0-56" href="#__codelineno-0-56"></a>  blocks a request waiting for it.
+</span><span id="__span-0-57"><a id="__codelineno-0-57" name="__codelineno-0-57" href="#__codelineno-0-57"></a>- It needs EVENT_LOG=True and an EVENT_LOG_KINDS that is either empty or keeps
+</span><span id="__span-0-58"><a id="__codelineno-0-58" name="__codelineno-0-58" href="#__codelineno-0-58"></a>  outbound.sent, outbound.failed, outbound.dropped and outbound.queued — **in the
+</span><span id="__span-0-59"><a id="__codelineno-0-59" name="__codelineno-0-59" href="#__codelineno-0-59"></a>  start_tgbot container as well as in the process that asks.** The rows are
+</span><span id="__span-0-60"><a id="__codelineno-0-60" name="__codelineno-0-60" href="#__codelineno-0-60"></a>  written by whichever process sent the message, and the refusal can only speak
+</span><span id="__span-0-61"><a id="__codelineno-0-61" name="__codelineno-0-61" href="#__codelineno-0-61"></a>  for the settings it can see: a bot container with the log off leaves the
+</span><span id="__span-0-62"><a id="__codelineno-0-62" name="__codelineno-0-62" href="#__codelineno-0-62"></a>  lookup answering `unknown` with nothing to refuse.
+</span><span id="__span-0-63"><a id="__codelineno-0-63" name="__codelineno-0-63" href="#__codelineno-0-63"></a>- `python manage.py check` validates the settings; treat its E0xx/W0xx output as
+</span><span id="__span-0-64"><a id="__codelineno-0-64" name="__codelineno-0-64" href="#__codelineno-0-64"></a>  the spec.
+</span><span id="__span-0-65"><a id="__codelineno-0-65" name="__codelineno-0-65" href="#__codelineno-0-65"></a>- Run `python manage.py migrate` after upgrading. The package ships one table,
+</span><span id="__span-0-66"><a id="__codelineno-0-66" name="__codelineno-0-66" href="#__codelineno-0-66"></a>  created whether or not you turn the event log on.
+</span><span id="__span-0-67"><a id="__codelineno-0-67" name="__codelineno-0-67" href="#__codelineno-0-67"></a>- bot.send() returns a correlation id. Store it next to your own model if you
+</span><span id="__span-0-68"><a id="__codelineno-0-68" name="__codelineno-0-68" href="#__codelineno-0-68"></a>  want to join your records to the event log later.
+</span><span id="__span-0-69"><a id="__codelineno-0-69" name="__codelineno-0-69" href="#__codelineno-0-69"></a>- For metrics, connect a receiver to `events_recorded` from
+</span><span id="__span-0-70"><a id="__codelineno-0-70" name="__codelineno-0-70" href="#__codelineno-0-70"></a>  `django_aiogram.eventlog.signals` in an AppConfig.ready(). Do not invent a settings
+</span><span id="__span-0-71"><a id="__codelineno-0-71" name="__codelineno-0-71" href="#__codelineno-0-71"></a>  hook: there is none. It fires with EVENT_LOG off, so metrics need no table and no
+</span><span id="__span-0-72"><a id="__codelineno-0-72" name="__codelineno-0-72" href="#__codelineno-0-72"></a>  migration, and the exporter must run in the start_tgbot container because that is
+</span><span id="__span-0-73"><a id="__codelineno-0-73" name="__codelineno-0-73" href="#__codelineno-0-73"></a>  where send outcomes are recorded.
+</span><span id="__span-0-74"><a id="__codelineno-0-74" name="__codelineno-0-74" href="#__codelineno-0-74"></a>- The event log is off by default (TELEGRAM_BOT['EVENT_LOG']). Turning it on
+</span><span id="__span-0-75"><a id="__codelineno-0-75" name="__codelineno-0-75" href="#__codelineno-0-75"></a>  needs a retention job — `manage.py tgbot_prune_events` — or the table grows
+</span><span id="__span-0-76"><a id="__codelineno-0-76" name="__codelineno-0-76" href="#__codelineno-0-76"></a>  without bound. Message bodies are not stored unless EVENT_LOG_PAYLOAD='full',
+</span><span id="__span-0-77"><a id="__codelineno-0-77" name="__codelineno-0-77" href="#__codelineno-0-77"></a>  which is a personal-data decision, not a verbosity one.
 </span></code></pre></div>
 <h2 id="prompts-that-work">Prompts that work<a class="headerlink" href="#prompts-that-work" title="Link to this section">&para;</a></h2>
 <p><strong>Add a notification.</strong> <em>"In <code>orders/views.py</code>, notify the reviewer over Telegram
@@ -1478,7 +1498,7 @@ here needs a test that fails when the change is reverted.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 1, 2026 01:02:33 UTC">September 1, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 3, 2026 13:07:09 UTC">September 3, 2026</span>
   </span>
 
     
