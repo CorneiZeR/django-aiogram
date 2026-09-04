@@ -296,18 +296,22 @@ def test_the_bound_applies_with_nobody_asking_for_it(queued):
     It passed `--limit` every time, so it would have held with `DEFAULT_LIMIT` changed to
     anything, or with the parser not applying it at all.
 
-    **A hundred and one written out, not `DEFAULT_LIMIT + 1`.** Sized from the constant, the
-    fixture grows with it and the case is a tautology -- raising the default to a thousand left
-    it green, which is how this was found: the review named the shape and the first fix
-    reproduced it. A literal fixture fails both ways, on a parser that stops applying the
-    default and on a default that moves without anybody revisiting the number here.
+    **Both numbers written out, and it took two rounds to get there.** Sized
+    `DEFAULT_LIMIT + 1`, the fixture grew with the constant and raising the default to a
+    thousand left the case green. Then, with a literal fixture but `DEFAULT_LIMIT` as the
+    expectation, *lowering* the default to fifty still passed -- fifty rows queued, fifty
+    expected. Only a literal on both sides fails in both directions, which is the same reason
+    `test_public_surface.py` writes its names out rather than reading them off the class: a
+    number derived from the code agrees with every change to it.
+
+    So a hundred is a decision, and moving it means editing this line on purpose.
     """
     for index in range(101):
         a_failure(chat_id=index)
 
     replay(since=since())
 
-    assert len(queued) == DEFAULT_LIMIT, f'the default bound is not {DEFAULT_LIMIT}'
+    assert len(queued) == 100, f'the default bound is not 100 (DEFAULT_LIMIT is {DEFAULT_LIMIT})'
 
 
 @pytest.mark.django_db(transaction=True)
