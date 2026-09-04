@@ -18,7 +18,7 @@ from django.utils.module_loading import import_string
 from django_aiogram import TelegramBot
 from django_aiogram.broker.base import Broker
 from django_aiogram.broker.exceptions import BrokerNotConfiguredError
-from django_aiogram.broker.registry import get_broker
+from django_aiogram.broker.registry import get_broker, use_broker
 from django_aiogram.testing import InMemoryBroker, SendCaptureMixin, capture_sends
 from django_aiogram.testing.capture import BROKER_PATH
 
@@ -170,6 +170,35 @@ def test_the_broker_starts_empty_for_every_block():
 
     assert len(first) == 1
     assert len(second) == 0, "a later block saw an earlier block's messages"
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_two_overrides_that_end_out_of_order_leave_neither_behind():
+    """Blocks need not end in the order they began, and the stack must survive that.
+
+    A fixture held open across cases, an `ExitStack` closed in the order it was built, two
+    threads each capturing: any of them can close the outer block first. A version that kept
+    the broker it displaced and put it back would then reinstate a broker whose block has
+    ended -- and the block that ends last would leave it installed for the rest of the process.
+
+    Falsifiable: with `use_broker` restoring a saved `previous` instead of removing its own
+    entry, `get_broker()` answers with `outer` after both blocks have ended.
+    """
+    outer, inner = InMemoryBroker(), InMemoryBroker()
+    first, second = use_broker(outer), use_broker(inner)
+    first.__enter__()
+    second.__enter__()
+
+    assert get_broker() is inner, 'the innermost block did not win'
+
+    first.__exit__(None, None, None)
+
+    assert get_broker() is inner, 'a block that ended took a live override with it'
+
+    second.__exit__(None, None, None)
+
+    with pytest.raises(BrokerNotConfiguredError):
+        get_broker()
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)

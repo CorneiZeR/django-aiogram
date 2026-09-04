@@ -254,7 +254,8 @@ from django_aiogram.redis import get_redis, redis_conn
 
 ## Testing helpers
 
-Supported the way `bot.send` is, and importable without a token, a broker or a running loop:
+These are public API, supported the way `bot.send` is, and every one of them imports without a
+token, a broker or a running loop.
 
 | | |
 | --- | --- |

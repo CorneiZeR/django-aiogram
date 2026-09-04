@@ -42,7 +42,7 @@ _broker: Broker | None = None
 #: `override_settings` in `django_aiogram.testing`: a case that overrides the setting itself --
 #: and every `@override_settings(TELEGRAM_BOT=...)` replaces the dict whole -- would otherwise
 #: undo the helper it is running inside, silently, and at a moment it did not choose
-_override: Broker | None = None
+_overrides: list[tuple[object, Broker]] = []
 #: registered once per process rather than per build, so a settings change that replaces the
 #: broker does not stack another callback. `close_broker` is idempotent either way
 _exit_hook_armed = False
@@ -107,8 +107,9 @@ def get_broker() -> Broker:
     only way anything but ``BROKER`` decides this.
     """
     global _broker, _exit_hook_armed  # noqa: PLW0603 - one per process, like the connection it holds
-    if _override is not None:
-        return _override
+    with _lock:
+        if _overrides:
+            return _overrides[-1][1]
     if _broker is not None:
         return _broker
     with _lock:
@@ -153,17 +154,27 @@ def use_broker(broker: Broker) -> 'Iterator[Broker]':
     has already started capturing -- would silently take the helper's broker away again. The
     override is a fact about this process, and nothing in the settings can undo it.
 
-    Nested blocks restore the one they replaced, so a case inside a fixture inside a suite-wide
-    hook all end up with what each of them expected.
+    **A stack, and each block removes its own entry rather than restoring what it replaced.**
+    The obvious version keeps the broker it displaced and puts it back on the way out, which is
+    correct only while blocks end in the order they began. They need not: a fixture holding one
+    open across cases, an ``ExitStack`` closed in the order it was built, or two threads each
+    capturing -- and then the block that exits first reinstates a broker whose own block has
+    ended, and the one that exits last leaves it installed for good. Removing an entry by
+    identity cannot get that wrong, and the innermost block still standing is the one that wins.
     """
-    global _override  # noqa: PLW0603 - the same one-per-process reasoning as `_broker`
+    entry = (object(), broker)
     with _lock:
-        previous, _override = _override, broker
+        _overrides.append(entry)
     try:
         yield broker
     finally:
         with _lock:
-            _override = previous
+            # by identity, because two blocks may hold the same broker instance and `remove`
+            # would take the wrong one -- the tuple's first field is a token for exactly this
+            for index in range(len(_overrides) - 1, -1, -1):
+                if _overrides[index][0] is entry[0]:
+                    del _overrides[index]
+                    break
 
 
 def close_broker() -> None:
