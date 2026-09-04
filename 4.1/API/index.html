@@ -1573,6 +1573,10 @@ it, and <code>django_aiogram.redis.redis_conn</code> is the same object in the m
 <td>queue it, or call Telegram directly inside the bot container</td>
 </tr>
 <tr>
+<td><code>bot.send(SendMessage(...))</code></td>
+<td>the same, with the arguments checked by aiogram's own model — see below</td>
+</tr>
+<tr>
 <td><code>bot.enqueue(...)</code></td>
 <td>always queue</td>
 </tr>
@@ -1598,6 +1602,19 @@ it, and <code>django_aiogram.redis.redis_conn</code> is the same object in the m
 </tr>
 </tbody>
 </table>
+<p><code>send</code>, <code>enqueue</code>, <code>asend</code> and <code>aenqueue</code> also take an <strong>aiogram method object</strong> in place of
+a name and keyword arguments:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">aiogram.methods</span><span class="w"> </span><span class="kn">import</span> <span class="n">SendMessage</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">bot</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">SendMessage</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="n">CHAT_ID</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="s1">'hello'</span><span class="p">))</span>
+</span></code></pre></div>
+<p>Everything else is identical — same correlation id, same route, same events — and the
+arguments are checked by whatever type checker the project runs, because they are aiogram's
+own model fields. This package declares no signature of its own for them, so there is nothing
+to drift: 181 methods and 1153 arguments stay where they are already declared and versioned. A
+field aiogram does not know is refused at the call, since aiogram itself allows unknown ones
+and the worker would not. <code>send_many</code> and <code>send_raw</code> do not take one — see
+<strong><a href="../Sending-messages/#checked-before-it-is-sent">Sending messages</a></strong>.</p>
 <p>Every form that <em>queues</em> takes <code>eta=&lt;datetime&gt;</code> — aware under <code>USE_TZ</code>, naive without it, and
 the other way round refused rather than guessed at — <code>send</code>, <code>enqueue</code>, <code>send_many</code> and
 their awaiting twins, which writes the call to the schedule instead of the queue, including
@@ -1616,8 +1633,8 @@ Deduplicate on a key your own domain owns.
 beside your own model if you want to join your records to the feed later. Each of
 them also accepts one as a keyword argument, and a handler replying to an update
 inherits that update's id without passing anything:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">identifier</span> <span class="o">=</span> <span class="n">bot</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="n">chat_id</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="s1">'hello'</span><span class="p">)</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">Receipt</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">order</span><span class="o">=</span><span class="n">order</span><span class="p">,</span> <span class="n">telegram_correlation_id</span><span class="o">=</span><span class="n">identifier</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">identifier</span> <span class="o">=</span> <span class="n">bot</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="n">chat_id</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="s1">'hello'</span><span class="p">)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">Receipt</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">order</span><span class="o">=</span><span class="n">order</span><span class="p">,</span> <span class="n">telegram_correlation_id</span><span class="o">=</span><span class="n">identifier</span><span class="p">)</span>
 </span></code></pre></div>
 <p>With <code>TRANSACTIONAL</code> on, a send that takes the queue route and is made inside
 <code>transaction.atomic()</code> returns its id immediately and reaches the broker when the block
@@ -1736,15 +1753,15 @@ these answer "is the backlog growing" rather than "how many will this worker sen
 <code>inline_query</code>, <code>chosen_inline_result</code>, <code>callback_query</code>, <code>shipping_query</code>,
 <code>pre_checkout_query</code>, <code>poll</code>, <code>poll_answer</code>, <code>my_chat_member</code>, <code>chat_member</code>,
 <code>chat_join_request</code>, <code>error</code>.</p>
-<div class="highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nd">@bot</span><span class="o">.</span><span class="n">message</span><span class="p">(</span><span class="n">F</span><span class="o">.</span><span class="n">text</span> <span class="o">==</span> <span class="s1">'/start'</span><span class="p">)</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">start</span><span class="p">(</span><span class="n">message</span><span class="p">):</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="k">await</span> <span class="n">message</span><span class="o">.</span><span class="n">answer</span><span class="p">(</span><span class="s1">'hi'</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nd">@bot</span><span class="o">.</span><span class="n">message</span><span class="p">(</span><span class="n">F</span><span class="o">.</span><span class="n">text</span> <span class="o">==</span> <span class="s1">'/start'</span><span class="p">)</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">start</span><span class="p">(</span><span class="n">message</span><span class="p">):</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="k">await</span> <span class="n">message</span><span class="o">.</span><span class="n">answer</span><span class="p">(</span><span class="s1">'hi'</span><span class="p">)</span>
 </span></code></pre></div>
 <p>Arguments pass straight through to aiogram, so filters behave exactly as they do
 there. See <strong><a href="../Handlers/">Handlers</a></strong>.</p>
 <h2 id="running-and-stopping">Running and stopping<a class="headerlink" href="#running-and-stopping" title="Link to this section">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">bot</span><span class="o">.</span><span class="n">start_polling</span><span class="p">()</span>  <span class="c1"># attaches the router, then blocks on long polling</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">bot</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>  <span class="c1"># drains in-flight sends, releases the storage, session and loop</span>
+<div class="highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">bot</span><span class="o">.</span><span class="n">start_polling</span><span class="p">()</span>  <span class="c1"># attaches the router, then blocks on long polling</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">bot</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>  <span class="c1"># drains in-flight sends, releases the storage, session and loop</span>
 </span></code></pre></div>
 <p><code>close(drain_timeout=None)</code> waits for sends still pacing behind the rate limiter,
 cancels whatever outlasts the wait with a warning, then releases the FSM storage's
@@ -1758,7 +1775,7 @@ the drain a second more. Set the setting rather than the argument: the arithmeti
 <p><code>start_tgbot</code> does both around the delivery consumer; you only need them when
 running the bot yourself.</p>
 <h2 id="a-second-instance">A second instance<a class="headerlink" href="#a-second-instance" title="Link to this section">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">own</span> <span class="o">=</span> <span class="n">TelegramBot</span><span class="p">(</span><span class="n">max_retries</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">own</span> <span class="o">=</span> <span class="n">TelegramBot</span><span class="p">(</span><span class="n">max_retries</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
 </span></code></pre></div>
 <p><code>TelegramBot(max_retries=None, loop=None)</code> — pass a loop to put its work on one
 you already run.</p>
@@ -1773,7 +1790,7 @@ Telegram itself: one <code>getUpdates</code> consumer per bot.</p>
 <p>Prefer the shared <code>bot</code>. A fresh instance inside a task or a request means a
 fresh event loop and HTTP session that nothing closes — see <strong><a href="../Sending-messages/">Sending messages</a></strong>.</p>
 <h2 id="module-level">Module level<a class="headerlink" href="#module-level" title="Link to this section">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram</span><span class="w"> </span><span class="kn">import</span> <span class="n">TelegramBot</span><span class="p">,</span> <span class="n">bot</span><span class="p">,</span> <span class="n">conf</span><span class="p">,</span> <span class="n">__version__</span>
+<div class="highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram</span><span class="w"> </span><span class="kn">import</span> <span class="n">TelegramBot</span><span class="p">,</span> <span class="n">bot</span><span class="p">,</span> <span class="n">conf</span><span class="p">,</span> <span class="n">__version__</span>
 </span></code></pre></div>
 <p><code>conf</code> reads <code>settings.TELEGRAM_BOT</code> on first access, falls back to
 <code>DJANGO_AIOGRAM_&lt;NAME&gt;</code> for scalars, and resets itself on <code>override_settings</code>.</p>
@@ -1782,7 +1799,7 @@ Redis's, and a package that carries four transports should not export one transp
 from its front door. Nothing about them changed otherwise — same objects, same laziness, one
 connection — so code that wants Redis for its own keys imports them from the module that owns
 them:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.redis</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_redis</span><span class="p">,</span> <span class="n">redis_conn</span>
+<div class="highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.redis</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_redis</span><span class="p">,</span> <span class="n">redis_conn</span>
 </span></code></pre></div>
 <h2 id="testing-helpers">Testing helpers<a class="headerlink" href="#testing-helpers" title="Link to this section">&para;</a></h2>
 <p>These are public API, supported the way <code>bot.send</code> is, and every one of them imports without a
@@ -1817,7 +1834,7 @@ token, a broker or a running loop.</p>
 </tr>
 </tbody>
 </table>
-<div class="highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">InMemoryBroker</span><span class="p">,</span> <span class="n">SendCaptureMixin</span><span class="p">,</span> <span class="n">capture_sends</span>
+<div class="highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">InMemoryBroker</span><span class="p">,</span> <span class="n">SendCaptureMixin</span><span class="p">,</span> <span class="n">capture_sends</span>
 </span></code></pre></div>
 <p>They exist so that a project's tests stop depending on this package's wire format: reading a
 queue by hand means <code>wire.serializers.loads</code>, <code>wire.envelope.unpack</code> and the transport's own
@@ -1825,12 +1842,12 @@ key, and none of those is API. See <strong><a href="../Testing/#asserting-that-y
 <h2 id="values-the-settings-accept">Values the settings accept<a class="headerlink" href="#values-the-settings-accept" title="Link to this section">&para;</a></h2>
 <p>Some settings offer a <strong>fixed set of choices</strong>, and every one of those exists as an enum member,
 so a project can import the value instead of spelling the string:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.config.enums</span><span class="w"> </span><span class="kn">import</span> <span class="n">StorageKind</span><span class="p">,</span> <span class="n">UpdateMode</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">TELEGRAM_BOT</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="s1">'FSM_STORAGE'</span><span class="p">:</span> <span class="n">StorageKind</span><span class="o">.</span><span class="n">REDIS</span><span class="p">,</span>
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="s1">'MODE'</span><span class="p">:</span> <span class="n">UpdateMode</span><span class="o">.</span><span class="n">POLLING</span><span class="p">,</span>
-</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.config.enums</span><span class="w"> </span><span class="kn">import</span> <span class="n">StorageKind</span><span class="p">,</span> <span class="n">UpdateMode</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">TELEGRAM_BOT</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="s1">'FSM_STORAGE'</span><span class="p">:</span> <span class="n">StorageKind</span><span class="o">.</span><span class="n">REDIS</span><span class="p">,</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="s1">'MODE'</span><span class="p">:</span> <span class="n">UpdateMode</span><span class="o">.</span><span class="n">POLLING</span><span class="p">,</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="p">}</span>
 </span></code></pre></div>
 <table>
 <thead>
@@ -1877,10 +1894,10 @@ look for; write the path, and see <strong><a href="../Delivery/">Delivery</a></s
 <p>The values are <strong>frozen</strong>: queued payloads and stored settings carry them, so a
 member may be renamed but never revalued.</p>
 <h2 id="the-event-log">The event log<a class="headerlink" href="#the-event-log" title="Link to this section">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.eventlog.events</span><span class="w"> </span><span class="kn">import</span> <span class="n">failure_kinds</span><span class="p">,</span> <span class="n">kind_choices</span><span class="p">,</span> <span class="n">register_kind</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.eventlog.outcomes</span><span class="w"> </span><span class="kn">import</span> <span class="n">Outcome</span><span class="p">,</span> <span class="n">SentMessage</span><span class="p">,</span> <span class="n">aoutcome</span><span class="p">,</span> <span class="n">outcome</span>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">TelegramEvent</span>
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.eventlog.signals</span><span class="w"> </span><span class="kn">import</span> <span class="n">events_recorded</span>
+<div class="highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.eventlog.events</span><span class="w"> </span><span class="kn">import</span> <span class="n">failure_kinds</span><span class="p">,</span> <span class="n">kind_choices</span><span class="p">,</span> <span class="n">register_kind</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.eventlog.outcomes</span><span class="w"> </span><span class="kn">import</span> <span class="n">Outcome</span><span class="p">,</span> <span class="n">SentMessage</span><span class="p">,</span> <span class="n">aoutcome</span><span class="p">,</span> <span class="n">outcome</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">TelegramEvent</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.eventlog.signals</span><span class="w"> </span><span class="kn">import</span> <span class="n">events_recorded</span>
 </span></code></pre></div>
 <p><code>TelegramEvent</code> is the append-only feed: one row per thing that happened, insert
 only, and <code>kind</code> is an unconstrained <code>CharField</code> whose legal values live in a
@@ -1889,8 +1906,8 @@ failure=False)</code> adds your own; <code>kind_choices()</code> and <code>failu
 the admin filters read.</p>
 <p>Querying it is ordinary ORM work, and the indexes are built for two questions —
 one message's history, and what a chat has seen:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">TelegramEvent</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">correlation_id</span><span class="o">=</span><span class="n">identifier</span><span class="p">)</span><span class="o">.</span><span class="n">order_by</span><span class="p">(</span><span class="s1">'id'</span><span class="p">)</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">TelegramEvent</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="n">chat_id</span><span class="p">)</span><span class="o">.</span><span class="n">order_by</span><span class="p">(</span><span class="s1">'-id'</span><span class="p">)[:</span><span class="mi">50</span><span class="p">]</span>
+<div class="highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">TelegramEvent</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">correlation_id</span><span class="o">=</span><span class="n">identifier</span><span class="p">)</span><span class="o">.</span><span class="n">order_by</span><span class="p">(</span><span class="s1">'id'</span><span class="p">)</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="n">TelegramEvent</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="n">chat_id</span><span class="p">)</span><span class="o">.</span><span class="n">order_by</span><span class="p">(</span><span class="s1">'-id'</span><span class="p">)[:</span><span class="mi">50</span><span class="p">]</span>
 </span></code></pre></div>
 <p>The first of those two has an answer written for it. <code>bot.outcome(identifier)</code> — or
 <code>outcome(identifier)</code>, the function behind it — returns an <code>Outcome</code>: a <code>state</code> of <code>sent</code>, <code>failed</code>,
@@ -1914,13 +1931,13 @@ refuse. Both processes have to be configured to record the deciding kinds.</p>
 message in twelve characters a person can read out, which is what the admin's
 thread column shows and what its search box takes. Rows already in the table when
 it arrived hold <code>''</code> until the backfill named below walks them.</p>
-<div class="highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">uuid</span>
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.eventlog.events</span><span class="w"> </span><span class="kn">import</span> <span class="n">normalise_short_id</span><span class="p">,</span> <span class="n">short_id</span>
-</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>
-</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="n">short_id</span><span class="p">(</span><span class="n">uuid</span><span class="o">.</span><span class="n">UUID</span><span class="p">(</span><span class="s1">'a615799d-dce6-42bc-af47-22c6ccf2c525'</span><span class="p">))</span>  <span class="c1"># 'YHS2RV6F5H95'</span>
-</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="n">normalise_short_id</span><span class="p">(</span><span class="s1">'yhs2-rv6f 5h95'</span><span class="p">)</span>  <span class="c1"># the same code</span>
-</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="n">normalise_short_id</span><span class="p">(</span><span class="s1">'hello'</span><span class="p">)</span>  <span class="c1"># '', not a code</span>
+<div class="highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">uuid</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.eventlog.events</span><span class="w"> </span><span class="kn">import</span> <span class="n">normalise_short_id</span><span class="p">,</span> <span class="n">short_id</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="n">short_id</span><span class="p">(</span><span class="n">uuid</span><span class="o">.</span><span class="n">UUID</span><span class="p">(</span><span class="s1">'a615799d-dce6-42bc-af47-22c6ccf2c525'</span><span class="p">))</span>  <span class="c1"># 'YHS2RV6F5H95'</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="n">normalise_short_id</span><span class="p">(</span><span class="s1">'yhs2-rv6f 5h95'</span><span class="p">)</span>  <span class="c1"># the same code</span>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="n">normalise_short_id</span><span class="p">(</span><span class="s1">'hello'</span><span class="p">)</span>  <span class="c1"># '', not a code</span>
 </span></code></pre></div>
 <p><code>short_id</code> is a pure function of the correlation id — the low 60 bits in
 Crockford's base32, the alphabet without <code>I</code>, <code>L</code>, <code>O</code> and <code>U</code> — so a log
@@ -1950,7 +1967,7 @@ a migration container pays nothing for it, and <code>signals.py</code> pulls nei
 nor the ORM so a metrics module can import it at settings time. See
 <strong><a href="../Event-log/">Event log</a></strong>.</p>
 <h2 id="errors">Errors<a class="headerlink" href="#errors" title="Link to this section">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.exceptions</span><span class="w"> </span><span class="kn">import</span> <span class="n">DjangoRedisAiogramError</span>
+<div class="highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.exceptions</span><span class="w"> </span><span class="kn">import</span> <span class="n">DjangoRedisAiogramError</span>
 </span></code></pre></div>
 <table>
 <thead>
@@ -2058,7 +2075,7 @@ what <code>manage.py check</code> and Django's own machinery expect.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 4, 2026 03:39:47 UTC">September 4, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 4, 2026 11:40:22 UTC">September 4, 2026</span>
   </span>
 
     
