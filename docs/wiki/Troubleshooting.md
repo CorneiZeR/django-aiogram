@@ -415,15 +415,25 @@ Unlike every other row this package writes, it is written synchronously and its 
 read: the recorder drops rather than waits, which is right in the send path and wrong for the
 one row that prevents a duplicate.
 
-Run it again for the next hundred: a failure an `outbound.replayed` row already names is
-skipped, which is what makes walking an incident in bounded runs work. `--limit` is 100 by
+Run it again for the next hundred, and again: `--limit` counts the messages a run *sends*
+rather than the rows it reads, so each run walks past what the last one did and reaches the
+next. The report keeps the two apart — `replayed 100; refused 3; skipped 100` — because a skip
+is a message that needed nothing, and a refusal is one somebody has to decide about. `--limit` is 100 by
 default because a slipped date range would otherwise empty a month of failures into the queue;
 `--limit 0` is the deliberate unbounded mode, and a negative number is refused as the typo it
 is.
 
-That is not the same as idempotence, and the difference matters: the guard is a *row*, so a
-replay whose join row the feed refused is offered again — the run says which, in the report and
-in the log — and a failure replayed by something other than this command is not known to it.
+That is not the same as idempotence, and the difference matters in three ways: the guard is a
+*row*, so a replay whose join row the feed refused is offered again — the run says which, in
+the report and in the log; a failure replayed by something other than this command is not known
+to it; and **two runs at once can both send the same message**, because each reads the rows
+before either writes its own. Run one at a time.
+
+There is nothing for the command to claim instead. The event log is insert-only — that is what
+lets a web process and a worker write one message's history with no coordination — so a run
+cannot take ownership of a failure the way `tgbot_dispatch_scheduled` claims a scheduled send.
+What is bounded is the damage: the join row is written per message right after it is queued, so
+a second run started later duplicates only the messages the first had not yet reached.
 
 ## `ModuleNotFoundError: No module named 'telegram_bot'`
 

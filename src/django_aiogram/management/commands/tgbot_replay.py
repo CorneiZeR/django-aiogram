@@ -68,13 +68,32 @@ ARGUMENT_KINDS = (EventKind.OUTBOUND_QUEUED.value, EventKind.OUTBOUND_SCHEDULED.
 #: into the queue at once and every one of them is a message somebody receives
 DEFAULT_LIMIT = 100
 
+#: how many rows are read at a time while walking towards that many replays. Bigger than the
+#: default bound, because the common shape is a second run reading past the first run's work:
+#: one query per window for the rows and two for the answers about them
+WINDOW = 200
+
 #: how much of one argument a dry run prints. Enough to recognise the message, short enough
 #: that a hundred of them stay a report rather than a transcript
 SHOWN_WIDTH = 40
 
 
 class Command(BaseCommand):
-    """Select failed sends and queue them again, or say why they cannot be."""
+    """Select failed sends and queue them again, or say why they cannot be.
+
+    **One run at a time.** Two of these with overlapping selections can both read a failure
+    before either has written the row that says it was replayed, and then both send it. There
+    is nothing here to claim against that, and the absence is a design decision rather than an
+    omission: the event log is insert-only -- which is what lets a web process and a worker
+    write one message's history with no coordination -- so there is no row a run can take
+    ownership of the way ``tgbot_dispatch_scheduled`` claims a scheduled send.
+
+    What is bounded is the damage. The guard is a row written per message immediately after it
+    is queued, so a second run started later duplicates only the messages the first had not
+    yet reached -- the window is the overlap between two runs, not the incident. Serialising
+    two operators' shells is not something a management command can do, so this says so
+    instead, the way the rest of this package states the races it cannot close.
+    """
 
     help = 'Queue failed sends again, from the arguments the event log recorded.'
 
@@ -118,42 +137,52 @@ class Command(BaseCommand):
     _unrecorded = 0
 
     def handle(self, *args: Any, **options: Any) -> None:
-        """Read the rows, replay what can be, and report both halves."""
+        """Walk the selection until the bound is spent on messages that actually went.
+
+        **``--limit`` counts replays, not rows examined**, and that is the difference between
+        a bound and a wall. Applied to the raw selection it was a wall: with a hundred and one
+        failures and ``--limit 100``, the first run replayed the oldest hundred, and the next
+        run selected those same hundred, skipped every one of them as already replayed, and
+        never reached the hundred-and-first. Which made "run it again for the next hundred"
+        false in the one place an operator would rely on it -- during an incident, with the
+        rest of the failures still waiting.
+
+        So the rows are walked in windows, the two "nothing to do here" answers are read for a
+        whole window at a time, and the walk stops when the bound has been spent on messages
+        that went. What it costs is reading past the rows a previous run already handled, which
+        is what paging is.
+        """
         self._unrecorded = 0
         self._refuse_where_there_is_nothing_to_read(dry_run=options['dry_run'])
         refused: Counter[str] = Counter()
+        skipped: Counter[str] = Counter()
         replayed = 0
-        rows = list(self._selected(options))
-        seen = self._already_replayed(rows)
-        delivered = self._delivered(rows)
-        for row in rows:
-            if row.correlation_id in delivered:
-                # the ending selected is not the end of the story: a mover that failed three
-                # times and published on the fourth leaves three drop rows and an
-                # `outbound.sent`, and a send the caller retried itself leaves the same shape.
-                # Telegram has that message
-                reason = 'it was sent in the end, so nothing was lost'
-                self.stdout.write(f'refused {row.short_id or row.correlation_id} ({row.function}): {reason}')
-                refused[reason] += 1
-                continue
-            if row.correlation_id in seen:
-                # one message's history can hold several endings -- the scheduled mover writes
-                # an `outbound.dropped` row per failed publish attempt and then retries the same
-                # row -- and replaying each of them would send one message once per attempt.
-                # An id is one message here, the way `bot.outcome()` reads it: the two are the
-                # same claim about the feed, and a caller who reuses an id across several sends
-                # has told it they are one thread
-                reason = 'it has been replayed already; the row joining them says so'
-                self.stdout.write(f'refused {row.short_id or row.correlation_id} ({row.function}): {reason}')
-                refused[reason] += 1
-                continue
-            reason = self._replay(row, dry_run=options['dry_run'])
-            if reason:
-                refused[reason] += 1
-                continue
-            seen.add(row.correlation_id)
-            replayed += 1
-        self._report(replayed, refused, dry_run=options['dry_run'])
+        limit = self._bound(options['limit'])
+        rows = self._selected(options)
+        offset = 0
+        while limit is None or replayed < limit:
+            window = list(rows[offset : offset + WINDOW])
+            if not window:
+                break
+            offset += len(window)
+            done = self._nothing_to_do_for(window)
+            for row in window:
+                if limit is not None and replayed >= limit:
+                    break
+                nothing = done.get(row.correlation_id)
+                if nothing:
+                    self.stdout.write(f'skipped {row.short_id or row.correlation_id} ({row.function}): {nothing}')
+                    skipped[nothing] += 1
+                    continue
+                reason = self._replay(row, dry_run=options['dry_run'])
+                if reason:
+                    refused[reason] += 1
+                    continue
+                # so a second ending for this message, later in the same walk, is skipped for
+                # the same reason a second *run* would skip it
+                done[row.correlation_id] = 'it has been replayed already; the row joining them says so'
+                replayed += 1
+        self._report(replayed, refused, skipped, dry_run=options['dry_run'])
 
     def _refuse_where_there_is_nothing_to_read(self, *, dry_run: bool) -> None:
         """Stop before a query that cannot answer, and before a send that cannot happen.
@@ -213,12 +242,20 @@ class Command(BaseCommand):
             rows = rows.filter(created_at__lt=_moment(options['until'], '--until'))
         if options['chat'] is not None:
             rows = rows.filter(chat_id=options['chat'])
-        rows = rows.order_by('created_at', 'id')
-        limit = options['limit']
+        return rows.order_by('created_at', 'id')
+
+    @staticmethod
+    def _bound(limit: int) -> int | None:
+        """How many messages this run may send, or ``None`` for the unbounded mode.
+
+        ``None`` rather than a large number, because the two are read in different places and
+        one of them is a ``while``. A negative limit is a typo rather than the unbounded mode:
+        ``0`` is that, and it is a deliberate thing to type.
+        """
         if limit < 0:
             msg = f'--limit {limit} is not a bound. 0 is the unbounded mode, and it is a deliberate thing to type.'
             raise CommandError(msg)
-        return rows if limit == 0 else rows[:limit]
+        return None if limit == 0 else limit
 
     def _replay(self, row: TelegramEvent, *, dry_run: bool) -> str:
         """Queue one message again, or answer with why it cannot be.
@@ -261,35 +298,43 @@ class Command(BaseCommand):
         return ''
 
     @staticmethod
-    def _delivered(rows: 'list[TelegramEvent]') -> set[uuid.UUID]:
-        """Which of these messages Telegram has, whatever ending was recorded for them."""
-        return set(
+    def _nothing_to_do_for(rows: 'list[TelegramEvent]') -> dict[uuid.UUID, str]:
+        """Answer which messages in this window need nothing, and what they need nothing for.
+
+        Two questions, two queries for the whole window rather than two per row:
+
+        * **Telegram has it.** An ``outbound.sent`` under the id means the ending selected was
+          not the end of the story -- a mover that failed three times and published on the
+          fourth leaves three drop rows and a delivery, and so does a send the caller retried.
+        * **A replay already stands in for it**, read from ``detail.replay_of`` on the
+          ``outbound.replayed`` rows. The join row is the record, so the record is what is
+          asked, and that is what lets a bounded run be repeated until the incident is walked.
+
+        Not refusals: nothing here is wrong, and the report counts them apart from the rows a
+        replay cannot be made from. An operator reads the two differently.
+        """
+        identifiers = {row.correlation_id for row in rows}
+        delivered = (
             TelegramEvent.objects.using(log_alias())
-            .filter(correlation_id__in={row.correlation_id for row in rows}, kind=EventKind.OUTBOUND_SENT.value)
+            .filter(correlation_id__in=identifiers, kind=EventKind.OUTBOUND_SENT.value)
             .values_list('correlation_id', flat=True)
         )
-
-    @staticmethod
-    def _already_replayed(rows: 'list[TelegramEvent]') -> set[uuid.UUID]:
-        """Which of these failures a replay already stands in for.
-
-        **This is what makes the command re-runnable, and it took a review to notice.** The
-        selection is bounded, so an incident of five hundred failures is walked a hundred at a
-        time -- and without this every run replayed the same first hundred, because they are
-        the oldest and the order is by time. Five runs, five hundred messages, four hundred of
-        them the same hundred again, and the rest never sent.
-
-        Read from ``detail.replay_of`` on the ``outbound.replayed`` rows: the join is the
-        record, so the record is what is asked. Two lookups for a whole batch rather than one
-        per row, since the batch is already in memory and bounded by ``--limit``.
-        """
-        identifiers = {str(row.correlation_id) for row in rows}
+        nothing = dict.fromkeys(delivered, 'it was sent in the end, so nothing was lost')
         already = (
             TelegramEvent.objects.using(log_alias())
-            .filter(kind=EventKind.OUTBOUND_REPLAYED.value, detail__replay_of__in=sorted(identifiers))
+            .filter(
+                kind=EventKind.OUTBOUND_REPLAYED.value,
+                detail__replay_of__in=sorted(str(one) for one in identifiers),
+            )
             .values_list('detail', flat=True)
         )
-        return {uuid.UUID(str(detail['replay_of'])) for detail in already if detail and detail.get('replay_of')}
+        for detail in already:
+            if detail and detail.get('replay_of'):
+                nothing.setdefault(
+                    uuid.UUID(str(detail['replay_of'])),
+                    'it has been replayed already; the row joining them says so',
+                )
+        return nothing
 
     def _arguments_for(self, row: TelegramEvent) -> tuple[dict[str, Any], str]:
         """Find what the failed call was made with, or say why it cannot be known.
@@ -350,10 +395,19 @@ class Command(BaseCommand):
             )
             return False
 
-    def _report(self, replayed: int, refused: 'Counter[str]', *, dry_run: bool) -> None:
-        """Say what happened, and what did not, with the reasons counted rather than repeated."""
+    def _report(self, replayed: int, refused: 'Counter[str]', skipped: 'Counter[str]', *, dry_run: bool) -> None:
+        """Say what happened, and what did not, with the reasons counted rather than repeated.
+
+        Skipped apart from refused, because an operator reads them differently: skipped is a
+        message that needs nothing -- it went in the end, or a replay already stands in for it
+        -- and refused is one this command cannot make a message from, which is a decision
+        somebody has to take. Counting them together made a walk past a previous run's work
+        look like five hundred problems.
+        """
         verb = 'would replay' if dry_run else 'replayed'
-        self.stdout.write(f'{verb} {replayed}; refused {sum(refused.values())}')
+        self.stdout.write(f'{verb} {replayed}; refused {sum(refused.values())}; skipped {sum(skipped.values())}')
+        for reason, count in skipped.most_common():
+            self.stdout.write(f'  {count} x {reason}')
         if self._unrecorded:
             were = 'replay was' if self._unrecorded == 1 else 'replays were'
             self.stdout.write(
@@ -364,7 +418,14 @@ class Command(BaseCommand):
             self.stdout.write(f'  {count} x {reason}')
         if not dry_run:
             recorder.flush(timeout=5)
-        logger.info('replay finished', extra={'tg_replayed': replayed, 'tg_refused': sum(refused.values())})
+        logger.info(
+            'replay finished',
+            extra={
+                'tg_replayed': replayed,
+                'tg_refused': sum(refused.values()),
+                'tg_skipped': sum(skipped.values()),
+            },
+        )
 
 
 def _as_uuid(value: str) -> uuid.UUID:

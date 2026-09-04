@@ -513,14 +513,15 @@ def test_several_endings_for_one_message_replay_it_once(queued):
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT=SETTINGS)
-def test_a_failure_already_replayed_is_not_offered_twice(queued):
-    """What makes the command re-runnable, and the paging trap it closes.
+def test_a_bounded_run_repeated_walks_the_incident_rather_than_the_first_page(queued):
+    """`--limit` counts replays, not rows examined, which is the difference between a bound
+    and a wall.
 
-    The selection is bounded, so five hundred failures are walked a hundred at a time -- and
-    without this every run replayed the same oldest hundred, since the order is by time. Five
-    runs, five hundred messages, four hundred of them the same hundred again, and the rest
-    never sent. Read off `detail.replay_of`: the join row is the record, so the record is what
-    is asked.
+    Applied to the raw selection it was a wall: the second run selected the same oldest rows,
+    skipped every one as already replayed, and never reached the next -- so "run it again for
+    the next hundred" was false in the one place an operator relies on it. Three runs of one,
+    over two failures, is the smallest shape that shows all of it: no duplicate, the second
+    run reaching the second failure, and the third finding nothing left.
     """
     a_failure(chat_id=1)
     a_failure(chat_id=2)
@@ -530,11 +531,40 @@ def test_a_failure_already_replayed_is_not_offered_twice(queued):
 
     output = replay(since=since(), limit=1)
 
-    assert [one.kwargs['chat_id'] for one in queued] == [1], 'the same failure was replayed twice'
-    assert 'it has been replayed already' in output
-
-    replay(since=since(), limit=2)
     assert [one.kwargs['chat_id'] for one in queued] == [1, 2], 'the second run never reached the second failure'
+    assert 'it has been replayed already' in output, 'it walked past the first failure without saying so'
+
+    third = replay(since=since(), limit=1)
+
+    assert [one.kwargs['chat_id'] for one in queued] == [1, 2], 'a failure was replayed twice'
+    assert 'replayed 0; refused 0; skipped 2' in third
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_what_needs_nothing_is_counted_apart_from_what_cannot_be_replayed(queued):
+    """An operator reads the two differently, so the report does not add them up.
+
+    Skipped is a message that needs nothing -- it went in the end, or a replay already stands
+    in for it. Refused is one this command cannot make a message from, which is a decision
+    somebody has to take. Counted together, a walk past a previous run's work read as five
+    hundred problems.
+    """
+    sent = a_failure(chat_id=1)
+    TelegramEvent.objects.create(
+        kind=EventKind.OUTBOUND_SENT.value,
+        correlation_id=sent,
+        function='send_message',
+        chat_id=1,
+        message_id=7,
+    )
+    a_failure(chat_id=2, arguments={'chat_id': 2, 'photo': {'__omitted__': 'bytes', 'size': 9}})
+    a_failure(chat_id=3)
+
+    output = replay(since=since())
+
+    assert [one.kwargs['chat_id'] for one in queued] == [3]
+    assert 'replayed 1; refused 1; skipped 1' in output
 
 
 @pytest.mark.django_db(transaction=True)
