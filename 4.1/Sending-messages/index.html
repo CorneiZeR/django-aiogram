@@ -562,6 +562,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#sending-it-later" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sending it later
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#editing-a-message-you-queued" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1317,6 +1328,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#sending-it-later" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sending it later
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#editing-a-message-you-queued" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1507,41 +1529,100 @@ rows exist rather than leaving you to work out how far it got.</p>
 </span></code></pre></div>
 <p><code>FSInputFile</code> carries a path, so the file has to exist in the <strong>bot container</strong>
 too — share a volume, or send bytes with <code>BufferedInputFile</code>.</p>
+<h2 id="sending-it-later">Sending it later<a class="headerlink" href="#sending-it-later" title="Link to this section">&para;</a></h2>
+<p><code>eta</code> puts a send in a table instead of on the queue, and a mover publishes it when the time
+comes:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">timedelta</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">timezone</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="n">identifier</span> <span class="o">=</span> <span class="n">bot</span><span class="o">.</span><span class="n">send</span><span class="p">(</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="n">chat_id</span><span class="o">=</span><span class="n">CHAT_ID</span><span class="p">,</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    <span class="n">text</span><span class="o">=</span><span class="s1">'Your appointment is tomorrow'</span><span class="p">,</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>    <span class="n">eta</span><span class="o">=</span><span class="n">timezone</span><span class="o">.</span><span class="n">now</span><span class="p">()</span> <span class="o">+</span> <span class="n">timedelta</span><span class="p">(</span><span class="n">hours</span><span class="o">=</span><span class="mi">23</span><span class="p">),</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="p">)</span>
+</span></code></pre></div>
+<p>The row and its <code>outbound.scheduled</code> event are written at once; what waits is the delivery.
+Nothing is published until <code>manage.py tgbot_dispatch_scheduled</code> runs, so <strong>schedule that</strong> —
+from cron, or with <code>--loop</code> in a container of its own. Until it does, the row is visible with
+<code>--dry-run</code> and the feed says what is waiting and for when.</p>
+<p>There is no admin page for the schedule: <code>--dry-run</code> is how you look at what is waiting, and
+<code>bot.cancel_scheduled(identifier)</code> is how you take something out of it. The feed is where the
+history lives, as it does for everything else here.</p>
+<p><code>bot.cancel_scheduled(identifier)</code> calls it off and answers with how many rows it removed.
+Zero means nothing was waiting — which is also the answer once a mover has claimed the row,
+because by then the message is on its way and deleting the row would not stop it.</p>
+<p><strong>A positive count is not a promise that nothing went out.</strong> A claim that has lapsed makes its
+row cancellable again, since any mover may publish it — and the mover that held it may still be
+inside the transport's own publish call, which nothing here can fence or hear from. So the row
+is deleted, the count says one, and the message goes out anyway. This is the same window the
+mover warns about in the log, and it is closed by arithmetic rather than by a lock: keep
+<code>--lease</code> comfortably longer than the deadline the transport puts on one call
+(<code>--lease 300</code> against a <code>KAFKA_TIMEOUT</code> of 10 leaves no practical window) and a live publish
+is never behind a lapsed claim.</p>
+<p><strong>A count can be partial where an id names more than one waiting send.</strong> <code>send_many</code> is not
+that case: it gives every chat its own id. It happens where a caller passed one explicit
+<code>correlation_id</code> to several scheduled sends, or where a handler's replies inherited the
+update's — then some rows may be claimed and some not, and the number is only what went. Pass
+an id per send if you need to call them off one at a time.</p>
+<p><strong>Why a table and not the transport.</strong> Of the four only RabbitMQ can delay a message, and
+only with a plugin or a dead-letter detour; a Redis list, a stream and a Kafka topic cannot.
+Building on the one that almost can would make <code>eta</code> work on a quarter of the deployments,
+against everything <code>BROKER</code> promises — so the wait sits above the transport, and a row that
+comes due becomes an ordinary queued message on whichever one is configured.</p>
+<p>Four things worth knowing before you use it:</p>
+<ul>
+<li><strong>A scheduled send is a database write</strong>, on the caller's own connection. So it rolls back
+  with the transaction that made it and needs nothing from <code>TRANSACTIONAL</code> — and the awaiting
+  twins await <code>abulk_create</code>, so an <code>eta</code> works from a coroutine as it does anywhere else.</li>
+<li><strong>The payload is frozen when you call.</strong> A payload the project cannot serialize raises
+  there rather than out of a mover hours later, and the bytes cannot drift if the settings
+  change in between.</li>
+<li><strong>An <code>eta</code> already past comes due at once</strong> rather than being refused: clock skew between a
+  web tier and a database is not a caller's problem, and "as soon as possible" is a
+  reasonable thing to schedule. It is still never faster than the mover's interval.</li>
+<li><strong>The <code>eta</code> has to match the project's <code>USE_TZ</code>.</strong> Under it a naive datetime is refused,
+  because Django would attach the project's <code>TIME_ZONE</code> to it and a message an hour early is
+  not worth guessing at. With <code>USE_TZ</code> off an <em>aware</em> one is refused instead — the project's
+  own datetime columns hold naive values, and the database refuses the rest.</li>
+</ul>
+<p>Inside the bot container <code>eta</code> schedules like anywhere else — it is the one case where <code>send</code>
+does not call Telegram directly, because sending now cannot be what an <code>eta</code> meant.</p>
 <h2 id="editing-a-message-you-queued">Editing a message you queued<a class="headerlink" href="#editing-a-message-you-queued" title="Link to this section">&para;</a></h2>
 <p><code>send()</code> hands back a correlation id, not a <code>message_id</code> — the reply Telegram gave belongs
 to the bot container, and the caller is somewhere else. The id an edit needs is recorded
 against that correlation id, and <code>bot.outcome()</code> reads it back:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">uuid</span><span class="w"> </span><span class="kn">import</span> <span class="n">uuid4</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">start_the_import</span><span class="p">(</span><span class="n">job</span><span class="p">):</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="c1"># an id of its own, so the outcome is about this message and no other</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="n">identifier</span> <span class="o">=</span> <span class="n">bot</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="n">CHAT_ID</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="s1">'Import started…'</span><span class="p">,</span> <span class="n">correlation_id</span><span class="o">=</span><span class="n">uuid4</span><span class="p">())</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    <span class="n">Job</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">pk</span><span class="o">=</span><span class="n">job</span><span class="o">.</span><span class="n">pk</span><span class="p">)</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">telegram_correlation_id</span><span class="o">=</span><span class="n">identifier</span><span class="p">)</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>    <span class="c1"># after the commit: called inside `atomic()`, `delay()` can start the task before the</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>    <span class="c1"># update above has landed, and it would read the id the row held before -- None</span>
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>    <span class="n">transaction</span><span class="o">.</span><span class="n">on_commit</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">finish_the_import</span><span class="o">.</span><span class="n">delay</span><span class="p">(</span><span class="n">job</span><span class="o">.</span><span class="n">pk</span><span class="p">))</span>
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>
-</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="nd">@app</span><span class="o">.</span><span class="n">task</span><span class="p">(</span><span class="n">bind</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">max_retries</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
-</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="k">def</span><span class="w"> </span><span class="nf">finish_the_import</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">job_pk</span><span class="p">):</span>
-</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a>    <span class="c1"># the row, not the instance `update()` left behind: a queryset update writes to the</span>
-</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a>    <span class="c1"># database and touches nothing in memory, so `job.telegram_correlation_id` on a stale</span>
-</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a>    <span class="c1"># instance is whatever it held before -- usually None</span>
-</span><span id="__span-6-18"><a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a>    <span class="n">job</span> <span class="o">=</span> <span class="n">Job</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">pk</span><span class="o">=</span><span class="n">job_pk</span><span class="p">)</span>
-</span><span id="__span-6-19"><a id="__codelineno-6-19" name="__codelineno-6-19" href="#__codelineno-6-19"></a>    <span class="n">answer</span> <span class="o">=</span> <span class="n">bot</span><span class="o">.</span><span class="n">outcome</span><span class="p">(</span><span class="n">job</span><span class="o">.</span><span class="n">telegram_correlation_id</span><span class="p">)</span>
-</span><span id="__span-6-20"><a id="__codelineno-6-20" name="__codelineno-6-20" href="#__codelineno-6-20"></a>    <span class="k">if</span> <span class="n">answer</span><span class="o">.</span><span class="n">state</span> <span class="o">==</span> <span class="s1">'failed'</span><span class="p">:</span>
-</span><span id="__span-6-21"><a id="__codelineno-6-21" name="__codelineno-6-21" href="#__codelineno-6-21"></a>        <span class="k">return</span>
-</span><span id="__span-6-22"><a id="__codelineno-6-22" name="__codelineno-6-22" href="#__codelineno-6-22"></a>    <span class="k">if</span> <span class="n">answer</span><span class="o">.</span><span class="n">state</span> <span class="o">!=</span> <span class="s1">'sent'</span><span class="p">:</span>
-</span><span id="__span-6-23"><a id="__codelineno-6-23" name="__codelineno-6-23" href="#__codelineno-6-23"></a>        <span class="c1"># `pending` and `unknown` both mean ask again, and `max_retries` is the bound past</span>
-</span><span id="__span-6-24"><a id="__codelineno-6-24" name="__codelineno-6-24" href="#__codelineno-6-24"></a>        <span class="c1"># which the honest answer is unresolved rather than another poll</span>
-</span><span id="__span-6-25"><a id="__codelineno-6-25" name="__codelineno-6-25" href="#__codelineno-6-25"></a>        <span class="k">raise</span> <span class="bp">self</span><span class="o">.</span><span class="n">retry</span><span class="p">(</span><span class="n">countdown</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
-</span><span id="__span-6-26"><a id="__codelineno-6-26" name="__codelineno-6-26" href="#__codelineno-6-26"></a>    <span class="n">bot</span><span class="o">.</span><span class="n">send</span><span class="p">(</span>
-</span><span id="__span-6-27"><a id="__codelineno-6-27" name="__codelineno-6-27" href="#__codelineno-6-27"></a>        <span class="s1">'edit_message_text'</span><span class="p">,</span>
-</span><span id="__span-6-28"><a id="__codelineno-6-28" name="__codelineno-6-28" href="#__codelineno-6-28"></a>        <span class="n">chat_id</span><span class="o">=</span><span class="n">answer</span><span class="o">.</span><span class="n">chat_id</span><span class="p">,</span>
-</span><span id="__span-6-29"><a id="__codelineno-6-29" name="__codelineno-6-29" href="#__codelineno-6-29"></a>        <span class="n">message_id</span><span class="o">=</span><span class="n">answer</span><span class="o">.</span><span class="n">message_id</span><span class="p">,</span>
-</span><span id="__span-6-30"><a id="__codelineno-6-30" name="__codelineno-6-30" href="#__codelineno-6-30"></a>        <span class="n">text</span><span class="o">=</span><span class="s1">'Import finished'</span><span class="p">,</span>
-</span><span id="__span-6-31"><a id="__codelineno-6-31" name="__codelineno-6-31" href="#__codelineno-6-31"></a>    <span class="p">)</span>
+<div class="highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">uuid</span><span class="w"> </span><span class="kn">import</span> <span class="n">uuid4</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">start_the_import</span><span class="p">(</span><span class="n">job</span><span class="p">):</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>    <span class="c1"># an id of its own, so the outcome is about this message and no other</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>    <span class="n">identifier</span> <span class="o">=</span> <span class="n">bot</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="n">CHAT_ID</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="s1">'Import started…'</span><span class="p">,</span> <span class="n">correlation_id</span><span class="o">=</span><span class="n">uuid4</span><span class="p">())</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    <span class="n">Job</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">pk</span><span class="o">=</span><span class="n">job</span><span class="o">.</span><span class="n">pk</span><span class="p">)</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">telegram_correlation_id</span><span class="o">=</span><span class="n">identifier</span><span class="p">)</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>    <span class="c1"># after the commit: called inside `atomic()`, `delay()` can start the task before the</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>    <span class="c1"># update above has landed, and it would read the id the row held before -- None</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>    <span class="n">transaction</span><span class="o">.</span><span class="n">on_commit</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">finish_the_import</span><span class="o">.</span><span class="n">delay</span><span class="p">(</span><span class="n">job</span><span class="o">.</span><span class="n">pk</span><span class="p">))</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="nd">@app</span><span class="o">.</span><span class="n">task</span><span class="p">(</span><span class="n">bind</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">max_retries</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="k">def</span><span class="w"> </span><span class="nf">finish_the_import</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">job_pk</span><span class="p">):</span>
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>    <span class="c1"># the row, not the instance `update()` left behind: a queryset update writes to the</span>
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>    <span class="c1"># database and touches nothing in memory, so `job.telegram_correlation_id` on a stale</span>
+</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a>    <span class="c1"># instance is whatever it held before -- usually None</span>
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a>    <span class="n">job</span> <span class="o">=</span> <span class="n">Job</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">pk</span><span class="o">=</span><span class="n">job_pk</span><span class="p">)</span>
+</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a>    <span class="n">answer</span> <span class="o">=</span> <span class="n">bot</span><span class="o">.</span><span class="n">outcome</span><span class="p">(</span><span class="n">job</span><span class="o">.</span><span class="n">telegram_correlation_id</span><span class="p">)</span>
+</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a>    <span class="k">if</span> <span class="n">answer</span><span class="o">.</span><span class="n">state</span> <span class="o">==</span> <span class="s1">'failed'</span><span class="p">:</span>
+</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a>        <span class="k">return</span>
+</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a>    <span class="k">if</span> <span class="n">answer</span><span class="o">.</span><span class="n">state</span> <span class="o">!=</span> <span class="s1">'sent'</span><span class="p">:</span>
+</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a>        <span class="c1"># `pending` and `unknown` both mean ask again, and `max_retries` is the bound past</span>
+</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a>        <span class="c1"># which the honest answer is unresolved rather than another poll</span>
+</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25" href="#__codelineno-7-25"></a>        <span class="k">raise</span> <span class="bp">self</span><span class="o">.</span><span class="n">retry</span><span class="p">(</span><span class="n">countdown</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+</span><span id="__span-7-26"><a id="__codelineno-7-26" name="__codelineno-7-26" href="#__codelineno-7-26"></a>    <span class="n">bot</span><span class="o">.</span><span class="n">send</span><span class="p">(</span>
+</span><span id="__span-7-27"><a id="__codelineno-7-27" name="__codelineno-7-27" href="#__codelineno-7-27"></a>        <span class="s1">'edit_message_text'</span><span class="p">,</span>
+</span><span id="__span-7-28"><a id="__codelineno-7-28" name="__codelineno-7-28" href="#__codelineno-7-28"></a>        <span class="n">chat_id</span><span class="o">=</span><span class="n">answer</span><span class="o">.</span><span class="n">chat_id</span><span class="p">,</span>
+</span><span id="__span-7-29"><a id="__codelineno-7-29" name="__codelineno-7-29" href="#__codelineno-7-29"></a>        <span class="n">message_id</span><span class="o">=</span><span class="n">answer</span><span class="o">.</span><span class="n">message_id</span><span class="p">,</span>
+</span><span id="__span-7-30"><a id="__codelineno-7-30" name="__codelineno-7-30" href="#__codelineno-7-30"></a>        <span class="n">text</span><span class="o">=</span><span class="s1">'Import finished'</span><span class="p">,</span>
+</span><span id="__span-7-31"><a id="__codelineno-7-31" name="__codelineno-7-31" href="#__codelineno-7-31"></a>    <span class="p">)</span>
 </span></code></pre></div>
 <p>It needs <code>EVENT_LOG</code> on and an <code>EVENT_LOG_KINDS</code> that is empty or keeps the four kinds a
 correct outcome requires, <strong>in the bot container as well as here</strong> — the rows are written by
@@ -1561,14 +1642,14 @@ the bot container is what the queue exists to avoid.</p>
 <h2 id="inside-a-transaction">Inside a transaction<a class="headerlink" href="#inside-a-transaction" title="Link to this section">&para;</a></h2>
 <p>A send writes to the broker as it is called, and that write is not part of your
 transaction:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">with</span> <span class="n">transaction</span><span class="o">.</span><span class="n">atomic</span><span class="p">():</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>    <span class="n">order</span> <span class="o">=</span> <span class="n">Order</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>    <span class="n">bot</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="n">CHAT_ID</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="sa">f</span><span class="s1">'Order </span><span class="si">{</span><span class="n">order</span><span class="o">.</span><span class="n">pk</span><span class="si">}</span><span class="s1"> accepted'</span><span class="p">)</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="n">charge</span><span class="p">(</span><span class="n">order</span><span class="p">)</span>  <span class="c1"># raises</span>
+<div class="highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="k">with</span> <span class="n">transaction</span><span class="o">.</span><span class="n">atomic</span><span class="p">():</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>    <span class="n">order</span> <span class="o">=</span> <span class="n">Order</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>    <span class="n">bot</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="n">CHAT_ID</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="sa">f</span><span class="s1">'Order </span><span class="si">{</span><span class="n">order</span><span class="o">.</span><span class="n">pk</span><span class="si">}</span><span class="s1"> accepted'</span><span class="p">)</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="n">charge</span><span class="p">(</span><span class="n">order</span><span class="p">)</span>  <span class="c1"># raises</span>
 </span></code></pre></div>
 <p>The row is gone and the message is not. <code>TRANSACTIONAL</code> holds the <strong>queue</strong> write until the
 commit, so the block above announces nothing when it rolls back:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">TELEGRAM_BOT</span> <span class="o">=</span> <span class="p">{</span><span class="s1">'TRANSACTIONAL'</span><span class="p">:</span> <span class="kc">True</span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">TELEGRAM_BOT</span> <span class="o">=</span> <span class="p">{</span><span class="s1">'TRANSACTIONAL'</span><span class="p">:</span> <span class="kc">True</span><span class="p">}</span>
 </span></code></pre></div>
 <p>It is off by default because it moves when a message reaches the queue.
 <strong><a href="../Settings/#bot-behavior">Settings</a></strong> has what changes with it on — the event row waits
@@ -1584,12 +1665,12 @@ raised in your view. For direct calls, <code>RAISE_EXCEPTION</code> propagates t
 only where <code>send_raw</code> still waits for the answer, which in a process that serves
 the webhook it does not. See <a href="#choosing-the-route-yourself">Choosing the route yourself</a>
 above: there the failure reaches the log rather than the <code>except</code> below.</p>
-<div class="highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">aiogram.exceptions</span><span class="w"> </span><span class="kn">import</span> <span class="n">TelegramBadRequest</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="k">try</span><span class="p">:</span>
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="n">bot</span><span class="o">.</span><span class="n">send_raw</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="n">CHAT_ID</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="s1">'**broken*'</span><span class="p">,</span> <span class="n">parse_mode</span><span class="o">=</span><span class="s1">'Markdown'</span><span class="p">)</span>
-</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="k">except</span> <span class="n">TelegramBadRequest</span><span class="p">:</span>
-</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    <span class="o">...</span>
+<div class="highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">aiogram.exceptions</span><span class="w"> </span><span class="kn">import</span> <span class="n">TelegramBadRequest</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="k">try</span><span class="p">:</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="n">bot</span><span class="o">.</span><span class="n">send_raw</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="n">CHAT_ID</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="s1">'**broken*'</span><span class="p">,</span> <span class="n">parse_mode</span><span class="o">=</span><span class="s1">'Markdown'</span><span class="p">)</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="k">except</span> <span class="n">TelegramBadRequest</span><span class="p">:</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>    <span class="o">...</span>
 </span></code></pre></div>
 <p>Telegram rate-limit refusals are retried up to <code>MAX_RETRIES</code>; exhausting them
 logs an error and, with <code>RAISE_EXCEPTION</code>, re-raises — into the caller that was
@@ -1597,9 +1678,9 @@ waiting, so the same qualification applies. See <strong><a href="../Rate-limits/
 for staying under the limits in the first place.</p>
 <h2 id="from-celery">From Celery<a class="headerlink" href="#from-celery" title="Link to this section">&para;</a></h2>
 <p>Queue the call and let the bot container do the talking:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nd">@app</span><span class="o">.</span><span class="n">task</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">notify</span><span class="p">(</span><span class="n">chat_id</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">text</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>    <span class="n">bot</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="n">chat_id</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="n">text</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nd">@app</span><span class="o">.</span><span class="n">task</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">notify</span><span class="p">(</span><span class="n">chat_id</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">text</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>    <span class="n">bot</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">chat_id</span><span class="o">=</span><span class="n">chat_id</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="n">text</span><span class="p">)</span>
 </span></code></pre></div>
 <p>Do not build a <code>TelegramBot()</code> per task — the shared <code>bot</code> is lazy and safe to
 import anywhere; a fresh instance means a fresh event loop and HTTP session
@@ -1624,7 +1705,7 @@ that nothing closes.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 3, 2026 13:07:09 UTC">September 3, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 4, 2026 00:40:45 UTC">September 4, 2026</span>
   </span>
 
     

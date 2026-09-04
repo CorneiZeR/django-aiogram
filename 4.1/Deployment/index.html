@@ -899,6 +899,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-jobs-nothing-runs-for-you" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The jobs nothing runs for you
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-enabled0-turns-off" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1323,6 +1334,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-jobs-nothing-runs-for-you" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The jobs nothing runs for you
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-enabled0-turns-off" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1632,8 +1654,9 @@ refusal replays a run of messages, and neither is something to discover in produ
 listener configuration is the part everybody loses an afternoon to, not because one broker is a
 production answer.</p>
 <h2 id="upgrading-to-30-order-matters-once">Upgrading to 3.0: order matters, once<a class="headerlink" href="#upgrading-to-30-order-matters-once" title="Link to this section">&para;</a></h2>
-<p><strong>Run <code>manage.py migrate</code> first.</strong> The package ships one table from 3.0, and it
-is created whether or not you turn the event log on.</p>
+<p><strong>Run <code>manage.py migrate</code> first.</strong> The package shipped one table from 3.0 — a second, the
+schedule table that an <code>eta</code> writes to, arrived in 4.1 — and the event log's is created whether
+or not you turn the log on.</p>
 <p><strong>Then deploy the bot container before the web tier.</strong> 3.0 nests a queued call
 inside an envelope. The new consumer reads the old flat shape, so a backlog
 drains across the upgrade — the reverse does not hold: a 2.x consumer handed a
@@ -1650,6 +1673,53 @@ messages would vanish with a debug line and nothing else. The flag is for
 processes that must not <strong>send</strong> — not to Telegram, not into the broker: image builds, a
 migration container, CI. Not "reach nothing at all": the depth reads answer either way, on
 purpose. See below.</p>
+<h2 id="the-jobs-nothing-runs-for-you">The jobs nothing runs for you<a class="headerlink" href="#the-jobs-nothing-runs-for-you" title="Link to this section">&para;</a></h2>
+<p>Two commands do work no request path does, so a deployment that never schedules them is a
+deployment where that work never happens:</p>
+<table>
+<thead>
+<tr>
+<th>command</th>
+<th>what waits on it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>manage.py tgbot_prune_events</code></td>
+<td>the event log's size. <code>W006</code> warns while <code>EVENT_LOG_RETENTION_DAYS</code> is unset</td>
+</tr>
+<tr>
+<td><code>manage.py tgbot_dispatch_scheduled</code></td>
+<td>every send made with an <code>eta</code>. Without it a scheduled message waits for ever</td>
+</tr>
+</tbody>
+</table>
+<p>From cron, or as a container of its own:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="w">  </span><span class="nt">scheduler</span><span class="p">:</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">your-image</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">python manage.py tgbot_dispatch_scheduled --loop --interval 5</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="c1"># no token and no bot here: a due row already holds the bytes the queue wants, so this</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="c1"># container needs the database and the broker and nothing else</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">      </span><span class="nt">DATABASE_URL</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${DATABASE_URL}</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">      </span><span class="nt">REDIS_URL</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${REDIS_URL}</span>
+</span></code></pre></div>
+<p>Several movers are safe <strong>while a claim is live</strong>: each row is claimed by a compare-and-set
+update, so two racing for one produce a winner and a loser. Delivery here is at-least-once,
+like every transport this package carries — a claim is a lease, and a publish that outlives
+its own lease can be joined by a mover taking the row back, which sends the message twice.
+Nothing fences a call already in flight to another system, so <strong>keep <code>--lease</code> comfortably
+above the deadline the transport puts on one call</strong> (<code>REDIS_TIMEOUT</code>, <code>RABBITMQ_TIMEOUT</code>,
+<code>KAFKA_TIMEOUT</code>); the mover warns when it is not, and the warning is a warning rather than a
+guard.</p>
+<p><code>--grace</code> keeps a mover that was down for a day from delivering a day of stale messages at
+once, <code>--max-attempts</code> gives up on a row the broker keeps refusing, <code>--limit</code> bounds one pass,
+and <code>--dry-run</code> says what is waiting without claiming anything.</p>
+<p>Under <code>--loop</code>, a pass that filled <code>--limit</code> goes straight round again rather than sleeping,
+because a full batch means there is a backlog behind it. Full is counted in rows <em>claimed</em>,
+not rows published — a batch that was all dropped past its grace, or all refused by the
+broker, is still a full batch, and a backlog of those would otherwise clear at one <code>--limit</code>
+per <code>--interval</code>.</p>
 <h2 id="what-enabled0-turns-off">What ENABLED=0 turns off<a class="headerlink" href="#what-enabled0-turns-off" title="Link to this section">&para;</a></h2>
 <ul>
 <li>no router autodiscovery, so those modules are never imported</li>
@@ -1688,11 +1758,11 @@ than being read as enabled.</p>
 <p>A clean exit still counts as a crash under <code>restart: always</code>, so a disabled
 <code>start_tgbot</code> would restart forever. Either keep the container out of the
 default set:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="w">  </span><span class="nt">telegram_bot</span><span class="p">:</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">    </span><span class="nt">profiles</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">bot</span><span class="p p-Indicator">]</span>
+<div class="highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="w">  </span><span class="nt">telegram_bot</span><span class="p">:</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">    </span><span class="nt">profiles</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">bot</span><span class="p p-Indicator">]</span>
 </span></code></pre></div>
 <p>or park it:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">python manage.py start_tgbot --idle</span>
+<div class="highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">python manage.py start_tgbot --idle</span>
 </span></code></pre></div>
 <p><code>--idle</code> blocks until a signal instead of returning.</p>
 <h2 id="health-and-shutdown">Health and shutdown<a class="headerlink" href="#health-and-shutdown" title="Link to this section">&para;</a></h2>
@@ -1705,7 +1775,7 @@ acknowledgement comes last because the drain is what finishes those sends, and t
 that would otherwise have acknowledged them stopped at the join — without this step a
 graceful stop would leave them to be sent again. Give the container enough grace period
 to finish an in-flight send:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="w">    </span><span class="nt">stop_grace_period</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30s</span>
+<div class="highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="w">    </span><span class="nt">stop_grace_period</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30s</span>
 </span></code></pre></div>
 <p>The grace period has to cover the waits shutdown makes, in order. For the bot
 container, which is what this table is about:</p>
@@ -1756,12 +1826,12 @@ timeout still happen, it just yields while they do. See
 <p>One thing is worth knowing rather than discovering. The async client belongs to
 the loop that created it, so each loop gets its own, and only that loop may close
 it. If your server has a lifespan hook, close it there:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram</span><span class="w"> </span><span class="kn">import</span> <span class="n">bot</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># an ASGI lifespan shutdown, or django-ninja's</span>
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">shutdown</span><span class="p">():</span>
-</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="k">await</span> <span class="n">bot</span><span class="o">.</span><span class="n">aclose</span><span class="p">()</span>
+<div class="highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram</span><span class="w"> </span><span class="kn">import</span> <span class="n">bot</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="c1"># an ASGI lifespan shutdown, or django-ninja's</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">shutdown</span><span class="p">():</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    <span class="k">await</span> <span class="n">bot</span><span class="o">.</span><span class="n">aclose</span><span class="p">()</span>
 </span></code></pre></div>
 <p>That closes the async client for the loop calling it, and nothing else — the
 worker's <code>close()</code> is a different thing and belongs in the bot container.</p>
@@ -1774,7 +1844,7 @@ exists. Nothing accumulates if you skip it — the registry drops clients whose 
 has closed — but the sockets stay open until then, and the close is untidy rather
 than clean.</p>
 <h2 id="hiredis-if-the-consumer-is-busy">hiredis, if the consumer is busy<a class="headerlink" href="#hiredis-if-the-consumer-is-busy" title="Link to this section">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">'django-aiogram[hiredis]'</span>
+<div class="highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">'django-aiogram[hiredis]'</span>
 </span></code></pre></div>
 <p>Only on the two Redis transports; the other drivers do their own parsing and this extra does
 nothing for them.</p>
@@ -1787,7 +1857,7 @@ parsing and not before.</p>
 <h2 id="is-it-working">Is it working?<a class="headerlink" href="#is-it-working" title="Link to this section">&para;</a></h2>
 <p><code>docker ps</code> answers the wrong question: the process being up says nothing about
 the consumer thread, which can be dead while polling continues.</p>
-<div class="highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_healthcheck
+<div class="highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_healthcheck
 </span></code></pre></div>
 <p>Exit 0 and a line on stdout when healthy, non-zero with the reason on stderr
 otherwise. It checks two things, and asks the transport both: the consumer reported
@@ -1861,18 +1931,18 @@ consumer went on sending and the probe went on passing. Since 4.0 every update i
 had, so that particular failure recovers by itself on the next update. A handler that raises for
 its own reasons still will, and the probe will still pass: aiogram logs it and the update stays
 unhandled, so watch your handler logs rather than the exit code for that.</p>
-<div class="highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="w">  </span><span class="nt">telegram_bot</span><span class="p">:</span>
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">python manage.py start_tgbot</span>
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
-</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">      </span><span class="c1"># required: a healthcheck is a separate process, and `manage.py` only sets this</span>
-</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">      </span><span class="c1"># inside its own — so without it here the probe cannot read your settings at all</span>
-</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">      </span><span class="nt">DJANGO_SETTINGS_MODULE</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">core.settings</span>
-</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">    </span><span class="nt">healthcheck</span><span class="p">:</span>
-</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">      </span><span class="nt">test</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">'CMD'</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">'python'</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">'-m'</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">'django_aiogram.healthcheck'</span><span class="p p-Indicator">]</span>
-</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="w">      </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30s</span>
-</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="w">      </span><span class="nt">timeout</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5s</span>
-</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="w">      </span><span class="nt">start_period</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30s</span>
-</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="w">      </span><span class="nt">retries</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
+<div class="highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="w">  </span><span class="nt">telegram_bot</span><span class="p">:</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">python manage.py start_tgbot</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">      </span><span class="c1"># required: a healthcheck is a separate process, and `manage.py` only sets this</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">      </span><span class="c1"># inside its own — so without it here the probe cannot read your settings at all</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">      </span><span class="nt">DJANGO_SETTINGS_MODULE</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">core.settings</span>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">    </span><span class="nt">healthcheck</span><span class="p">:</span>
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="w">      </span><span class="nt">test</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">'CMD'</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">'python'</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">'-m'</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">'django_aiogram.healthcheck'</span><span class="p p-Indicator">]</span>
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="w">      </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30s</span>
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="w">      </span><span class="nt">timeout</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5s</span>
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="w">      </span><span class="nt">start_period</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30s</span>
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="w">      </span><span class="nt">retries</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
 </span></code></pre></div>
 <p><strong>Not <code>manage.py tgbot_healthcheck</code>, and this matters more than it looks.</strong> That
 command still exists and still works; what it also does is <code>django.setup()</code>, which
@@ -1909,7 +1979,7 @@ first turns, so a container checked immediately after start has nothing to show
 yet.</p>
 <p>To fail when work is backing up rather than only when the worker is gone, set a
 queue limit — as a setting, or per invocation, where the flag wins:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_healthcheck<span class="w"> </span>--max-queue<span class="w"> </span><span class="m">1000</span><span class="w"> </span>--max-age<span class="w"> </span><span class="m">25</span>
+<div class="highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_healthcheck<span class="w"> </span>--max-queue<span class="w"> </span><span class="m">1000</span><span class="w"> </span>--max-age<span class="w"> </span><span class="m">25</span>
 </span></code></pre></div>
 <p><code>--max-age</code> has a ceiling it cannot be argued out of: three <code>HEARTBEAT_INTERVAL</code>s, because
 that is the TTL the consumer writes the key with. A heartbeat can never be <em>observed</em>
@@ -1984,7 +2054,7 @@ since only one process should run <code>start_tgbot</code> in the first place.</
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 1, 2026 01:02:33 UTC">September 1, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 4, 2026 00:40:45 UTC">September 4, 2026</span>
   </span>
 
     

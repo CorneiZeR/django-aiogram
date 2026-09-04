@@ -1416,6 +1416,22 @@ structlog backend can index and filter them.</p>
 <td>how many messages a deferred publish was carrying when it failed: every chunk of a fan-out, not one of them</td>
 </tr>
 <tr>
+<td><code>tg_published</code> / <code>tg_claimed</code></td>
+<td>how many scheduled sends one dispatch pass put on the queue, of how many it claimed</td>
+</tr>
+<tr>
+<td><code>tg_overdue</code> / <code>tg_grace</code></td>
+<td>how late a scheduled send was, against the <code>--grace</code> that refused it</td>
+</tr>
+<tr>
+<td><code>tg_attempts</code></td>
+<td>how many failed publishes a scheduled send had had when the mover gave up on it</td>
+</tr>
+<tr>
+<td><code>tg_lease</code> / <code>tg_call_ceiling</code></td>
+<td>the <code>--lease</code> a mover is running with, against the deadline the transport puts on one publish — reported where the first is not longer than the second</td>
+</tr>
+<tr>
 <td><code>tg_database</code></td>
 <td>the connection alias a decision about a transaction was made on</td>
 </tr>
@@ -1663,7 +1679,7 @@ of its values.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 2, 2026 07:45:06 UTC">September 2, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 4, 2026 00:40:45 UTC">September 4, 2026</span>
   </span>
 
     

@@ -1169,9 +1169,24 @@
 the lowest section that applies to the version you are on and work <strong>up</strong> the page, one release
 at a time: each covers a single hop and assumes the ones below it are done.</p>
 <h1 id="from-40-to-41">From 4.0 to 4.1<a class="headerlink" href="#from-40-to-41" title="Link to this section">&para;</a></h1>
-<p>Nothing is required. Every setting 4.0 had keeps its meaning and its default, no migration
-runs, and the wire format is unchanged — so the bot container and the web tier may be
-deployed in either order.</p>
+<p><strong>One required step: run <code>migrate</code>.</strong> 4.1 adds a table, and a project that skips the
+migration and then passes an <code>eta</code> gets an error rather than a scheduled message.</p>
+<p>Everything else is optional. Every setting 4.0 had keeps its meaning and its default, no
+existing behaviour changes, and the wire format is unchanged — so the bot container and the
+web tier may be deployed in either order.</p>
+<h2 id="run-migrate-there-is-a-second-table">Run <code>migrate</code>: there is a second table<a class="headerlink" href="#run-migrate-there-is-a-second-table" title="Link to this section">&para;</a></h2>
+<p>4.1 adds <code>django_aiogram_scheduled</code>, which is where a send with an <code>eta</code> waits. Nothing uses
+it until a caller passes one, so the migration is safe on a running deployment — it creates
+an empty table and one index.</p>
+<p><strong>It is created wherever your own tables go.</strong> The router that sends the event log to its
+own alias routes by <em>model</em> from 4.1 rather than by app label: it keeps the schedule off a
+<strong>separate</strong> event-log database and says nothing about it otherwise, so with
+<code>EVENT_LOG_DATABASE</code> unset — or naming <code>default</code> — the table lands on <code>default</code> like any of
+your own. A project that installed <code>TelegramEventLogRouter</code> gets this for free; one that wrote
+its own router matching <code>app_label == 'django_aiogram'</code> should narrow it to <code>TelegramEvent</code>,
+or the schedule will be created somewhere the mover does not read.</p>
+<p>And if you use <code>eta</code>, schedule <code>manage.py tgbot_dispatch_scheduled</code> —
+<strong><a href="../Deployment/">Deployment</a></strong> has the container.</p>
 <h2 id="botoutcome-is-new-and-needs-the-event-log"><code>bot.outcome()</code> is new, and needs the event log<a class="headerlink" href="#botoutcome-is-new-and-needs-the-event-log" title="Link to this section">&para;</a></h2>
 <p>Nothing to do, but worth knowing it exists: the <code>message_id</code> Telegram gave for a queued
 message is readable by the process that queued it now, which is what an edit or a delete
@@ -1616,7 +1631,7 @@ left to redeliver.</p>
 web and Celery processes. A brief window where the new consumer reads old
 payloads is fine; the reverse is not.</p>
 <h2 id="run-migrate_2">Run migrate<a class="headerlink" href="#run-migrate_2" title="Link to this section">&para;</a></h2>
-<p>The package ships one table now, and <code>migrate</code> creates it whether or not you
+<p>The package shipped one table at 4.0, and <code>migrate</code> creates it whether or not you
 turn the event log on. Creating it later on a live database is the more
 expensive order, so do it with the upgrade — see <strong><a href="../Event-log/">Event log</a></strong>
 before switching the feature on.</p>
@@ -1799,7 +1814,7 @@ it — see the section above.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 3, 2026 13:07:09 UTC">September 3, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 4, 2026 00:40:45 UTC">September 4, 2026</span>
   </span>
 
     
