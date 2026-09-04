@@ -219,12 +219,22 @@ def test_connecting_with_no_registry_is_a_caller_with_no_opinion(registry):
 
 
 def test_disconnecting_stops_the_counting(registry):
-    """A test wants a clean registry between cases, and a deployment never comes back here."""
-    connect(registry)
+    """A test wants a clean registry between cases, and a deployment never comes back here.
+
+    **The receiver is asserted gone, not only the samples.** A `disconnect` that unregistered
+    the collectors and left the exporter attached passes the sample check on its own: the
+    batch still reaches the old exporter and still increments its counters, which are simply
+    no longer in the registry being read. And every reconnect would then add another receiver
+    to the pile.
+    """
+    metrics = connect(registry)
     disconnect()
 
     publish(sender=None, batch=[Event(kind='outbound.sent')])
 
+    assert metrics not in [receiver for _key, receiver, *_ in events_recorded.receivers], (
+        'the exporter is still attached to the feed, so it goes on counting into a registry nobody reads'
+    )
     assert value(registry, 'django_aiogram_events_total', kind='outbound.sent') is None
 
 

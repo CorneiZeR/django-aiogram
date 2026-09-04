@@ -286,11 +286,15 @@ every other number is missing some.
 **`connect()` rather than `events_recorded.connect(EventMetrics())`.** A signal keeps a *weak*
 reference by default and the exporter is an instance, so the obvious line connects a receiver
 that is collected before the first batch — metrics that read as no traffic at all. `connect()`
-holds it, and calling it from two apps answers with the one already connected rather than
-raising about a duplicate collector.
+holds it, and two apps calling it answer with the one already connected rather than raising
+about a duplicate collector — as long as they agree about the registry.
 
 `connect(registry)` takes a registry, for a project running `django_prometheus` or one that
-keeps its own; the default is `prometheus_client`'s process-wide one. Serving the numbers stays
+keeps its own; the default is `prometheus_client`'s process-wide one. A second call naming a
+*different* registry is refused by name: answering with the first exporter would leave that
+registry empty and its owner scraping zeros for ever, and nothing about the call would say so.
+`connect()` with no registry is not that case — it is a caller with no opinion, and gets what
+is connected. Serving the numbers stays
 the project's business — this fills a registry in and does nothing else.
 
 **What is deliberately not a label.** `chat_id` and `user_id` are a series per person,

@@ -106,7 +106,9 @@
   reference and the exporter is a callable instance: the obvious line connects a receiver that
   is collected before the first batch, and the metrics then read as no traffic at all. Two
   apps calling it get the one already connected rather than a `ValueError` about a duplicate
-  collector.
+  collector — where they agree about the registry. A second call naming a different one is
+  refused by name instead, since answering with the first would leave that registry empty and
+  nothing about the call would say so.
 
   It cannot break the feed. The seam contains a receiver that raises, and this one contains
   itself as well rather than leaning on that — a shipped exporter that relied on somebody
