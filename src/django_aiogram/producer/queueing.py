@@ -83,7 +83,11 @@ def _dropped(
         )
 
 
-def serialise(function: str, messages: list[tuple[uuid.UUID, dict[str, Any]]]) -> Queueing:
+def serialise(
+    function: str,
+    messages: list[tuple[uuid.UUID, dict[str, Any]]],
+    queued_at: float | None = None,
+) -> Queueing:
     """Turn the calls into payloads, and stamp the moment they were made.
 
     Guarded, not left to the caller: a payload that cannot be serialized loses its message
@@ -103,8 +107,13 @@ def serialise(function: str, messages: list[tuple[uuid.UUID, dict[str, Any]]]) -
     keyboard, a list of entities, a dict it builds and reuses. Encoding here freezes those
     where the call was written, rather than reading them again from a commit hook that runs
     after the caller has moved on.
+
+    ``queued_at`` is passed in by exactly one caller, and for a reason worth stating: a
+    scheduled send is serialized when it is *scheduled* and published when it comes **due**,
+    so stamping it now would report the whole wait as queue latency. Its due time goes in
+    instead, and the delivered row then measures the queue rather than the calendar.
     """
-    queued_at = time.time()
+    queued_at = time.time() if queued_at is None else queued_at
     serializer = get_serializer()
     # two gates, not one: whether to record at all is a different question from whether to
     # summarize the arguments, and describing them is the expensive half. A metrics receiver

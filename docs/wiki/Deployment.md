@@ -176,8 +176,9 @@ production answer.
 
 ## Upgrading to 3.0: order matters, once
 
-**Run `manage.py migrate` first.** The package ships one table from 3.0, and it
-is created whether or not you turn the event log on.
+**Run `manage.py migrate` first.** The package shipped one table from 3.0 — a second, the
+schedule table that an `eta` writes to, arrived in 4.1 — and the event log's is created whether
+or not you turn the log on.
 
 **Then deploy the bot container before the web tier.** 3.0 nests a queued call
 inside an envelope. The new consumer reads the old flat shape, so a backlog
@@ -198,6 +199,48 @@ messages would vanish with a debug line and nothing else. The flag is for
 processes that must not **send** — not to Telegram, not into the broker: image builds, a
 migration container, CI. Not "reach nothing at all": the depth reads answer either way, on
 purpose. See below.
+
+## The jobs nothing runs for you
+
+Two commands do work no request path does, so a deployment that never schedules them is a
+deployment where that work never happens:
+
+| command | what waits on it |
+| --- | --- |
+| `manage.py tgbot_prune_events` | the event log's size. `W006` warns while `EVENT_LOG_RETENTION_DAYS` is unset |
+| `manage.py tgbot_dispatch_scheduled` | every send made with an `eta`. Without it a scheduled message waits for ever |
+
+From cron, or as a container of its own:
+
+```yaml
+  scheduler:
+    image: your-image
+    command: python manage.py tgbot_dispatch_scheduled --loop --interval 5
+    # no token and no bot here: a due row already holds the bytes the queue wants, so this
+    # container needs the database and the broker and nothing else
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+```
+
+Several movers are safe **while a claim is live**: each row is claimed by a compare-and-set
+update, so two racing for one produce a winner and a loser. Delivery here is at-least-once,
+like every transport this package carries — a claim is a lease, and a publish that outlives
+its own lease can be joined by a mover taking the row back, which sends the message twice.
+Nothing fences a call already in flight to another system, so **keep `--lease` comfortably
+above the deadline the transport puts on one call** (`REDIS_TIMEOUT`, `RABBITMQ_TIMEOUT`,
+`KAFKA_TIMEOUT`); the mover warns when it is not, and the warning is a warning rather than a
+guard.
+
+`--grace` keeps a mover that was down for a day from delivering a day of stale messages at
+once, `--max-attempts` gives up on a row the broker keeps refusing, `--limit` bounds one pass,
+and `--dry-run` says what is waiting without claiming anything.
+
+Under `--loop`, a pass that filled `--limit` goes straight round again rather than sleeping,
+because a full batch means there is a backlog behind it. Full is counted in rows *claimed*,
+not rows published — a batch that was all dropped past its grace, or all refused by the
+broker, is still a full batch, and a backlog of those would otherwise clear at one `--limit`
+per `--interval`.
 
 ## What ENABLED=0 turns off
 

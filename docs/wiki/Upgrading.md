@@ -6,9 +6,29 @@ at a time: each covers a single hop and assumes the ones below it are done.
 
 # From 4.0 to 4.1
 
-Nothing is required. Every setting 4.0 had keeps its meaning and its default, no migration
-runs, and the wire format is unchanged — so the bot container and the web tier may be
-deployed in either order.
+**One required step: run `migrate`.** 4.1 adds a table, and a project that skips the
+migration and then passes an `eta` gets an error rather than a scheduled message.
+
+Everything else is optional. Every setting 4.0 had keeps its meaning and its default, no
+existing behaviour changes, and the wire format is unchanged — so the bot container and the
+web tier may be deployed in either order.
+
+## Run `migrate`: there is a second table
+
+4.1 adds `django_aiogram_scheduled`, which is where a send with an `eta` waits. Nothing uses
+it until a caller passes one, so the migration is safe on a running deployment — it creates
+an empty table and one index.
+
+**It is created wherever your own tables go.** The router that sends the event log to its
+own alias routes by *model* from 4.1 rather than by app label: it keeps the schedule off a
+**separate** event-log database and says nothing about it otherwise, so with
+`EVENT_LOG_DATABASE` unset — or naming `default` — the table lands on `default` like any of
+your own. A project that installed `TelegramEventLogRouter` gets this for free; one that wrote
+its own router matching `app_label == 'django_aiogram'` should narrow it to `TelegramEvent`,
+or the schedule will be created somewhere the mover does not read.
+
+And if you use `eta`, schedule `manage.py tgbot_dispatch_scheduled` —
+**[Deployment](Deployment.md)** has the container.
 
 ## `bot.outcome()` is new, and needs the event log
 
@@ -529,7 +549,7 @@ payloads is fine; the reverse is not.
 
 ## Run migrate
 
-The package ships one table now, and `migrate` creates it whether or not you
+The package shipped one table at 4.0, and `migrate` creates it whether or not you
 turn the event log on. Creating it later on a live database is the more
 expensive order, so do it with the upgrade — see **[Event log](Event-log.md)**
 before switching the feature on.

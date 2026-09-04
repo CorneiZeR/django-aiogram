@@ -302,6 +302,53 @@ Reading `unknown` for everything, on a project with `EVENT_LOG_DATABASE` set, me
 query is going to the wrong alias — `outcome()` uses the log's, so this is a sign of a
 hand-written query rather than of this one.
 
+## A scheduled send never goes out
+
+Nothing on the write path publishes one, so check first that
+`manage.py tgbot_dispatch_scheduled` is actually scheduled — from cron, or running with
+`--loop`. `--dry-run` answers the question directly: it counts what is due, what is not due
+yet and what a mover has claimed, and claims nothing itself.
+
+Then, in the order these bite:
+
+- **The mover refuses to start** where `ENABLED` is false, because a scheduled send would
+  have nowhere to go. It says so and claims nothing.
+- **`--grace` dropped it.** A row more than that many seconds overdue is recorded as a drop
+  with `TooLate` rather than sent late; the feed says which and by how much. `--grace 0` is
+  the default and refuses nothing — however overdue a row is, it goes out.
+- **The broker kept refusing it and the mover gave up.** After `--max-attempts` failed
+  publishes, five by default, the row is deleted with a `TooManyAttempts` drop naming the
+  count in `detail.attempts`. `--max-attempts 0` retries without end instead — the row's own
+  counter has no ceiling to reach, while the drop event's `attempt` column stops at 32767.
+- **A row is gone and there is no drop row for it at all.** Two causes, both by design. A
+  mover killed between publishing and deleting leaves the row for its lease to lapse, and the
+  next pass publishes it again — a duplicate rather than a drop, which is what at-least-once
+  means here. And a mover whose lease lapsed *while* it was publishing no longer owns the row,
+  so it records no `TooManyAttempts` or `TooLate` about it: the mover that does own it decides
+  what happens, and a drop row from the one that lost the race would be a claim about a
+  message the winner may have delivered. Look for the `outbound.sent` under the correlation id
+  before looking for a drop.
+- **A row is claimed and still there.** Wait one `--lease` (300 seconds by default) and
+  another mover takes it back: a claim is a lease, not a deed, because a mover that died
+  holding a row would otherwise strand the message for ever. What that costs is a second
+  copy where the mover died *after* publishing, which is the trade this package makes
+  everywhere — at-least-once, never silent loss, **with a finite lease**. A publish that
+  outlives its own lease is the same exposure from the other end: nothing fences a request
+  already in flight to another system, so keep `--lease` comfortably above the deadline the
+  transport puts on one call. The mover says so in the log when it is not. Under `--lease 0`
+  a claim never lapses, so a mover that died holding one leaves that row where it is until
+  somebody clears `claimed_at`; that is the exception, and it is the reason the default is
+  not zero.
+
+  Whether to expect a drop row depends on which happened. A publish that *failed* records
+  one and says why; a mover that was **killed** between publishing and deleting records
+  nothing at all, so do not go looking for a row that explains it. `--lease 0` trusts a
+  claim for ever, and then a crash does need an operator.
+- **The row is in the wrong database.** The schedule is *not* routed to
+  `EVENT_LOG_DATABASE`; it lives with the project's own tables. A project that pointed a
+  router at this app by label before 4.1 should check `migrate` created
+  `django_aiogram_scheduled` where the mover reads it.
+
 ## The bot ignores ENABLED
 
 `ENABLED` is parsed, so `'false'` disables. If a value cannot be parsed you get

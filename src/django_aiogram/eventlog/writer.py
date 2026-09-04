@@ -19,6 +19,7 @@ from django.db import (
     connections,
     transaction,
 )
+from django.db.backends.base.operations import BaseDatabaseOperations
 from django.utils import timezone
 
 from django_aiogram.eventlog.dbrouter import event_log_database
@@ -65,6 +66,26 @@ def _text(value: object, length: int) -> str:
     return str(value).replace('\x00', '')[:length]
 
 
+#: the portable ceiling of `models.TelegramEvent.attempt`, read from Django's own table rather
+#: than written down: it is the range every backend is expected to enforce, and widening the
+#: column carries here on its own. SQLite reports no limit at all for the type, so a literal
+#: measured locally would be the one number that never fires in the tests
+_ATTEMPT_CEILING = BaseDatabaseOperations.integer_field_ranges['PositiveSmallIntegerField'][1]
+
+
+def _attempt(value: int) -> int:
+    """Fit a count into its column, saturating rather than raising.
+
+    Same job as :func:`_text` does for a width, and the same reason: a value that does not fit
+    its column does not fail its own row, it fails the batch of two hundred it travelled in.
+    The count reaching here is not always this package's own -- ``tgbot_dispatch_scheduled
+    --max-attempts`` takes any positive number, and a bound above 32767 writes its give-up
+    event with a value PostgreSQL refuses. Saturating is honest for a field nobody reads past a
+    handful; the exact count lives on the schedule row, which is a ``BigInteger``.
+    """
+    return min(max(0, value), _ATTEMPT_CEILING)
+
+
 def to_row(
     event: Event,
     keys: frozenset[str] | None = None,
@@ -95,7 +116,7 @@ def to_row(
         message_id=event.message_id,
         update_id=event.update_id,
         worker=_text(event.worker, 128),
-        attempt=max(0, event.attempt),
+        attempt=_attempt(event.attempt),
         duration_ms=event.duration_ms,
         error_code=_text(event.error_code, 64),
         error=_text(redact_text(str(event.error or ''), configured), 20000),

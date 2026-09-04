@@ -170,6 +170,7 @@ def worker_identity() -> str:
     return os.environ.get('HOSTNAME') or socket.gethostname()
 
 
+register_kind(EventKind.OUTBOUND_SCHEDULED.value, 'Scheduled')
 register_kind(EventKind.OUTBOUND_QUEUED.value, 'Queued')
 register_kind(EventKind.OUTBOUND_CONSUMED.value, 'Taken off the queue')
 register_kind(EventKind.OUTBOUND_SENT.value, 'Sent')

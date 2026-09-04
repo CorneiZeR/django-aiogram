@@ -88,6 +88,9 @@ class EventKind(str, Enum):
     saved admin filters, which is why the values are frozen like the rest.
     """
 
+    #: written where a send names an `eta`, and the only outbound row that is not about a
+    #: message on its way: it says one is waiting for a time
+    OUTBOUND_SCHEDULED = 'outbound.scheduled'
     OUTBOUND_QUEUED = 'outbound.queued'
     OUTBOUND_CONSUMED = 'outbound.consumed'
     OUTBOUND_SENT = 'outbound.sent'

@@ -51,6 +51,15 @@ it, and `django_aiogram.redis.redis_conn` is the same object in the module that 
 | `bot.send_many(chat_ids, function='send_message', *, chunk_size=100, **kwargs)` | queue rather than call, one message per chat, a chunk per round trip |
 | `bot.outcome(correlation_id)` | what became of the message that id names, read from the event log |
 | `await bot.aoutcome(correlation_id)` | as `outcome`, without blocking the loop |
+| `bot.cancel_scheduled(correlation_id)` | delete the rows this id still has waiting; returns how many. A positive count is not a promise that nothing went out — see below |
+
+Every form that *queues* takes `eta=<datetime>` — aware under `USE_TZ`, naive without it, and
+the other way round refused rather than guessed at — `send`, `enqueue`, `send_many` and
+their awaiting twins, which writes the call to the schedule instead of the queue, including
+inside the bot container where `send` would otherwise call Telegram directly. `send_raw` does
+not: it calls Telegram from this process, and there is nothing to schedule.
+`manage.py tgbot_dispatch_scheduled` is what publishes a row once it is due. See
+**[Sending messages](Sending-messages.md#sending-it-later)**.
 
 `function` must name a Telegram API method aiogram exposes; anything else raises
 `ValueError` before it reaches the queue. See **[Sending messages](Sending-messages.md)**.

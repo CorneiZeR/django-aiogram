@@ -4,6 +4,97 @@
 
 ### Added
 
+- **A send can name a time instead of going now.** `eta` on every form that queues -- `send`,
+  `enqueue`, `send_many` and their awaiting twins, but not `send_raw`, which reaches Telegram
+  from this process and has nothing to schedule -- writes the call to a table, and
+  `manage.py tgbot_dispatch_scheduled` publishes it when the time comes. Reminders, follow-ups and digests stopped needing Celery for the one thing this
+  package could not do.
+
+  **The wait cannot live in the transport, which is the whole design.** Of the four only
+  RabbitMQ delays a message at all, and only through a plugin or a dead-letter detour — a
+  Redis list, a stream and a Kafka topic have nothing to offer. Building on the one that
+  almost can would make `eta` work on a quarter of the deployments, against everything
+  `BROKER` promises. So the wait sits above the broker contract and a row that comes due
+  becomes an ordinary queued message on whichever transport is configured.
+
+  The payload is stored as `serialise` produced it, so a payload the project cannot serialize
+  raises where the call was written rather than out of a mover hours later, and the bytes
+  cannot drift if the settings change in between. Its envelope is stamped with the **due**
+  time rather than the scheduling time — stamped now, a message scheduled for tomorrow would
+  arrive reporting a day of queue latency, which is the number an operator reads to know
+  whether delivery is keeping up.
+
+  A scheduled send is a database write on the caller's own connection, so it rolls back with
+  the transaction that made it and needs nothing from `TRANSACTIONAL`. Its `outbound.scheduled`
+  event waits for that commit, and on a *weaker* condition than a publish may: the event log
+  writes on its own connection and would keep a durable row about a send the block took away,
+  while arriving late costs a record nothing. So under manual transaction management the event
+  defers where a message cannot — and the write and its record share a block `schedule` opens
+  itself, so that a caller who left no block anywhere still leaves Django a commit hook to
+  run. There is no alias configuration on which that event can outlive its row. Inside the bot
+  container it still schedules: that is the one case where `send` does not call Telegram
+  directly, because sending now cannot be what an `eta` meant. An `eta` already past comes due
+  at once rather than being refused. A datetime that does not match the project's `USE_TZ` is
+  refused either way round: a naive one under it, rather than being read in the project's
+  `TIME_ZONE`, and an aware one without it, which the datetime columns of such a project
+  cannot hold anyway.
+
+  `bot.cancel_scheduled(identifier)` calls off what is still waiting and answers with how
+  many rows went. Zero is the answer both for an id that was never scheduled and for one a
+  mover already owns — by then the message is on its way, and deleting the row would not stop
+  it.
+
+  Several movers are safe: each row is claimed by a compare-and-set update, so two racing for
+  one produce a winner and a loser on every database this package supports — no
+  `SKIP LOCKED`, which SQLite does not have. **A claim is a lease**, `--lease` seconds long
+  and 300 by default: a mover killed between publishing a row and deleting it would otherwise
+  strand that message for ever, since every later pass filters claimed rows out. What the
+  lease costs is a second copy where the mover died *after* publishing, which is the trade
+  this package makes everywhere. `--lease 0` trusts a claim for ever, and then a crash needs
+  an operator.
+
+  **Delivery here is at-least-once, like every transport this package carries.** A claim is a
+  lease, and nothing fences a call already in flight to another system -- so a publish that
+  outlives its own lease can be joined by a mover taking the row back, and a cancellation can
+  report a row deleted while that publish is still going. What closes the window is
+  arithmetic rather than a lock: keep `--lease` comfortably above the deadline the transport
+  puts on one call, which the mover warns about when it is not.
+
+  What *is* fenced is every judgement the mover passes on a row. A publish may happen twice,
+  but only the mover that still holds the claim counts a failure against a row, records
+  `TooManyAttempts` or `TooLate` for it, or deletes it as either — each of those is conditional
+  on the exact claim the row was handed out with. Unconditional, a mover whose lease lapsed
+  mid-publish would file a drop about a message the mover that took over went on to deliver.
+
+  A claim's expiry lives **on the row**, not in a setting, and that is what lets `cancel` and
+  the mover agree about it: the lease is a command flag, so a producer asking whether a row
+  may still be called off would have had to guess at the mover's. A row nobody effectively
+  holds is publishable again *and* cancellable again, by the same predicate.
+
+  The row is deleted *after* the publish, which is what makes this at-least-once like
+  everything else here. A publish that fails counts the attempt and leaves the row for its
+  claim to lapse, so the lease paces the retry — bounded by `--max-attempts`, five by
+  default, because a lease turns "the claim stays and nothing retries it" into "every lease,
+  for ever": a payload the broker refuses permanently would otherwise write one more drop row
+  per pass until somebody noticed. The counter behind it is a `BigInteger`, because
+  `--max-attempts 0` retries a row without end and a narrower column would eventually refuse
+  the increment and take the whole pass down with it. The feed's `attempt` is the narrow one
+  still — widening that is a rewrite of the largest table here — so the event log saturates
+  the value at 32767 and keeps the exact count in `detail.attempts`. `--grace` refuses a row too far overdue and records the
+  drop, because a mover that was down for a day should not deliver a day of stale messages at
+  once; `--grace 0`, the default, refuses nothing. `--loop` sleeps only after a pass that did
+  *not* fill `--limit`, and fullness is counted in rows claimed rather than rows published:
+  a batch dropped as late or refused by the broker is still a batch, and counting the publish
+  would hold every row behind it for another `--interval`.
+
+- **A second table, and the router narrowed to match.** `django_aiogram_scheduled` is where
+  those rows wait, and it is **not** routed to `EVENT_LOG_DATABASE`: the feed is a record and
+  may live in a warehouse of its own, while this is operational state a producer writes and a
+  mover consumes. `TelegramEventLogRouter` therefore routes by *model* rather than by app
+  label — routed as before, a project with a log database would have had this table created
+  only there, and nothing on `default` would have had one at all. A project with its own
+  router matching `app_label == 'django_aiogram'` should narrow it the same way.
+
 - **A caller can find out which message its send produced.** `bot.send()` answers with a
   correlation id, and the reply Telegram gave is produced in the bot container — so a message
   queued from a web request could never be edited or deleted by whoever queued it, for want

@@ -29,6 +29,7 @@ in it:
 
 import asyncio
 import contextlib
+import datetime
 import logging
 import threading
 import time
@@ -58,6 +59,7 @@ from django_aiogram.producer.looping import LOOP_THREAD, RUNNER_TIMEOUT, drain_b
 from django_aiogram.producer.outbound import TASK_PREFIX, Outbound, completion, resolve_correlation_id, settle
 from django_aiogram.producer.queueing import Queueing, chunks, publishing, serialise
 from django_aiogram.producer.routing import RouterShortcuts
+from django_aiogram.producer.scheduling import aschedule, cancel, due_moment, schedule
 from django_aiogram.producer.throttling import RateLimiter, get_rate_limiter
 from django_aiogram.redis import aclose_redis
 
@@ -477,6 +479,7 @@ class TelegramBot(RouterShortcuts):
         function: str = 'send_message',
         *,
         correlation_id: uuid.UUID | str | None = None,
+        eta: datetime.datetime | None = None,
         **kwargs: Any,
     ) -> uuid.UUID:
         """Deliver a message the way this process can.
@@ -485,12 +488,21 @@ class TelegramBot(RouterShortcuts):
         else it means handing the call to the queue for the bot to pick up. It
         saves every caller from having to know which process it is running in.
 
+        ``eta`` puts it in the schedule instead, for a mover to publish when the time comes.
+        See :mod:`django_aiogram.producer.scheduling` for why the wait cannot live in the
+        transport, and ``manage.py tgbot_dispatch_scheduled`` for what publishes it.
+
         Returns the correlation id every event about this message carries, so a
         project can store it next to its own model and join the two.
         """
         # resolved here so both routes agree on the id, and so a caller reading
         # the return value gets the same one the rows carry
         identifier = resolve_correlation_id(correlation_id)
+        # before the worker shortcut, not after: an `eta` inside the bot container has to be
+        # written down like anywhere else, and sending it now is the one reading of `eta`
+        # that cannot be what the caller meant
+        if eta is not None:
+            return self.enqueue(function, correlation_id=identifier, eta=eta, **kwargs)
         if self.is_worker:
             return self.send_raw(function, correlation_id=identifier, **kwargs)
         # named here as well as in `enqueue`, and before delegating, because the twin a
@@ -519,6 +531,7 @@ class TelegramBot(RouterShortcuts):
         function: str = 'send_message',
         *,
         correlation_id: uuid.UUID | str | None = None,
+        eta: datetime.datetime | None = None,
         **kwargs: Any,
     ) -> uuid.UUID:
         """Deliver a message from code that is already on an event loop.
@@ -534,6 +547,9 @@ class TelegramBot(RouterShortcuts):
         # before the first await, so a handler's correlation_scope is still the
         # one in effect: after an await the caller's context may have moved on
         identifier = resolve_correlation_id(correlation_id)
+        if eta is not None:
+            # as `send` does, and before the worker shortcut for the same reason
+            return await self.aenqueue(function, correlation_id=identifier, eta=eta, **kwargs)
         if self.is_worker:
             return self.send_raw(function, correlation_id=identifier, **kwargs)
         return await self.aenqueue(function, correlation_id=identifier, **kwargs)
@@ -1099,6 +1115,7 @@ class TelegramBot(RouterShortcuts):
         function: str = 'send_message',
         *,
         correlation_id: uuid.UUID | str | None = None,
+        eta: datetime.datetime | None = None,
         **kwargs: Any,
     ) -> uuid.UUID:
         """Queue a message for the bot worker to deliver, whichever transport carries it.
@@ -1110,10 +1127,19 @@ class TelegramBot(RouterShortcuts):
         broker nor Telegram and returns the id anyway, so a caller storing it beside its own
         row gets the same value whether or not this deployment sends.
 
+        With an ``eta`` it goes to the schedule rather than to the broker, and the id comes
+        back the same way. Nothing is published until a mover finds the row due.
+
         Returns the correlation id the delivered row will carry too.
         """
         identifier, accepted = self._accept(function, correlation_id)
         if not accepted:
+            return identifier
+        if eta is not None:
+            # no broker resolved and none needed: the row holds the bytes, and whichever
+            # transport is configured when it comes due is the one that carries it
+            due_at = due_moment(eta)
+            schedule(function, serialise(function, [(identifier, kwargs)], due_at.timestamp()), due_at)
             return identifier
 
         # before the context manager, like the awaiting twin does: a `BROKER` that cannot be
@@ -1138,6 +1164,7 @@ class TelegramBot(RouterShortcuts):
         function: str = 'send_message',
         *,
         correlation_id: uuid.UUID | str | None = None,
+        eta: datetime.datetime | None = None,
         **kwargs: Any,
     ) -> uuid.UUID:
         """Queue a message without blocking the loop this coroutine runs on.
@@ -1151,6 +1178,13 @@ class TelegramBot(RouterShortcuts):
         """
         identifier, accepted = self._accept(function, correlation_id)
         if not accepted:
+            return identifier
+        if eta is not None:
+            # `abulk_create`, because the synchronous one raises `SynchronousOnlyOperation`
+            # from a coroutine -- measured. An earlier comment here claimed this path merely
+            # blocked like its twin, and an `eta` on this method simply raised
+            due_at = due_moment(eta)
+            await aschedule(function, serialise(function, [(identifier, kwargs)], due_at.timestamp()), due_at)
             return identifier
 
         broker = get_broker()
@@ -1184,6 +1218,7 @@ class TelegramBot(RouterShortcuts):
         function: str = 'send_message',
         *,
         chunk_size: int = 100,
+        eta: datetime.datetime | None = None,
         **kwargs: Any,
     ) -> list[uuid.UUID]:
         """Queue one message per chat, a chunk of them per round trip.
@@ -1204,9 +1239,14 @@ class TelegramBot(RouterShortcuts):
         is why the drops are recorded rather than left to the caller to infer.
         """
         writing = self._accept_bulk(function)
+        # only where this process writes, or a disabled fan-out would refuse an `eta`
+        # that the single-send path never looks at -- `_accept` returns before its own
+        # validation, and two producers judging one argument differently is the defect
+        due_at = due_moment(eta) if writing and eta is not None else None
         # resolved before the first chunk, as above: a broker that cannot be resolved is not
-        # a chunk that failed to write
-        broker = get_broker() if writing else None
+        # a chunk that failed to write. Not resolved at all for a scheduled batch, which
+        # reaches no transport today and takes whichever one is configured when it comes due
+        broker = get_broker() if writing and due_at is None else None
         if writing:
             mention_asend('asend_many')
         # the hook is registered before the first chunk and handed the list it will read at
@@ -1220,7 +1260,11 @@ class TelegramBot(RouterShortcuts):
         waiting = broker is not None and self._deferred(function, held, broker.publish)
         identifiers: list[uuid.UUID] = []
         for chunk in chunks(chat_ids, chunk_size, kwargs):
-            if broker is not None:
+            if writing and due_at is not None:
+                # a scheduled fan-out needs no broker and no commit hook: the rows are the
+                # caller's own write, so `atomic()` rolls them back on its own
+                schedule(function, serialise(function, chunk, due_at.timestamp()), due_at)
+            elif broker is not None:
                 write = serialise(function, chunk)
                 if waiting:
                     held.append(write)
@@ -1236,6 +1280,7 @@ class TelegramBot(RouterShortcuts):
         function: str = 'send_message',
         *,
         chunk_size: int = 100,
+        eta: datetime.datetime | None = None,
         **kwargs: Any,
     ) -> list[uuid.UUID]:
         """Queue one message per chat without blocking the loop.
@@ -1246,15 +1291,22 @@ class TelegramBot(RouterShortcuts):
         often than a single send does.
         """
         writing = self._accept_bulk(function)
+        # only where this process writes, or a disabled fan-out would refuse an `eta`
+        # that the single-send path never looks at -- `_accept` returns before its own
+        # validation, and two producers judging one argument differently is the defect
+        due_at = due_moment(eta) if writing and eta is not None else None
         # after the decision, not before: a disabled process may have no transport
-        # configured at all, and resolving one would raise where the point is to do nothing
-        broker = get_broker() if writing else None
+        # configured at all, and resolving one would raise where the point is to do nothing.
+        # A scheduled batch is the same case for a different reason -- see the twin above
+        broker = get_broker() if writing and due_at is None else None
         # before the loop and handed an empty list, exactly as the synchronous twin does
         held: list[Queueing] = []
         waiting = broker is not None and self._deferred(function, held, broker.publish)
         identifiers: list[uuid.UUID] = []
         for chunk in chunks(chat_ids, chunk_size, kwargs):
-            if broker is not None:
+            if writing and due_at is not None:
+                await aschedule(function, serialise(function, chunk, due_at.timestamp()), due_at)
+            elif broker is not None:
                 write = serialise(function, chunk)
                 if waiting:
                     held.append(write)
@@ -1280,6 +1332,24 @@ class TelegramBot(RouterShortcuts):
         has one, and from anything that runs a loop per unit of work.
         """
         await aclose_redis()
+
+    @staticmethod
+    def cancel_scheduled(correlation_id: uuid.UUID | str) -> int:
+        """Call off the sends this id still has waiting, and say how many there were.
+
+        Rows nobody effectively holds -- not "unclaimed", which this said before and is a
+        stronger promise than the predicate makes: a claim that has *lapsed* is cancellable,
+        because such a row is publishable again by any mover. A live claim is not, so zero is
+        the answer for an id that was never scheduled *and* for one whose message is on its
+        way.
+
+        **A positive count therefore is not a promise that nothing went out**, in the one case
+        where a mover's lease lapsed while it was inside ``Broker.publish``: nothing fences a
+        call already in flight, so the row goes and the message goes too. The window is closed
+        by arithmetic rather than a lock -- see
+        :func:`~django_aiogram.producer.scheduling.cancel`, which carries it in full.
+        """
+        return cancel(resolve_correlation_id(correlation_id))
 
     @staticmethod
     def outcome(correlation_id: uuid.UUID | str) -> 'Outcome':

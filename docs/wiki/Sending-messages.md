@@ -138,6 +138,76 @@ bot.send('send_photo', chat_id=CHAT_ID, photo=BufferedInputFile(data, filename='
 `FSInputFile` carries a path, so the file has to exist in the **bot container**
 too — share a volume, or send bytes with `BufferedInputFile`.
 
+## Sending it later
+
+`eta` puts a send in a table instead of on the queue, and a mover publishes it when the time
+comes:
+
+```python
+from datetime import timedelta
+
+from django.utils import timezone
+
+identifier = bot.send(
+    chat_id=CHAT_ID,
+    text='Your appointment is tomorrow',
+    eta=timezone.now() + timedelta(hours=23),
+)
+```
+
+The row and its `outbound.scheduled` event are written at once; what waits is the delivery.
+Nothing is published until `manage.py tgbot_dispatch_scheduled` runs, so **schedule that** —
+from cron, or with `--loop` in a container of its own. Until it does, the row is visible with
+`--dry-run` and the feed says what is waiting and for when.
+
+There is no admin page for the schedule: `--dry-run` is how you look at what is waiting, and
+`bot.cancel_scheduled(identifier)` is how you take something out of it. The feed is where the
+history lives, as it does for everything else here.
+
+`bot.cancel_scheduled(identifier)` calls it off and answers with how many rows it removed.
+Zero means nothing was waiting — which is also the answer once a mover has claimed the row,
+because by then the message is on its way and deleting the row would not stop it.
+
+**A positive count is not a promise that nothing went out.** A claim that has lapsed makes its
+row cancellable again, since any mover may publish it — and the mover that held it may still be
+inside the transport's own publish call, which nothing here can fence or hear from. So the row
+is deleted, the count says one, and the message goes out anyway. This is the same window the
+mover warns about in the log, and it is closed by arithmetic rather than by a lock: keep
+`--lease` comfortably longer than the deadline the transport puts on one call
+(`--lease 300` against a `KAFKA_TIMEOUT` of 10 leaves no practical window) and a live publish
+is never behind a lapsed claim.
+
+**A count can be partial where an id names more than one waiting send.** `send_many` is not
+that case: it gives every chat its own id. It happens where a caller passed one explicit
+`correlation_id` to several scheduled sends, or where a handler's replies inherited the
+update's — then some rows may be claimed and some not, and the number is only what went. Pass
+an id per send if you need to call them off one at a time.
+
+**Why a table and not the transport.** Of the four only RabbitMQ can delay a message, and
+only with a plugin or a dead-letter detour; a Redis list, a stream and a Kafka topic cannot.
+Building on the one that almost can would make `eta` work on a quarter of the deployments,
+against everything `BROKER` promises — so the wait sits above the transport, and a row that
+comes due becomes an ordinary queued message on whichever one is configured.
+
+Four things worth knowing before you use it:
+
+- **A scheduled send is a database write**, on the caller's own connection. So it rolls back
+  with the transaction that made it and needs nothing from `TRANSACTIONAL` — and the awaiting
+  twins await `abulk_create`, so an `eta` works from a coroutine as it does anywhere else.
+- **The payload is frozen when you call.** A payload the project cannot serialize raises
+  there rather than out of a mover hours later, and the bytes cannot drift if the settings
+  change in between.
+- **An `eta` already past comes due at once** rather than being refused: clock skew between a
+  web tier and a database is not a caller's problem, and "as soon as possible" is a
+  reasonable thing to schedule. It is still never faster than the mover's interval.
+- **The `eta` has to match the project's `USE_TZ`.** Under it a naive datetime is refused,
+  because Django would attach the project's `TIME_ZONE` to it and a message an hour early is
+  not worth guessing at. With `USE_TZ` off an *aware* one is refused instead — the project's
+  own datetime columns hold naive values, and the database refuses the rest.
+
+Inside the bot container `eta` schedules like anywhere else — it is the one case where `send`
+does not call Telegram directly, because sending now cannot be what an `eta` meant.
+
 ## Editing a message you queued
 
 `send()` hands back a correlation id, not a `message_id` — the reply Telegram gave belongs
