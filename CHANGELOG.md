@@ -130,8 +130,9 @@
   right in the send path and wrong here. The command refuses to run when `EVENT_LOG_KINDS`
   excludes the kind, and says so per message when the feed will not take the row.
 
-  **What it will not replay, beyond the lossy rows.** A message with an `outbound.sent` under
-  its id went out in the end — a mover that failed three times and published on the fourth
+  **What it will not replay, beyond the lossy rows.** A send the worker refused while shutting
+  down (`NotScheduled`) is left to the queue, which still holds it unacknowledged and hands it
+  back on restart. A message with an `outbound.sent` under its id went out in the end — a mover that failed three times and published on the fourth
   leaves three drop rows and a delivery — and a message with several endings recorded is
   replayed once, since an id is one message here the way `bot.outcome()` reads it.
   `outbound.retried` is not selectable at all: that send went on to succeed or fail under the

@@ -383,11 +383,18 @@ Rate-limit exhaustion — the case this section is named after — is recorded a
 `outbound.failed` alone would replay the smaller half and leave an operator concluding the rest
 was fine. `--kind` narrows to one when you know which half you are looking at.
 
-`outbound.dropped` covers more than a loss, which is why the default can include it safely:
-a drop past `--grace` is **skipped** as a decision the deployment already took, and the two
-whose queue write never landed (`NotScheduled`, and a failed write with `detail.stage`) carry
-no arguments to replay from, because the row that records them is written before the payload
-reaches a transport.
+`outbound.dropped` covers more than a loss, which is why the default can include it safely —
+three of its shapes are read rather than trusted:
+
+- **past `--grace`** (`TooLate`) — skipped, because the deployment already decided not to send it.
+- **never acknowledged** (`NotScheduled`) — skipped, because the message is still the queue's. A
+  worker refusing a send at shutdown does not acknowledge it, so the transport hands it back when
+  the container comes up; replaying it would be the second copy. The same code also covers a
+  direct `send_raw` refused the same way, which *is* lost — but that one was never queued, so
+  nothing recorded its arguments and it cannot be replayed either way.
+- **a queue write that failed** (`detail.stage`) — refused for want of arguments, because the row
+  that records it is written before the payload reaches a transport and the `outbound.queued` row
+  never happened.
 
 **Most refusals are honest ones, and they say which.** A replay needs the arguments the send
 was made with, and the feed records a *description* of them — so:
@@ -411,6 +418,9 @@ was made with, and the feed records a *description* of them — so:
   drop rows and an `outbound.sent`, and Telegram has the message.
 - `the deployment discarded it on purpose (TooLate), so this is not a loss` — `--grace` refused
   that message deliberately; replaying it would be the outage twice.
+- `the worker never acknowledged it (NotScheduled), so the queue redelivers it on restart` — the
+  send was refused while the container was shutting down and the message stayed in flight on the
+  transport. Restart the worker; it comes back on its own.
 - `it has been replayed already; the row joining them says so` — an `outbound.replayed` row
   names this failure, from this run, an earlier one, or another run that finished while this one
   was walking. **This is what makes the command

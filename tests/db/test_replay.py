@@ -403,6 +403,34 @@ def test_one_ending_may_be_selected_alone(queued):
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_send_the_worker_never_acknowledged_is_left_to_the_queue(queued):
+    """`NotScheduled` has two callers and they do not mean the same thing.
+
+    A direct `send_raw` refused at shutdown was never queued, so it has no arguments recorded
+    and the arguments rule refuses it anyway. But the *consumer* reaches the same code with a
+    message it took off the queue -- which has an `outbound.queued` row and its arguments --
+    and the worker deliberately does not acknowledge it there ("the slot back, not the
+    acknowledgement", `producer/client.py`), so the transport hands it back when the container
+    comes up.
+
+    Replaying that is the second copy. Found by a review reading the page rather than the code:
+    my own enumeration had filed `NotScheduled` under "no arguments recorded", which is true of
+    one caller and false of the other.
+    """
+    consumed = a_failure(chat_id=5, kind=EventKind.OUTBOUND_DROPPED.value)
+    TelegramEvent.objects.filter(correlation_id=consumed, kind=EventKind.OUTBOUND_DROPPED.value).update(
+        error_code='NotScheduled', error='cancelled at shutdown'
+    )
+
+    output = replay(since=since())
+
+    assert list(queued) == [], 'a message the queue still holds was sent again'
+    assert 'never acknowledged it (NotScheduled)' in output
+    assert 'replayed 0; refused 0; skipped 1' in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
 def test_a_message_the_deployment_discarded_on_purpose_is_not_a_loss(queued):
     """`--grace` refused it deliberately, and replaying it would be that outage twice.
 

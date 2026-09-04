@@ -61,7 +61,14 @@ logger = logging.getLogger('django_aiogram')
 #: * `producer/client.py`, `outbound.dropped` with `detail.max_retries` -- the rate-limit
 #:   retries ran out. **Lost, and the case an operator means by "Telegram was down"** -- which
 #:   a default of `outbound.failed` alone missed entirely.
-#: * `producer/client.py`, `outbound.dropped` with `NotScheduled` -- never reached the loop.
+#: * `producer/client.py`, `outbound.dropped` with `NotScheduled` -- the send never reached the
+#:   loop, from either of two callers, and they do not mean the same thing. A direct `send_raw`
+#:   was never queued and has no arguments recorded, so the arguments rule refuses it. A message
+#:   the *consumer* took off the queue has an `outbound.queued` row and its arguments -- and the
+#:   worker deliberately does not acknowledge it ("the slot back, not the acknowledgement"), so
+#:   the transport redelivers it on restart. Replaying that is a duplicate, which is why
+#:   `UNACKNOWLEDGED_DROPS` skips the code rather than the caller: from the feed the two are
+#:   told apart only by whether a queued row exists, and the safe answer is the same for both.
 #: * `producer/queueing.py`, `outbound.dropped` with `detail.stage` -- the queue write failed.
 #: * `tgbot_dispatch_scheduled`, `outbound.dropped` with `TooManyAttempts` -- the mover gave up.
 #:   Lost.
@@ -75,6 +82,11 @@ logger = logging.getLogger('django_aiogram')
 #: `outbound.retried` is not selectable at all: that message went on to succeed or fail under
 #: the same id, and replaying it would duplicate whichever it was.
 REPLAYABLE_KINDS = (EventKind.OUTBOUND_FAILED.value, EventKind.OUTBOUND_DROPPED.value)
+
+#: error codes on an ending whose message the *transport* still has. Nothing is lost: the worker
+#: refused the send without acknowledging it, so the queue hands it back when the container comes
+#: up. A replay would be the second copy
+UNACKNOWLEDGED_DROPS = frozenset({'NotScheduled'})
 
 #: error codes on an ending that mean the deployment chose this, rather than losing it. Replaying
 #: one is not a recovery, it is an override of the policy that discarded it -- `--grace` exists
@@ -93,6 +105,7 @@ ARGUMENT_KINDS = (EventKind.OUTBOUND_QUEUED.value, EventKind.OUTBOUND_SCHEDULED.
 SKIPPED_DELIVERED = 'it was sent in the end, so nothing was lost'
 SKIPPED_REPLAYED = 'it has been replayed already; the row joining them says so'
 SKIPPED_DELIBERATE = 'the deployment discarded it on purpose ({code}), so this is not a loss'
+SKIPPED_UNACKNOWLEDGED = 'the worker never acknowledged it ({code}), so the queue redelivers it on restart'
 SKIP_REASONS = frozenset({SKIPPED_DELIVERED, SKIPPED_REPLAYED})
 
 #: how many messages one run may put back, unless an operator says otherwise. A default rather
@@ -502,7 +515,10 @@ class Command(BaseCommand):
 
 
 def _deliberate(row: TelegramEvent) -> str:
-    """Say why this ending is a decision rather than a loss, or ``''`` where it is a loss.
+    """Say why this ending is not a loss, or ``''`` where it is one.
+
+    Two ways for an ending to be nothing to act on, and they are different facts: the
+    deployment chose it, or the transport still has the message.
 
     Counted with the skips and not with the refusals, because there is nothing for an operator
     to act on: `--grace` exists so that a mover which was down for a day does not deliver a
@@ -511,6 +527,8 @@ def _deliberate(row: TelegramEvent) -> str:
     """
     if row.error_code in DELIBERATE_DROPS:
         return SKIPPED_DELIBERATE.format(code=row.error_code)
+    if row.error_code in UNACKNOWLEDGED_DROPS:
+        return SKIPPED_UNACKNOWLEDGED.format(code=row.error_code)
     return ''
 
 
