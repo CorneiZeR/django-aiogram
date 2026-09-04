@@ -339,6 +339,11 @@ def test_selection_narrows_by_window_chat_and_id(queued):
 
     A failure of its own per sub-run, since a replay is not offered twice: the row joining the
     two says it has been done, which is the case below this one.
+
+    **The last sub-run needs an untouched failure beside it**, or it proves nothing: by then the
+    other two have been replayed, so they would be skipped whatever the filter did, and the
+    assertion could not tell a working filter from a selection that was already empty. Chat 4
+    is that witness, and it is the one the id must leave alone.
     """
     a_failure(chat_id=1, minutes_old=600)
     a_failure(chat_id=2, minutes_old=5)
@@ -350,8 +355,12 @@ def test_selection_narrows_by_window_chat_and_id(queued):
     replay(since=since(1000), chat=1)
     assert [one.kwargs['chat_id'] for one in queued][1:] == [1], 'the chat filter did not hold'
 
+    a_failure(chat_id=4, minutes_old=900)
+
     replay(correlation_id=[str(named)])
+
     assert [one.kwargs['chat_id'] for one in queued][2:] == [3], 'an id did not name its own rows'
+    assert 4 not in [one.kwargs['chat_id'] for one in queued], 'the id filter let an unrelated failure through'
 
 
 @pytest.mark.django_db(transaction=True)
