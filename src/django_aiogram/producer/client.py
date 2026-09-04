@@ -482,7 +482,7 @@ class TelegramBot(RouterShortcuts):
 
     def send(
         self,
-        function: "'TelegramMethod[Any]' | str" = 'send_message',
+        function: 'TelegramMethod[Any] | str' = 'send_message',
         *,
         correlation_id: uuid.UUID | str | None = None,
         eta: datetime.datetime | None = None,
@@ -537,7 +537,7 @@ class TelegramBot(RouterShortcuts):
 
     async def asend(
         self,
-        function: "'TelegramMethod[Any]' | str" = 'send_message',
+        function: 'TelegramMethod[Any] | str' = 'send_message',
         *,
         correlation_id: uuid.UUID | str | None = None,
         eta: datetime.datetime | None = None,
@@ -1122,7 +1122,7 @@ class TelegramBot(RouterShortcuts):
 
     def enqueue(
         self,
-        function: "'TelegramMethod[Any]' | str" = 'send_message',
+        function: 'TelegramMethod[Any] | str' = 'send_message',
         *,
         correlation_id: uuid.UUID | str | None = None,
         eta: datetime.datetime | None = None,
@@ -1172,7 +1172,7 @@ class TelegramBot(RouterShortcuts):
 
     async def aenqueue(
         self,
-        function: "'TelegramMethod[Any]' | str" = 'send_message',
+        function: 'TelegramMethod[Any] | str' = 'send_message',
         *,
         correlation_id: uuid.UUID | str | None = None,
         eta: datetime.datetime | None = None,

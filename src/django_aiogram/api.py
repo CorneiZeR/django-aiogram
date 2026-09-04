@@ -30,16 +30,16 @@ if TYPE_CHECKING:
 DENIED_METHODS = frozenset({'set_webhook', 'delete_webhook', 'log_out', 'close'})
 
 
-def method_name(class_name: str) -> str:
-    """Turn an aiogram method class name into the ``Bot`` attribute it corresponds to.
+def method_name(camel_case: str) -> str:
+    """Turn an aiogram method's name into the ``Bot`` attribute it corresponds to.
 
-    ``SendMessage`` is ``send_message``. One implementation, because two callers need it and
-    they must agree: the allowlist below is built from ``aiogram.methods.__all__``, and
-    :func:`resolve_call` names the method a caller handed in. Spelled twice, a
-    ``CamelCase`` aiogram ever writes unusually would be allowed under one name and sent under
-    another.
+    ``SendMessage`` and ``sendMessage`` are both ``send_message``, which is what lets the two
+    callers here use it on different inputs: the allowlist below is built from the class names
+    in ``aiogram.methods.__all__``, and :func:`resolve_call` reads ``__api_method__`` off the
+    object it was handed. Spelled twice, a ``CamelCase`` aiogram ever writes unusually would be
+    allowed under one name and sent under another.
     """
-    return re.sub(r'(?<!^)(?=[A-Z])', '_', class_name).lower()
+    return re.sub(r'(?<!^)(?=[A-Z])', '_', camel_case).lower()
 
 
 def _api_methods() -> frozenset[str]:
@@ -105,9 +105,22 @@ def resolve_call(function: 'TelegramMethod[Any] | str', kwargs: dict[str, Any]) 
 
     The string form is left alone: it accepts whatever keyword arguments a caller passes, as
     it has since 2.x, and a project that wants them checked has the object form to move to.
+
+    **The name comes from ``__api_method__`` rather than from the class name.** Measured: a
+    project subclassing ``SendMessage`` -- to carry a default, or a field of its own -- has a
+    class called whatever it called it, and the class name then resolves to ``my_send`` and is
+    refused as no Telegram method. ``__api_method__`` is inherited, so the subclass resolves to
+    ``send_message`` like its parent. Read off the *instance*, because on the base class it is
+    a ``property`` and only the concrete ones declare a string.
     """
     if isinstance(function, str):
         return function, kwargs
+    if not is_method(function):
+        msg = (
+            f'send takes a method name or an aiogram method object, not {type(function).__name__}. '
+            f"Pass a string like 'send_message', or aiogram.methods.SendMessage(...)."
+        )
+        raise TypeError(msg)
     if kwargs:
         msg = (
             f'{type(function).__name__} carries its own arguments, so '
@@ -124,5 +137,5 @@ def resolve_call(function: 'TelegramMethod[Any] | str', kwargs: dict[str, Any]) 
             'where nobody is looking.'
         )
         raise TypeError(msg)
-    name = check_function(method_name(kind.__name__))
+    name = check_function(method_name(str(function.__api_method__)))
     return name, {field: getattr(function, field) for field in function.model_fields_set}

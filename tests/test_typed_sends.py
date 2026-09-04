@@ -48,9 +48,12 @@ def test_every_queued_producer_takes_one(form):
     between a signature existing and a signature being used.
     """
     with capture_sends() as sent:
-        getattr(TelegramBot(), form)(SendMessage(chat_id=1, text=form))
+        identifier = getattr(TelegramBot(), form)(SendMessage(chat_id=1, text=form))
 
     assert [(one.function, one.kwargs['text']) for one in sent] == [('send_message', form)]
+    # the return value as well as the event: all four promise the id the rows carry, and a form
+    # that queued correctly and answered with `None` would pass on the line above alone
+    assert sent[0].correlation_id == identifier
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
@@ -60,9 +63,10 @@ def test_the_awaiting_twins_take_one_too(form):
     import asyncio
 
     with capture_sends() as sent:
-        asyncio.run(getattr(TelegramBot(), form)(SendMessage(chat_id=1, text=form)))
+        identifier = asyncio.run(getattr(TelegramBot(), form)(SendMessage(chat_id=1, text=form)))
 
     assert [(one.function, one.kwargs['text']) for one in sent] == [('send_message', form)]
+    assert sent[0].correlation_id == identifier
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
@@ -96,6 +100,34 @@ def test_a_field_aiogram_does_not_declare_is_refused_at_the_call():
 
     with capture_sends(), pytest.raises(TypeError, match="no field 'parse_mod'"):
         TelegramBot().send(SendMessage(chat_id=1, text='x', parse_mod='HTML'))
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_project_s_own_subclass_resolves_to_the_method_it_inherits():
+    """A subclass is a reasonable thing to write, and its class name is not a method name.
+
+    Measured: `method_name` over the class name gives `my_send` for the class below, which the
+    allowlist refuses -- while `__api_method__` is inherited and gives `send_message`. Read off
+    the instance, because on aiogram's base class that attribute is a `property` and only the
+    concrete methods declare a string.
+    """
+
+    class MySend(SendMessage):
+        """What a project writes to carry a default of its own."""
+
+    with capture_sends() as sent:
+        TelegramBot().send(MySend(chat_id=1, text='from a subclass'))
+
+    assert sent[0].function == 'send_message'
+    assert sent[0].kwargs == {'chat_id': 1, 'text': 'from a subclass'}
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_neither_a_name_nor_a_method_object_is_refused_by_name():
+    """The third case the signature allows a caller to reach, said plainly rather than as an
+    `AttributeError` about `model_fields_set`."""
+    with capture_sends(), pytest.raises(TypeError, match='not dict'):
+        TelegramBot().send({'chat_id': 1, 'text': 'a dict is not a call'})  # type: ignore[arg-type]
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
@@ -157,28 +189,46 @@ def test_a_method_object_resolves_to_the_name_the_allowlist_holds():
 
 
 def test_the_types_still_line_up_with_what_the_bot_takes():
-    """A model field with no `Bot` parameter would reach the worker as a `TypeError`.
+    """Both directions, because each breaks the worker in its own way.
 
-    True for all 181 today, measured. It is a property of aiogram rather than of this package,
-    which is exactly why it is worth a case: an aiogram release that broke it would otherwise
-    break sends in the worker, and the failure would arrive as somebody's lost message.
+    A model field the `Bot` method has no parameter for arrives as
+    `TypeError: unexpected keyword argument`; a *required* `Bot` parameter no model field
+    fills arrives as a missing argument, from a call the producer had no way to know was
+    incomplete. Either way it lands in the worker and reaches the project as a lost message,
+    which is why a property of *aiogram* is asserted here.
+
+    Measured today: no strays either way, and every `Bot` method takes exactly one parameter
+    no model declares -- `request_timeout`, which belongs to the transport rather than to the
+    call and is optional. Optional extras are the one asymmetry allowed, since a parameter
+    nothing passes cannot break a send.
     """
     import inspect
 
     import aiogram.methods
     from aiogram import Bot
 
-    stray = {}
+    stray, incomplete, optional_extras = {}, {}, set()
     for class_name in aiogram.methods.__all__:
         name = method_name(class_name)
         if name not in API_METHODS:
             continue
         fields = set(getattr(aiogram.methods, class_name).model_fields)
-        parameters = set(inspect.signature(getattr(Bot, name)).parameters) - {'self'}
+        signature = inspect.signature(getattr(Bot, name))
+        parameters = {
+            one.name for one in signature.parameters.values() if one.name != 'self' and one.kind is not one.VAR_KEYWORD
+        }
+        required = {
+            one.name for one in signature.parameters.values() if one.name in parameters and one.default is one.empty
+        }
         if fields - parameters:
             stray[name] = sorted(fields - parameters)
+        if required - fields:
+            incomplete[name] = sorted(required - fields)
+        optional_extras |= parameters - fields
 
     assert stray == {}, f'model fields the Bot method cannot take: {stray}'
+    assert incomplete == {}, f'required Bot parameters no model field fills: {incomplete}'
+    assert optional_extras == {'request_timeout'}, f'a new optional parameter appeared: {sorted(optional_extras)}'
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
