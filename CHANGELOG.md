@@ -87,6 +87,35 @@
   a batch dropped as late or refused by the broker is still a batch, and counting the publish
   would hold every row behind it for another `--interval`.
 
+- **A Prometheus exporter, so the metrics seam has a consumer.** `events_recorded` was a
+  signal with nothing on the other end: every project that wanted a dashboard wrote the same
+  receiver over the same kinds and invented its own metric names.
+  `pip install 'django-aiogram[prometheus]'`, then `connect()` from an `AppConfig.ready()`,
+  and two metrics fill in — `django_aiogram_events_total{kind}` and
+  `django_aiogram_event_duration_seconds{kind}`, the second from the `duration_ms` the feed
+  already records, in seconds because that is what a dashboard's arithmetic assumes.
+
+  One counter with a `kind` label rather than fourteen names, and failures need no metric of
+  their own because they are kinds. Nothing that identifies a person is a label, and neither
+  is `error_code`, which Telegram gets to choose the values of — cardinality rather than
+  dimensions, with the feed there for the detail. It takes a registry for a project running
+  `django_prometheus`, and it fills one in rather than serving it: exposing metrics is a thing
+  every project already has a way to do.
+
+  `connect()` rather than connecting the object yourself, because a signal keeps a *weak*
+  reference and the exporter is a callable instance: the obvious line connects a receiver that
+  is collected before the first batch, and the metrics then read as no traffic at all. Two
+  apps calling it get the one already connected rather than a `ValueError` about a duplicate
+  collector — where they agree about the registry. A second call naming a different one is
+  refused by name instead, since answering with the first would leave that registry empty and
+  nothing about the call would say so.
+
+  It cannot break the feed. The seam contains a receiver that raises, and this one contains
+  itself as well rather than leaning on that — a shipped exporter that relied on somebody
+  else's `try` would be the first thing to break if that ever narrowed. `django_aiogram.contrib.prometheus` is the only
+  module that imports `prometheus_client`, and nothing in the package imports that module —
+  which a test in a subprocess holds, on the modules a project's boot actually pulls.
+
 - **Testing helpers, so a project's suite stops reading this package's wire format.**
   `django_aiogram.testing` ships what `Testing.md` used to hand out as a recipe: point a
   connection at fakeredis, read a list back by its key, `loads` the payload, `unpack` the

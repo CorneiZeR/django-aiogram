@@ -85,6 +85,19 @@ says so with the install line for the one you named:
 	HINT: pip install "django-aiogram[redis]"
 ```
 
+**Two extras are not transports.** `hiredis` swaps redis-py's parser for the C one, and
+`prometheus` (`prometheus-client>=0.20`) installs the client the shipped exporter fills:
+
+```shell
+pip install 'django-aiogram[redis,prometheus]'
+```
+
+`django_aiogram.contrib.prometheus` is the only module that imports `prometheus_client`, and
+nothing in this package imports *that* module — a project does, from its own
+`AppConfig.ready()`. So without the extra the failure is an `ImportError` on the line that
+asked for it, rather than a broken install for everyone who never wanted metrics. See
+**[Event log](Event-log.md#metrics-without-the-table)**.
+
 A base `pip install django-aiogram` is a valid install — it imports, and every
 `manage.py` command runs — it just cannot carry a message anywhere yet. A process
 with `ENABLED` off is not asked for a driver, so a web container that only records the

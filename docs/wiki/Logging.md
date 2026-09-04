@@ -91,6 +91,7 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `rate limited by telegram` | WARNING | refused and backing off |
 | `a synchronous send was called from a running event loop` | WARNING | `send`, `enqueue` or `send_many` from async code: correct, but it writes on the loop's own thread. `tg_alternative` names the awaitable form. Said once per process |
 | `an events_recorded receiver raised` | ERROR | one of your metrics receivers raised; the batch reached the database if the event log is on and the write succeeded, and usually the other receivers too — `send_robust` isolates them, but the row below is the case where it cannot. `tg_receiver` names it |
+| `the prometheus exporter could not record an event` | ERROR | the shipped exporter failed on one event and carried on with the rest of the batch. `tg_kind` names it. It contains itself rather than leaning on the two rows above, so a metric going wrong costs one observation and never the feed |
 | `publishing recorded events failed` | ERROR | the signal dispatch itself raised, not a receiver — Django's own failure logging cannot name a callable instance. The batch reached the database if the event log is on; some receivers may have missed it |
 | `delivery started` | INFO | the consumer is up |
 | `message sent` | INFO | one call succeeded |

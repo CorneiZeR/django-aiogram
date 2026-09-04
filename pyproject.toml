@@ -83,6 +83,12 @@ kafka = [
     "confluent-kafka>=2.6; python_version < '3.14'",
     "confluent-kafka>=2.12.1; python_version >= '3.14'",
 ]
+# the exporter's own client, and an extra for the same reason every driver is one: a base
+# install that pulls a metrics library for the projects that scrape nothing is a dependency
+# nobody named. `django_aiogram.contrib.prometheus` is the only module that imports it, and it
+# is imported by a project rather than by this package -- so the absence is an ImportError
+# where somebody asked for it, not a broken install
+prometheus = ["prometheus-client>=0.20"]
 # not a runtime dependency: redis-py parses the protocol in C when this is
 # present. Worth it on a busy consumer, pointless on a web tier that only ever
 # pushes, which is why it is opt-in rather than pulled in for everybody
@@ -97,6 +103,8 @@ dev = [
     "pytest>=8",
     "pytest-django>=4.9",
     "fakeredis>=2.26",
+    # the exporter's extra, so its suite runs on every leg rather than skipping quietly
+    "prometheus-client>=0.20",
     "ruff>=0.9",
     "mypy>=1.14",
     # <6.1: 6.1.0 resolves every Self-returning QuerySet method to Any, so a plain
