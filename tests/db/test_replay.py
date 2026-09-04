@@ -682,7 +682,8 @@ def test_a_replay_that_landed_mid_walk_is_seen_before_the_send(queued, monkeypat
     """
     from django_aiogram.management.commands.tgbot_replay import Command
 
-    identifier = a_failure()
+    a_failure()
+    # the seam between the window read and the send, which is where a competing run's row lands
     real = Command._arguments_for
 
     def land_a_competitor(self, row):
@@ -703,7 +704,6 @@ def test_a_replay_that_landed_mid_walk_is_seen_before_the_send(queued, monkeypat
     assert list(queued) == [], 'the message was sent although another run had already replayed it'
     assert 'it has been replayed already' in output
     assert 'replayed 0; refused 0; skipped 1' in output
-    assert identifier is not None
 
 
 @pytest.mark.django_db(transaction=True)

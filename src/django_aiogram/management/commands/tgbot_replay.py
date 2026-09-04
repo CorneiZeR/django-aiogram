@@ -367,10 +367,15 @@ class Command(BaseCommand):
     def _already_replayed(row: TelegramEvent) -> bool:
         """Whether a replay already stands in for this failure, asked at this instant.
 
-        The same question :meth:`_nothing_to_do_for` answers for a window, asked again for one
-        row immediately before the send. It narrows a race rather than closing one, and the
-        difference matters: what it removes is the window spanning two hundred rows, so two
-        runs now have to collide inside one query rather than anywhere inside a walk.
+        **Per row, immediately before the send, and the only place this is asked.** The window
+        pass used to ask it too and no longer does -- see :meth:`_nothing_to_do_for`, which is
+        about deliveries alone now -- so a reader looking for where the marker is read has one
+        answer rather than two.
+
+        It narrows a race rather than closing one, and the difference matters: what it removes
+        is the window spanning two hundred rows, so two runs have to collide inside one query
+        rather than anywhere inside a walk. The rest needs a claim row with a unique
+        constraint, which is a schema change and is issue #105.
         """
         return (
             TelegramEvent.objects.using(log_alias())
