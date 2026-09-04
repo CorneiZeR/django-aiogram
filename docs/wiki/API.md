@@ -46,12 +46,30 @@ it, and `django_aiogram.redis.redis_conn` is the same object in the module that 
 | | |
 | --- | --- |
 | `bot.send(function='send_message', **kwargs)` | queue it, or call Telegram directly inside the bot container |
+| `bot.send(SendMessage(...))` | the same, with the arguments checked by aiogram's own model — see below |
 | `bot.enqueue(...)` | always queue |
 | `bot.send_raw(...)` | always call Telegram from this process |
 | `bot.send_many(chat_ids, function='send_message', *, chunk_size=100, **kwargs)` | queue rather than call, one message per chat, a chunk per round trip |
 | `bot.outcome(correlation_id)` | what became of the message that id names, read from the event log |
 | `await bot.aoutcome(correlation_id)` | as `outcome`, without blocking the loop |
 | `bot.cancel_scheduled(correlation_id)` | delete the rows this id still has waiting; returns how many. A positive count is not a promise that nothing went out — see below |
+
+`send`, `enqueue`, `asend` and `aenqueue` also take an **aiogram method object** in place of
+a name and keyword arguments:
+
+```python
+from aiogram.methods import SendMessage
+
+bot.send(SendMessage(chat_id=CHAT_ID, text='hello'))
+```
+
+Everything else is identical — same correlation id, same route, same events — and the
+arguments are checked by whatever type checker the project runs, because they are aiogram's
+own model fields. This package declares no signature of its own for them, so there is nothing
+to drift: 181 methods and 1153 arguments stay where they are already declared and versioned. A
+field aiogram does not know is refused at the call, since aiogram itself allows unknown ones
+and the worker would not. `send_many` and `send_raw` do not take one — see
+**[Sending messages](Sending-messages.md#checked-before-it-is-sent)**.
 
 Every form that *queues* takes `eta=<datetime>` — aware under `USE_TZ`, naive without it, and
 the other way round refused rather than guessed at — `send`, `enqueue`, `send_many` and
