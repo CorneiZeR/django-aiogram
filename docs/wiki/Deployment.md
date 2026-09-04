@@ -529,7 +529,7 @@ process exports what it does, and the two halves do different things.
 | --- | --- |
 | web, Celery, anything that queues | `outbound.queued`, `outbound.scheduled` |
 | the bot container | `outbound.consumed`, `outbound.sent`, `outbound.retried`, `outbound.failed`, `outbound.dropped`, every `inbound.*`, `fsm.transition`, `queue.*` |
-| the mover (`tgbot_dispatch_scheduled`) | the queueing of a row that came due, and its drops |
+| the mover (`tgbot_dispatch_scheduled`) | `outbound.queued` for a row it published, `outbound.dropped` for a publish that failed, a row past `--grace` and a row past `--max-attempts` |
 
 So a scrape configuration that names only the web tier reports zero sends for ever, and one
 that names only the bot reports that nothing is ever queued. Both are the exporter working.
