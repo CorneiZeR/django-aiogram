@@ -129,7 +129,9 @@
   leaves three drop rows and a delivery — and a message with several endings recorded is
   replayed once, since an id is one message here the way `bot.outcome()` reads it.
   `outbound.retried` is not selectable at all: that send went on to succeed or fail under the
-  same id.
+  same id. And a failure an `outbound.replayed` row already names is skipped, which is what
+  makes a bounded run repeatable: without it, five runs over five hundred failures would have
+  replayed the same oldest hundred five times and never reached the rest.
 
   `--limit` defaults to 100: bounded rather than idempotent, because a slipped date range would
   otherwise empty a month of failures into the queue at once. `--limit 0` is the deliberate

@@ -384,7 +384,9 @@ was made with, and the feed records a *description* of them — so:
   value the log replaces with a marker. Nothing to replay from.
 - `... as truncated ...` — the arguments did not fit the column and were capped.
 - `a value was redacted, and redaction is one-way` — a token-shaped value or a
-  `EVENT_LOG_REDACT_KEYS` key was blanked on the way in.
+  `EVENT_LOG_REDACT_KEYS` key was blanked on the way in. Anywhere in the text, not only as the
+  whole of a value: a body reading `the token is ***, keep it` is refused, and so is one that
+  merely writes `***` for emphasis. The second is the cost of the first.
 - `... keys is the cap, and a mapping at it cannot be told from one cut to it` — fifty is
   where the log stops keeping keys or items, and a structure sitting exactly there might be
   whole or might be cut. Refused, because the alternative is a call sent with items missing.
@@ -395,8 +397,11 @@ was made with, and the feed records a *description* of them — so:
 - `it was sent in the end, so nothing was lost` — the ending selected is not the end of that
   message's story. A mover that failed three times and published on the fourth leaves three
   drop rows and an `outbound.sent`, and Telegram has the message.
-- `another ending for a message already replayed in this run` — the same message had several
-  endings recorded, and one message is what goes.
+- `it has been replayed already; the row joining them says so` — an `outbound.replayed` row
+  names this failure, from this run or an earlier one. **This is what makes the command
+  re-runnable**: the selection is bounded, so five hundred failures are walked a hundred at a
+  time, and without it every run would replay the same oldest hundred and never reach the
+  rest.
 
 So `EVENT_LOG_PAYLOAD: 'full'` is what makes replay possible, and it is not a guarantee: it is
 decided per row, not per setting. Set it before you need it — a failure recorded under
@@ -410,10 +415,15 @@ Unlike every other row this package writes, it is written synchronously and its 
 read: the recorder drops rather than waits, which is right in the send path and wrong for the
 one row that prevents a duplicate.
 
-Running the command twice sends the message twice: it is bounded (`--limit`, 100 by default)
-rather than idempotent, and the bound exists because a slipped date range would otherwise
-empty a month of failures into the queue. `--limit 0` is the deliberate unbounded mode; a
-negative number is refused as the typo it is.
+Run it again for the next hundred: a failure an `outbound.replayed` row already names is
+skipped, which is what makes walking an incident in bounded runs work. `--limit` is 100 by
+default because a slipped date range would otherwise empty a month of failures into the queue;
+`--limit 0` is the deliberate unbounded mode, and a negative number is refused as the typo it
+is.
+
+That is not the same as idempotence, and the difference matters: the guard is a *row*, so a
+replay whose join row the feed refused is offered again — the run says which, in the report and
+in the log — and a failure replayed by something other than this command is not known to it.
 
 ## `ModuleNotFoundError: No module named 'telegram_bot'`
 

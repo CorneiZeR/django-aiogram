@@ -290,9 +290,14 @@ def test_the_bound_holds_and_is_the_default(queued):
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT=SETTINGS)
 def test_selection_narrows_by_window_chat_and_id(queued):
-    """Four ways to select, because the operator knows one of them and not the others."""
-    old = a_failure(chat_id=1, minutes_old=600)
+    """Three ways to select, because the operator knows one of them and not the others.
+
+    A failure of its own per sub-run, since a replay is not offered twice: the row joining the
+    two says it has been done, which is the case below this one.
+    """
+    a_failure(chat_id=1, minutes_old=600)
     a_failure(chat_id=2, minutes_old=5)
+    named = a_failure(chat_id=3, minutes_old=900)
 
     replay(since=since(60))
     assert [one.kwargs['chat_id'] for one in queued] == [2], 'the window did not hold'
@@ -300,8 +305,8 @@ def test_selection_narrows_by_window_chat_and_id(queued):
     replay(since=since(1000), chat=1)
     assert [one.kwargs['chat_id'] for one in queued][1:] == [1], 'the chat filter did not hold'
 
-    replay(correlation_id=[str(old)])
-    assert [one.kwargs['chat_id'] for one in queued][2:] == [1], 'an id did not name its own rows'
+    replay(correlation_id=[str(named)])
+    assert [one.kwargs['chat_id'] for one in queued][2:] == [3], 'an id did not name its own rows'
 
 
 @pytest.mark.django_db(transaction=True)
@@ -329,6 +334,70 @@ def test_a_retry_is_not_selectable_at_all():
     """
     with pytest.raises(CommandError, match='is not an ending a replay may select'):
         replay(since=since(), kind=[EventKind.OUTBOUND_RETRIED.value])
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_credential_redacted_inside_a_body_is_refused(queued):
+    """Redaction happens *inside* a string as well as instead of a whole value.
+
+    `redact_values` replaces a value whose key matched; `redact_text` substitutes a
+    token-shaped run inside text. So a body reads `'the token is ***, keep it'` and an equality
+    test sees nothing wrong with it -- measured, and the replay would have sent that sentence
+    to the chat.
+    """
+    a_failure(arguments={'chat_id': 42, 'text': 'the token is ***, keep it'})
+
+    output = replay(since=since())
+
+    assert list(queued) == [], 'a message with a blanked credential in it was sent'
+    assert 'redacted' in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_body_that_merely_contains_stars_is_refused_too(queued):
+    """The cost of the check above, asserted rather than left to be discovered.
+
+    Recording which keys were redacted instead would read as complete and not be:
+    `eventlog.writer.to_row` redacts `detail` again at the boundary, for the caller who builds
+    an `Event` by hand, and nothing there knows which of a row's keys are a call's arguments.
+    So a message that writes `***` for emphasis is retyped by hand, and a credential is never
+    sent.
+    """
+    a_failure(arguments={'chat_id': 42, 'text': 'this is ***bold*** in some dialects'})
+
+    output = replay(since=since())
+
+    assert list(queued) == []
+    assert 'redacted' in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_feed_that_refuses_the_join_row_outright_does_not_end_the_run(queued, monkeypatch):
+    """A total refusal raises where a partial one is counted, and the message has already gone.
+
+    Letting it out would end the run at whichever row hit it -- rows after it neither replayed
+    nor reported, and this one's uncertainty never counted, which is the failure the
+    uncertainty exists to describe.
+    """
+    from django_aiogram.eventlog.writer import EventLogRefusedError
+    from django_aiogram.management.commands import tgbot_replay as command
+
+    a_failure(chat_id=1, minutes_old=5)
+    a_failure(chat_id=2, minutes_old=4)
+
+    def refuse_outright(events):
+        """What the writer does when the database took none of the batch."""
+        raise EventLogRefusedError(len(events))
+
+    monkeypatch.setattr(command, 'write_batch', refuse_outright)
+
+    output = replay(since=since())
+
+    assert [one.kwargs['chat_id'] for one in queued] == [1, 2], 'the run stopped at the first refusal'
+    assert '2 replays were queued without a row joining it' in output
 
 
 @pytest.mark.django_db(transaction=True)
@@ -439,7 +508,33 @@ def test_several_endings_for_one_message_replay_it_once(queued):
     output = replay(since=since(), kind=[EventKind.OUTBOUND_DROPPED.value])
 
     assert len(queued) == 1, 'one lost message was sent once per ending recorded for it'
-    assert 'already replayed in this run' in output
+    assert 'it has been replayed already' in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_failure_already_replayed_is_not_offered_twice(queued):
+    """What makes the command re-runnable, and the paging trap it closes.
+
+    The selection is bounded, so five hundred failures are walked a hundred at a time -- and
+    without this every run replayed the same oldest hundred, since the order is by time. Five
+    runs, five hundred messages, four hundred of them the same hundred again, and the rest
+    never sent. Read off `detail.replay_of`: the join row is the record, so the record is what
+    is asked.
+    """
+    a_failure(chat_id=1)
+    a_failure(chat_id=2)
+
+    replay(since=since(), limit=1)
+    assert [one.kwargs['chat_id'] for one in queued] == [1]
+
+    output = replay(since=since(), limit=1)
+
+    assert [one.kwargs['chat_id'] for one in queued] == [1], 'the same failure was replayed twice'
+    assert 'it has been replayed already' in output
+
+    replay(since=since(), limit=2)
+    assert [one.kwargs['chat_id'] for one in queued] == [1, 2], 'the second run never reached the second failure'
 
 
 @pytest.mark.django_db(transaction=True)

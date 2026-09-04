@@ -231,9 +231,17 @@ def lossy_reason(recorded: object) -> str:
     is unreplayable under ``'full'`` while the text message beside it is fine, and the answer
     has to be read off the row rather than off the configuration.
 
-    A message whose text is literally ``'***'`` is refused as redacted. That is the trade in
-    the honest direction: the alternative is sending a credential to a chat because a marker
-    happened to look like a message.
+    **Anywhere in a string, not only as the whole of one.** Two things redact here and they
+    leave different shapes: :func:`redact_values` replaces a whole value whose *key* matched,
+    while :func:`redact_text` substitutes a token-shaped run *inside* text -- so a body reads
+    ``'the token is ***, keep it'`` and an equality test sees nothing wrong with it. Measured,
+    and a replay would have sent that sentence to the chat.
+
+    So a message whose text merely contains ``'***'`` is refused. That is the trade in the
+    honest direction, and it is the one available: recording which keys were redacted instead
+    would read as complete and not be, because ``eventlog.writer.to_row`` redacts ``detail``
+    again at the boundary -- deliberately, for the caller who builds an ``Event`` by hand --
+    and nothing there knows which of a row's keys are a call's arguments.
 
     **A row written before 4.1 needs the last two checks.** Until then the string cap left a
     prefix and an ellipsis rather than a marker, so a body over ``MAX_STRING`` reads as an
@@ -253,7 +261,7 @@ def lossy_reason(recorded: object) -> str:
         if len(recorded) >= MAX_ITEMS:
             return f'{len(recorded)} items is the cap, and a list at it cannot be told from one cut to it'
         return next((reason for reason in map(lossy_reason, recorded) if reason), '')
-    if recorded == _REDACTED:
+    if isinstance(recorded, str) and _REDACTED in recorded:
         return 'a value was redacted, and redaction is one-way'
     if isinstance(recorded, str) and len(recorded) > MAX_STRING:
         return f'the arguments were recorded as truncated rather than in full (a {len(recorded)}-character prefix)'
