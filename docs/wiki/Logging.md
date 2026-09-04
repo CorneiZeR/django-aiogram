@@ -48,7 +48,7 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_drain_timeout` | how long shutdown gave them |
 | `tg_kind` | the event log kind of a row |
 | `tg_replay_of` | the correlation id a replayed send is standing in for |
-| `tg_replayed`, `tg_refused`, `tg_skipped` | how many sends one `tgbot_replay` run put back, how many it could not, and how many needed nothing — sent in the end, or replayed already |
+| `tg_replayed`, `tg_refused`, `tg_skipped` | how many sends one `tgbot_replay` run put back, how many it could not, and how many needed nothing — sent in the end, replayed already, or discarded on purpose past `--grace` |
 | `tg_receiver` | the `events_recorded` receiver that raised |
 | `tg_batch` | how many rows the batch held, when part of it was refused |
 | `tg_worker` | the worker name an in-flight list is keyed on |
@@ -97,7 +97,7 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `publishing recorded events failed` | ERROR | the signal dispatch itself raised, not a receiver — Django's own failure logging cannot name a callable instance. The batch reached the database if the event log is on; some receivers may have missed it |
 | `could not replay a failed send` | ERROR | one row's queue write raised, and the run carried on with the rest. `tg_replay_of` names it. One bad row must not take a hundred-row replay down halfway, with no way to tell which half went |
 | `replayed a failed send` | INFO | `tgbot_replay` queued one message again. `tg_replay_of` names the id it stands in for, `tg_function` the method |
-| `replay finished` | INFO | one `tgbot_replay` run is done: `tg_replayed` put back, `tg_refused` it could not, `tg_skipped` needed nothing. Neither count is an error — a refusal is usually a row whose arguments were never recorded in full, and a skip is usually a previous run's work |
+| `replay finished` | INFO | one `tgbot_replay` run is done: `tg_replayed` put back, `tg_refused` it could not, `tg_skipped` needed nothing — delivered in the end, replayed already, or discarded past `--grace`. Neither count is an error: a refusal is usually a row whose arguments were never recorded in full, and a skip is usually a previous run's work |
 | `delivery started` | INFO | the consumer is up |
 | `message sent` | INFO | one call succeeded |
 | `the event log is falling behind; events are being dropped` | ERROR | the writer cannot keep up; rows are being lost, messages are not |

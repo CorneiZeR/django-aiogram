@@ -409,8 +409,11 @@ was made with, and the feed records a *description* of them — so:
 - `it was sent in the end, so nothing was lost` — the ending selected is not the end of that
   message's story. A mover that failed three times and published on the fourth leaves three
   drop rows and an `outbound.sent`, and Telegram has the message.
+- `the deployment discarded it on purpose (TooLate), so this is not a loss` — `--grace` refused
+  that message deliberately; replaying it would be the outage twice.
 - `it has been replayed already; the row joining them says so` — an `outbound.replayed` row
-  names this failure, from this run or an earlier one. **This is what makes the command
+  names this failure, from this run, an earlier one, or another run that finished while this one
+  was walking. **This is what makes the command
   re-runnable**: the selection is bounded, so five hundred failures are walked a hundred at a
   time, and without it every run would replay the same oldest hundred and never reach the
   rest.
@@ -444,10 +447,15 @@ before either writes its own. Run one at a time.
 There is nothing for the command to claim instead. The event log is insert-only — that is what
 lets a web process and a worker write one message's history with no coordination — so a run
 cannot take ownership of a failure the way `tgbot_dispatch_scheduled` claims a scheduled send.
-What is bounded is the damage: the join row is written per message right after it is queued, so
-a second run started later duplicates only the messages the first had not yet reached *or whose
-join row the feed refused* — the two exceptions are the same one seen from either side, and the
-first run's report names the second kind.
+What is bounded is the damage, twice over: the join row is written per message right after it is
+queued, and read again right *before* the next send — so two runs have to collide inside one
+query rather than anywhere inside a walk of two hundred rows. What is left is a duplicate
+message, which is the failure mode this package documents everywhere else too: a lease that
+lapses mid-publish sends twice, a cancellation can lose its race, a consumer redelivers.
+
+The exceptions stay: a message whose join row the feed refused is offered again — the first
+run's report names those — and one replayed by something other than this command is not known to
+it.
 
 ## `ModuleNotFoundError: No module named 'telegram_bot'`
 

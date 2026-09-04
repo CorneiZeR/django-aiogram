@@ -669,6 +669,45 @@ def test_what_needs_nothing_is_counted_apart_from_what_cannot_be_replayed(queued
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_replay_that_landed_mid_walk_is_seen_before_the_send(queued, monkeypatch):
+    """Another run finishing while this one walks must not cost a duplicate message.
+
+    The window's answers are read for two hundred rows at a time, so without a second look a
+    run started while the first was working through them sent every message the first had not
+    yet reached. Asked again immediately before the send, the two have to collide inside one
+    query instead.
+
+    Not a claim, and this case does not pretend otherwise: it drives the *ordering* by having
+    the competing row land while this row is being prepared.
+    """
+    from django_aiogram.management.commands.tgbot_replay import Command
+
+    identifier = a_failure()
+    real = Command._arguments_for
+
+    def land_a_competitor(self, row):
+        """What another run's join row looks like, arriving between the two reads."""
+        TelegramEvent.objects.create(
+            kind=EventKind.OUTBOUND_REPLAYED.value,
+            correlation_id=new_correlation_id(),
+            function=row.function,
+            chat_id=row.chat_id,
+            detail={'replay_of': str(row.correlation_id)},
+        )
+        return real(self, row)
+
+    monkeypatch.setattr(Command, '_arguments_for', land_a_competitor)
+
+    output = replay(since=since())
+
+    assert list(queued) == [], 'the message was sent although another run had already replayed it'
+    assert 'it has been replayed already' in output
+    assert 'replayed 0; refused 0; skipped 1' in output
+    assert identifier is not None
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
 def test_a_negative_limit_is_not_the_unbounded_mode(queued):
     """`--limit 0` is the deliberate one; `--limit -1` is a typo that would replay everything."""
     a_failure()
@@ -738,6 +777,25 @@ def test_a_moment_that_is_not_one_is_refused_by_name():
     """`--since yesterday` is a reasonable thing to try and a bad thing to guess at."""
     with pytest.raises(CommandError, match='ISO 8601'):
         replay(since='yesterday')
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_row_dated_in_the_future_is_left_alone(queued):
+    """`--until` says it defaults to now, and the code left the upper end open.
+
+    A row can be dated ahead of the clock -- a process whose clock ran fast wrote it, or a
+    caller built an `Event` by hand -- and with no upper bound it was selected and sent. The
+    run reads one moment at its start and uses that, so rows arriving *while* it walks belong
+    to the next run rather than creeping into this one.
+    """
+    a_failure(chat_id=1, minutes_old=5)
+    ahead = a_failure(chat_id=2, minutes_old=-600)
+
+    replay(since=since())
+
+    assert [one.kwargs['chat_id'] for one in queued] == [1], 'a row dated in the future was sent early'
+    assert TelegramEvent.objects.filter(correlation_id=ahead, kind=EventKind.OUTBOUND_REPLAYED.value).count() == 0
 
 
 @pytest.mark.django_db(transaction=True)

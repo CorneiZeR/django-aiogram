@@ -87,6 +87,14 @@ DELIBERATE_DROPS = frozenset({'TooLate'})
 #: until a mover did and the mover records no description of its own
 ARGUMENT_KINDS = (EventKind.OUTBOUND_QUEUED.value, EventKind.OUTBOUND_SCHEDULED.value)
 
+#: the three answers that mean "nothing to do here", written once because they are read in four
+#: places -- the per-row line, the report, the log field's documentation and the page. Counted
+#: apart from the refusals, since a refusal asks somebody to decide and these do not
+SKIPPED_DELIVERED = 'it was sent in the end, so nothing was lost'
+SKIPPED_REPLAYED = 'it has been replayed already; the row joining them says so'
+SKIPPED_DELIBERATE = 'the deployment discarded it on purpose ({code}), so this is not a loss'
+SKIP_REASONS = frozenset({SKIPPED_DELIVERED, SKIPPED_REPLAYED})
+
 #: how many messages one run may put back, unless an operator says otherwise. A default rather
 #: than "all of them", because a slipped date range would otherwise empty a month of failures
 #: into the queue at once and every one of them is a message somebody receives
@@ -112,12 +120,18 @@ class Command(BaseCommand):
     write one message's history with no coordination -- so there is no row a run can take
     ownership of the way ``tgbot_dispatch_scheduled`` claims a scheduled send.
 
-    What is bounded is the damage. The guard is a row written per message immediately after it
-    is queued, so a second run started later duplicates only the messages the first had not
-    yet reached, or the ones whose join row the feed refused -- which the first run reports and
-    logs. The window is the overlap between two runs rather than the incident. Serialising two
-    operators' shells is not something a management command can do, so this says so instead,
-    the way the rest of this package states the races it cannot close.
+    What is bounded is the damage, and it is bounded twice. The guard is a row written per
+    message immediately after it is queued, and the row is read again immediately *before* the
+    next send -- so two runs have to collide inside one query rather than anywhere inside a walk
+    of two hundred rows. What is left is a duplicate message, which is the failure mode this
+    whole package documents: a lease that lapses mid-publish sends twice, a cancellation can
+    lose its race, a consumer redelivers. Closing it here alone would need a coordination
+    primitive the rest of the package deliberately does not have.
+
+    The exceptions to the guard are the same two the page carries: a message whose join row the
+    feed refused is offered again, and one replayed by something other than this command is not
+    known to it. Serialising two operators' shells is not something a management command can do,
+    so this says so instead, the way the rest of this package states the races it cannot close.
     """
 
     help = 'Queue failed sends again, from the arguments the event log recorded.'
@@ -130,7 +144,12 @@ class Command(BaseCommand):
             help='replay failures recorded at or after this moment, as ISO 8601. Required '
             'unless --correlation-id names the rows instead.',
         )
-        parser.add_argument('--until', default=None, help='and before this one, as ISO 8601 (default: now).')
+        parser.add_argument(
+            '--until',
+            default=None,
+            help='and before this one, as ISO 8601. Defaults to the moment the run starts, so a '
+            'row dated in the future is left alone rather than sent early.',
+        )
         parser.add_argument(
             '--kind',
             action='append',
@@ -161,6 +180,9 @@ class Command(BaseCommand):
     #: replays whose join row the feed would not take, counted so the report can say so
     _unrecorded = 0
 
+    #: the moment the run began, which is the upper end of the window when `--until` is absent
+    _started: datetime.datetime
+
     def handle(self, *args: Any, **options: Any) -> None:
         """Walk the selection until the bound is spent on messages that actually went.
 
@@ -178,6 +200,7 @@ class Command(BaseCommand):
         is what paging is.
         """
         self._unrecorded = 0
+        self._started = timezone.now()
         self._refuse_where_there_is_nothing_to_read(dry_run=options['dry_run'])
         refused: Counter[str] = Counter()
         skipped: Counter[str] = Counter()
@@ -200,12 +223,14 @@ class Command(BaseCommand):
                     skipped[nothing] += 1
                     continue
                 reason = self._replay(row, dry_run=options['dry_run'])
+                if reason in SKIP_REASONS:
+                    skipped[reason] += 1
+                    continue
                 if reason:
                     refused[reason] += 1
                     continue
-                # so a second ending for this message, later in the same walk, is skipped for
-                # the same reason a second *run* would skip it
-                done[row.correlation_id] = 'it has been replayed already; the row joining them says so'
+                # nothing to record for the next ending of this message: the join row was
+                # written synchronously just now, so `_already_replayed` sees it on the way past
                 replayed += 1
         self._report(replayed, refused, skipped, dry_run=options['dry_run'])
 
@@ -263,8 +288,14 @@ class Command(BaseCommand):
             rows = rows.filter(correlation_id__in=[_as_uuid(one) for one in identifiers])
         if options['since']:
             rows = rows.filter(created_at__gte=_moment(options['since'], '--since'))
-        if options['until']:
-            rows = rows.filter(created_at__lt=_moment(options['until'], '--until'))
+        # the help said "default: now" and the code left the upper end open, so a row dated in
+        # the future -- a clock that ran ahead on the process that wrote it, or a caller building
+        # an `Event` by hand -- was selected and sent. Read once at the start of the run rather
+        # than per query, so a walk of several windows does not creep forward past rows arriving
+        # while it runs: those belong to the next run, which is the same reason `claim` in the
+        # mover takes one `moment` for a whole pass
+        until = _moment(options['until'], '--until') if options['until'] else self._started
+        rows = rows.filter(created_at__lt=until)
         if options['chat'] is not None:
             rows = rows.filter(chat_id=options['chat'])
         return rows.order_by('created_at', 'id')
@@ -298,6 +329,16 @@ class Command(BaseCommand):
         if dry_run:
             self.stdout.write(f'would replay {row.short_id or row.correlation_id}: {row.function}({_shown(arguments)})')
             return ''
+        # read once more, as late as it can be read. Two runs at once is a race this cannot
+        # close -- there is nothing here to claim, see the class docstring -- and the window it
+        # *can* remove is the one that spans a whole window of rows: without this, a second run
+        # started while the first was working through two hundred rows duplicated every message
+        # the first had not yet reached. With it, the two have to land inside the same query.
+        # Not a claim, and the reply on the thread says so rather than implying otherwise
+        if self._already_replayed(row):
+            self.stdout.write(f'skipped {row.short_id or row.correlation_id} ({row.function}): {SKIPPED_REPLAYED}')
+            return SKIPPED_REPLAYED
+
         from django_aiogram import bot  # noqa: PLC0415 - building a bot is the last thing this does
 
         try:
@@ -323,43 +364,45 @@ class Command(BaseCommand):
         return ''
 
     @staticmethod
+    def _already_replayed(row: TelegramEvent) -> bool:
+        """Whether a replay already stands in for this failure, asked at this instant.
+
+        The same question :meth:`_nothing_to_do_for` answers for a window, asked again for one
+        row immediately before the send. It narrows a race rather than closing one, and the
+        difference matters: what it removes is the window spanning two hundred rows, so two
+        runs now have to collide inside one query rather than anywhere inside a walk.
+        """
+        return (
+            TelegramEvent.objects.using(log_alias())
+            .filter(kind=EventKind.OUTBOUND_REPLAYED.value, detail__replay_of=str(row.correlation_id))
+            .exists()
+        )
+
+    @staticmethod
     def _nothing_to_do_for(rows: 'list[TelegramEvent]') -> dict[uuid.UUID, str]:
-        """Answer which messages in this window need nothing, and what they need nothing for.
+        """Answer which messages in this window Telegram already has.
 
-        Two questions, two queries for the whole window rather than two per row:
+        One question, one query for the whole window: an ``outbound.sent`` under the id means
+        the ending selected was not the end of the story -- a mover that failed three times and
+        published on the fourth leaves three drop rows and a delivery, and so does a send the
+        caller retried.
 
-        * **Telegram has it.** An ``outbound.sent`` under the id means the ending selected was
-          not the end of the story -- a mover that failed three times and published on the
-          fourth leaves three drop rows and a delivery, and so does a send the caller retried.
-        * **A replay already stands in for it**, read from ``detail.replay_of`` on the
-          ``outbound.replayed`` rows. The join row is the record, so the record is what is
-          asked, and that is what lets a bounded run be repeated until the incident is walked.
+        **It used to ask two**, the second being whether a replay already stood in for the row.
+        That answer now comes from :meth:`_already_replayed`, per row and immediately before the
+        send, which is both later and exact -- and once it existed, re-applying this pull
+        request's swaps showed the window's copy of it made no difference to any case, because
+        anything it missed was caught a moment later. Two mechanisms for one property, one of
+        them unobservable; this is the one that went.
 
-        Not refusals: nothing here is wrong, and the report counts them apart from the rows a
+        Not a refusal: nothing here is wrong, and the report counts these apart from the rows a
         replay cannot be made from. An operator reads the two differently.
         """
-        identifiers = {row.correlation_id for row in rows}
         delivered = (
             TelegramEvent.objects.using(log_alias())
-            .filter(correlation_id__in=identifiers, kind=EventKind.OUTBOUND_SENT.value)
+            .filter(correlation_id__in={row.correlation_id for row in rows}, kind=EventKind.OUTBOUND_SENT.value)
             .values_list('correlation_id', flat=True)
         )
-        nothing = dict.fromkeys(delivered, 'it was sent in the end, so nothing was lost')
-        already = (
-            TelegramEvent.objects.using(log_alias())
-            .filter(
-                kind=EventKind.OUTBOUND_REPLAYED.value,
-                detail__replay_of__in=sorted(str(one) for one in identifiers),
-            )
-            .values_list('detail', flat=True)
-        )
-        for detail in already:
-            if detail and detail.get('replay_of'):
-                nothing.setdefault(
-                    uuid.UUID(str(detail['replay_of'])),
-                    'it has been replayed already; the row joining them says so',
-                )
-        return nothing
+        return dict.fromkeys(delivered, SKIPPED_DELIVERED)
 
     def _arguments_for(self, row: TelegramEvent) -> tuple[dict[str, Any], str]:
         """Find what the failed call was made with, or say why it cannot be known.
@@ -462,7 +505,7 @@ def _deliberate(row: TelegramEvent) -> str:
     twice. A refusal asks somebody to decide; this decision has been taken.
     """
     if row.error_code in DELIBERATE_DROPS:
-        return f'the deployment discarded it on purpose ({row.error_code}), so this is not a loss'
+        return SKIPPED_DELIBERATE.format(code=row.error_code)
     return ''
 
 
