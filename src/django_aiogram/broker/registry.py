@@ -6,6 +6,7 @@ a typo in the setting look like a working configuration.
 """
 
 import atexit
+import contextlib
 import threading
 from typing import TYPE_CHECKING
 
@@ -18,9 +19,10 @@ from django_aiogram.broker.exceptions import BrokerDependencyError, BrokerNotCon
 from django_aiogram.config.settings import SETTINGS_NAME, conf
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from typing import Any
 
-__all__ = ('SHIPPED', 'broker_class', 'close_broker', 'get_broker')
+__all__ = ('SHIPPED', 'broker_class', 'close_broker', 'get_broker', 'use_broker')
 
 #: what each shipped broker needs, keyed by dotted path — readable *without* importing the
 #: module, so a check can name the missing extra even where the import would fail
@@ -35,6 +37,12 @@ SHIPPED: dict[str, tuple[str, str]] = {
 
 _lock = threading.Lock()
 _broker: Broker | None = None
+#: a broker handed in rather than resolved, for the length of a test. Consulted *before*
+#: `BROKER` and never built from it, which is the whole reason it is not simply an
+#: `override_settings` in `django_aiogram.testing`: a case that overrides the setting itself --
+#: and every `@override_settings(TELEGRAM_BOT=...)` replaces the dict whole -- would otherwise
+#: undo the helper it is running inside, silently, and at a moment it did not choose
+_override: Broker | None = None
 #: registered once per process rather than per build, so a settings change that replaces the
 #: broker does not stack another callback. `close_broker` is idempotent either way
 _exit_hook_armed = False
@@ -94,8 +102,13 @@ def get_broker() -> Broker:
 
     Cached like the Redis client was, and for the same reason: a transport holds a
     connection, and building one per send is what the 3.x accessor existed to avoid.
+
+    An override from :func:`use_broker` wins over both the cache and the setting, and is the
+    only way anything but ``BROKER`` decides this.
     """
     global _broker, _exit_hook_armed  # noqa: PLW0603 - one per process, like the connection it holds
+    if _override is not None:
+        return _override
     if _broker is not None:
         return _broker
     with _lock:
@@ -123,6 +136,34 @@ def get_broker() -> Broker:
                 atexit.register(close_broker)
                 _exit_hook_armed = True
     return _broker
+
+
+@contextlib.contextmanager
+def use_broker(broker: Broker) -> 'Iterator[Broker]':
+    """Make ``broker`` this process's broker for the length of the block.
+
+    The seam ``django_aiogram.testing`` is built on, and public because a project's own
+    fixtures reach for the same thing. Not for a deployment: ``BROKER`` decides there, and a
+    process that could be talked out of its transport by a caller is one whose configuration
+    means less than it says.
+
+    Ahead of the setting rather than through it, which is a deliberate difference from
+    ``override_settings(TELEGRAM_BOT=...)``. Every such override replaces the dict whole, so a
+    case that carries one of its own -- a decorator on the method, applied *after* a fixture
+    has already started capturing -- would silently take the helper's broker away again. The
+    override is a fact about this process, and nothing in the settings can undo it.
+
+    Nested blocks restore the one they replaced, so a case inside a fixture inside a suite-wide
+    hook all end up with what each of them expected.
+    """
+    global _override  # noqa: PLW0603 - the same one-per-process reasoning as `_broker`
+    with _lock:
+        previous, _override = _override, broker
+    try:
+        yield broker
+    finally:
+        with _lock:
+            _override = previous
 
 
 def close_broker() -> None:
