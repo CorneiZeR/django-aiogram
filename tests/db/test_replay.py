@@ -651,16 +651,23 @@ def test_a_naive_moment_is_read_in_the_project_s_timezone(queued):
     out and the window either takes everything or nothing. So one moment before the failure
     and one after it, both naive, both local.
     """
-    a_failure(minutes_old=5)
+    a_failure(chat_id=1, minutes_old=5)
+    a_failure(chat_id=2, minutes_old=5)
     local = timezone.localtime()
     before = (local - datetime.timedelta(minutes=30)).replace(tzinfo=None).isoformat()
     after = (local - datetime.timedelta(minutes=1)).replace(tzinfo=None).isoformat()
 
-    replay(since=before)
+    replay(since=before, limit=1)
     assert len(queued) == 1, 'a naive moment before the failure did not select it'
 
-    replay(since=after)
-    assert len(queued) == 1, 'a naive moment after the failure selected it anyway'
+    output = replay(since=after)
+
+    assert len(queued) == 1, 'a naive moment after the failures selected one anyway'
+    # on the *report*, and with a second failure nothing has touched: asserting the queue alone
+    # passed however `--since` was read, because the first run's join row made the second skip
+    # that failure whatever window it selected. My own de-duplication made the assertion
+    # vacuous, which is what a review found
+    assert 'replayed 0; refused 0; skipped 0' in output, 'the window selected rows it should not have'
 
 
 @pytest.mark.django_db(transaction=True)

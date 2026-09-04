@@ -433,7 +433,9 @@ There is nothing for the command to claim instead. The event log is insert-only 
 lets a web process and a worker write one message's history with no coordination — so a run
 cannot take ownership of a failure the way `tgbot_dispatch_scheduled` claims a scheduled send.
 What is bounded is the damage: the join row is written per message right after it is queued, so
-a second run started later duplicates only the messages the first had not yet reached.
+a second run started later duplicates only the messages the first had not yet reached *or whose
+join row the feed refused* — the two exceptions are the same one seen from either side, and the
+first run's report names the second kind.
 
 ## `ModuleNotFoundError: No module named 'telegram_bot'`
 

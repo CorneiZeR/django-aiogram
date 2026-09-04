@@ -90,9 +90,10 @@ class Command(BaseCommand):
 
     What is bounded is the damage. The guard is a row written per message immediately after it
     is queued, so a second run started later duplicates only the messages the first had not
-    yet reached -- the window is the overlap between two runs, not the incident. Serialising
-    two operators' shells is not something a management command can do, so this says so
-    instead, the way the rest of this package states the races it cannot close.
+    yet reached, or the ones whose join row the feed refused -- which the first run reports and
+    logs. The window is the overlap between two runs rather than the incident. Serialising two
+    operators' shells is not something a management command can do, so this says so instead,
+    the way the rest of this package states the races it cannot close.
     """
 
     help = 'Queue failed sends again, from the arguments the event log recorded.'

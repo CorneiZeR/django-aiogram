@@ -444,8 +444,11 @@ exception messages, and those messages are what an `error` column holds.
 **A value the log could not keep whole says so.** `detail` carries markers rather than quietly
 shorter data: `{"__omitted__": "bytes", "size": …}` for a file, `{"__truncated__": true,
 "size": …, "preview": …}` for a body or a list too long to store, and an `"__omitted__":
-"keys"` entry beside the keys of a mapping that had more. Since 4.1 — before it, an over-long
-body was a prefix and an ellipsis, which read exactly like a message that ended in one.
+"keys"` entry beside the keys of a mapping that had more. A `datetime`, a `date` and a
+`Decimal` are marked too — `{"__omitted__": "Decimal", "value": "9.99"}` — because the row
+keeps them as text while the queue keeps their type. Since 4.1: before it, an over-long body
+was a prefix and an ellipsis, which read exactly like a message that ended in one, and the
+rest were invisible.
 
 **This is also the setting that decides whether a failed send can be replayed**, which is a
 reason to choose it before an incident rather than during one:

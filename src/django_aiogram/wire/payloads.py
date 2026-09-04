@@ -85,7 +85,13 @@ def _scalar(value: object, *, bodies: bool) -> Any:  # noqa: ANN401 - see `summa
     if isinstance(value, bool) or value is None or isinstance(value, (int, float)):
         return value
     if isinstance(value, (datetime.datetime, datetime.date, Decimal)):
-        return str(value)
+        # rendered *and* said so, with the value kept for a reader. `serialise` preserves these
+        # types on the wire and this does not -- a `Decimal('9.99')` reaches a row as `'9.99'`
+        # and a `datetime` as `'2026-09-04 12:00:00+00:00'` -- so a replay built from the row
+        # would hand a string to a field that had a number or an instant, where pydantic
+        # coerces it differently or refuses it in the worker. The marker is what
+        # `lossy_reason` refuses; the value is what the admin still shows
+        return {_OMITTED: type(value).__name__, 'value': str(value)}
     return _UNHANDLED
 
 
@@ -254,6 +260,12 @@ def lossy_reason(recorded: object) -> str:
     package cannot tell the two apart from the stored shape. Fifty keyword arguments is not a
     Telegram method and fifty items is past every list Telegram takes, so what this costs is a
     keyboard of exactly fifty rows, retyped by hand.
+
+    A ``datetime``, a ``date`` and a ``Decimal`` are lossy here too, which is less obvious
+    than the rest: :func:`~django_aiogram.wire.serializers.encode` keeps their types on the
+    wire and this renders them as text, so a replay would hand ``'9.99'`` to a field that had
+    a number. They carry an omission marker as of 4.1 for that reason, and the string beside
+    it, so the refusal is exact and a reader still sees the value.
     """
     if isinstance(recorded, dict):
         return _lossy_mapping(recorded)

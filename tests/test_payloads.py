@@ -81,9 +81,16 @@ def test_an_enum_arrives_as_its_value():
     assert summarize(Colour.RED, bodies=True) == 'red'
 
 
-def test_dates_and_decimals_are_readable():
-    assert summarize(datetime.date(2026, 8, 9), bodies=True) == '2026-08-09'
-    assert summarize(Decimal('1.50'), bodies=True) == '1.50'
+def test_dates_and_decimals_are_readable_and_say_they_were_rendered():
+    """Readable for a person, and marked for `tgbot_replay`, which is a 4.1 addition.
+
+    `serializers.encode` keeps these types on the wire and this renders them as text, so a
+    replay built from a row would hand `'1.50'` to a field that had a `Decimal` -- coerced
+    differently or refused in the worker. The value stays beside the marker, so nothing a
+    reader wanted is gone.
+    """
+    assert summarize(datetime.date(2026, 8, 9), bodies=True) == {'__omitted__': 'date', 'value': '2026-08-09'}
+    assert summarize(Decimal('1.50'), bodies=True) == {'__omitted__': 'Decimal', 'value': '1.50'}
 
 
 def test_an_unknown_object_arrives_as_its_class_name():

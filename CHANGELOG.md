@@ -106,6 +106,12 @@
   and still redacts. `payloads.lossy_reason` is the one place that knows what the loss looks
   like, and each refusal names which kind it hit rather than saying nothing happened.
 
+  A `datetime`, a `date` and a `Decimal` are marked as well, for a reason that is less obvious
+  than the caps: `serializers.encode` keeps their types on the wire and `describe` renders them
+  as text, so a replay built from a row would hand `'9.99'` to a field that had a number —
+  coerced differently by pydantic, or refused in the worker. The rendered value stays beside
+  the marker, so a reader loses nothing.
+
   **Three of those caps are now visible in what they produce, which is a change to what the
   feed stores.** A body over `MAX_STRING` was recorded as a prefix and an ellipsis, a mapping
   over `MAX_KEYS` as fewer keys, and a sequence over `MAX_ITEMS` as fewer items — each
