@@ -105,14 +105,17 @@ def get_broker() -> Broker:
 
     An override from :func:`use_broker` wins over both the cache and the setting, and is the
     only way anything but ``BROKER`` decides this.
+
+    **One lock over the whole choice**, rather than a lock-free read of the cache after
+    checking for an override. Between the two, another thread could install one -- and then a
+    send made *inside* a capture would go to the configured transport instead, which is a test
+    that fails for a reason nothing in it can show. The cost is an uncontended acquisition on a
+    path that ends in a socket write.
     """
     global _broker, _exit_hook_armed  # noqa: PLW0603 - one per process, like the connection it holds
     with _lock:
         if _overrides:
             return _overrides[-1][1]
-    if _broker is not None:
-        return _broker
-    with _lock:
         if _broker is None:
             cls = broker_class()
             cls.verify()
@@ -136,7 +139,7 @@ def get_broker() -> Broker:
                 # closes only the calling thread's consumer.
                 atexit.register(close_broker)
                 _exit_hook_armed = True
-    return _broker
+        return _broker
 
 
 @contextlib.contextmanager

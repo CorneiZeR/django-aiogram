@@ -1,6 +1,8 @@
 """Helpers a project's own tests import, supported the way ``bot.send`` is.
 
-The point is subtraction. Before this, asserting that a message was queued meant pointing a
+What they provide is a boundary: a test names the *call* -- function, arguments, correlation
+id -- and the transport it travelled on and the bytes it travelled as stay this package's
+business. Before this, asserting that a message was queued meant pointing a
 connection at fakeredis, reading a list back by key, and decoding the payload through
 ``wire.serializers.loads`` and ``wire.envelope.unpack`` -- so every project wrote the same
 fixture, and every project's suite depended on a wire format that this package is free to

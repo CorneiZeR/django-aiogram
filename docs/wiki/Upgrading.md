@@ -47,7 +47,15 @@ assert sent.kwargs == [{'chat_id': 42, 'text': 'Order approved'}]
 ```
 
 There is also an in-memory `Broker` to point `BROKER` at for a whole suite, which is what a
-project on RabbitMQ or Kafka never had a way to do.
+project on RabbitMQ or Kafka never had a way to do:
+
+```python
+# settings/test.py
+TELEGRAM_BOT = {
+    'FSM_STORAGE': 'memory',
+    'BROKER': 'django_aiogram.testing.InMemoryBroker',
+}
+```
 
 ## `bot.outcome()` is new, and needs the event log
 
