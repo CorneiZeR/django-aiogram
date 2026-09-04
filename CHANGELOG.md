@@ -87,6 +87,46 @@
   a batch dropped as late or refused by the broker is still a batch, and counting the publish
   would hold every row behind it for another `--interval`.
 
+- **A send can be checked before it is made, by aiogram rather than by us.** `bot.send('send_mesage', ...)`
+  passes every type checker and every linter, and is refused where the payload is built — in a
+  web request, as an exception about a name the caller already wrote. The keyword arguments
+  were `**kwargs: Any`, so a misspelled `parse_mod` reached Telegram.
+
+  `send`, `enqueue`, `asend` and `aenqueue` now take an aiogram **method object** in place of
+  a name and keyword arguments:
+
+  ```python
+  from aiogram.methods import SendMessage
+
+  bot.send(SendMessage(chat_id=42, text='hello'))
+  ```
+
+  Same correlation id, same route, same events. A misspelled method is impossible — it is a
+  class you imported — and a missing or wrongly typed argument is a type error at the call
+  site rather than a `TypeError` in the worker.
+
+  **Nothing here declares those signatures, which is the whole design.** aiogram has 181
+  methods with 1153 arguments between them, every one already declared, typed and versioned
+  there; a hand-written or generated surface would be that many chances to drift. `resolve_call`
+  reads the model the caller built, so a project on a newer aiogram gets its newer arguments
+  with no release here.
+
+  One refusal is ours: aiogram's models are configured `extra='allow'`, so
+  `SendMessage(chat_id=1, text='x', parse_mod='HTML')` is *accepted* and neither mypy nor the
+  pydantic mypy plugin says a word — measured, with the plugin enabled. Queued, it reaches
+  `Bot.send_message(**kwargs)` in the worker as a `TypeError` about a name nobody there can
+  see. So a field aiogram does not declare is refused at the call and named.
+
+  The fields are read as attributes rather than through `model_dump(exclude_unset=True)`,
+  which is the obvious conversion and loses discriminators — `wire.serializers` documents that
+  from the other side, and an `InputMediaPhoto` comes back an `InputMediaAudio`.
+
+  `send_many` does not take one: it fans one call out over many chats, and a method object
+  carries the chat it was built for. `send_raw` does not either — inside the bot container
+  aiogram's own `bot(method)` is the direct call, with the `Message` it returns. The string
+  form is unchanged and stays: it is the 2.x call and the only form that works when the method
+  name is a variable.
+
 - **A Prometheus exporter, so the metrics seam has a consumer.** `events_recorded` was a
   signal with nothing on the other end: every project that wanted a dashboard wrote the same
   receiver over the same kinds and invented its own metric names.

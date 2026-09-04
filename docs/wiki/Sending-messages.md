@@ -23,6 +23,52 @@ bot.send('send_photo', chat_id=CHAT_ID, photo=URL, caption='look')
 bot.send('send_chat_action', chat_id=CHAT_ID, action='typing')
 ```
 
+## Checked before it is sent
+
+A method name is a string, so `bot.send('send_mesage', ...)` passes every type checker and
+every linter — and is refused where the payload is built, in a web request, as an exception
+about a name the caller already wrote. Keyword arguments were never checked at all: a
+misspelled `parse_mod` reached Telegram.
+
+Hand `send` the aiogram method **object** instead, and the checking is aiogram's:
+
+```python
+from aiogram.methods import SendMessage
+
+from django_aiogram import bot
+
+bot.send(SendMessage(chat_id=CHAT_ID, text='hello', parse_mode='HTML'))
+```
+
+Same return value, same events, same route — a correlation id, and the queue unless this is
+the bot container. What changed is where a mistake lands:
+
+| | `bot.send('send_message', ...)` | `bot.send(SendMessage(...))` |
+| --- | --- | --- |
+| a misspelled method | at the call, in a web request | impossible: it is a class you imported |
+| a missing required argument | in the worker | your type checker |
+| an argument of the wrong type | in the worker | your type checker |
+| a misspelled argument | in the worker | at the call, by name |
+
+**This package declares none of those signatures**, which is the point: aiogram has 181
+methods with 1153 arguments between them, and every one of them is already declared, typed and
+versioned there. So the shortcuts cannot drift from the API — they *are* the API — and a
+project on a newer aiogram gets its newer arguments with no release here.
+
+The last row is this package's own doing rather than a type checker's. aiogram's models accept
+unknown fields (`extra='allow'`), so `SendMessage(chat_id=1, text='x', parse_mod='HTML')` is
+accepted and nothing warns; put on the queue it reaches the worker as a `TypeError` about a
+name nobody there can see. The object form refuses it at the call and names it.
+
+`send`, `enqueue`, `asend` and `aenqueue` all take one. `send_many` does not: it fans one call
+out over many chats, and a method object carries the chat it was built for. `send_raw` does
+not either — inside the bot container aiogram's own `bot(method)` is the direct call, with the
+`Message` it returns.
+
+The string form is untouched, and stays: it is the 2.x call, it is what every existing project
+wrote, and it is the only form that works when the method name is a variable. Its keyword
+arguments are not checked either — refusing them there would break calls that work today.
+
 ## Choosing the route yourself
 
 | Method | Behavior |

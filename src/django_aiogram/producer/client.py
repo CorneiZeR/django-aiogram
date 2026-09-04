@@ -43,7 +43,7 @@ from aiogram import Bot, Dispatcher, Router, exceptions
 from aiogram.types import Update
 from django.core.exceptions import ImproperlyConfigured
 
-from django_aiogram.api import check_function
+from django_aiogram.api import check_function, resolve_call
 from django_aiogram.broker.registry import close_broker, get_broker
 from django_aiogram.config.enums import EventKind
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
@@ -64,6 +64,12 @@ from django_aiogram.producer.throttling import RateLimiter, get_rate_limiter
 from django_aiogram.redis import aclose_redis
 
 if TYPE_CHECKING:
+    # the type the queued producers accept beside a method *name*: a caller who wants their
+    # arguments checked builds `SendMessage(...)` and hands it over, and aiogram's own model
+    # is what checks them. Only under TYPE_CHECKING because the runtime test is by attribute
+    # — `api.is_method` says why
+    from aiogram.methods.base import TelegramMethod
+
     # `outcomes` reaches the ORM through `writer`, and this module is imported by
     # `_singleton` on the first touch of `bot` — earlier than the app registry in a process
     # that only ever queues. The two methods below import it when they are called
@@ -476,7 +482,7 @@ class TelegramBot(RouterShortcuts):
 
     def send(
         self,
-        function: str = 'send_message',
+        function: "'TelegramMethod[Any]' | str" = 'send_message',
         *,
         correlation_id: uuid.UUID | str | None = None,
         eta: datetime.datetime | None = None,
@@ -495,6 +501,9 @@ class TelegramBot(RouterShortcuts):
         Returns the correlation id every event about this message carries, so a
         project can store it next to its own model and join the two.
         """
+        # first, so everything below this line -- both routes, the delegation, the
+        # schedule -- sees a name and a dict whatever the caller handed in
+        function, kwargs = resolve_call(function, kwargs)
         # resolved here so both routes agree on the id, and so a caller reading
         # the return value gets the same one the rows carry
         identifier = resolve_correlation_id(correlation_id)
@@ -528,7 +537,7 @@ class TelegramBot(RouterShortcuts):
 
     async def asend(
         self,
-        function: str = 'send_message',
+        function: "'TelegramMethod[Any]' | str" = 'send_message',
         *,
         correlation_id: uuid.UUID | str | None = None,
         eta: datetime.datetime | None = None,
@@ -544,6 +553,7 @@ class TelegramBot(RouterShortcuts):
         In the bot container it still calls Telegram directly, and that path was
         never blocking: :meth:`send_raw` schedules onto the loop and returns.
         """
+        function, kwargs = resolve_call(function, kwargs)
         # before the first await, so a handler's correlation_scope is still the
         # one in effect: after an await the caller's context may have moved on
         identifier = resolve_correlation_id(correlation_id)
@@ -1112,7 +1122,7 @@ class TelegramBot(RouterShortcuts):
 
     def enqueue(
         self,
-        function: str = 'send_message',
+        function: "'TelegramMethod[Any]' | str" = 'send_message',
         *,
         correlation_id: uuid.UUID | str | None = None,
         eta: datetime.datetime | None = None,
@@ -1132,6 +1142,7 @@ class TelegramBot(RouterShortcuts):
 
         Returns the correlation id the delivered row will carry too.
         """
+        function, kwargs = resolve_call(function, kwargs)
         identifier, accepted = self._accept(function, correlation_id)
         if not accepted:
             return identifier
@@ -1161,7 +1172,7 @@ class TelegramBot(RouterShortcuts):
 
     async def aenqueue(
         self,
-        function: str = 'send_message',
+        function: "'TelegramMethod[Any]' | str" = 'send_message',
         *,
         correlation_id: uuid.UUID | str | None = None,
         eta: datetime.datetime | None = None,
@@ -1176,6 +1187,7 @@ class TelegramBot(RouterShortcuts):
         destination — a list, a stream, an AMQP queue or a Kafka topic — and the same
         no-op when ``ENABLED`` is off, which returns the id without reaching the broker.
         """
+        function, kwargs = resolve_call(function, kwargs)
         identifier, accepted = self._accept(function, correlation_id)
         if not accepted:
             return identifier
