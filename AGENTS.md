@@ -51,6 +51,9 @@ src/django_aiogram/
         serializers.py  tagged JSON, and pickle behind ALLOW_PICKLE
         envelope.py     what a queued payload looks like, both shapes
         payloads.py     summarize, redact, cap — in that order, and never lossless
+    contrib/
+        prometheus/     the shipped exporter, behind an extra; imported by a project
+                        and by nothing in this package
     testing/
         broker.py       InMemoryBroker: the contract, against a deque and no server
         capture.py      capture_sends and the records it answers with
@@ -253,6 +256,7 @@ Packaging-only work does not need the Redis suite, and vice versa.
 | `wire/` | how a message becomes bytes and comes back |
 | `eventlog/` | the optional table, the writer thread, the metrics seam |
 | `testing/` | what a *project's* tests import: a broker with no server, and the capture over it |
+| `contrib/` | integrations with what this package does not depend on; one extra each, imported by a project |
 
 **The root keeps two kinds of thing**, and nothing else:
 

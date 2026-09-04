@@ -85,6 +85,18 @@ says so with the install line for the one you named:
 	HINT: pip install "django-aiogram[redis]"
 ```
 
+**Two extras are not transports.** `hiredis` swaps redis-py's parser for the C one, and
+`prometheus` (`prometheus-client>=0.20`) installs the client the shipped exporter fills:
+
+```shell
+pip install 'django-aiogram[redis,prometheus]'
+```
+
+Nothing in this package imports `prometheus_client` — `django_aiogram.contrib.prometheus` is
+imported by a *project*, from its own `AppConfig.ready()`, so the absence is an `ImportError`
+where somebody asked for it rather than a broken install for everyone else. See
+**[Event log](Event-log.md#metrics-without-the-table)**.
+
 A base `pip install django-aiogram` is a valid install — it imports, and every
 `manage.py` command runs — it just cannot carry a message anywhere yet. A process
 with `ENABLED` off is not asked for a driver, so a web container that only records the

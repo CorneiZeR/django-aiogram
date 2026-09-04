@@ -518,6 +518,31 @@ line, and the probe says as much when you give it one. To tolerate a longer sile
 A disabled process is not unhealthy: with `ENABLED=0` the command says so and
 exits 0, since nothing is meant to be running there.
 
+## Metrics: scrape every process that does something
+
+The shipped exporter fills a registry from the event feed —
+`pip install 'django-aiogram[prometheus]'` and `connect()` in an `AppConfig.ready()`, see
+**[Event log](Event-log.md#metrics-without-the-table)**. What matters here is *where*: each
+process exports what it does, and the two halves do different things.
+
+| process | the kinds it produces |
+| --- | --- |
+| web, Celery, anything that queues | `outbound.queued`, `outbound.scheduled` |
+| the bot container | `outbound.consumed`, `outbound.sent`, `outbound.retried`, `outbound.failed`, `outbound.dropped`, every `inbound.*`, `fsm.transition`, `queue.*` |
+| the mover (`tgbot_dispatch_scheduled`) | the queueing of a row that came due, and its drops |
+
+So a scrape configuration that names only the web tier reports zero sends for ever, and one
+that names only the bot reports that nothing is ever queued. Both are the exporter working.
+
+`log.dropped` is the row that says recording itself fell behind, and it is exempt from
+`EVENT_LOG_KINDS` for that reason — alert on it, because while it is non-zero every other
+number here is missing some.
+
+Under gunicorn with several workers, `prometheus_client` needs `PROMETHEUS_MULTIPROC_DIR` and
+the multiprocess collector in whatever view serves `/metrics`, the same as for any other
+metric in that process. The exporter adds no requirement of its own, and no server: it fills
+a registry and stops there.
+
 ## The event log and your database
 
 With `EVENT_LOG` on, every process that records owns **one more database

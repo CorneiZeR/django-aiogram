@@ -251,7 +251,64 @@ to at-most-once; **[Delivery](Delivery.md)** has the guarantee per transport.
 ## Metrics, without the table
 
 The same events reach a `django.dispatch.Signal`, so a project can count what the
-bot does without keeping a row for any of it:
+bot does without keeping a row for any of it. On Prometheus there is nothing to write:
+
+```shell
+pip install 'django-aiogram[prometheus]'
+```
+
+```python
+# apps.py
+from django.apps import AppConfig
+
+
+class ShopConfig(AppConfig):
+    name = 'shop'
+
+    def ready(self):
+        from django_aiogram.contrib.prometheus import connect
+
+        connect()
+```
+
+Two metrics, filled from every batch:
+
+| | |
+| --- | --- |
+| `django_aiogram_events_total{kind}` | every event, by kind — one counter with a label rather than fourteen names to learn |
+| `django_aiogram_event_duration_seconds{kind}` | how long the work took, where it was measured: a send's round trip and a handler's run. Seconds, because that is what a dashboard's arithmetic assumes |
+
+Failures need no metric of their own: `outbound.failed`, `outbound.dropped`, `inbound.failed`
+and the rest are kinds, so `sum(rate(django_aiogram_events_total{kind=~".*failed|.*dropped"}[5m]))`
+is the panel. `log.dropped` is the one to alert on — it means recording itself fell behind, so
+every other number is missing some.
+
+**`connect()` rather than `events_recorded.connect(EventMetrics())`.** A signal keeps a *weak*
+reference by default and the exporter is an instance, so the obvious line connects a receiver
+that is collected before the first batch — metrics that read as no traffic at all. `connect()`
+holds it, and calling it from two apps answers with the one already connected rather than
+raising about a duplicate collector.
+
+`connect(registry)` takes a registry, for a project running `django_prometheus` or one that
+keeps its own; the default is `prometheus_client`'s process-wide one. Serving the numbers stays
+the project's business — this fills a registry in and does nothing else.
+
+**What is deliberately not a label.** `chat_id` and `user_id` are a series per person,
+`correlation_id` a series per message, and `error_code` is whatever Telegram sends — all
+cardinality rather than dimensions. `function` is bounded in practice and still left out,
+because it multiplies every kind by the methods a project uses for a breakdown the feed
+answers exactly. `worker` is not one either: Prometheus already knows which process it
+scraped.
+
+**Which process to scrape.** Each one exports what it does. A web tier produces
+`outbound.queued` and `outbound.scheduled`; the bot container produces `outbound.consumed`,
+`outbound.sent`, the failures and every `inbound.*`. Scraping only one is why half the
+counters read zero for ever. Under gunicorn with several workers, `prometheus_client` needs
+`PROMETHEUS_MULTIPROC_DIR` set and the multiprocess collector in the view, exactly as it does
+for any other metric in that process — this exporter adds no requirement of its own.
+
+For anything else — StatsD, OpenTelemetry, a counter of your own — the seam is a signal and a
+receiver is four lines:
 
 ```python
 # metrics.py, imported from your AppConfig.ready()
