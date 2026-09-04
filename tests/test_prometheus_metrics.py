@@ -179,6 +179,45 @@ def test_connecting_twice_answers_with_the_one_already_connected(registry):
     assert value(registry, 'django_aiogram_events_total', kind='outbound.sent') == 1, 'the batch was counted twice'
 
 
+def test_connecting_again_after_disconnecting_does_not_collide_with_itself(registry):
+    """`disconnect` has to give the names back, or the next `connect` raises about them.
+
+    Measured before the fix: `DuplicateTimeseries: {'django_aiogram_events_total',
+    'django_aiogram_events', 'django_aiogram_events_created'}` -- names nobody typed twice.
+    A suite that disconnects between cases is the one most likely to call this, and it would
+    have failed on its second case.
+    """
+    connect(registry)
+    disconnect()
+
+    connect(registry)
+    publish(sender=None, batch=[Event(kind='outbound.sent')])
+
+    assert value(registry, 'django_aiogram_events_total', kind='outbound.sent') == 1
+
+
+def test_a_second_registry_is_refused_rather_than_quietly_ignored(registry):
+    """Answering with the first exporter would leave the second registry empty for ever.
+
+    And the caller would have no way to know: the call returns an exporter, the metrics are
+    real, and the registry they were asked for is the one nothing scrapes.
+    """
+    connect(registry)
+    other = CollectorRegistry()
+
+    with pytest.raises(ValueError, match='already connected'):
+        connect(other)
+
+    assert not list(other._collector_to_names), 'the refused registry was written to anyway'
+
+
+def test_connecting_with_no_registry_is_a_caller_with_no_opinion(registry):
+    """`connect()` after `connect(registry)` is not the mistake above, so it is not refused."""
+    first = connect(registry)
+
+    assert connect() is first
+
+
 def test_disconnecting_stops_the_counting(registry):
     """A test wants a clean registry between cases, and a deployment never comes back here."""
     connect(registry)

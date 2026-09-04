@@ -10,6 +10,7 @@ project's business, through ``django_prometheus``, ``prometheus_client.start_htt
 or a view of its own. This only fills a registry in.
 """
 
+import contextlib
 import logging
 from typing import TYPE_CHECKING
 
@@ -139,12 +140,25 @@ def connect(registry: CollectorRegistry | None = None) -> EventMetrics:
     trap this function exists to close; the module keeps the reference either way.
 
     Calling it twice returns the one already connected rather than registering the same metric
-    names into the registry again, which ``prometheus_client`` refuses with a ``ValueError``
-    naming a collector -- an error about duplicate registration is a poor way to learn that
-    two apps both called this.
+    names into the registry again, which ``prometheus_client`` refuses with a
+    ``DuplicateTimeseries`` naming three collectors -- a poor way to learn that two apps both
+    called this.
+
+    **A second call naming a different registry raises**, and the message says which two.
+    Answering with the first exporter would leave the second registry with no metrics in it
+    at all: whoever passed it would scrape zeros for ever, from a call that looked like it
+    worked. ``connect()`` with no registry is not that case -- it is a caller with no opinion,
+    and it gets what is already connected.
     """
     global _connected  # noqa: PLW0603 - one exporter per process, like the registry it fills
     if _connected is not None:
+        if registry is not None and registry is not _connected.registry:
+            msg = (
+                f'django_aiogram metrics are already connected to {_connected.registry!r}, so '
+                f'{registry!r} would be left empty. Call disconnect() first, or pass the registry '
+                f'that is already in use.'
+            )
+            raise ValueError(msg)
         return _connected
     metrics = EventMetrics(registry)
     events_recorded.connect(metrics, weak=False)
@@ -153,13 +167,23 @@ def connect(registry: CollectorRegistry | None = None) -> EventMetrics:
 
 
 def disconnect() -> None:
-    """Stop counting, and forget what was connected. Safe to call when nothing is.
+    """Stop counting, unregister the metrics, and forget what was connected.
 
-    For a test that wants a clean registry between cases, mostly. A deployment connects once
-    and never comes back here.
+    Safe to call when nothing is. For a test that wants a clean registry between cases,
+    mostly: a deployment connects once and never comes back here.
+
+    **The collectors are unregistered, not merely disconnected.** Left in the registry, the
+    next ``connect()`` on that same registry raises ``DuplicateTimeseries`` about names
+    nobody typed twice -- so a suite that disconnects between cases would fail on its second
+    one, which is exactly the suite most likely to call this.
     """
     global _connected  # noqa: PLW0603 - as above
     if _connected is None:
         return
     events_recorded.disconnect(_connected)
+    for collector in (_connected.events, _connected.duration):
+        # tolerated rather than assumed: a caller may have unregistered them itself, and
+        # `unregister` raises `KeyError` on a collector the registry does not hold
+        with contextlib.suppress(KeyError):
+            _connected.registry.unregister(collector)
     _connected = None

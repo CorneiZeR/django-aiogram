@@ -110,8 +110,9 @@
 
   It cannot break the feed. The seam contains a receiver that raises, and this one contains
   itself as well rather than leaning on that — a shipped exporter that relied on somebody
-  else's `try` would be the first thing to break if that ever narrowed. Nothing in the package
-  imports `prometheus_client`, which a test in a subprocess holds.
+  else's `try` would be the first thing to break if that ever narrowed. `django_aiogram.contrib.prometheus` is the only
+  module that imports `prometheus_client`, and nothing in the package imports that module —
+  which a test in a subprocess holds, on the modules a project's boot actually pulls.
 
 - **Testing helpers, so a project's suite stops reading this package's wire format.**
   `django_aiogram.testing` ships what `Testing.md` used to hand out as a recipe: point a
