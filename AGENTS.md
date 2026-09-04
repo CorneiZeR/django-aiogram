@@ -158,7 +158,38 @@ Packaging-only work does not need the Redis suite, and vice versa.
   subprocesses; an eager import anywhere on the boot path fails them.
 - **Every change carries a test, and the test must fail without the change.**
   Revert your fix, watch the test fail, put it back. A test that passes either
-  way is worse than none, because it reads as coverage.
+  way is worse than none, because it reads as coverage. Swap the source to check
+  it — never `git checkout` on a file with uncommitted work.
+
+  And re-apply the **earlier** swaps of the same piece of work after a change
+  that alters behaviour rather than adding a branch: a later change can empty a
+  case written two rounds ago and leave it green. It happened in 4.1 — a
+  de-duplication in `tgbot_replay` made a case about `--since` parsing pass
+  whatever the parser did, because its second run then skipped the row either
+  way. `tests/test_suite_discipline.py` catches an assertion that was true
+  before the code ran; it cannot catch one that stopped mattering.
+- **A guard is as complete as the branches it was built from.** When you add a
+  check — a validator, a refusal, a "may this be replayed" predicate — walk
+  **every `return`** of the thing it guards rather than the cases already
+  marked, and prefer the invariant to the enumeration. 4.1's replay refusal was
+  built from the three loss markers `wire/payloads.py` had, and that module lost
+  data in four more ways with no marker; the four are one property —
+  *if `lossy_reason` says nothing was lost, the recorded value equals the
+  input* — and one property test would have covered every branch it has and
+  every branch it grows.
+- **A new flag is a new adversary.** Every argument a command gains gets the
+  short list tried before anyone else does: negative, zero, empty, absent,
+  enormous, the wrong type, and the value the help text calls special. The one
+  that got through in 4.1 was a sentinel with a twin: `--limit 0` documented as
+  "no bound" and `--limit -1` behaving as one too, because the comparison read
+  `<= 0`. Refuse what the help text does not offer, by name.
+- **Do not build a guarantee on something documented as dropping.** Before
+  leaning on a component, read its docstring for "never blocks", "drops rather
+  than", "best effort", "may lose". The recorder says all of that on purpose,
+  because it sits in the send path — so the one row whose absence causes a
+  duplicate message goes through `eventlog.writer` and its answer is read.
+  `tgbot_replay` is the only place in the package that writes a row that way,
+  and the reason is written where it does it.
 - **Values go in `extra`, not in the message.** `logger.warning('rate limited',
   extra={'tg_function': name})`, never an f-string. Keys are `tg_`-prefixed so
   they cannot collide with `LogRecord` attributes.
@@ -320,3 +351,16 @@ and `pytest`. Say why the change is needed and what failure it produces.
 [CodeRabbit](https://github.com/apps/coderabbitai) reviews automatically;
 answer its findings, fix what is still valid and say plainly what you skipped
 and why.
+
+**Every promise the documentation gains needs a case named after it.** A page
+that says "run it again for the next hundred" is a claim about behaviour across
+runs, and a case written from the code path tests the mechanism instead: 4.1
+shipped that sentence twice while it was false, because the fix each time was
+read off the diff rather than off the sentence. List the claims your `docs/wiki`
+diff adds, and name a test for each.
+
+**A round of fixes is the newest and least-read code on the branch.** On the
+largest 4.1 pull request, eleven of thirteen review findings were in the two
+files it had just written, and none of them was caught by a gate here. So the
+sweep, the guard rule above and the earlier rounds' swaps belong to *answering*
+a finding as much as to writing the change.

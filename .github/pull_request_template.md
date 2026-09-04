@@ -15,3 +15,7 @@ The first three apply to every pull request. Strike out the rest with
 - [ ] Nothing new runs at import time
 - [ ] `CHANGELOG.md` updated for user-visible changes
 - [ ] Documentation in `docs/wiki/` follows the behaviour it describes
+- [ ] Every promise the documentation gains has a case named after it — a claim
+      about repetition, bounds or idempotence needs a test that repeats
+- [ ] New flags and settings were tried with the wrong values: negative, zero,
+      empty, absent, enormous, and whatever the help text calls special
