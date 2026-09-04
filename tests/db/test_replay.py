@@ -1,0 +1,431 @@
+"""Putting a failed send back on the queue, from the row that recorded it.
+
+The command's whole risk is in the other direction from the rest of this package: its mistake
+is measured in messages people receive. So most of these cases are about what it *refuses* --
+a row whose arguments were summarized, redacted or capped, and a failure whose queued row is
+gone -- and the two that replay assert the new id and the row that joins it to the old one.
+"""
+
+import datetime
+import uuid
+from io import StringIO
+
+import pytest
+from django.core.management import CommandError, call_command
+from django.test import override_settings
+from django.utils import timezone
+
+from django_aiogram import TelegramBot
+from django_aiogram.broker.registry import use_broker
+from django_aiogram.config.enums import EventKind
+from django_aiogram.eventlog.events import new_correlation_id
+from django_aiogram.eventlog.recorder import recorder
+from django_aiogram.models import TelegramEvent
+from django_aiogram.testing import InMemoryBroker
+from django_aiogram.testing.capture import Captured
+
+SETTINGS = {
+    'TOKEN': '42:x',
+    'FSM_STORAGE': 'memory',
+    'RATE_LIMIT': None,
+    'BROKER': 'django_aiogram.testing.InMemoryBroker',
+    'EVENT_LOG': True,
+    'EVENT_LOG_SYNC': True,
+    'EVENT_LOG_PAYLOAD': 'full',
+}
+
+
+@pytest.fixture
+def queued():
+    """The messages a replay put on the queue, read as records rather than as bytes."""
+    broker = InMemoryBroker()
+    with use_broker(broker):
+        yield Captured(broker)
+
+
+def a_failure(function='send_message', chat_id=42, arguments=None, minutes_old=1, kind=None):
+    """One ended send, with the queued row that carries what it was called with.
+
+    Two rows, because that is the shape the command reads: the ending names the function and
+    the chat, and the arguments are on the row the producer wrote before a worker ever saw it.
+    """
+    identifier = new_correlation_id()
+    when = timezone.now() - datetime.timedelta(minutes=minutes_old)
+    for row_kind, detail in (
+        (EventKind.OUTBOUND_QUEUED.value, arguments if arguments is not None else {'chat_id': chat_id, 'text': 'lost'}),
+        (kind or EventKind.OUTBOUND_FAILED.value, {'stage': 'sending'}),
+    ):
+        row = TelegramEvent.objects.create(
+            kind=row_kind,
+            correlation_id=identifier,
+            function=function,
+            chat_id=chat_id,
+            detail=detail,
+        )
+        TelegramEvent.objects.filter(pk=row.pk).update(created_at=when)
+    return identifier
+
+
+def replay(**options):
+    out = StringIO()
+    call_command('tgbot_replay', stdout=out, **options)
+    return out.getvalue()
+
+
+def since(minutes=60):
+    return (timezone.now() - datetime.timedelta(minutes=minutes)).isoformat()
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_failed_send_goes_back_on_the_queue(queued):
+    """The whole point: the arguments the feed recorded, queued again."""
+    a_failure()
+
+    output = replay(since=since())
+
+    assert queued.kwargs == [{'chat_id': 42, 'text': 'lost'}]
+    assert queued[0].function == 'send_message'
+    assert 'replayed 1; refused 0' in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_replay_gets_an_id_of_its_own_joined_to_the_one_it_stands_in_for(queued):
+    """Reusing the id would make one message look as though it had been sent twice."""
+    original = a_failure()
+
+    replay(since=since())
+    recorder.flush(timeout=5)
+
+    replacement = queued[0].correlation_id
+    assert replacement != original, 'the replay reused the id of the send it stands in for'
+    row = TelegramEvent.objects.get(kind=EventKind.OUTBOUND_REPLAYED.value)
+    assert row.correlation_id == replacement, 'the replay row is not under the id it queued'
+    assert row.detail['replay_of'] == str(original)
+    assert row.detail['replay_of_kind'] == EventKind.OUTBOUND_FAILED.value
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_dry_run_queues_nothing_and_says_what_it_would_have_sent(queued):
+    """The look before the leap, for a command whose mistake is a message somebody reads."""
+    a_failure()
+
+    output = replay(since=since(), dry_run=True)
+
+    assert list(queued) == []
+    assert 'would replay 1' in output
+    assert 'send_message(chat_id=42, text=lost)' in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+@pytest.mark.parametrize(
+    ('arguments', 'expected'),
+    [
+        ({'chat_id': 42, 'photo': {'__omitted__': 'bytes', 'size': 12}}, 'omitted'),
+        ({'chat_id': 42, 'text': {'__truncated__': True, 'size': 9000, 'preview': 'a'}}, 'truncated'),
+        ({'chat_id': 42, 'text': 'hi', 'token': '***'}, 'redacted'),
+        ({}, 'no outbound.queued or outbound.scheduled row'),
+    ],
+    ids=['omitted', 'truncated', 'redacted', 'nothing recorded'],
+)
+def test_a_row_that_is_not_what_was_sent_is_refused_by_name(queued, arguments, expected):
+    """A summary is not a payload, and redaction is one-way.
+
+    Per row rather than per setting: all four of these are recorded under
+    `EVENT_LOG_PAYLOAD: 'full'`, which is necessary and not sufficient -- 'full' still replaces
+    bytes with a marker, still caps a payload too big for the column, and still redacts. The
+    refusal names which, because "it did not replay" is not an answer an operator can act on.
+    """
+    a_failure(arguments=arguments)
+
+    output = replay(since=since())
+
+    assert list(queued) == [], 'a message was sent from arguments that are not what was sent'
+    assert 'replayed 0; refused 1' in output
+    assert expected in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_body_too_long_to_record_is_refused_end_to_end(queued):
+    """The case the local review caught before this shipped, driven through the real producer.
+
+    A body over `MAX_STRING` used to be recorded as a prefix and an ellipsis, with nothing to
+    say so -- so `lossy_reason` saw an ordinary string and the replay would have sent two
+    thousand characters of a longer message to somebody. The cap is a marker now, at the point
+    it happens, and this is the whole path: a real send records the row, and the replay reads
+    it back and refuses.
+    """
+    from django_aiogram.wire.payloads import MAX_STRING
+
+    identifier = TelegramBot().send(chat_id=42, text='x' * (MAX_STRING + 100))
+    recorder.flush(timeout=5)
+    TelegramEvent.objects.create(
+        kind=EventKind.OUTBOUND_FAILED.value,
+        correlation_id=identifier,
+        function='send_message',
+        chat_id=42,
+    )
+    queued_before = len(queued)
+
+    output = replay(since=since())
+
+    assert len(queued) == queued_before, 'a truncated body was sent as though it were the message'
+    assert 'truncated' in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_row_written_before_the_cap_was_marked_is_refused_by_its_length(queued):
+    """4.0 wrote the truncation as a prefix and an ellipsis, and those rows are still in the table.
+
+    Nothing else can produce a stored string longer than `MAX_STRING`, so the length is the
+    signal -- and it has to be, because a replay reads history rather than only what this
+    version wrote.
+    """
+    from django_aiogram.wire.payloads import MAX_STRING
+
+    a_failure(arguments={'chat_id': 42, 'text': 'x' * MAX_STRING + '…'})
+
+    output = replay(since=since())
+
+    assert list(queued) == []
+    assert 'truncated' in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+@pytest.mark.parametrize(
+    'arguments',
+    [
+        {'chat_id': 1, 'reply_markup': {'__omitted__': 'keys', 'keys': 70}},
+        {'chat_id': 1, 'media': {'__truncated__': True, 'size': 70, 'preview': []}},
+    ],
+    ids=['keys', 'items'],
+)
+def test_a_structure_cut_to_its_cap_is_refused(queued, arguments):
+    """The other two losses that used to be invisible: fifty keys kept out of seventy, and
+    fifty items out of seventy. Both are marked at the source now, so both are refused here."""
+    a_failure(arguments=arguments)
+
+    output = replay(since=since())
+
+    assert list(queued) == []
+    assert 'replayed 0; refused 1' in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_an_eta_send_replays_from_its_scheduled_row_without_the_due_time(queued):
+    """A scheduled send has no queued row of its own until a mover writes one, and that one
+    carries no description -- so the arguments are on `outbound.scheduled`, beside `due_at`.
+
+    Falsifiable: leave `due_at` in and the replay calls `send_message(due_at=...)`, which the
+    worker refuses.
+    """
+    identifier = new_correlation_id()
+    row = TelegramEvent.objects.create(
+        kind=EventKind.OUTBOUND_SCHEDULED.value,
+        correlation_id=identifier,
+        function='send_message',
+        chat_id=7,
+        detail={'chat_id': 7, 'text': 'later', 'due_at': timezone.now().isoformat()},
+    )
+    TelegramEvent.objects.filter(pk=row.pk).update(created_at=timezone.now() - datetime.timedelta(minutes=2))
+    TelegramEvent.objects.create(
+        kind=EventKind.OUTBOUND_FAILED.value,
+        correlation_id=identifier,
+        function='send_message',
+        chat_id=7,
+    )
+
+    replay(since=since())
+
+    assert queued.kwargs == [{'chat_id': 7, 'text': 'later'}]
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_the_bound_holds_and_is_the_default(queued):
+    """No unbounded replay: a slipped date range must not empty a month into the queue."""
+    for _ in range(3):
+        a_failure()
+
+    replay(since=since(), limit=2)
+
+    assert len(queued) == 2
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_selection_narrows_by_window_chat_and_id(queued):
+    """Four ways to select, because the operator knows one of them and not the others."""
+    old = a_failure(chat_id=1, minutes_old=600)
+    a_failure(chat_id=2, minutes_old=5)
+
+    replay(since=since(60))
+    assert [one.kwargs['chat_id'] for one in queued] == [2], 'the window did not hold'
+
+    replay(since=since(1000), chat=1)
+    assert [one.kwargs['chat_id'] for one in queued][1:] == [1], 'the chat filter did not hold'
+
+    replay(correlation_id=[str(old)])
+    assert [one.kwargs['chat_id'] for one in queued][2:] == [1], 'an id did not name its own rows'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_dropped_send_is_only_replayed_when_asked_for(queued):
+    """Two endings, and the default is the one an operator means by "what did we lose"."""
+    a_failure(kind=EventKind.OUTBOUND_DROPPED.value)
+
+    replay(since=since())
+    assert list(queued) == [], 'a drop was replayed without being asked for'
+
+    replay(since=since(), kind=[EventKind.OUTBOUND_DROPPED.value])
+    assert len(queued) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_retry_is_not_selectable_at_all():
+    """`outbound.retried` is not an ending: that message went on to succeed or fail under the
+    same id, and replaying it would duplicate whichever it was.
+
+    Checked in the command rather than left to argparse, which is what this case found:
+    `choices` is enforced when a command line is parsed and not when `call_command` is handed
+    a list, so the same run through Python's API selected retries happily.
+    """
+    with pytest.raises(CommandError, match='is not an ending a replay may select'):
+        replay(since=since(), kind=[EventKind.OUTBOUND_RETRIED.value])
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_window_nobody_bounded_is_refused():
+    """A replay of everything ever recorded is not a default."""
+    with pytest.raises(CommandError, match='--since is required'):
+        replay()
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': False})
+def test_a_replay_without_the_log_says_where_it_reads_from():
+    """The feed is the only source there is, so an empty report would be a lie about it."""
+    with pytest.raises(CommandError, match='EVENT_LOG'):
+        replay(since=since())
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'ENABLED': False})
+def test_a_replay_on_a_disabled_process_refuses_rather_than_reporting_nothing():
+    """With `ENABLED` off every send is a no-op that answers with an id, so a run would have
+    reported a hundred messages queued and queued none. `--dry-run` still works, because
+    reading the selection is exactly what a disabled process can do."""
+    a_failure()
+
+    with pytest.raises(CommandError, match='ENABLED'):
+        replay(since=since())
+
+    assert 'would replay 1' in replay(since=since(), dry_run=True)
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_one_row_the_queue_refuses_does_not_take_the_run_down(queued, monkeypatch):
+    """A traceback halfway through a hundred replays leaves nobody able to say which half went.
+
+    The refusal is counted beside the honest ones and named, and the rows after it still go.
+    Falsifiable: without the `try`, the first row's exception escapes `handle` and the second
+    message is never queued.
+    """
+    a_failure(chat_id=1, minutes_old=5)
+    a_failure(chat_id=2, minutes_old=4)
+    calls = []
+    real = TelegramBot.enqueue
+
+    def refuse_the_first(self, function='send_message', **kwargs):
+        """Refuse once, the way a broker that dropped would."""
+        calls.append(kwargs)
+        if len(calls) == 1:
+            msg = 'the broker refused the write'
+            raise ConnectionError(msg)
+        return real(self, function, **kwargs)
+
+    monkeypatch.setattr(TelegramBot, 'enqueue', refuse_the_first)
+
+    output = replay(since=since())
+
+    assert len(calls) == 2, 'the run stopped at the row that raised'
+    assert queued.kwargs == [{'chat_id': 2, 'text': 'lost'}]
+    assert 'replayed 1; refused 1' in output
+    assert 'the queue write refused it: ConnectionError' in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_correlation_id_that_is_not_one_is_refused_by_name():
+    """An operator pastes these by hand, so the typo has to say what it was."""
+    with pytest.raises(CommandError, match='is not a uuid'):
+        replay(correlation_id=['not-an-id'])
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_moment_that_is_not_one_is_refused_by_name():
+    """`--since yesterday` is a reasonable thing to try and a bad thing to guess at."""
+    with pytest.raises(CommandError, match='ISO 8601'):
+        replay(since='yesterday')
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_naive_moment_is_read_in_the_project_s_timezone(queued):
+    """The opposite of what an `eta` does, and deliberately: this is an operator typing a
+    moment they just read off a log line, not code promising a future one.
+
+    Both directions, because "it selected something" would pass while the string was read in
+    UTC: with `TIME_ZONE` five hours from UTC, a naive moment read the wrong way lands hours
+    out and the window either takes everything or nothing. So one moment before the failure
+    and one after it, both naive, both local.
+    """
+    a_failure(minutes_old=5)
+    local = timezone.localtime()
+    before = (local - datetime.timedelta(minutes=30)).replace(tzinfo=None).isoformat()
+    after = (local - datetime.timedelta(minutes=1)).replace(tzinfo=None).isoformat()
+
+    replay(since=before)
+    assert len(queued) == 1, 'a naive moment before the failure did not select it'
+
+    replay(since=after)
+    assert len(queued) == 1, 'a naive moment after the failure selected it anyway'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_the_newest_description_wins(queued):
+    """A message queued, failed, replayed and failed again has two describing rows, and the
+    one that describes *this* attempt is the later of them."""
+    identifier = uuid.uuid4()
+    for text, minutes in (('first', 20), ('second', 2)):
+        row = TelegramEvent.objects.create(
+            kind=EventKind.OUTBOUND_QUEUED.value,
+            correlation_id=identifier,
+            function='send_message',
+            chat_id=9,
+            detail={'chat_id': 9, 'text': text},
+        )
+        TelegramEvent.objects.filter(pk=row.pk).update(created_at=timezone.now() - datetime.timedelta(minutes=minutes))
+    TelegramEvent.objects.create(
+        kind=EventKind.OUTBOUND_FAILED.value,
+        correlation_id=identifier,
+        function='send_message',
+        chat_id=9,
+    )
+
+    replay(since=since())
+
+    assert queued.kwargs == [{'chat_id': 9, 'text': 'second'}]

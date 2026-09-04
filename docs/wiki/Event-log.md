@@ -57,6 +57,7 @@ gives you `sent` rows with no `queued` rows to match. That is not a bug.
 | `outbound.retried` | Telegram refused it with a rate limit; backing off |
 | `outbound.failed` | the call raised |
 | `outbound.dropped` | it had not completed when the row was written: serialization failed, queueing refused it, retries were exhausted, or shutdown canceled it. `detail.stage` says which. Not the same as *never sent* — a queueing error can follow a write that landed, and a cancellation can land after Telegram took the request |
+| `outbound.replayed` | `manage.py tgbot_replay` queued a failed send again. Written under the **new** id, with the old one in `detail.replay_of` and the ending it replays in `detail.replay_of_kind` — a replay is not a fresh send, and a feed that could not tell them apart would make the failure rate unreadable |
 | `inbound.received` | an update arrived, by polling or webhook |
 | `inbound.handled` | the handlers finished |
 | `inbound.failed` | a handler raised |
@@ -439,6 +440,20 @@ decision it is. `'none'` stores no payload at all.
 Credentials are stripped from `detail` and `error` either way. That matters more
 than it sounds: the bot token is in the API URL, aiogram puts the URL in its
 exception messages, and those messages are what an `error` column holds.
+
+**A value the log could not keep whole says so.** `detail` carries markers rather than quietly
+shorter data: `{"__omitted__": "bytes", "size": …}` for a file, `{"__truncated__": true,
+"size": …, "preview": …}` for a body or a list too long to store, and an `"__omitted__":
+"keys"` entry beside the keys of a mapping that had more. Since 4.1 — before it, an over-long
+body was a prefix and an ellipsis, which read exactly like a message that ended in one.
+
+**This is also the setting that decides whether a failed send can be replayed**, which is a
+reason to choose it before an incident rather than during one:
+`manage.py tgbot_replay` sends a message again from the arguments the feed recorded, so it
+needs them recorded in full — and even `'full'` is decided per row, since bytes are still
+replaced by a marker, an oversized payload is still capped and credentials are still redacted.
+A failure recorded under `'summary'` cannot be upgraded afterwards. See
+**[Troubleshooting](Troubleshooting.md#telegram-was-down-what-did-we-lose-and-can-it-be-sent-again)**.
 
 ## The admin, and who may see what
 

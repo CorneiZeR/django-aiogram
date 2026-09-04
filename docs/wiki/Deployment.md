@@ -210,6 +210,11 @@ deployment where that work never happens:
 | `manage.py tgbot_prune_events` | the event log's size. `W006` warns while `EVENT_LOG_RETENTION_DAYS` is unset |
 | `manage.py tgbot_dispatch_scheduled` | every send made with an `eta`. Without it a scheduled message waits for ever |
 
+`manage.py tgbot_replay` is the third command, and deliberately not on that list: it is run by
+a person, after an incident, with `--dry-run` first — see
+**[Troubleshooting](Troubleshooting.md#telegram-was-down-what-did-we-lose-and-can-it-be-sent-again)**.
+Scheduling it would mean re-sending failures nobody has looked at.
+
 From cron, or as a container of its own:
 
 ```yaml

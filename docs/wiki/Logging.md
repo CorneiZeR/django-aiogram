@@ -47,6 +47,8 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_low` | the first id of the range a copy is retrying, when a row landed under an id it was about to move |
 | `tg_drain_timeout` | how long shutdown gave them |
 | `tg_kind` | the event log kind of a row |
+| `tg_replay_of` | the correlation id a replayed send is standing in for |
+| `tg_replayed`, `tg_refused` | how many sends one `tgbot_replay` run put back, and how many it would not |
 | `tg_receiver` | the `events_recorded` receiver that raised |
 | `tg_batch` | how many rows the batch held, when part of it was refused |
 | `tg_worker` | the worker name an in-flight list is keyed on |
@@ -93,6 +95,9 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `an events_recorded receiver raised` | ERROR | one of your metrics receivers raised; the batch reached the database if the event log is on and the write succeeded, and usually the other receivers too — `send_robust` isolates them, but the row below is the case where it cannot. `tg_receiver` names it |
 | `the prometheus exporter could not record an event` | ERROR | the shipped exporter failed on one event and carried on with the rest of the batch. `tg_kind` names it. It contains itself rather than leaning on the two rows above, so a metric going wrong costs one observation and never the feed |
 | `publishing recorded events failed` | ERROR | the signal dispatch itself raised, not a receiver — Django's own failure logging cannot name a callable instance. The batch reached the database if the event log is on; some receivers may have missed it |
+| `could not replay a failed send` | ERROR | one row's queue write raised, and the run carried on with the rest. `tg_replay_of` names it. One bad row must not take a hundred-row replay down halfway, with no way to tell which half went |
+| `replayed a failed send` | INFO | `tgbot_replay` queued one message again. `tg_replay_of` names the id it stands in for, `tg_function` the method |
+| `replay finished` | INFO | one `tgbot_replay` run is done: `tg_replayed` put back, `tg_refused` left alone. A refusal is not an error — most are a row whose arguments were never recorded in full |
 | `delivery started` | INFO | the consumer is up |
 | `message sent` | INFO | one call succeeded |
 | `the event log is falling behind; events are being dropped` | ERROR | the writer cannot keep up; rows are being lost, messages are not |

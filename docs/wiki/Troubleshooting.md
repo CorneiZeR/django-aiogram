@@ -362,6 +362,43 @@ message per second to the same chat, 20 per minute to a group. Verify with `RATE
 set to `None`; if it speeds up, tune the numbers rather than removing them, or
 Telegram will start refusing.
 
+## Telegram was down; what did we lose, and can it be sent again
+
+The feed answers the first half: `outbound.failed` and `outbound.dropped` rows over the
+window, which the admin filters by kind and by time. `manage.py tgbot_replay` answers the
+second, from the same rows:
+
+```shell
+python manage.py tgbot_replay --since 2026-09-04T10:00 --dry-run
+python manage.py tgbot_replay --since 2026-09-04T10:00 --limit 50
+```
+
+`--dry-run` first, always: this is the one command in the package whose mistake is measured in
+messages people receive. It prints the call it would make for each row, and the reason for
+each row it will not.
+
+**Most refusals are honest ones, and they say which.** A replay needs the arguments the send
+was made with, and the feed records a *description* of them — so:
+
+- `the arguments were recorded as omitted rather than in full` — a photo, a document, or any
+  value the log replaces with a marker. Nothing to replay from.
+- `... as truncated ...` — the arguments did not fit the column and were capped.
+- `a value was redacted, and redaction is one-way` — a token-shaped value or a
+  `EVENT_LOG_REDACT_KEYS` key was blanked on the way in.
+- `no outbound.queued or outbound.scheduled row carries its arguments` — the failure row names
+  the function and the chat, and the arguments live on the row the *producer* wrote. With
+  `EVENT_LOG_PAYLOAD: 'none'` there never was one; after `tgbot_prune_events` there is not one
+  any more, however recent the failure.
+
+So `EVENT_LOG_PAYLOAD: 'full'` is what makes replay possible, and it is not a guarantee: it is
+decided per row, not per setting. Set it before you need it — a failure recorded under
+`'summary'` cannot be upgraded afterwards.
+
+Each replay is a **new** message with a new correlation id, and an `outbound.replayed` row
+joins it to the one it stands in for (`detail.replay_of`). Running the command twice sends the
+message twice: it is bounded (`--limit`, 100 by default) rather than idempotent, and the bound
+exists because a slipped date range would otherwise empty a month of failures into the queue.
+
 ## `ModuleNotFoundError: No module named 'telegram_bot'`
 
 The 1.x package name was a deprecated shim in 2.x and is gone in 3.0. The

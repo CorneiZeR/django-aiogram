@@ -97,6 +97,10 @@ class EventKind(str, Enum):
     OUTBOUND_RETRIED = 'outbound.retried'
     OUTBOUND_FAILED = 'outbound.failed'
     OUTBOUND_DROPPED = 'outbound.dropped'
+    #: written by `manage.py tgbot_replay`, under the *new* id it queued, with the id it is
+    #: replaying in `detail`. Its own kind because a replayed send is not a fresh one, and a
+    #: feed that cannot tell them apart makes the failure rate unreadable
+    OUTBOUND_REPLAYED = 'outbound.replayed'
     INBOUND_RECEIVED = 'inbound.received'
     INBOUND_HANDLED = 'inbound.handled'
     INBOUND_FAILED = 'inbound.failed'
