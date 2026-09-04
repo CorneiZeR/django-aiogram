@@ -167,12 +167,15 @@ def test_the_string_form_still_accepts_whatever_it_is_given():
     assert (function, kwargs) == ('send_message', {'parse_mod': 'HTML'})
 
 
-def test_a_method_object_resolves_to_the_name_the_allowlist_holds():
-    """Both halves derive the name the same way, or a method is allowed under one name and sent
-    under another.
+def test_every_aiogram_method_resolves_to_the_name_the_allowlist_holds():
+    """`resolve_call` and the allowlist must derive the same name, or a method is allowed under
+    one and sent under another.
 
-    Every aiogram method class, not a sample: `method_name` is a regular expression over
-    `CamelCase`, and the one that breaks it will be a class name nobody predicted.
+    Driven through `resolve_call` on an instance of every method, not by comparing two
+    transformations of the same string -- which is what this case did first, and it would have
+    passed with the resolution broken. `model_construct` builds an instance without validating
+    required fields, which is what makes all 181 reachable without inventing arguments for
+    each.
     """
     import aiogram.methods
 
@@ -181,11 +184,38 @@ def test_a_method_object_resolves_to_the_name_the_allowlist_holds():
         name = method_name(class_name)
         if name not in API_METHODS:
             continue  # administrative or not a Bot attribute, which the allowlist already decides
-        kind = getattr(aiogram.methods, class_name)
-        assert method_name(kind.__name__) == name, f'{class_name} resolves two ways'
+        blank = getattr(aiogram.methods, class_name).model_construct()
+
+        resolved, kwargs = resolve_call(blank, {})
+
+        assert resolved == name, f'{class_name} resolves to {resolved!r} and is allowed as {name!r}'
+        assert kwargs == {}, f'{class_name} carried arguments nobody set: {sorted(kwargs)}'
         checked += 1
 
     assert checked == len(API_METHODS), f'{checked} of {len(API_METHODS)} allowed methods were reached'
+
+
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_subclass_may_not_invent_an_argument_for_the_api():
+    """The other half of accepting a subclass, and the hole the first version had.
+
+    A subclass that declares a field of its own has it in `model_fields`, so comparing against
+    the object's own model accepted it -- and the worker calls `Bot.send_message(**kwargs)`,
+    which knows only what Telegram defines, so it would refuse it there. Compared against the
+    canonical model for the resolved name, it is refused at the call like any other unknown
+    field.
+
+    Defaults, validators and behaviour on a subclass are fine, which is what the case above
+    covers; an extra argument for the API is not.
+    """
+
+    class SendWithExtra(SendMessage):
+        """A subclass carrying a field of the project's own."""
+
+        internal_note: str = 'for our own bookkeeping'
+
+    with capture_sends(), pytest.raises(TypeError, match="no field 'internal_note'"):
+        TelegramBot().send(SendWithExtra(chat_id=1, text='x', internal_note='keep this'))
 
 
 def test_the_types_still_line_up_with_what_the_bot_takes():

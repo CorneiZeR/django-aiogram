@@ -51,6 +51,14 @@ def _api_methods() -> frozenset[str]:
 
 API_METHODS = _api_methods()
 
+#: the aiogram class behind each allowed name, so a field can be checked against the method
+#: Telegram defines rather than against whatever model the caller happens to have built. Keyed
+#: the same way :data:`API_METHODS` is, from the class names in ``aiogram.methods.__all__``, so
+#: every name that passes :func:`check_function` is in here
+CANONICAL_METHODS: dict[str, type['TelegramMethod[Any]']] = {
+    method_name(class_name): getattr(aiogram.methods, class_name) for class_name in aiogram.methods.__all__
+}
+
 
 def check_function(function: str) -> str:
     """Return ``function`` if it names a Telegram API method, else raise."""
@@ -98,8 +106,14 @@ def resolve_call(function: 'TelegramMethod[Any] | str', kwargs: dict[str, Any]) 
     and keeps the misspelling in ``model_fields_set`` -- and neither mypy nor the pydantic mypy
     plugin says a word, checked with the plugin enabled. Put on the wire, it reaches
     ``Bot.send_message(**kwargs)`` in the worker as a ``TypeError`` about a name nobody can
-    see from there. So the model's own field list is the allowlist, and the refusal happens on
-    the line that wrote the typo. Every one of the 181 methods declares exactly the fields its
+    see from there. So the refusal happens on the line that wrote the typo.
+
+    Against the **canonical** model for the resolved name rather than against the object's own,
+    which is the difference a subclass makes: a project's subclass that declares a field of its
+    own has it in ``model_fields``, so comparing there would accept it and the worker's ``Bot``
+    method -- which knows only what Telegram defines -- would refuse it in the same breath as a
+    typo. A subclass may carry defaults, validators and behaviour; what it may not do is invent
+    an argument for the API. Every one of the 181 methods declares exactly the fields its
     ``Bot`` method takes as parameters -- measured, no exceptions -- so nothing legitimate is
     caught by this.
 
@@ -127,15 +141,15 @@ def resolve_call(function: 'TelegramMethod[Any] | str', kwargs: dict[str, Any]) 
             f'{sorted(kwargs)} cannot be passed beside it. Put them in the method object.'
         )
         raise TypeError(msg)
-    kind = type(function)
-    unknown = sorted(set(function.model_fields_set) - set(kind.model_fields))
+    name = check_function(method_name(str(function.__api_method__)))
+    canonical = CANONICAL_METHODS[name]
+    unknown = sorted(set(function.model_fields_set) - set(canonical.model_fields))
     if unknown:
         msg = (
-            f'{kind.__name__} has no field {unknown[0]!r}'
+            f'{canonical.__name__} has no field {unknown[0]!r}'
             + (f' (and {len(unknown) - 1} more: {unknown[1:]})' if len(unknown) > 1 else '')
-            + '. aiogram accepts unknown fields and this does not: the worker would refuse it '
-            'where nobody is looking.'
+            + '. aiogram accepts unknown fields and this does not: the worker calls '
+            f'Bot.{name} with them, and it would refuse them where nobody is looking.'
         )
         raise TypeError(msg)
-    name = check_function(method_name(str(function.__api_method__)))
     return name, {field: getattr(function, field) for field in function.model_fields_set}

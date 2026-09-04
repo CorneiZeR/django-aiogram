@@ -60,6 +60,12 @@ unknown fields (`extra='allow'`), so `SendMessage(chat_id=1, text='x', parse_mod
 accepted and nothing warns; put on the queue it reaches the worker as a `TypeError` about a
 name nobody there can see. The object form refuses it at the call and names it.
 
+**A subclass of an aiogram method works**, and is a reasonable thing to write for a default or
+a validator of your own — the method is resolved from `__api_method__`, which a subclass
+inherits, rather than from the class name. What a subclass may not do is declare a *new field*:
+the check is against the method Telegram defines, because the worker calls
+`Bot.send_message(**kwargs)` and that knows nothing about your field either.
+
 `send`, `enqueue`, `asend` and `aenqueue` all take one. `send_many` does not: it fans one call
 out over many chats, and a method object carries the chat it was built for. `send_raw` does
 not either — inside the bot container aiogram's own `bot(method)` is the direct call, with the

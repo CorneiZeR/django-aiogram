@@ -115,7 +115,11 @@
   `SendMessage(chat_id=1, text='x', parse_mod='HTML')` is *accepted* and neither mypy nor the
   pydantic mypy plugin says a word — measured, with the plugin enabled. Queued, it reaches
   `Bot.send_message(**kwargs)` in the worker as a `TypeError` about a name nobody there can
-  see. So a field aiogram does not declare is refused at the call and named.
+  see. So a field aiogram does not declare is refused at the call and named — against the
+  method Telegram defines rather than against the object handed in, which is what lets a
+  project subclass a method for a default of its own while still being told that a *new* field
+  is one the worker's `Bot` method cannot take. The method itself is resolved from
+  `__api_method__`, which a subclass inherits; its class name would resolve to nothing.
 
   The fields are read as attributes rather than through `model_dump(exclude_unset=True)`,
   which is the obvious conversion and loses discriminators — `wire.serializers` documents that
