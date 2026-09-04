@@ -116,6 +116,9 @@ def test_a_dry_run_queues_nothing_and_says_what_it_would_have_sent(queued):
 
     assert list(queued) == []
     assert 'would replay 1' in output
+    # sorted by name, which is what makes this line the same on every backend: PostgreSQL
+    # stores `detail` as `jsonb` and does not keep key order. CI caught it, which is what the
+    # postgres leg is for
     assert 'send_message(chat_id=42, text=lost)' in output
 
 

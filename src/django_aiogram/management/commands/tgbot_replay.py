@@ -293,9 +293,15 @@ def _moment(value: str, flag: str) -> datetime.datetime:
 
 
 def _shown(arguments: dict[str, Any]) -> str:
-    """Render arguments for one line of a dry run, without pasting a whole message body."""
+    """Render arguments for one line of a dry run, without pasting a whole message body.
+
+    Sorted, because the order they arrive in is the database's rather than the caller's:
+    PostgreSQL stores ``detail`` as ``jsonb``, which does not keep key order, while SQLite
+    keeps the text as written -- so the same row printed on two backends read differently, and
+    a dry run of a hundred rows is something an operator scans down a column of.
+    """
     parts = []
-    for key, value in arguments.items():
+    for key, value in sorted(arguments.items()):
         text = str(value)
         parts.append(f'{key}={text[:SHOWN_WIDTH]}…' if len(text) > SHOWN_WIDTH else f'{key}={text}')
     return ', '.join(parts)
