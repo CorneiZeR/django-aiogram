@@ -1944,21 +1944,84 @@ server without <code>BLMOVE</code>, where the list transport says so in the log 
 to at-most-once; <strong><a href="../Delivery/">Delivery</a></strong> has the guarantee per transport.</p>
 <h2 id="metrics-without-the-table">Metrics, without the table<a class="headerlink" href="#metrics-without-the-table" title="Link to this section">&para;</a></h2>
 <p>The same events reach a <code>django.dispatch.Signal</code>, so a project can count what the
-bot does without keeping a row for any of it:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># metrics.py, imported from your AppConfig.ready()</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">prometheus_client</span><span class="w"> </span><span class="kn">import</span> <span class="n">Counter</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.eventlog.signals</span><span class="w"> </span><span class="kn">import</span> <span class="n">events_recorded</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="n">SENDS</span> <span class="o">=</span> <span class="n">Counter</span><span class="p">(</span><span class="s1">'telegram_events'</span><span class="p">,</span> <span class="s1">'django-aiogram events'</span><span class="p">,</span> <span class="p">[</span><span class="s1">'kind'</span><span class="p">,</span> <span class="s1">'function'</span><span class="p">])</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="k">def</span><span class="w"> </span><span class="nf">count</span><span class="p">(</span><span class="n">sender</span><span class="p">,</span> <span class="n">events</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>    <span class="k">for</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">events</span><span class="p">:</span>
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>        <span class="n">SENDS</span><span class="o">.</span><span class="n">labels</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="n">event</span><span class="o">.</span><span class="n">kind</span><span class="p">,</span> <span class="n">function</span><span class="o">=</span><span class="n">event</span><span class="o">.</span><span class="n">function</span> <span class="ow">or</span> <span class="s1">'none'</span><span class="p">)</span><span class="o">.</span><span class="n">inc</span><span class="p">()</span>
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>
-</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>
-</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="n">events_recorded</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="n">count</span><span class="p">,</span> <span class="n">dispatch_uid</span><span class="o">=</span><span class="s1">'metrics.telegram'</span><span class="p">)</span>
+bot does without keeping a row for any of it. On Prometheus there is nothing to write:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">'django-aiogram[prometheus]'</span>
+</span></code></pre></div>
+<div class="highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># apps.py</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django.apps</span><span class="w"> </span><span class="kn">import</span> <span class="n">AppConfig</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="k">class</span><span class="w"> </span><span class="nc">ShopConfig</span><span class="p">(</span><span class="n">AppConfig</span><span class="p">):</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>    <span class="n">name</span> <span class="o">=</span> <span class="s1">'shop'</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">ready</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>        <span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.contrib.prometheus</span><span class="w"> </span><span class="kn">import</span> <span class="n">connect</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>        <span class="n">connect</span><span class="p">()</span>
+</span></code></pre></div>
+<p>Two metrics, filled from every batch:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>django_aiogram_events_total{kind}</code></td>
+<td>every event, by kind — one counter with a label rather than fourteen names to learn</td>
+</tr>
+<tr>
+<td><code>django_aiogram_event_duration_seconds{kind}</code></td>
+<td>how long the work took, where it was measured: a send's round trip and a handler's run. Seconds, because that is what a dashboard's arithmetic assumes</td>
+</tr>
+</tbody>
+</table>
+<p>Failures need no metric of their own: <code>outbound.failed</code>, <code>outbound.dropped</code>, <code>inbound.failed</code>
+and the rest are kinds, so <code>sum(rate(django_aiogram_events_total{kind=~".*failed|.*dropped"}[5m]))</code>
+is the panel. <code>log.dropped</code> is the one to alert on — it means recording itself fell behind, so
+every other number is missing some.</p>
+<p><strong><code>connect()</code> rather than <code>events_recorded.connect(EventMetrics())</code>.</strong> A signal keeps a <em>weak</em>
+reference by default and the exporter is an instance, so the obvious line connects a receiver
+that is collected before the first batch — metrics that read as no traffic at all. <code>connect()</code>
+holds it, and two apps calling it answer with the one already connected rather than raising
+about a duplicate collector — as long as they agree about the registry.</p>
+<p><code>connect(registry)</code> takes a registry, for a project running <code>django_prometheus</code> or one that
+keeps its own; the default is <code>prometheus_client</code>'s process-wide one. A second call naming a
+<em>different</em> registry is refused by name: answering with the first exporter would leave that
+registry empty and its owner scraping zeros for ever, and nothing about the call would say so.
+<code>connect()</code> with no registry is not that case — it is a caller with no opinion, and gets what
+is connected. Serving the numbers stays
+the project's business — this fills a registry in and does nothing else.</p>
+<p><strong>What is deliberately not a label.</strong> <code>chat_id</code> and <code>user_id</code> are a series per person,
+<code>correlation_id</code> a series per message, and <code>error_code</code> is whatever Telegram sends — all
+cardinality rather than dimensions. <code>function</code> is bounded in practice and still left out,
+because it multiplies every kind by the methods a project uses for a breakdown the feed
+answers exactly. <code>worker</code> is not one either: Prometheus already knows which process it
+scraped.</p>
+<p><strong>Which process to scrape.</strong> Each one exports what it does. A web tier produces
+<code>outbound.queued</code> and <code>outbound.scheduled</code>; the bot container produces <code>outbound.consumed</code>,
+<code>outbound.sent</code>, the failures and every <code>inbound.*</code>. Scraping only one is why half the
+counters read zero for ever. Under gunicorn with several workers, <code>prometheus_client</code> needs
+<code>PROMETHEUS_MULTIPROC_DIR</code> set and the multiprocess collector in the view, exactly as it does
+for any other metric in that process — this exporter adds no requirement of its own.</p>
+<p>For anything else — StatsD, OpenTelemetry, a counter of your own — the seam is a signal and a
+receiver is four lines:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># metrics.py, imported from your AppConfig.ready()</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">prometheus_client</span><span class="w"> </span><span class="kn">import</span> <span class="n">Counter</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django_aiogram.eventlog.signals</span><span class="w"> </span><span class="kn">import</span> <span class="n">events_recorded</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="n">SENDS</span> <span class="o">=</span> <span class="n">Counter</span><span class="p">(</span><span class="s1">'telegram_events'</span><span class="p">,</span> <span class="s1">'django-aiogram events'</span><span class="p">,</span> <span class="p">[</span><span class="s1">'kind'</span><span class="p">,</span> <span class="s1">'function'</span><span class="p">])</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="k">def</span><span class="w"> </span><span class="nf">count</span><span class="p">(</span><span class="n">sender</span><span class="p">,</span> <span class="n">events</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>    <span class="k">for</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">events</span><span class="p">:</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>        <span class="n">SENDS</span><span class="o">.</span><span class="n">labels</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="n">event</span><span class="o">.</span><span class="n">kind</span><span class="p">,</span> <span class="n">function</span><span class="o">=</span><span class="n">event</span><span class="o">.</span><span class="n">function</span> <span class="ow">or</span> <span class="s1">'none'</span><span class="p">)</span><span class="o">.</span><span class="n">inc</span><span class="p">()</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="n">events_recorded</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="n">count</span><span class="p">,</span> <span class="n">dispatch_uid</span><span class="o">=</span><span class="s1">'metrics.telegram'</span><span class="p">)</span>
 </span></code></pre></div>
 <p>Receivers get <code>events</code>: a tuple of <code>Event</code>, whose field names are the same ones the
 table's columns carry and are pinned as public API. A signal rather than a setting
@@ -2083,18 +2146,18 @@ without reading what it said. There are no field-level permissions in Django, so
 there is no way to express it with the stock four.</p>
 <p><code>add</code>, <code>change</code> and <code>delete</code> exist but the admin refuses all three, since the
 feed is append-only and rows leave through <code>tgbot_prune_events</code>.</p>
-<div class="highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django.contrib.auth.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Group</span><span class="p">,</span> <span class="n">Permission</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">support</span> <span class="o">=</span> <span class="n">Group</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s1">'Telegram support'</span><span class="p">)</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">support</span><span class="o">.</span><span class="n">permissions</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">Permission</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">codename</span><span class="o">=</span><span class="s1">'view_telegramevent'</span><span class="p">))</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="n">operators</span> <span class="o">=</span> <span class="n">Group</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s1">'Telegram operators'</span><span class="p">)</span>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="n">operators</span><span class="o">.</span><span class="n">permissions</span><span class="o">.</span><span class="n">set</span><span class="p">(</span>
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>    <span class="n">Permission</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span>
-</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>        <span class="n">content_type__app_label</span><span class="o">=</span><span class="s1">'django_aiogram'</span><span class="p">,</span>
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>        <span class="n">codename__in</span><span class="o">=</span><span class="p">[</span><span class="s1">'view_telegramevent'</span><span class="p">,</span> <span class="s1">'view_telegramevent_payload'</span><span class="p">],</span>
-</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>    <span class="p">)</span>
-</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">django.contrib.auth.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Group</span><span class="p">,</span> <span class="n">Permission</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">support</span> <span class="o">=</span> <span class="n">Group</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s1">'Telegram support'</span><span class="p">)</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">support</span><span class="o">.</span><span class="n">permissions</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">Permission</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">codename</span><span class="o">=</span><span class="s1">'view_telegramevent'</span><span class="p">))</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="n">operators</span> <span class="o">=</span> <span class="n">Group</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s1">'Telegram operators'</span><span class="p">)</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="n">operators</span><span class="o">.</span><span class="n">permissions</span><span class="o">.</span><span class="n">set</span><span class="p">(</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>    <span class="n">Permission</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>        <span class="n">content_type__app_label</span><span class="o">=</span><span class="s1">'django_aiogram'</span><span class="p">,</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>        <span class="n">codename__in</span><span class="o">=</span><span class="p">[</span><span class="s1">'view_telegramevent'</span><span class="p">,</span> <span class="s1">'view_telegramevent_payload'</span><span class="p">],</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>    <span class="p">)</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="p">)</span>
 </span></code></pre></div>
 <p>Permissions live wherever <code>django.contrib.auth</code> does. If the log is on another
 alias, leave <code>auth</code> where it is — the router in this package moves only its own
@@ -2152,7 +2215,7 @@ returns every row a code matches, and <code>correlation_id</code> stays the iden
 <p><code>migrate</code> adds the column empty. Filling it is a command rather than a data migration, for the
 same reason the prune is a command: <code>migrate</code> runs inside a deploy, and a table sized by traffic
 cannot be paced, stopped or resumed there.</p>
-<div class="highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_backfill_short_ids
+<div class="highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_backfill_short_ids
 </span></code></pre></div>
 <p>The same arguments as the others — <code>--chunk</code>, <code>--sleep</code>, <code>--max-chunks</code>, <code>--database</code>, <code>--dry-run</code>
 — and one chunk per transaction. A row with no code is a row still to do, so there is no watermark
@@ -2169,7 +2232,7 @@ bodies pushes the per-event figure up, so measure rather than trust it once
 <p>Nothing on the write path deletes anything. Set <code>EVENT_LOG_RETENTION_DAYS</code> and
 schedule the command; <code>W006</code> warns while it is <code>0</code>, which is its default, because the
 feature is not finished without it:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_prune_events
+<div class="highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_prune_events
 </span></code></pre></div>
 <p>It deletes by primary-key range in bounded chunks, one transaction each, so it
 never holds a long lock and never competes with the inserts arriving at the
@@ -2184,7 +2247,7 @@ path, and every prune then has to fetch primary keys first.</p>
 <p>The table is <code>django_aiogram_event</code> now, and <code>migrate</code> creates it empty. Rows written by 3.x are
 in <code>django_redis_aiogram_event</code>, where nothing reads them and nothing drops them — <code>I003</code> says so
 on every <code>manage.py check</code> until they are moved or the table is gone.</p>
-<div class="highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_move_events
+<div class="highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_move_events
 </span></code></pre></div>
 <p>The same shape as the prune above, and the same arguments: <code>--chunk</code>, <code>--sleep</code>, <code>--max-chunks</code>,
 <code>--database</code>, <code>--dry-run</code>. It copies by primary-key range, one transaction per chunk, naming every
@@ -2226,8 +2289,8 @@ write fails on a duplicate primary key.</p>
 <p>Dropping <code>django_redis_aiogram_event</code> afterwards is yours to do. This package will never run it
 for you.</p>
 <h2 id="a-separate-database">A separate database<a class="headerlink" href="#a-separate-database" title="Link to this section">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">TELEGRAM_BOT</span> <span class="o">=</span> <span class="p">{</span><span class="s1">'EVENT_LOG_DATABASE'</span><span class="p">:</span> <span class="s1">'logs'</span><span class="p">}</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">DATABASE_ROUTERS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">'django_aiogram.eventlog.dbrouter.TelegramEventLogRouter'</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+<div class="highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">TELEGRAM_BOT</span> <span class="o">=</span> <span class="p">{</span><span class="s1">'EVENT_LOG_DATABASE'</span><span class="p">:</span> <span class="s1">'logs'</span><span class="p">}</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">DATABASE_ROUTERS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">'django_aiogram.eventlog.dbrouter.TelegramEventLogRouter'</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
 </span></code></pre></div>
 <p>The writer and the admin name the alias explicitly, so the log lands in the
 right database even with no router installed. The router is what makes <code>migrate</code>
@@ -2245,17 +2308,17 @@ inserts, selects and range deletes.</p>
 <p>That is exactly the set of properties an operator needs to take the table over
 out of band. The sketch below is for an <strong>empty</strong> table — do it right after
 <code>migrate</code>, before the log is switched on:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">ALTER</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">django_aiogram_event</span><span class="w"> </span><span class="k">RENAME</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="n">django_aiogram_event_old</span><span class="p">;</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">django_aiogram_event</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">    </span><span class="k">LIKE</span><span class="w"> </span><span class="n">django_aiogram_event_old</span><span class="w"> </span><span class="k">INCLUDING</span><span class="w"> </span><span class="k">DEFAULTS</span><span class="w"> </span><span class="k">INCLUDING</span><span class="w"> </span><span class="k">IDENTITY</span>
-</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="p">)</span><span class="w"> </span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">RANGE</span><span class="w"> </span><span class="p">(</span><span class="n">created_at</span><span class="p">);</span><span class="w">            </span><span class="c1">-- no primary key on the parent</span>
-</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>
-</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">django_aiogram_event_2026_08</span>
-</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">    </span><span class="n">PARTITION</span><span class="w"> </span><span class="k">OF</span><span class="w"> </span><span class="n">django_aiogram_event</span><span class="w"> </span><span class="k">FOR</span><span class="w"> </span><span class="k">VALUES</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="p">(</span><span class="s1">'2026-08-01'</span><span class="p">)</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="p">(</span><span class="s1">'2026-09-01'</span><span class="p">);</span>
-</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">INDEX</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">django_aiogram_event_2026_08</span><span class="w"> </span><span class="p">(</span><span class="n">id</span><span class="p">);</span><span class="w">   </span><span class="c1">-- per partition, per index</span>
-</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>
-</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="k">DROP</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">django_aiogram_event_old</span><span class="p">;</span>
+<div class="highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="k">ALTER</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">django_aiogram_event</span><span class="w"> </span><span class="k">RENAME</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="n">django_aiogram_event_old</span><span class="p">;</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">django_aiogram_event</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">    </span><span class="k">LIKE</span><span class="w"> </span><span class="n">django_aiogram_event_old</span><span class="w"> </span><span class="k">INCLUDING</span><span class="w"> </span><span class="k">DEFAULTS</span><span class="w"> </span><span class="k">INCLUDING</span><span class="w"> </span><span class="k">IDENTITY</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="p">)</span><span class="w"> </span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">RANGE</span><span class="w"> </span><span class="p">(</span><span class="n">created_at</span><span class="p">);</span><span class="w">            </span><span class="c1">-- no primary key on the parent</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">django_aiogram_event_2026_08</span>
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">    </span><span class="n">PARTITION</span><span class="w"> </span><span class="k">OF</span><span class="w"> </span><span class="n">django_aiogram_event</span><span class="w"> </span><span class="k">FOR</span><span class="w"> </span><span class="k">VALUES</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="p">(</span><span class="s1">'2026-08-01'</span><span class="p">)</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="p">(</span><span class="s1">'2026-09-01'</span><span class="p">);</span>
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">INDEX</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">django_aiogram_event_2026_08</span><span class="w"> </span><span class="p">(</span><span class="n">id</span><span class="p">);</span><span class="w">   </span><span class="c1">-- per partition, per index</span>
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>
+</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="k">DROP</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">django_aiogram_event_old</span><span class="p">;</span>
 </span></code></pre></div>
 <p><code>INCLUDING IDENTITY</code> is not decoration: Django creates the primary key as
 <code>GENERATED BY DEFAULT AS IDENTITY</code> rather than a <code>serial</code> with a default, and
@@ -2293,7 +2356,7 @@ express.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 4, 2026 00:40:45 UTC">September 4, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 4, 2026 07:42:34 UTC">September 4, 2026</span>
   </span>
 
     

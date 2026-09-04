@@ -1590,6 +1590,11 @@ structlog backend can index and filter them.</p>
 <td>one of your metrics receivers raised; the batch reached the database if the event log is on and the write succeeded, and usually the other receivers too — <code>send_robust</code> isolates them, but the row below is the case where it cannot. <code>tg_receiver</code> names it</td>
 </tr>
 <tr>
+<td><code>the prometheus exporter could not record an event</code></td>
+<td>ERROR</td>
+<td>the shipped exporter failed on one event and carried on with the rest of the batch. <code>tg_kind</code> names it. It contains itself rather than leaning on the two rows above, so a metric going wrong costs one observation and never the feed</td>
+</tr>
+<tr>
 <td><code>publishing recorded events failed</code></td>
 <td>ERROR</td>
 <td>the signal dispatch itself raised, not a receiver — Django's own failure logging cannot name a callable instance. The batch reached the database if the event log is on; some receivers may have missed it</td>
@@ -1679,7 +1684,7 @@ of its values.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 4, 2026 00:40:45 UTC">September 4, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 4, 2026 07:42:34 UTC">September 4, 2026</span>
   </span>
 
     
