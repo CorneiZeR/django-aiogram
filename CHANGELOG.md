@@ -87,6 +87,43 @@
   a batch dropped as late or refused by the broker is still a batch, and counting the publish
   would hold every row behind it for another `--interval`.
 
+- **Testing helpers, so a project's suite stops reading this package's wire format.**
+  `django_aiogram.testing` ships what `Testing.md` used to hand out as a recipe: point a
+  connection at fakeredis, read a list back by its key, `loads` the payload, `unpack` the
+  envelope. Four internal names in every project's fixtures, and a suite pinned to a format
+  that moves — envelope v1 accepts the 2.x shape precisely because it moved once. And the
+  recipe was Redis-shaped, so a project on Kafka or RabbitMQ had no documented way to assert a
+  send at all.
+
+  `capture_sends()` is a context manager over the block, answering with records rather than
+  bytes: `function`, `kwargs`, `correlation_id` — the same id `bot.send()` returned — and
+  `queued_at`. `sent.of('send_photo')` narrows to one method, and reading never consumes, so a
+  case can assert what was queued and then run the consumer over the same messages. What it
+  does not catch is stated rather than left to be discovered: `send_raw` never queues,
+  `ENABLED: False` queues nothing while still answering with an id, and `TRANSACTIONAL` holds
+  the write until the caller's transaction commits.
+
+  `InMemoryBroker` is underneath it and useful on its own — `BROKER` pointed at
+  `'django_aiogram.testing.InMemoryBroker'` gives a whole suite a transport with no server,
+  which is what finally gives the three non-Redis transports a testing story. It is a real
+  broker rather than a stub: it is held to the same contract as the four that ship, in the same
+  conformance suite, because a double that answers loosely is exactly what that suite exists to
+  catch. `crash_safe` is `False` and says so.
+
+  A pytest fixture (`telegram_sends`, from `django_aiogram.testing.plugin`, registered by the
+  project rather than by an entry point) and `SendCaptureMixin` for `TestCase`, so neither half
+  of the Django world is the assumed one.
+
+  **`broker.registry.use_broker(broker)` is the seam**, and it is public because a project's
+  own fixtures want it. It installs an instance *ahead of* `BROKER` rather than through it:
+  an `override_settings(TELEGRAM_BOT=...)` replaces the dict whole, and pytest applies a
+  decorator on a test method after the fixtures it asked for have run — so a capture built on
+  the setting was quietly undone by the case's own override, which is how this was built first
+  and how it was found.
+
+  The old recipe stays on the page as the escape hatch, for a test that really does mean to
+  assert on the bytes.
+
 - **A second table, and the router narrowed to match.** `django_aiogram_scheduled` is where
   those rows wait, and it is **not** routed to `EVENT_LOG_DATABASE`: the feed is a record and
   may live in a warehouse of its own, while this is operational state a producer writes and a

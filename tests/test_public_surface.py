@@ -75,8 +75,14 @@ THREE_ONE_INTROSPECTION = ('queue_depth', 'inflight_depth')
 #: 4.1's additions, apart for the same reason: what a release added is a record of that
 #: release, and editing an older tuple to carry a newer name loses which contract a caller
 #: can rely on
-FOUR_ONE_ADDITIONS = ('outcome',)
+FOUR_ONE_ADDITIONS = ('outcome', 'cancel_scheduled')
 FOUR_ONE_COROUTINES = ('aoutcome',)
+
+#: what `django_aiogram.testing` promises a project's own suite, which is the whole reason it
+#: exists: the names below are supported the way `bot.send` is, so that the wire format and the
+#: transport key stop being things other people's tests can depend on. Pinned by import rather
+#: than through the bot, because none of them hangs off the client
+TESTING_HELPERS = ('Captured', 'InMemoryBroker', 'SendCaptureMixin', 'Sent', 'capture_sends')
 
 #: what `import django_aiogram` gives you. `redis_conn` and `get_redis` left in 4.0: one
 #: transport's client is not the package's business to export, and both are still importable
@@ -444,3 +450,35 @@ def test_every_event_field_has_a_column_to_land_in():
     columns = {field.name for field in TelegramEvent._meta.get_fields()}
     missing = [field.name for field in dataclasses.fields(Event) if field.name not in columns]
     assert not missing, f'Event fields with nowhere to go: {missing}'
+
+
+@pytest.mark.parametrize('name', TESTING_HELPERS)
+def test_the_testing_helper_is_still_exported(name):
+    """A project imports these by name from `django_aiogram.testing`.
+
+    The same reasoning as the tuples above, one release later: 4.1 offered them as the way to
+    assert a send, so removing or renaming one is a break in every suite that took the offer --
+    and the failure lands in *their* tests, which is the worst place for it to land.
+    """
+    from django_aiogram import testing
+
+    assert hasattr(testing, name), f'{name} disappeared from django_aiogram.testing'
+    assert name in testing.__all__, f'{name} left django_aiogram.testing.__all__'
+
+
+def test_the_fixture_and_the_seam_under_it_are_still_there():
+    """The two halves that are not classes: the pytest fixture and the registry's override.
+
+    `Testing.md` tells a project to write `pytest_plugins = ('django_aiogram.testing.plugin',)`
+    and reach for `telegram_sends`; `use_broker` is what the helper is built on and what a
+    project's own fixtures reach for when they want the same thing by hand.
+    """
+    from django_aiogram.broker.registry import use_broker
+    from django_aiogram.testing.plugin import telegram_sends
+
+    assert callable(use_broker)
+    # pytest wraps a fixture in an object that carries the marker; the attribute it hangs it
+    # on has changed name across releases, so ask for either rather than pinning pytest's
+    assert any(hasattr(telegram_sends, name) for name in ('_pytestfixturefunction', '_fixture_function_marker')), (
+        'telegram_sends stopped being a fixture'
+    )

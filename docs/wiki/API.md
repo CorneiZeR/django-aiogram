@@ -252,6 +252,27 @@ them:
 from django_aiogram.redis import get_redis, redis_conn
 ```
 
+## Testing helpers
+
+These are public API, supported the way `bot.send` is, and every one of them imports without a
+token, a broker or a running loop.
+
+| | |
+| --- | --- |
+| `capture_sends()` | a context manager; the block's queued sends, as records with `function`, `kwargs`, `correlation_id` and `queued_at` |
+| `InMemoryBroker` | a real `Broker` with no server — point `BROKER` at `'django_aiogram.testing.InMemoryBroker'` for a whole suite |
+| `SendCaptureMixin` | the same capture for a `TestCase`, as `self.sent` |
+| `telegram_sends` | the pytest fixture, from `django_aiogram.testing.plugin` |
+| `use_broker(broker)` | the seam under all of it, in `django_aiogram.broker.registry` |
+
+```python
+from django_aiogram.testing import InMemoryBroker, SendCaptureMixin, capture_sends
+```
+
+They exist so that a project's tests stop depending on this package's wire format: reading a
+queue by hand means `wire.serializers.loads`, `wire.envelope.unpack` and the transport's own
+key, and none of those is API. See **[Testing](Testing.md#asserting-that-your-code-queued-a-message)**.
+
 ## Values the settings accept
 
 Some settings offer a **fixed set of choices**, and every one of those exists as an enum member,

@@ -6,6 +6,7 @@ a typo in the setting look like a working configuration.
 """
 
 import atexit
+import contextlib
 import threading
 from typing import TYPE_CHECKING
 
@@ -18,9 +19,10 @@ from django_aiogram.broker.exceptions import BrokerDependencyError, BrokerNotCon
 from django_aiogram.config.settings import SETTINGS_NAME, conf
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from typing import Any
 
-__all__ = ('SHIPPED', 'broker_class', 'close_broker', 'get_broker')
+__all__ = ('SHIPPED', 'broker_class', 'close_broker', 'get_broker', 'use_broker')
 
 #: what each shipped broker needs, keyed by dotted path — readable *without* importing the
 #: module, so a check can name the missing extra even where the import would fail
@@ -35,6 +37,12 @@ SHIPPED: dict[str, tuple[str, str]] = {
 
 _lock = threading.Lock()
 _broker: Broker | None = None
+#: a broker handed in rather than resolved, for the length of a test. Consulted *before*
+#: `BROKER` and never built from it, which is the whole reason it is not simply an
+#: `override_settings` in `django_aiogram.testing`: a case that overrides the setting itself --
+#: and every `@override_settings(TELEGRAM_BOT=...)` replaces the dict whole -- would otherwise
+#: undo the helper it is running inside, silently, and at a moment it did not choose
+_overrides: list[tuple[object, Broker]] = []
 #: registered once per process rather than per build, so a settings change that replaces the
 #: broker does not stack another callback. `close_broker` is idempotent either way
 _exit_hook_armed = False
@@ -94,11 +102,20 @@ def get_broker() -> Broker:
 
     Cached like the Redis client was, and for the same reason: a transport holds a
     connection, and building one per send is what the 3.x accessor existed to avoid.
+
+    An override from :func:`use_broker` wins over both the cache and the setting, and is the
+    only way anything but ``BROKER`` decides this.
+
+    **One lock over the whole choice**, rather than a lock-free read of the cache after
+    checking for an override. Between the two, another thread could install one -- and then a
+    send made *inside* a capture would go to the configured transport instead, which is a test
+    that fails for a reason nothing in it can show. The cost is an uncontended acquisition on a
+    path that ends in a socket write.
     """
     global _broker, _exit_hook_armed  # noqa: PLW0603 - one per process, like the connection it holds
-    if _broker is not None:
-        return _broker
     with _lock:
+        if _overrides:
+            return _overrides[-1][1]
         if _broker is None:
             cls = broker_class()
             cls.verify()
@@ -122,7 +139,45 @@ def get_broker() -> Broker:
                 # closes only the calling thread's consumer.
                 atexit.register(close_broker)
                 _exit_hook_armed = True
-    return _broker
+        return _broker
+
+
+@contextlib.contextmanager
+def use_broker(broker: Broker) -> 'Iterator[Broker]':
+    """Make ``broker`` this process's broker for the length of the block.
+
+    The seam ``django_aiogram.testing`` is built on, and public because a project's own
+    fixtures reach for the same thing. Not for a deployment: ``BROKER`` decides there, and a
+    process that could be talked out of its transport by a caller is one whose configuration
+    means less than it says.
+
+    Ahead of the setting rather than through it, which is a deliberate difference from
+    ``override_settings(TELEGRAM_BOT=...)``. Every such override replaces the dict whole, so a
+    case that carries one of its own -- a decorator on the method, applied *after* a fixture
+    has already started capturing -- would silently take the helper's broker away again. The
+    override is a fact about this process, and nothing in the settings can undo it.
+
+    **A stack, and each block removes its own entry rather than restoring what it replaced.**
+    The obvious version keeps the broker it displaced and puts it back on the way out, which is
+    correct only while blocks end in the order they began. They need not: a fixture holding one
+    open across cases, an ``ExitStack`` closed in the order it was built, or two threads each
+    capturing -- and then the block that exits first reinstates a broker whose own block has
+    ended, and the one that exits last leaves it installed for good. Removing an entry by
+    identity cannot get that wrong, and the innermost block still standing is the one that wins.
+    """
+    entry = (object(), broker)
+    with _lock:
+        _overrides.append(entry)
+    try:
+        yield broker
+    finally:
+        with _lock:
+            # by identity, because two blocks may hold the same broker instance and `remove`
+            # would take the wrong one -- the tuple's first field is a token for exactly this
+            for index in range(len(_overrides) - 1, -1, -1):
+                if _overrides[index][0] is entry[0]:
+                    del _overrides[index]
+                    break
 
 
 def close_broker() -> None:

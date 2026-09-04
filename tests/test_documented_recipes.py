@@ -158,6 +158,24 @@ def test_draining_the_queue_without_a_thread(redis_server):
     assert redis_server.llen(QUEUE) == 0
 
 
+@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'FSM_STORAGE': 'memory', 'RATE_LIMIT': None})
+def test_the_capture_recipe_the_page_leads_with():
+    """The page's first answer, run as written -- no server, no patching, no settings.
+
+    The recipes below it are the escape hatch and the two older ways; this is the one a reader
+    meets first, so it is the one that must not be able to rot quietly. Note what is *not*
+    here: no `BROKER` in the settings above, because the helper installs its own.
+    """
+    from django_aiogram.testing import capture_sends
+
+    with capture_sends() as sent:
+        approve({'reviewer': 42})
+
+    assert sent.kwargs == [{'chat_id': 42, 'text': 'Order approved'}]
+    assert sent[0].function == 'send_message'
+    assert sent[0].correlation_id is not None, 'the record lost the id the page promises'
+
+
 PAGE = pathlib.Path(__file__).resolve().parent.parent / 'docs' / 'wiki' / 'Testing.md'
 SNIPPETS = re.findall(r'```python\n(.*?)```', PAGE.read_text(encoding='utf-8'), re.DOTALL)
 
@@ -234,6 +252,10 @@ def test_the_page_documents_every_recipe_here():
     """A recipe that leaves the page should leave this file with it."""
     text = PAGE.read_text(encoding='utf-8')
     for needle in (
+        'capture_sends',
+        'telegram_sends',
+        'SendCaptureMixin',
+        'django_aiogram.testing.InMemoryBroker',
         'fakeredis',
         'django_aiogram.broker.redis_list.broker.get_redis',
         "monkeypatch.setattr(bot, 'send'",

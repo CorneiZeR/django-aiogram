@@ -30,6 +30,33 @@ or the schedule will be created somewhere the mover does not read.
 And if you use `eta`, schedule `manage.py tgbot_dispatch_scheduled` —
 **[Deployment](Deployment.md)** has the container.
 
+## Your own tests can stop reading the queue by hand
+
+Nothing to do, and nothing you wrote has stopped working — the fakeredis recipe is still on
+the **[Testing](Testing.md#reading-the-queue-by-hand)** page. But `django_aiogram.testing`
+ships what that recipe was standing in for, and a suite that adopts it stops depending on
+`wire.serializers.loads`, `wire.envelope.unpack` and a transport's key, none of which is API:
+
+```python
+from django_aiogram.testing import capture_sends
+
+with capture_sends() as sent:
+    approve(order)
+
+assert sent.kwargs == [{'chat_id': 42, 'text': 'Order approved'}]
+```
+
+There is also an in-memory `Broker` to point `BROKER` at for a whole suite, which is what a
+project on RabbitMQ or Kafka never had a way to do:
+
+```python
+# settings/test.py
+TELEGRAM_BOT = {
+    'FSM_STORAGE': 'memory',
+    'BROKER': 'django_aiogram.testing.InMemoryBroker',
+}
+```
+
 ## `bot.outcome()` is new, and needs the event log
 
 Nothing to do, but worth knowing it exists: the `message_id` Telegram gave for a queued

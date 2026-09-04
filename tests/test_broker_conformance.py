@@ -72,15 +72,29 @@ def payload(chat_id: int) -> bytes:
     return JsonSerializer().dumps({'function': 'send_message', 'chat_id': chat_id})
 
 
-@pytest.fixture(params=sorted(SHIPPED), ids=lambda path: path.rsplit('.', 1)[-1])
+#: every transport this suite holds to the contract: the four a deployment can choose, and the
+#: in-memory one a project's tests can. Not `SHIPPED`, because that table is about deployable
+#: transports — it decides which extra installs a driver and which page documents a broker, and
+#: `InMemoryBroker` has neither. It is a `Broker` all the same, and a double that answers the
+#: contract loosely is exactly the thing this file exists to catch
+CONFORMANT = (*SHIPPED, 'django_aiogram.testing.InMemoryBroker')
+
+
+@pytest.fixture(params=sorted(CONFORMANT), ids=lambda path: path.rsplit('.', 1)[-1])
 def broker(request):
-    """One instance of each shipped transport, ready to publish and take.
+    """One instance of each transport, ready to publish and take.
 
     A branch per transport for what it needs to *run*, and the assertions below do not change —
     which is the whole point. `redis_server` is requested lazily rather than taken as an
     argument, because the Redis branch does not want it when a real server is configured.
     """
     path = request.param
+    if 'testing' in path:
+        with override_settings(TELEGRAM_BOT=SETTINGS):
+            broker = import_string(path)()
+            broker.conformance_path = path
+            yield broker
+        return
     if 'rabbitmq' in path:
         yield from _against_rabbitmq(path)
         return
@@ -453,7 +467,7 @@ def test_every_transport_has_a_kill_case_and_the_map_names_it():
         )
 
 
-@pytest.mark.parametrize('path', sorted(SHIPPED))
+@pytest.mark.parametrize('path', sorted(CONFORMANT))
 def test_the_ceiling_follows_the_setting_the_broker_names(path):
     """`CALL_TIMEOUT_OPTION` is a name and `call_ceiling` is a number: they must be one fact.
 
@@ -483,7 +497,7 @@ def test_the_ceiling_follows_the_setting_the_broker_names(path):
 
 
 @pytest.mark.parametrize('value', ['', 'abc', 0, -1, float('nan'), float('inf')], ids=repr)
-@pytest.mark.parametrize('path', sorted(SHIPPED))
+@pytest.mark.parametrize('path', sorted(CONFORMANT))
 def test_a_deadline_that_cannot_be_one_is_refused_by_name(path, value):
     """Every transport, one reader, one refusal — and the setting named in it.
 

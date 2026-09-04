@@ -43,9 +43,118 @@ with self.captureOnCommitCallbacks(execute=True):
 
 ## Asserting that your code queued a message
 
-Point the connection at [fakeredis](https://pypi.org/project/fakeredis/) and
-read the list back. `loads` decodes a payload the same way the worker does, and
-`unpack` reads the envelope it is wrapped in:
+`django_aiogram.testing` ships the helper, so a test names the call rather than the bytes:
+
+```python
+from django_aiogram.testing import capture_sends
+
+
+def test_approval_notifies_the_reviewer():
+    with capture_sends() as sent:
+        approve(order)  # your code, which calls bot.send(...)
+
+    assert sent.kwargs == [{'chat_id': 42, 'text': 'Order approved'}]
+```
+
+No server, no settings to arrange and nothing patched. For the duration of the block this
+process's broker is an in-memory one, so every producer runs for real — `send`, `enqueue`,
+`send_many`, their awaiting twins, and the mover behind `eta` — and the messages land where
+the helper can read them.
+
+Each record has names on it, and `correlation_id` is the same value `bot.send()` returned:
+
+```python
+from django_aiogram.testing import capture_sends
+
+
+def test_the_reply_carries_the_id_the_caller_got():
+    with capture_sends() as sent:
+        identifier = notify(order)
+
+    assert len(sent) == 1
+    assert sent[0].function == 'send_message'
+    assert sent[0].kwargs['chat_id'] == 42
+    assert sent[0].correlation_id == identifier
+```
+
+`sent.of('send_photo')` narrows to one method, for a block that queues more than one kind.
+Reading never consumes: assert what was queued and then run the consumer over the same
+messages if that is what the case is about.
+
+**Three things it does not catch**, each on purpose:
+
+- `send_raw` reaches Telegram from the calling process and never queues.
+- `'ENABLED': False` makes every send a no-op — the capture is empty, and each call still
+  returns the id it would have used.
+- `'TRANSACTIONAL': True` holds the write until the caller's transaction commits, so read the
+  capture *after* the block rather than inside it, and see the section above about `TestCase`.
+
+### As a fixture, or as a mixin
+
+Neither half of the Django world is the assumed one. For pytest, register the plugin once:
+
+```python
+# conftest.py
+pytest_plugins = ('django_aiogram.testing.plugin',)
+```
+
+and take `telegram_sends`, which captures the whole test:
+
+```python
+def test_approval_notifies(telegram_sends):
+    approve(order)
+
+    assert telegram_sends.kwargs == [{'chat_id': 42, 'text': 'Order approved'}]
+```
+
+For `TestCase`, mix `SendCaptureMixin` in **before** the case class, and read `self.sent`:
+
+```python
+from django.test import TestCase
+
+from django_aiogram.testing import SendCaptureMixin
+
+
+class ApprovalTests(SendCaptureMixin, TestCase):
+    def test_the_reviewer_is_told(self):
+        approve(self.order)
+
+        assert self.sent.kwargs == [{'chat_id': 42, 'text': 'Order approved'}]
+```
+
+### The whole suite on an in-memory broker
+
+Where the consumer is what a test drives — delivery, acknowledgement, reclaiming — point
+`BROKER` at the shipped double and skip the capture entirely:
+
+```python
+# settings/test.py
+TELEGRAM_BOT = {
+    'FSM_STORAGE': 'memory',
+    'BROKER': 'django_aiogram.testing.InMemoryBroker',
+}
+```
+
+It is a real broker rather than a stub: publish, take, ack, release, reclaim and the depths,
+held to the same contract as the four transports in this package's own conformance suite. Its
+one option is `MEMORY_TIMEOUT` (1.0 by default), which bounds how long a `take` waits for a
+message that has not arrived — there is no IO here for a deadline to be about.
+
+Nothing is written down, so nothing survives the process, and each `override_settings` of
+`TELEGRAM_BOT` starts from an empty queue. `crash_safe` is `False` and says so, which is what
+stops it being mistaken for something to deploy.
+
+For a fixture of your own that wants the same thing without the capture,
+`django_aiogram.broker.registry.use_broker(broker)` is the seam underneath: it makes an
+instance this process's broker for the length of a block, ahead of `BROKER` rather than
+through it, so an `override_settings(TELEGRAM_BOT=...)` inside the block cannot take it away.
+
+### Reading the queue by hand
+
+The escape hatch, for a test that really does mean to assert on the wire format — and the only
+way to do this before 4.1. Point the connection at [fakeredis](https://pypi.org/project/fakeredis/)
+and read the list back. `loads` decodes a payload the same way the worker does, and `unpack`
+reads the envelope it is wrapped in:
 
 ```python
 import fakeredis
@@ -68,6 +177,11 @@ def test_approval_notifies_the_reviewer(monkeypatch):
         ('send_message', {'chat_id': 42, 'text': 'Order approved'}),
     ]
 ```
+
+**Two costs, which are why the helper above exists.** `loads`, `unpack` and the transport's own
+key are this package's internals, so a suite written this way is pinned to a wire format that
+moves — envelope v1 accepts the 2.x shape precisely because it moved once. And the recipe is
+Redis-shaped: on RabbitMQ or Kafka there is nothing here to copy.
 
 3.0 nests the arguments under an envelope so a message can carry a correlation
 id — see **[Event log](Event-log.md)**. Reading through `unpack` is what keeps a

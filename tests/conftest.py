@@ -6,6 +6,12 @@ import pytest
 
 from django_aiogram import conf
 
+# the shipped fixture, taken the way a project takes it. `pytest_plugins` is what `Testing.md`
+# tells a project to write, and it is only honoured in the *rootdir* `conftest.py` -- which
+# this is not, the rootdir being the repository. Importing the fixture here is the same
+# registration by hand, and `test_testing_helpers.py` is what uses it
+from django_aiogram.testing.plugin import telegram_sends  # noqa: F401 - a fixture, reached by name
+
 # `django_aiogram.bot` is the singleton instance, so the class lives in
 # `client`; patching the wrong one silently leaves the real connection in place.
 PATCH_TARGETS = (

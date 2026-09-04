@@ -51,6 +51,10 @@ src/django_aiogram/
         serializers.py  tagged JSON, and pickle behind ALLOW_PICKLE
         envelope.py     what a queued payload looks like, both shapes
         payloads.py     summarize, redact, cap — in that order, and never lossless
+    testing/
+        broker.py       InMemoryBroker: the contract, against a deque and no server
+        capture.py      capture_sends and the records it answers with
+        case.py         the TestCase mixin; plugin.py the pytest fixture
     eventlog/
         recorder.py     the bounded queue and the writer thread; no django.db here
         records.py      Event and Wake: the shapes that cross the queue
@@ -248,6 +252,7 @@ Packaging-only work does not need the Redis suite, and vice versa.
 | `consumer/` | the receive side: the queue consumer, the webhook view, router discovery |
 | `wire/` | how a message becomes bytes and comes back |
 | `eventlog/` | the optional table, the writer thread, the metrics seam |
+| `testing/` | what a *project's* tests import: a broker with no server, and the capture over it |
 
 **The root keeps two kinds of thing**, and nothing else:
 
