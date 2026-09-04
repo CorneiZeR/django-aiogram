@@ -20,6 +20,7 @@ from django_aiogram.broker.registry import use_broker
 from django_aiogram.config.enums import EventKind
 from django_aiogram.eventlog.events import new_correlation_id
 from django_aiogram.eventlog.recorder import recorder
+from django_aiogram.management.commands.tgbot_replay import DEFAULT_LIMIT
 from django_aiogram.models import TelegramEvent
 from django_aiogram.testing import InMemoryBroker
 from django_aiogram.testing.capture import Captured
@@ -277,7 +278,7 @@ def test_an_eta_send_replays_from_its_scheduled_row_without_the_due_time(queued)
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT=SETTINGS)
-def test_the_bound_holds_and_is_the_default(queued):
+def test_the_bound_holds(queued):
     """No unbounded replay: a slipped date range must not empty a month into the queue."""
     for _ in range(3):
         a_failure()
@@ -285,6 +286,50 @@ def test_the_bound_holds_and_is_the_default(queued):
     replay(since=since(), limit=2)
 
     assert len(queued) == 2
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_the_bound_applies_with_nobody_asking_for_it(queued):
+    """And the default is the bound, which the case above claimed and never exercised.
+
+    It passed `--limit` every time, so it would have held with `DEFAULT_LIMIT` changed to
+    anything, or with the parser not applying it at all.
+
+    **A hundred and one written out, not `DEFAULT_LIMIT + 1`.** Sized from the constant, the
+    fixture grows with it and the case is a tautology -- raising the default to a thousand left
+    it green, which is how this was found: the review named the shape and the first fix
+    reproduced it. A literal fixture fails both ways, on a parser that stops applying the
+    default and on a default that moves without anybody revisiting the number here.
+    """
+    for index in range(101):
+        a_failure(chat_id=index)
+
+    replay(since=since())
+
+    assert len(queued) == DEFAULT_LIMIT, f'the default bound is not {DEFAULT_LIMIT}'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_the_walk_crosses_its_own_window(queued, monkeypatch):
+    """The rows are read in windows, and nothing tested the second one.
+
+    `WINDOW` is two hundred and every other case has a handful of rows, so the offset
+    bookkeeping -- the part that makes a bounded run reach past a previous run's work -- ran
+    exactly once per test. Found by re-applying the swaps of earlier rounds: breaking the walk
+    after the first window left the suite green. Patched small rather than fixtured large,
+    because it is the bookkeeping under test and not the number.
+    """
+    from django_aiogram.management.commands import tgbot_replay as command
+
+    monkeypatch.setattr(command, 'WINDOW', 2)
+    for index in range(3):
+        a_failure(chat_id=index)
+
+    replay(since=since())
+
+    assert sorted(one.kwargs['chat_id'] for one in queued) == [0, 1, 2], 'the walk stopped at its first window'
 
 
 @pytest.mark.django_db(transaction=True)
@@ -311,15 +356,57 @@ def test_selection_narrows_by_window_chat_and_id(queued):
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT=SETTINGS)
-def test_a_dropped_send_is_only_replayed_when_asked_for(queued):
-    """Two endings, and the default is the one an operator means by "what did we lose"."""
-    a_failure(kind=EventKind.OUTBOUND_DROPPED.value)
+def test_both_endings_are_replayed_by_default_because_exhaustion_is_a_drop(queued):
+    """The default had to be both kinds, and the reason is not guessable from the names.
+
+    Rate-limit exhaustion -- the case an operator means by "Telegram was down for ten minutes"
+    -- is recorded as `outbound.dropped` with `detail.max_retries`, not as `outbound.failed`;
+    measured in `producer/client.py`. So a default of `outbound.failed` alone missed the
+    largest loss there is, and the page that told an operator to run this told them to replay
+    the smaller half and conclude the rest was fine.
+    """
+    a_failure(chat_id=1)
+    exhausted = a_failure(chat_id=2, kind=EventKind.OUTBOUND_DROPPED.value)
+    TelegramEvent.objects.filter(correlation_id=exhausted, kind=EventKind.OUTBOUND_DROPPED.value).update(
+        detail={'max_retries': 10}
+    )
 
     replay(since=since())
-    assert list(queued) == [], 'a drop was replayed without being asked for'
+
+    assert sorted(one.kwargs['chat_id'] for one in queued) == [1, 2], 'the default missed an ending'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_one_ending_may_be_selected_alone(queued):
+    """`--kind` narrows, for an operator who knows which half they are looking at."""
+    a_failure(chat_id=1)
+    a_failure(chat_id=2, kind=EventKind.OUTBOUND_DROPPED.value)
 
     replay(since=since(), kind=[EventKind.OUTBOUND_DROPPED.value])
-    assert len(queued) == 1
+
+    assert [one.kwargs['chat_id'] for one in queued] == [2]
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_message_the_deployment_discarded_on_purpose_is_not_a_loss(queued):
+    """`--grace` refused it deliberately, and replaying it would be that outage twice.
+
+    Counted with the skips rather than the refusals: a refusal asks somebody to decide, and
+    this decision has been taken. It is the one ending in `outbound.dropped` that is not a
+    loss, which is why the default can be both kinds at all.
+    """
+    late = a_failure(chat_id=3, kind=EventKind.OUTBOUND_DROPPED.value)
+    TelegramEvent.objects.filter(correlation_id=late, kind=EventKind.OUTBOUND_DROPPED.value).update(
+        error_code='TooLate', error='90000s overdue, past the 3600s grace'
+    )
+
+    output = replay(since=since())
+
+    assert list(queued) == [], 'a message the grace policy discarded was sent anyway'
+    assert 'discarded it on purpose (TooLate)' in output
+    assert 'replayed 0; refused 0; skipped 1' in output
 
 
 @pytest.mark.django_db(transaction=True)

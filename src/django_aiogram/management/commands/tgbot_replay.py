@@ -53,10 +53,34 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger('django_aiogram')
 
-#: the kinds a replay may select. Both are ends: a send that failed, and one dropped before it
-#: was ever attempted. `outbound.retried` is not one -- that message went on to succeed or fail
-#: under the same id, and replaying it would duplicate whichever it was
+#: the kinds a replay may select, and **both are the default**, which took a review to get
+#: right. The list the default is built from, because the answer is not guessable from the
+#: names -- every place this package records the end of a send, and what each means:
+#:
+#: * `producer/client.py`, `outbound.failed` -- the call raised. Lost.
+#: * `producer/client.py`, `outbound.dropped` with `detail.max_retries` -- the rate-limit
+#:   retries ran out. **Lost, and the case an operator means by "Telegram was down"** -- which
+#:   a default of `outbound.failed` alone missed entirely.
+#: * `producer/client.py`, `outbound.dropped` with `NotScheduled` -- never reached the loop.
+#: * `producer/queueing.py`, `outbound.dropped` with `detail.stage` -- the queue write failed.
+#: * `tgbot_dispatch_scheduled`, `outbound.dropped` with `TooManyAttempts` -- the mover gave up.
+#:   Lost.
+#: * `tgbot_dispatch_scheduled`, `outbound.dropped` with `TooLate` -- past `--grace`. **Not
+#:   lost: the deployment decided not to send it**, so `DELIBERATE_DROPS` refuses it below.
+#:
+#: The two with no arguments recorded -- `NotScheduled` and the queueing drop, neither of which
+#: has an `outbound.queued` row, because that row is written after the transport takes the
+#: payload -- are refused by the arguments rule without needing to be named here.
+#:
+#: `outbound.retried` is not selectable at all: that message went on to succeed or fail under
+#: the same id, and replaying it would duplicate whichever it was.
 REPLAYABLE_KINDS = (EventKind.OUTBOUND_FAILED.value, EventKind.OUTBOUND_DROPPED.value)
+
+#: error codes on an ending that mean the deployment chose this, rather than losing it. Replaying
+#: one is not a recovery, it is an override of the policy that discarded it -- `--grace` exists
+#: to stop a mover delivering a day of stale messages at once, and a replay that sent them
+#: anyway would be that outage twice
+DELIBERATE_DROPS = frozenset({'TooLate'})
 
 #: where the arguments are, in the order they are looked for. The queued row is the ordinary
 #: case; the scheduled row is where an `eta` send's arguments live, since nothing queued it
@@ -112,7 +136,7 @@ class Command(BaseCommand):
             action='append',
             default=None,
             choices=REPLAYABLE_KINDS,
-            help=f'which endings to replay; repeatable (default {EventKind.OUTBOUND_FAILED.value}).',
+            help='which endings to replay; repeatable (default: both, since exhausted retries are recorded as a drop).',
         )
         parser.add_argument('--chat', type=int, default=None, help='only failures for this chat id.')
         parser.add_argument(
@@ -170,7 +194,7 @@ class Command(BaseCommand):
             for row in window:
                 if limit is not None and replayed >= limit:
                     break
-                nothing = done.get(row.correlation_id)
+                nothing = done.get(row.correlation_id) or _deliberate(row)
                 if nothing:
                     self.stdout.write(f'skipped {row.short_id or row.correlation_id} ({row.function}): {nothing}')
                     skipped[nothing] += 1
@@ -225,7 +249,7 @@ class Command(BaseCommand):
                 'a replay of everything ever recorded is not a default.'
             )
             raise CommandError(msg)
-        kinds = options['kind'] or [REPLAYABLE_KINDS[0]]
+        kinds = options['kind'] or list(REPLAYABLE_KINDS)
         # argparse checks `choices` when it parses a command line and not when `call_command`
         # is handed a list, so the same run through Python's API could have selected
         # `outbound.retried` -- a message that went on to succeed or fail under the same id.
@@ -427,6 +451,19 @@ class Command(BaseCommand):
                 'tg_skipped': sum(skipped.values()),
             },
         )
+
+
+def _deliberate(row: TelegramEvent) -> str:
+    """Say why this ending is a decision rather than a loss, or ``''`` where it is a loss.
+
+    Counted with the skips and not with the refusals, because there is nothing for an operator
+    to act on: `--grace` exists so that a mover which was down for a day does not deliver a
+    day of stale messages at once, and a replay that sent them anyway would be that outage
+    twice. A refusal asks somebody to decide; this decision has been taken.
+    """
+    if row.error_code in DELIBERATE_DROPS:
+        return f'the deployment discarded it on purpose ({row.error_code}), so this is not a loss'
+    return ''
 
 
 def _as_uuid(value: str) -> uuid.UUID:

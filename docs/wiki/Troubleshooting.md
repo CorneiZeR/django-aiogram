@@ -377,6 +377,18 @@ python manage.py tgbot_replay --since 2026-09-04T10:00 --limit 50
 messages people receive. It prints the call it would make for each row, and the reason for
 each row it will not.
 
+**Both endings are selected by default, and the reason is not guessable from the names.**
+Rate-limit exhaustion — the case this section is named after — is recorded as
+`outbound.dropped` with `detail.max_retries`, not as `outbound.failed`, so a default of
+`outbound.failed` alone would replay the smaller half and leave an operator concluding the rest
+was fine. `--kind` narrows to one when you know which half you are looking at.
+
+`outbound.dropped` covers more than a loss, which is why the default can include it safely:
+a drop past `--grace` is **skipped** as a decision the deployment already took, and the two
+whose queue write never landed (`NotScheduled`, and a failed write with `detail.stage`) carry
+no arguments to replay from, because the row that records them is written before the payload
+reaches a transport.
+
 **Most refusals are honest ones, and they say which.** A replay needs the arguments the send
 was made with, and the feed records a *description* of them — so:
 

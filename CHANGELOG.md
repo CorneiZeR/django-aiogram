@@ -144,6 +144,13 @@
   unbounded mode and a negative number is refused. Selection is by window, kind, chat or
   correlation id.
 
+  **Both endings are selected by default**, which is not guessable from their names: rate-limit
+  exhaustion — the case an operator means by "Telegram was down" — is recorded as
+  `outbound.dropped` with `detail.max_retries` rather than as `outbound.failed`, so a default
+  of the latter alone replayed the smaller half. That is safe because `outbound.dropped` is
+  read rather than trusted: a drop past `--grace` is skipped as a decision already taken, and
+  the ones whose queue write never landed carry no arguments to replay from.
+
   It refuses to run with `EVENT_LOG` off, since the feed is the only source it has, and with
   `ENABLED` off, where every replay would be a no-op reporting success. `--dry-run` works in
   both.
