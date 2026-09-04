@@ -118,11 +118,23 @@
 
   Each replay is a new message under a **new** correlation id, with an `outbound.replayed` row
   under that id carrying `detail.replay_of` — reusing the id would make one message look as
-  though it had been sent twice, and the failure rate is read off these kinds. `--limit`
-  defaults to 100: the command is bounded rather than idempotent, because a slipped date range
-  would otherwise empty a month of failures into the queue at once. Selection is by window,
-  kind, chat or correlation id, and `outbound.retried` is not selectable at all — that message
-  went on to succeed or fail under the same id.
+  though it had been sent twice, and the failure rate is read off these kinds. That row is also
+  what stops the *next* run selecting the same failure, so it is the one row in this package
+  written synchronously, with its answer read: the recorder drops rather than waits, which is
+  right in the send path and wrong here. The command refuses to run when `EVENT_LOG_KINDS`
+  excludes the kind, and says so per message when the feed will not take the row.
+
+  **What it will not replay, beyond the lossy rows.** A message with an `outbound.sent` under
+  its id went out in the end — a mover that failed three times and published on the fourth
+  leaves three drop rows and a delivery — and a message with several endings recorded is
+  replayed once, since an id is one message here the way `bot.outcome()` reads it.
+  `outbound.retried` is not selectable at all: that send went on to succeed or fail under the
+  same id.
+
+  `--limit` defaults to 100: bounded rather than idempotent, because a slipped date range would
+  otherwise empty a month of failures into the queue at once. `--limit 0` is the deliberate
+  unbounded mode and a negative number is refused. Selection is by window, kind, chat or
+  correlation id.
 
   It refuses to run with `EVENT_LOG` off, since the feed is the only source it has, and with
   `ENABLED` off, where every replay would be a no-op reporting success. `--dry-run` works in

@@ -235,16 +235,23 @@ def lossy_reason(recorded: object) -> str:
     the honest direction: the alternative is sending a credential to a chat because a marker
     happened to look like a message.
 
-    **A row written before 4.1 needs the last check.** Until then the string cap left a prefix
-    and an ellipsis rather than a marker, so a body over ``MAX_STRING`` reads as an ordinary
-    string -- and a replay would have sent two thousand characters of a longer message. Nothing
-    else can produce a stored string that long, so the length is the signal. The key and item
-    caps of such a row are not detectable at all, which is the one loss this cannot see and the
-    reason the caps are marked at the source now.
+    **A row written before 4.1 needs the last two checks.** Until then the string cap left a
+    prefix and an ellipsis rather than a marker, so a body over ``MAX_STRING`` reads as an
+    ordinary string -- and a replay would have sent two thousand characters of a longer
+    message. Nothing else can produce a stored string that long, so the length is the signal.
+
+    The key and item caps of such a row leave no signal at all: a mapping cut to fifty keys is
+    a mapping of fifty keys. So a structure sitting exactly *at* a cap is refused, whichever
+    version wrote it -- the alternative is replaying a call with items missing, and this
+    package cannot tell the two apart from the stored shape. Fifty keyword arguments is not a
+    Telegram method and fifty items is past every list Telegram takes, so what this costs is a
+    keyboard of exactly fifty rows, retyped by hand.
     """
     if isinstance(recorded, dict):
         return _lossy_mapping(recorded)
     if isinstance(recorded, (list, tuple)):
+        if len(recorded) >= MAX_ITEMS:
+            return f'{len(recorded)} items is the cap, and a list at it cannot be told from one cut to it'
         return next((reason for reason in map(lossy_reason, recorded) if reason), '')
     if recorded == _REDACTED:
         return 'a value was redacted, and redaction is one-way'
@@ -255,6 +262,8 @@ def lossy_reason(recorded: object) -> str:
 
 def _lossy_mapping(recorded: dict[Any, Any]) -> str:
     """Answer for a mapping, which is the half that recurses: a marker here, or one below."""
+    if len(recorded) >= MAX_KEYS:
+        return f'{len(recorded)} keys is the cap, and a mapping at it cannot be told from one cut to it'
     for key, value in recorded.items():
         if key in {_OMITTED, _TRUNCATED}:
             return f'the arguments were recorded as {key.strip("_")} rather than in full'

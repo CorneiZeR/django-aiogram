@@ -40,9 +40,10 @@ from django.utils.dateparse import parse_datetime
 
 from django_aiogram.config.enums import EventKind
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
+from django_aiogram.eventlog.events import worker_identity
 from django_aiogram.eventlog.recorder import recorder
 from django_aiogram.eventlog.records import Event
-from django_aiogram.eventlog.writer import log_alias
+from django_aiogram.eventlog.writer import log_alias, write_batch
 from django_aiogram.models import TelegramEvent
 from django_aiogram.producer.scheduling import DUE_AT_DETAIL
 from django_aiogram.wire.payloads import lossy_reason
@@ -113,17 +114,31 @@ class Command(BaseCommand):
             help='say what would be replayed, and why anything is refused, without queueing.',
         )
 
+    #: replays whose join row the feed would not take, counted so the report can say so
+    _unrecorded = 0
+
     def handle(self, *args: Any, **options: Any) -> None:
         """Read the rows, replay what can be, and report both halves."""
+        self._unrecorded = 0
         self._refuse_where_there_is_nothing_to_read(dry_run=options['dry_run'])
-        rows = self._selected(options)
         refused: Counter[str] = Counter()
         replayed = 0
-        for row in rows:
+        seen: set[uuid.UUID] = set()
+        for row in self._selected(options):
+            if row.correlation_id in seen:
+                # one message's history can hold several endings -- the scheduled mover writes
+                # an `outbound.dropped` row per failed publish attempt and then retries the same
+                # row -- and replaying each of them would send one message once per attempt.
+                # An id is one message here, the way `bot.outcome()` reads it: the two are the
+                # same claim about the feed, and a caller who reuses an id across several sends
+                # has told it they are one thread
+                refused['another ending for a message already replayed in this run'] += 1
+                continue
             reason = self._replay(row, dry_run=options['dry_run'])
             if reason:
                 refused[reason] += 1
                 continue
+            seen.add(row.correlation_id)
             replayed += 1
         self._report(replayed, refused, dry_run=options['dry_run'])
 
@@ -141,10 +156,20 @@ class Command(BaseCommand):
                 f'A replay reads the feed; it has no other source.'
             )
             raise CommandError(msg)
-        if not dry_run and not coerce_bool(conf['ENABLED'], f"{SETTINGS_NAME}['ENABLED']"):
+        if dry_run:
+            return
+        if not coerce_bool(conf['ENABLED'], f"{SETTINGS_NAME}['ENABLED']"):
             msg = (
                 f"{SETTINGS_NAME}['ENABLED'] is off, so a replay would queue nothing while "
                 f'reporting that it had. Use --dry-run to read the selection instead.'
+            )
+            raise CommandError(msg)
+        if not recorder.wants(EventKind.OUTBOUND_REPLAYED.value):
+            msg = (
+                f"{SETTINGS_NAME}['EVENT_LOG_KINDS'] excludes {EventKind.OUTBOUND_REPLAYED.value!r}, "
+                f'so a replay would send the message and record nothing joining it to the '
+                f'failure -- and a later run would select that failure again. Add the kind, or '
+                f'read the selection with --dry-run.'
             )
             raise CommandError(msg)
 
@@ -177,7 +202,10 @@ class Command(BaseCommand):
             rows = rows.filter(chat_id=options['chat'])
         rows = rows.order_by('created_at', 'id')
         limit = options['limit']
-        return rows if limit <= 0 else rows[:limit]
+        if limit < 0:
+            msg = f'--limit {limit} is not a bound. 0 is the unbounded mode, and it is a deliberate thing to type.'
+            raise CommandError(msg)
+        return rows if limit == 0 else rows[:limit]
 
     def _replay(self, row: TelegramEvent, *, dry_run: bool) -> str:
         """Queue one message again, or answer with why it cannot be.
@@ -188,6 +216,18 @@ class Command(BaseCommand):
         allowlist has since stopped allowing, a broker that dropped: each is counted as a
         refusal beside the honest ones and named in the report.
         """
+        sent = (
+            TelegramEvent.objects.using(log_alias())
+            .filter(correlation_id=row.correlation_id, kind=EventKind.OUTBOUND_SENT.value)
+            .exists()
+        )
+        if sent:
+            # the ending selected is not the end of the story: a mover that failed three times
+            # and published on the fourth leaves three drop rows and one `outbound.sent`, and a
+            # send the caller retried itself leaves the same shape. Telegram has the message
+            reason = 'it was sent in the end, so nothing was lost'
+            self.stdout.write(f'refused {row.short_id or row.correlation_id} ({row.function}): {reason}')
+            return reason
         arguments, reason = self._arguments_for(row)
         if reason:
             self.stdout.write(f'refused {row.short_id or row.correlation_id} ({row.function}): {reason}')
@@ -204,12 +244,19 @@ class Command(BaseCommand):
             failed = f'the queue write refused it: {type(error).__name__}'
             self.stdout.write(f'refused {row.short_id or row.correlation_id} ({row.function}): {failed}')
             return failed
-        self._record_replay(row, replacement)
+        recorded = self._record_replay(row, replacement)
         logger.info(
             'replayed a failed send',
             extra={'tg_function': row.function, 'tg_replay_of': str(row.correlation_id)},
         )
-        self.stdout.write(f'replayed {row.short_id or row.correlation_id} as {replacement}')
+        note = '' if recorded else ' (the feed did not take the row joining them; see the log)'
+        if not recorded:
+            logger.error(
+                'a replay was queued and not recorded, so a later run may select it again',
+                extra={'tg_replay_of': str(row.correlation_id)},
+            )
+        self.stdout.write(f'replayed {row.short_id or row.correlation_id} as {replacement}{note}')
+        self._unrecorded += 0 if recorded else 1
         return ''
 
     def _arguments_for(self, row: TelegramEvent) -> tuple[dict[str, Any], str]:
@@ -234,30 +281,46 @@ class Command(BaseCommand):
         return {}, f'no {" or ".join(ARGUMENT_KINDS)} row carries its arguments'
 
     @staticmethod
-    def _record_replay(row: TelegramEvent, replacement: uuid.UUID) -> None:
-        """Say in the feed that this message is a replay of that one.
+    def _record_replay(row: TelegramEvent, replacement: uuid.UUID) -> bool:
+        """Say in the feed that this message is a replay of that one, and answer whether it landed.
 
         Under the **new** id, with the old one in ``detail``: reusing the id would make one
         message look as though it had been sent twice, and the failure rate is read off these
         kinds. Recorded after the queue write, so a replay that could not be queued claims
         nothing.
+
+        **Written through the writer rather than handed to the recorder**, which is the one
+        place in this package that does that, and the reason is the recorder's own contract: it
+        never blocks and drops rather than waiting, so a queue write nobody watched could
+        report ``replayed 1`` with no row joining the new message to the failure -- and the next
+        run would select that failure again and send a second copy. The recorder is built that
+        way because it sits in the send path. This is a management command an operator is
+        watching, so it can afford to wait and to be told.
         """
-        if not recorder.active:
-            return
-        recorder.record(
-            Event(
-                kind=EventKind.OUTBOUND_REPLAYED.value,
-                correlation_id=replacement,
-                function=row.function,
-                chat_id=row.chat_id,
-                detail={'replay_of': str(row.correlation_id), 'replay_of_kind': row.kind},
-            )
+        landed = write_batch(
+            [
+                Event(
+                    kind=EventKind.OUTBOUND_REPLAYED.value,
+                    correlation_id=replacement,
+                    function=row.function,
+                    chat_id=row.chat_id,
+                    worker=worker_identity(),
+                    detail={'replay_of': str(row.correlation_id), 'replay_of_kind': row.kind},
+                )
+            ]
         )
+        return landed == 0
 
     def _report(self, replayed: int, refused: 'Counter[str]', *, dry_run: bool) -> None:
         """Say what happened, and what did not, with the reasons counted rather than repeated."""
         verb = 'would replay' if dry_run else 'replayed'
         self.stdout.write(f'{verb} {replayed}; refused {sum(refused.values())}')
+        if self._unrecorded:
+            were = 'replay was' if self._unrecorded == 1 else 'replays were'
+            self.stdout.write(
+                f'{self._unrecorded} {were} queued without a row joining it to the failure: '
+                f'a later run will select that failure again, so read the log before repeating this one'
+            )
         for reason, count in refused.most_common():
             self.stdout.write(f'  {count} x {reason}')
         if not dry_run:

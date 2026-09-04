@@ -385,19 +385,35 @@ was made with, and the feed records a *description* of them — so:
 - `... as truncated ...` — the arguments did not fit the column and were capped.
 - `a value was redacted, and redaction is one-way` — a token-shaped value or a
   `EVENT_LOG_REDACT_KEYS` key was blanked on the way in.
+- `... keys is the cap, and a mapping at it cannot be told from one cut to it` — fifty is
+  where the log stops keeping keys or items, and a structure sitting exactly there might be
+  whole or might be cut. Refused, because the alternative is a call sent with items missing.
 - `no outbound.queued or outbound.scheduled row carries its arguments` — the failure row names
   the function and the chat, and the arguments live on the row the *producer* wrote. With
   `EVENT_LOG_PAYLOAD: 'none'` there never was one; after `tgbot_prune_events` there is not one
   any more, however recent the failure.
+- `it was sent in the end, so nothing was lost` — the ending selected is not the end of that
+  message's story. A mover that failed three times and published on the fourth leaves three
+  drop rows and an `outbound.sent`, and Telegram has the message.
+- `another ending for a message already replayed in this run` — the same message had several
+  endings recorded, and one message is what goes.
 
 So `EVENT_LOG_PAYLOAD: 'full'` is what makes replay possible, and it is not a guarantee: it is
 decided per row, not per setting. Set it before you need it — a failure recorded under
 `'summary'` cannot be upgraded afterwards.
 
 Each replay is a **new** message with a new correlation id, and an `outbound.replayed` row
-joins it to the one it stands in for (`detail.replay_of`). Running the command twice sends the
-message twice: it is bounded (`--limit`, 100 by default) rather than idempotent, and the bound
-exists because a slipped date range would otherwise empty a month of failures into the queue.
+joins it to the one it stands in for (`detail.replay_of`). That row is what stops the *next*
+run selecting the same failure, so the command refuses to run at all when `EVENT_LOG_KINDS`
+excludes `outbound.replayed`, and says so per message if the feed would not take the row.
+Unlike every other row this package writes, it is written synchronously and its answer is
+read: the recorder drops rather than waits, which is right in the send path and wrong for the
+one row that prevents a duplicate.
+
+Running the command twice sends the message twice: it is bounded (`--limit`, 100 by default)
+rather than idempotent, and the bound exists because a slipped date range would otherwise
+empty a month of failures into the queue. `--limit 0` is the deliberate unbounded mode; a
+negative number is refused as the typo it is.
 
 ## `ModuleNotFoundError: No module named 'telegram_bot'`
 

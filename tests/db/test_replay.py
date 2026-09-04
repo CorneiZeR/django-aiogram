@@ -222,6 +222,31 @@ def test_a_structure_cut_to_its_cap_is_refused(queued, arguments):
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT=SETTINGS)
+@pytest.mark.parametrize('shape', ['keys', 'items'], ids=['keys', 'items'])
+def test_a_structure_sitting_at_a_cap_is_refused_however_it_was_written(queued, shape):
+    """The loss with no signal: 4.0 cut a mapping to fifty keys and stored fifty keys.
+
+    A mapping of exactly fifty and a mapping cut to fifty are the same bytes, so this cannot
+    be classified from the stored shape -- and the safe direction is refusing it. What that
+    costs is a keyboard of exactly fifty rows, retyped by hand; what accepting it costs is a
+    call sent with items missing.
+
+    New rows carry a marker and are caught by the case above, so this fires on the rows 4.0
+    wrote and on the rare whole structure that happens to sit on the boundary.
+    """
+    from django_aiogram.wire.payloads import MAX_ITEMS, MAX_KEYS
+
+    at_the_cap = {str(index): index for index in range(MAX_KEYS)} if shape == 'keys' else list(range(MAX_ITEMS))
+    a_failure(arguments={'chat_id': 42, 'reply_markup': at_the_cap})
+
+    output = replay(since=since())
+
+    assert list(queued) == [], 'a structure that may be missing items was sent'
+    assert 'is the cap' in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
 def test_an_eta_send_replays_from_its_scheduled_row_without_the_due_time(queued):
     """A scheduled send has no queued row of its own until a mover writes one, and that one
     carries no description -- so the arguments are on `outbound.scheduled`, beside `due_at`.
@@ -366,6 +391,112 @@ def test_one_row_the_queue_refuses_does_not_take_the_run_down(queued, monkeypatc
     assert queued.kwargs == [{'chat_id': 2, 'text': 'lost'}]
     assert 'replayed 1; refused 1' in output
     assert 'the queue write refused it: ConnectionError' in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_message_that_was_sent_in_the_end_is_not_replayed(queued):
+    """The ending selected is not always the end of the story.
+
+    A mover that failed three times and published on the fourth leaves three `outbound.dropped`
+    rows and one `outbound.sent`; a send the caller retried itself leaves the same shape.
+    Telegram has that message, and replaying it would send a second copy to somebody.
+    """
+    identifier = a_failure()
+    TelegramEvent.objects.create(
+        kind=EventKind.OUTBOUND_SENT.value,
+        correlation_id=identifier,
+        function='send_message',
+        chat_id=42,
+        message_id=1001,
+    )
+
+    output = replay(since=since())
+
+    assert list(queued) == [], 'a message Telegram already has was sent again'
+    assert 'it was sent in the end' in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_several_endings_for_one_message_replay_it_once(queued):
+    """The mover writes an `outbound.dropped` row per failed publish and retries the same row,
+    so one lost message can have a column of endings -- and one message is what should go.
+
+    An id is one message here, the way `bot.outcome()` reads it. A caller who reuses an id
+    across several sends has told the feed they are one thread, and this run replays one.
+    """
+    identifier = a_failure(kind=EventKind.OUTBOUND_DROPPED.value)
+    for _ in range(2):
+        TelegramEvent.objects.create(
+            kind=EventKind.OUTBOUND_DROPPED.value,
+            correlation_id=identifier,
+            function='send_message',
+            chat_id=42,
+            detail={'stage': 'queueing'},
+        )
+
+    output = replay(since=since(), kind=[EventKind.OUTBOUND_DROPPED.value])
+
+    assert len(queued) == 1, 'one lost message was sent once per ending recorded for it'
+    assert 'already replayed in this run' in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_negative_limit_is_not_the_unbounded_mode(queued):
+    """`--limit 0` is the deliberate one; `--limit -1` is a typo that would replay everything."""
+    a_failure()
+
+    with pytest.raises(CommandError, match='is not a bound'):
+        replay(since=since(), limit=-1)
+
+    assert list(queued) == []
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_KINDS': ['outbound.failed', 'outbound.queued']})
+def test_a_replay_the_feed_would_not_record_is_refused(queued):
+    """`EVENT_LOG_KINDS` excluding the replay kind means the message goes and nothing joins it
+    to the failure -- so the next run selects that failure again and sends a second copy.
+
+    Refused rather than warned, because the operator can fix it in one line and the cost of
+    not fixing it is a duplicate message nobody predicted.
+    """
+    a_failure()
+
+    with pytest.raises(CommandError, match='EVENT_LOG_KINDS'):
+        replay(since=since())
+
+    assert list(queued) == []
+    assert 'would replay 1' in replay(since=since(), dry_run=True), 'a dry run needs no audit row'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_join_row_the_feed_would_not_take_is_reported_rather_than_assumed(queued, monkeypatch):
+    """The audit row is written through the writer and its answer is read.
+
+    Handed to the recorder instead, the row would be dropped rather than waited for -- that is
+    the recorder's contract, and it is right for the send path and wrong here: the run would
+    print `replayed 1; refused 0` with nothing joining the new message to the failure, and the
+    next run would select that failure and send a second copy.
+    """
+    from django_aiogram.management.commands import tgbot_replay as command
+
+    a_failure()
+
+    def refuse_them_all(events):
+        """What the writer answers when the database took none of the batch."""
+        return len(events)
+
+    monkeypatch.setattr(command, 'write_batch', refuse_them_all)
+
+    output = replay(since=since())
+
+    assert len(queued) == 1, 'the message itself still went'
+    assert 'the feed did not take the row joining them' in output
+    assert '1 replay was queued without a row joining it' in output
 
 
 @pytest.mark.django_db(transaction=True)
