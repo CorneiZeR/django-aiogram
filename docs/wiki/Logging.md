@@ -48,6 +48,7 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_drain_timeout` | how long shutdown gave them |
 | `tg_kind` | the event log kind of a row |
 | `tg_replay_of` | the correlation id a replayed send is standing in for |
+| `tg_claimed_by` | the process whose replay claim is being taken over, from `django_aiogram_replay_claim.claimed_by` |
 | `tg_replayed`, `tg_refused`, `tg_skipped` | how many sends one `tgbot_replay` run put back, how many it could not, and how many needed nothing — sent in the end, replayed already, or discarded on purpose past `--grace` |
 | `tg_receiver` | the `events_recorded` receiver that raised |
 | `tg_batch` | how many rows the batch held, when part of it was refused |
@@ -95,6 +96,7 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `an events_recorded receiver raised` | ERROR | one of your metrics receivers raised; the batch reached the database if the event log is on and the write succeeded, and usually the other receivers too — `send_robust` isolates them, but the row below is the case where it cannot. `tg_receiver` names it |
 | `the prometheus exporter could not record an event` | ERROR | the shipped exporter failed on one event and carried on with the rest of the batch. `tg_kind` names it. It contains itself rather than leaning on the two rows above, so a metric going wrong costs one observation and never the feed |
 | `publishing recorded events failed` | ERROR | the signal dispatch itself raised, not a receiver — Django's own failure logging cannot name a callable instance. The batch reached the database if the event log is on; some receivers may have missed it |
+| `taking over a replay claim from a run that did not finish` | WARNING | a claim older than `--claim-lease` whose message never reached the queue: the run that made it died. `tg_claimed_by` names that process, `tg_replay_of` the failure. Taking it over may send a second copy, since the message may have reached the queue in the instant before it went |
 | `could not replay a failed send` | ERROR | one row's queue write raised, and the run carried on with the rest. `tg_replay_of` names it. One bad row must not take a hundred-row replay down halfway, with no way to tell which half went |
 | `replayed a failed send` | INFO | `tgbot_replay` queued one message again. `tg_replay_of` names the id it stands in for, `tg_function` the method |
 | `replay finished` | INFO | one `tgbot_replay` run is done: `tg_replayed` put back, `tg_refused` it could not, `tg_skipped` needed nothing — delivered in the end, replayed already, or discarded past `--grace`. Neither count is an error: a refusal is usually a row whose arguments were never recorded in full, and a skip is usually a previous run's work |

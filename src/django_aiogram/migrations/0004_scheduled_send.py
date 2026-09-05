@@ -1,4 +1,4 @@
-"""Add the table sends wait in, which is the second and last one this app ships.
+"""Add the table sends wait in, the second of the three this app ships.
 
 One ``CREATE TABLE`` and one ``CREATE INDEX``, on a table that starts empty — so unlike
 ``0003`` there is nothing to pace and no window to pick. It is safe on a running deployment:

@@ -140,6 +140,20 @@
   makes a bounded run repeatable: without it, five runs over five hundred failures would have
   replayed the same oldest hundred five times and never reached the rest.
 
+  **Two runs at once are safe**, which took a table to make true. Each failure is claimed in
+  `django_aiogram_replay_claim` before its message is queued, and that column is unique — the
+  one claim that is atomic on all four databases this package supports, since SQLite has neither
+  advisory locks nor `GET_LOCK`, and the same reasoning that made the mover's claim a
+  compare-and-set update. Without it both runs could read that a failure had not been replayed,
+  both queue it, and both write the row saying so afterwards: a recovered message delivered
+  twice, which is the wrong side of at-least-once for a command that exists to repair an
+  incident.
+
+  A claim is released when the queue write fails, so only a run that *died* between claiming and
+  queueing leaves one — and `--claim-lease`, an hour by default, is how long the next run
+  believes it. Taking one over may send a second copy, the mover's `--lease` trade in the same
+  words.
+
   `--limit` defaults to 100: bounded rather than idempotent, because a slipped date range would
   otherwise empty a month of failures into the queue at once. `--limit 0` is the deliberate
   unbounded mode and a negative number is refused. Selection is by window, kind, chat or
@@ -266,8 +280,9 @@
   The old recipe stays on the page as the escape hatch, for a test that really does mean to
   assert on the bytes.
 
-- **A second table, and the router narrowed to match.** `django_aiogram_scheduled` is where
-  those rows wait, and it is **not** routed to `EVENT_LOG_DATABASE`: the feed is a record and
+- **Two more tables, and the router narrowed to match.** `django_aiogram_scheduled` is where
+  those rows wait — and `django_aiogram_replay_claim` is one row per failure `tgbot_replay` is
+  putting back, described with that command below. Neither is routed to `EVENT_LOG_DATABASE`: the feed is a record and
   may live in a warehouse of its own, while this is operational state a producer writes and a
   mover consumes. `TelegramEventLogRouter` therefore routes by *model* rather than by app
   label — routed as before, a project with a log database would have had this table created

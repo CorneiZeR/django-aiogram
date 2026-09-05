@@ -453,22 +453,20 @@ is.
 
 That is not the same as idempotence, and the difference matters in three ways: the guard is a
 *row*, so a replay whose join row the feed refused is offered again — the run says which, in
-the report and in the log; a failure replayed by something other than this command is not known
-to it; and **two runs at once can both send the same message**, because each reads the rows
-before either writes its own. Run one at a time.
+the report and in the log — and a failure replayed by something other than this command is not
+known to it.
 
-There is nothing for the command to claim instead. The event log is insert-only — that is what
-lets a web process and a worker write one message's history with no coordination — so a run
-cannot take ownership of a failure the way `tgbot_dispatch_scheduled` claims a scheduled send.
-What is bounded is the damage, twice over: the join row is written per message right after it is
-queued, and read again right *before* the next send — so two runs have to collide inside one
-query rather than anywhere inside a walk of two hundred rows. What is left is a duplicate
-message, which is the failure mode this package documents everywhere else too: a lease that
-lapses mid-publish sends twice, a cancellation can lose its race, a consumer redelivers.
+**Two runs at once are safe.** Each failure is claimed in `django_aiogram_replay_claim` before
+its message is queued, and that column is unique, so the second run is refused by the database
+rather than by a read it would have to trust. It says so per row: *another run holds it
+(`<worker>`, since `<time>`)*.
 
-The exceptions stay: a message whose join row the feed refused is offered again — the first
-run's report names those — and one replayed by something other than this command is not known to
-it.
+What is left is one narrow case, and it is the mover's trade in the same words. A claim is
+released when the queue write fails, so only a run that *died* between claiming and queueing
+leaves one behind — and `--claim-lease` (an hour by default) is how long the next run believes
+it before taking over. Taking one over can send a second copy, because the message may have
+reached the queue in the instant before that process went; the log says
+*taking over a replay claim from a run that did not finish* when it happens.
 
 ## `ModuleNotFoundError: No module named 'telegram_bot'`
 
