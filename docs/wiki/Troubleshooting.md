@@ -432,6 +432,10 @@ was made with, and the feed records a *description* of them — so:
   at a time, and without it every run would replay the same oldest hundred and never reach the
   rest.
 
+- `two runs kept taking it from each other; the next run gets it` — this run read the row free
+  and lost the insert three times running, which is two runs on a lease short enough to expire
+  between them. Nothing is wrong with the message and nothing sent it; the next run reaches it.
+
 So `EVENT_LOG_PAYLOAD: 'full'` is what makes replay possible, and it is not a guarantee: it is
 decided per row, not per setting. Set it before you need it — a failure recorded under
 `'summary'` cannot be upgraded afterwards.

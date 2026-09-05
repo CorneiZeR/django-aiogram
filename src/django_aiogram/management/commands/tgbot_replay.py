@@ -110,6 +110,15 @@ SKIPPED_REPLAYED = 'it has been replayed already; one failure gets one replaceme
 SKIPPED_DELIBERATE = 'the deployment discarded it on purpose ({code}), so this is not a loss'
 SKIPPED_UNACKNOWLEDGED = 'the worker never acknowledged it ({code}), so the queue redelivers it on restart'
 SKIPPED_CLAIMED = 'another run holds it ({by}, since {at:%H:%M:%S}); one run at a time reaches it'
+#: said when the row was free every time this run looked and taken every time it wrote, which is
+#: two runs arriving together on a lease short enough to expire between them. Not a refusal and
+#: not a replay: nothing is wrong with the message, and the next run reaches it
+SKIPPED_CONTESTED = 'two runs kept taking it from each other; the next run gets it'
+
+#: how many times one row's claim is attempted before this run leaves it to another. Three,
+#: because each retry costs one insert and the state it retries into is one another run has just
+#: written -- a fourth read says nothing a third did not
+CLAIM_ATTEMPTS = 3
 
 
 class Verdict(NamedTuple):
@@ -485,19 +494,28 @@ class Command(BaseCommand):
         database this package supports -- so the second run to arrive is told by an
         ``IntegrityError`` rather than by a read it would have to trust. Everything else here is
         deciding what a claim that is *already* there means.
+
+        **It reads again after losing the insert**, because the row it lost to may be gone by
+        then: :meth:`_claim_on` takes over a lapsed claim, and a lease short enough for that --
+        the second the documentation recommends when an operator knows a write did not land --
+        makes it ordinary rather than exotic. Answering with the first refusal reported a failure
+        as *already replayed* when nothing held it at all, and left it for a later run that would
+        read the same empty table.
         """
-        held = self._claim_on(row)
-        if held is not None:
-            return None, held
-        try:
-            with transaction.atomic():
-                return TelegramReplayClaim.objects.create(
-                    correlation_id=row.correlation_id, claimed_by=worker_identity()
-                ), None
-        except IntegrityError:
-            # the other run inserted between the read above and this line, which is exactly the
-            # race the constraint exists for. Read its claim back so the report can name it
-            return None, self._claim_on(row)
+        for _ in range(CLAIM_ATTEMPTS):
+            held = self._claim_on(row)
+            if held is not None:
+                return None, held
+            try:
+                with transaction.atomic():
+                    return TelegramReplayClaim.objects.create(
+                        correlation_id=row.correlation_id, claimed_by=worker_identity()
+                    ), None
+            except IntegrityError:
+                # the other run inserted between the read above and this line, which is exactly
+                # the race the constraint exists for -- so look again rather than concluding
+                continue
+        return None, None
 
     def _claim_on(self, row: TelegramEvent, *, takeover: bool = True) -> 'TelegramReplayClaim | None':
         """Answer with the claim standing in the way of replaying this failure, if one does.
@@ -522,11 +540,17 @@ class Command(BaseCommand):
         if not self._lapsed(claim):
             return claim
         if takeover:
+            # conditional, and re-read when it removes nothing: the run holding this row may have
+            # marked it queued between the read above and this line, and an unconditional delete
+            # took a *finished* claim away -- after which the next run replays a message that
+            # went. The delete is the transition, so the database decides it rather than the read
+            taken, _ = TelegramReplayClaim.objects.filter(pk=claim.pk, queued_at__isnull=True).delete()
+            if not taken:
+                return TelegramReplayClaim.objects.filter(pk=claim.pk).first()
             logger.warning(
                 'taking over a replay claim whose queue write never answered',
                 extra={'tg_replay_of': str(row.correlation_id), 'tg_claimed_by': claim.claimed_by},
             )
-            claim.delete()
         return None
 
     def _lapsed(self, claim: 'TelegramReplayClaim') -> bool:
@@ -536,8 +560,16 @@ class Command(BaseCommand):
         return claim.claimed_at < self._started - datetime.timedelta(seconds=self._claim_lease)
 
     def _say_claimed(self, row: TelegramEvent, held: 'TelegramReplayClaim | None') -> Verdict:
-        """Report a failure somebody else owns, and answer with the reason it was skipped."""
-        if held is not None and held.queued_at is None:
+        """Report a failure somebody else owns, and answer with the reason it was skipped.
+
+        No claim at all is a third answer rather than a replay: :meth:`_claim` gives up after
+        ``CLAIM_ATTEMPTS`` rounds of losing the insert to a run that then let the row go, and
+        calling that *already replayed* would be a message nobody sent described as one that
+        went.
+        """
+        if held is None:
+            reason = SKIPPED_CONTESTED
+        elif held.queued_at is None:
             reason = SKIPPED_CLAIMED.format(by=held.claimed_by or 'another run', at=_local(held.claimed_at))
         else:
             reason = SKIPPED_REPLAYED

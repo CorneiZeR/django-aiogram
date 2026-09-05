@@ -23,7 +23,7 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    """Create the claim table, whose whole shape is one unique column."""
+    """Create the claim table: six columns, of which the unique one is the claim itself."""
 
     dependencies: ClassVar = [('django_aiogram', '0004_scheduled_send')]
 

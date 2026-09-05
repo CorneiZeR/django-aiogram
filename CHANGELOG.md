@@ -171,6 +171,14 @@
   in Python rather than through `detail__replay_of`, so it needs no JSON key lookup from a
   database that may be the log's own.
 
+  Both halves of the claim are conditional for the same reason. Taking a lapsed one over deletes
+  only a row that is still unqueued, because the run holding it may mark it queued in the instant
+  between the read and the delete — an unconditional delete took a *finished* claim away, and the
+  message went twice. And a run that loses the insert looks again rather than concluding: the row
+  it lost to may already be gone, since a short lease lets the next reader take it over. Three
+  rounds of that and the failure is left for another run, reported in its own words — *two runs
+  kept taking it from each other* — rather than as one that was already replayed.
+
   A queue write slower than the lease loses its claim to another run mid-call, and the write
   back is conditional for that reason: the row may be gone, and `save(update_fields=…)` raises
   on an update that matches nothing, which would have ended the run at that row with the rest

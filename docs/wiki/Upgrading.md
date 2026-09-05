@@ -18,8 +18,9 @@ web tier may be deployed in either order.
 4.1 adds `django_aiogram_scheduled`, which is where a send with an `eta` waits, and
 `django_aiogram_replay_claim`, one row per failure `manage.py tgbot_replay` is putting back.
 Nothing uses either until a caller passes an `eta` or an operator runs the replay, so the
-migrations are safe on a running deployment — two empty tables, one index and one unique
-constraint.
+migrations are safe on a running deployment: two empty tables, the schedule's index on
+`correlation_id` and its `dja_scheduled_due` index for the mover's query, and the claim's unique
+`correlation_id`, which is what stops two `tgbot_replay` runs recovering one message twice.
 
 **They are created wherever your own tables go.** The router that sends the event log to its
 own alias routes by *model* from 4.1 rather than by app label: it keeps both off a
