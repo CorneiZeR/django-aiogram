@@ -124,11 +124,11 @@
 
   Each replay is a new message under a **new** correlation id, with an `outbound.replayed` row
   under that id carrying `detail.replay_of` — reusing the id would make one message look as
-  though it had been sent twice, and the failure rate is read off these kinds. That row is also
-  what stops the *next* run selecting the same failure, so it is the one row in this package
-  written synchronously, with its answer read: the recorder drops rather than waits, which is
-  right in the send path and wrong here. The command refuses to run when `EVENT_LOG_KINDS`
-  excludes the kind, and says so per message when the feed will not take the row.
+  though it had been sent twice, and the failure rate is read off these kinds. It is the one row
+  in this package written synchronously, with its answer read: the recorder drops rather than
+  waits, which is right in the send path and wrong for the row that says which failure was
+  repaired. The command refuses to run when `EVENT_LOG_KINDS` excludes the kind, and says so per
+  message when the feed will not take the row.
 
   **What it will not replay, beyond the lossy rows.** A send the worker refused while shutting
   down (`NotScheduled`) is left to the queue, which still holds it unacknowledged and hands it
@@ -136,9 +136,9 @@
   leaves three drop rows and a delivery — and a message with several endings recorded is
   replayed once, since an id is one message here the way `bot.outcome()` reads it.
   `outbound.retried` is not selectable at all: that send went on to succeed or fail under the
-  same id. And a failure an `outbound.replayed` row already names is skipped, which is what
-  makes a bounded run repeatable: without it, five runs over five hundred failures would have
-  replayed the same oldest hundred five times and never reached the rest.
+  same id. And a failure a claim already names is skipped, which is what makes a bounded run
+  repeatable: without it, five runs over five hundred failures would have replayed the same
+  oldest hundred five times and never reached the rest.
 
   **Two runs at once are safe**, which took a table to make true. Each failure is claimed in
   `django_aiogram_replay_claim` before its message is queued, and that column is unique — the

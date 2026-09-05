@@ -424,11 +424,12 @@ was made with, and the feed records a *description* of them — so:
 - `the worker never acknowledged it (NotScheduled), so the queue redelivers it on restart` — the
   send was refused while the container was shutting down and the message stayed in flight on the
   transport. Restart the worker; it comes back on its own.
-- `it has been replayed already; the row joining them says so` — an `outbound.replayed` row
-  names this failure, from this run, an earlier one, or another run that finished while this one
-  was walking. **This is what makes the command
-  re-runnable**: the selection is bounded, so five hundred failures are walked a hundred at a
-  time, and without it every run would replay the same oldest hundred and never reach the
+- `it has been replayed already; one failure gets one replacement` — a claim in
+  `django_aiogram_replay_claim` names this failure with its replacement queued, from this run, an
+  earlier one, or another run that finished while this one was walking. Under `--dry-run` nothing
+  is claimed, so a second ending for the same message is answered from what the run itself has
+  already said it would do. **This is what makes the command re-runnable**: the selection is bounded, so five hundred failures are walked a hundred
+  at a time, and without it every run would replay the same oldest hundred and never reach the
   rest.
 
 So `EVENT_LOG_PAYLOAD: 'full'` is what makes replay possible, and it is not a guarantee: it is
@@ -436,12 +437,13 @@ decided per row, not per setting. Set it before you need it — a failure record
 `'summary'` cannot be upgraded afterwards.
 
 Each replay is a **new** message with a new correlation id, and an `outbound.replayed` row
-joins it to the one it stands in for (`detail.replay_of`). That row is what stops the *next*
-run selecting the same failure, so the command refuses to run at all when `EVENT_LOG_KINDS`
-excludes `outbound.replayed`, and says so per message if the feed would not take the row.
-Unlike every other row this package writes, it is written synchronously and its answer is
-read: the recorder drops rather than waits, which is right in the send path and wrong for the
-one row that prevents a duplicate.
+joins it to the one it stands in for (`detail.replay_of`). The claim is what stops the *next*
+run selecting the same failure; this row is what lets anybody read afterwards which failure was
+repaired, and without it the feed shows a fresh send that stands in for nothing. So the command
+refuses to run at all when `EVENT_LOG_KINDS` excludes `outbound.replayed`, and says so per
+message if the feed would not take the row. Unlike every other row this package writes, it is
+written synchronously and its answer is read: the recorder drops rather than waits, which is
+right in the send path and wrong for a row an operator is standing there waiting on.
 
 Run it again for the next hundred, and again: `--limit` counts the messages a run *sends*
 rather than the rows it reads, so each run walks past what the last one did and reaches the

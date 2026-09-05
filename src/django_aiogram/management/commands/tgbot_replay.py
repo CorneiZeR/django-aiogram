@@ -104,7 +104,9 @@ ARGUMENT_KINDS = (EventKind.OUTBOUND_QUEUED.value, EventKind.OUTBOUND_SCHEDULED.
 #: places -- the per-row line, the report, the log field's documentation and the page. Counted
 #: apart from the refusals, since a refusal asks somebody to decide and these do not
 SKIPPED_DELIVERED = 'it was sent in the end, so nothing was lost'
-SKIPPED_REPLAYED = 'it has been replayed already; the row joining them says so'
+#: said by two paths -- a claim naming it in a live run, and this run's own memory in a dry one,
+#: which is why the sentence names neither
+SKIPPED_REPLAYED = 'it has been replayed already; one failure gets one replacement'
 SKIPPED_DELIBERATE = 'the deployment discarded it on purpose ({code}), so this is not a loss'
 SKIPPED_UNACKNOWLEDGED = 'the worker never acknowledged it ({code}), so the queue redelivers it on restart'
 SKIPPED_CLAIMED = 'another run holds it ({by}, since {at:%H:%M:%S}); one run at a time reaches it'
@@ -318,8 +320,9 @@ class Command(BaseCommand):
             msg = (
                 f"{SETTINGS_NAME}['EVENT_LOG_KINDS'] excludes {EventKind.OUTBOUND_REPLAYED.value!r}, "
                 f'so a replay would send the message and record nothing joining it to the '
-                f'failure -- and a later run would select that failure again. Add the kind, or '
-                f'read the selection with --dry-run.'
+                f'failure. The claim still stops a second run repeating it, but the feed would '
+                f'show a fresh send that repaired nothing. Add the kind, or read the selection '
+                f'with --dry-run.'
             )
             raise CommandError(msg)
 
@@ -569,11 +572,12 @@ class Command(BaseCommand):
 
         **Written through the writer rather than handed to the recorder**, which is the one
         place in this package that does that, and the reason is the recorder's own contract: it
-        never blocks and drops rather than waiting, so a queue write nobody watched could
-        report ``replayed 1`` with no row joining the new message to the failure -- and the next
-        run would select that failure again and send a second copy. The recorder is built that
-        way because it sits in the send path. This is a management command an operator is
-        watching, so it can afford to wait and to be told.
+        never blocks and drops rather than waiting, so a queue write nobody watched could report
+        ``replayed 1`` while the feed shows a send that stands in for nothing. The claim is what
+        keeps the next run off that failure; this row is what lets anybody read afterwards which
+        failure was repaired, and a dropped one is a hole in that history rather than a duplicate
+        message. The recorder is built that way because it sits in the send path. This is a
+        management command an operator is watching, so it can afford to wait and to be told.
         """
         event = Event(
             kind=EventKind.OUTBOUND_REPLAYED.value,

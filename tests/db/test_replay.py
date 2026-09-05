@@ -928,10 +928,10 @@ def test_a_negative_limit_is_not_the_unbounded_mode(queued):
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_KINDS': ['outbound.failed', 'outbound.queued']})
 def test_a_replay_the_feed_would_not_record_is_refused(queued):
     """`EVENT_LOG_KINDS` excluding the replay kind means the message goes and nothing joins it
-    to the failure -- so the next run selects that failure again and sends a second copy.
+    to the failure -- the feed shows a fresh send, and no one can read which failure it repaired.
 
-    Refused rather than warned, because the operator can fix it in one line and the cost of
-    not fixing it is a duplicate message nobody predicted.
+    Refused rather than warned, because the operator can fix it in one line and what is lost
+    otherwise cannot be reconstructed afterwards.
     """
     a_failure()
 
@@ -949,8 +949,8 @@ def test_a_join_row_the_feed_would_not_take_is_reported_rather_than_assumed(queu
 
     Handed to the recorder instead, the row would be dropped rather than waited for -- that is
     the recorder's contract, and it is right for the send path and wrong here: the run would
-    print `replayed 1; refused 0` with nothing joining the new message to the failure, and the
-    next run would select that failure and send a second copy.
+    print `replayed 1; refused 0` while the feed showed a send standing in for nothing, and the
+    history of what was repaired would have a hole in it.
     """
     from django_aiogram.management.commands import tgbot_replay as command
 
