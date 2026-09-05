@@ -15,8 +15,9 @@ The first three apply to every pull request. Strike out the rest with
 - [ ] Nothing new runs at import time
 - [ ] `CHANGELOG.md` updated for user-visible changes
 - [ ] Documentation in `docs/wiki/` follows the behaviour it describes
-- [ ] Every promise the documentation gains has a case named after it — a claim
-      about repetition or idempotence needs a case that runs the thing twice
+- [ ] Every promise about the software has a case named after it — in a wiki
+      page, a docstring, a `--help` string or a check's hint — and a claim about
+      repetition or idempotence needs a case that runs the thing twice
 - [ ] A documented bound has a case *at* it and one *past* it — running twice
       says nothing about where a limit stops
 - [ ] New flags and settings were tried with the wrong values: negative, zero,

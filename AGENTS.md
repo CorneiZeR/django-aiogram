@@ -175,8 +175,10 @@ Packaging-only work does not need the Redis suite, and vice versa.
   built from the three loss markers `wire/payloads.py` had, and that module lost
   data in four more ways with no marker; the four are one property —
   *if `lossy_reason` says nothing was lost, the recorded value equals the
-  input* — and one property test would have covered every branch it has and
-  every branch it grows.
+  input* — and stating it that way is what makes a new loss path a failure
+  rather than a silence. It is not coverage: a property test checks generated
+  inputs, so a branch the generator never reaches stays unexercised, and the
+  cases whose input it cannot produce are still written by hand.
 - **A new flag is a new adversary.** Every argument a command gains gets the
   short list tried before anyone else does: negative, zero, empty, absent,
   enormous, the wrong type, and the value the help text calls special. The one
@@ -370,12 +372,20 @@ and `pytest`. Say why the change is needed and what failure it produces.
 answer its findings, fix what is still valid and say plainly what you skipped
 and why.
 
-**Every promise the documentation gains needs a case named after it.** A page
-that says "run it again for the next hundred" is a claim about behaviour across
-runs, and a case written from the code path tests the mechanism instead: 4.1
-shipped that sentence twice while it was false, because the fix each time was
-read off the diff rather than off the sentence. List the claims your `docs/wiki`
-diff adds, and name a test for each.
+**Every promise about the software needs a case named after it.** A page that
+says "run it again for the next hundred" is a claim about behaviour across runs,
+and a case written from the code path tests the mechanism instead: 4.1 shipped
+that sentence twice while it was false, because the fix each time was read off
+the diff rather than off the sentence. List the claims your `docs/wiki` diff
+adds — and the ones in a docstring, a `--help` string or a check's hint, which
+are documentation a reader trusts the same way — and name a test for each.
+
+This file and `.github/` are the exception, and it is a real one rather than a
+convenience: they describe how the work is done, not what the package does, so
+there is nothing for a case to run. What holds them honest instead is the same
+demand one level up — every rule here names the release and the defect it came
+from, so a rule that stops being true is a claim somebody can check against the
+history.
 
 **A round of fixes is the newest and least-read code on the branch.** On the
 largest 4.1 pull request, eleven of thirteen review findings were in the two
