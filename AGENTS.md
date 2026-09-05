@@ -179,12 +179,13 @@ Packaging-only work does not need the Redis suite, and vice versa.
   rather than a silence. It is not coverage: a property test checks generated
   inputs, so a branch the generator never reaches stays unexercised, and the
   cases whose input it cannot produce are still written by hand.
-- **A new flag is a new adversary.** Every argument a command gains gets the
-  short list tried before anyone else does: negative, zero, empty, absent,
+- **A new flag is a new adversary.** Every argument a command gains, and every
+  setting the package reads, gets the short list tried before anyone else does: negative, zero, empty, absent,
   enormous, the wrong type, and the value the help text calls special. The one
   that got through in 4.1 was a sentinel with a twin: `--limit 0` documented as
   "no bound" and `--limit -1` behaving as one too, because the comparison read
-  `<= 0`. Refuse what the help text does not offer, by name.
+  `<= 0`. Refuse what the help text does not offer, by name — a command says so
+  with `CommandError`, a setting with the check that owns it.
 
   A **documented bound** is the same demand from the other side: a case at it and
   one past it. Repetition proves nothing there — 4.1's `--limit` counted the rows
@@ -202,14 +203,17 @@ Packaging-only work does not need the Redis suite, and vice versa.
   after the bytes went — the event log says so in its own definition of a
   queueing drop — so a `publish` that raises is *unknown*, not *refused*.
   Release a claim only where nothing can have been queued; otherwise leave it to
-  the lease, which is the same trade the mover makes.
+  the lease, which is the same trade the mover makes. 4.1's replay released it,
+  so the next run took the same failure and sent a message that had already
+  gone.
 - **Do not build a guarantee on something documented as dropping.** Before
   leaning on a component, read its docstring for "never blocks", "drops rather
   than", "best effort", "may lose". The recorder says all of that on purpose,
   because it sits in the send path — so the one row whose absence causes a
   duplicate message goes through `eventlog.writer` and its answer is read.
   `tgbot_replay` is the only place in the package that writes a row that way,
-  and the reason is written where it does it.
+  and the reason is written where it does it — 4.1 built that row on the
+  recorder first, which drops rather than waits.
 - **Values go in `extra`, not in the message.** `logger.warning('rate limited',
   extra={'tg_function': name})`, never an f-string. Keys are `tg_`-prefixed so
   they cannot collide with `LogRecord` attributes.
@@ -382,10 +386,11 @@ are documentation a reader trusts the same way — and name a test for each.
 
 This file and `.github/` are the exception, and it is a real one rather than a
 convenience: they describe how the work is done, not what the package does, so
-there is nothing for a case to run. What holds them honest instead is the same
-demand one level up — every rule here names the release and the defect it came
-from, so a rule that stops being true is a claim somebody can check against the
-history.
+there is nothing for a case to run. What holds them honest instead is a
+demand one level up: a rule earns its place by naming what it cost. Every rule
+added since 4.1 cites the release and the defect it came from, older ones say it
+where somebody knew, and a rule that cannot name a cost is a preference — which
+is the argument for deleting it rather than for writing it down.
 
 **A round of fixes is the newest and least-read code on the branch.** On the
 largest 4.1 pull request, eleven of thirteen review findings were in the two
