@@ -192,6 +192,13 @@ Packaging-only work does not need the Redis suite, and vice versa.
   a run read instead of the messages it sent, which only a second run finds, and
   `--limit -1` slipped through the same review, which only a value past the bound
   finds. Two claims, two kinds of case.
+- **A moment written down is true for an hour.** A case that hard-codes a time
+  and then leans on how old something is passes while the clock agrees with it
+  and lies afterwards. 4.1 wrote a claim at `12:00` and asserted the run would
+  report it rather than take it over, which is true until the default hour of
+  `--claim-lease` runs out: green in review, red on `master` that afternoon.
+  Derive the moment from `now()` and read the assertion back from the same
+  value, so the case says what it means at every hour.
 - **A read is not a transition, and the database is what decides one.** Where a
   claim, a lease or a takeover is expressed as *read, decide, write*, put the
   condition the read relied on into the write and treat zero rows as the answer
