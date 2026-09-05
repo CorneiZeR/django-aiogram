@@ -641,7 +641,7 @@ def test_one_row_the_queue_refuses_does_not_take_the_run_down(queued, monkeypatc
     assert len(calls) == 2, 'the run stopped at the row that raised'
     assert queued.kwargs == [{'chat_id': 2, 'text': 'lost'}]
     assert 'replayed 1; refused 1' in output
-    assert 'the queue write refused it: ConnectionError' in output
+    assert 'the queue write raised ConnectionError' in output
 
 
 @pytest.mark.django_db(transaction=True)
@@ -801,12 +801,12 @@ def test_two_runs_cannot_both_take_one_failure(queued):
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT=SETTINGS)
 def test_a_claim_whose_run_died_is_taken_over_after_its_lease(queued):
-    """A claim is released when the queue write fails, so only a *crashed* run leaves one.
+    """A claim whose queue write never answered outlives its run -- it died, or `publish` raised.
 
     Then the message is neither queued nor claimable, which is a message nothing will ever put
-    back -- so the lease takes it over, and what that can cost is a second copy: the process may
-    have died in the instant after the queue took it. The mover's `--lease` makes the same trade
-    in the same words.
+    back -- so the lease takes it over, and what that can cost is a second copy: the queue may
+    have taken it in the instant before the answer stopped coming. The mover's `--lease` makes
+    the same trade in the same words.
     """
     identifier = a_failure()
     stale = TelegramReplayClaim.objects.create(correlation_id=identifier, claimed_by='a-run-that-died')
@@ -835,26 +835,36 @@ def test_a_fresh_claim_is_not_taken_over(queued):
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT=SETTINGS)
-def test_a_queue_write_that_failed_releases_its_claim(queued, monkeypatch):
-    """A refusal must leave nothing behind, or one bad broker moment locks a failure for an hour.
+def test_a_queue_write_that_raised_keeps_its_claim(queued, monkeypatch):
+    """A raise is not proof the message stayed out of the queue.
 
-    Only a process that *dies* between the claim and the queue write leaves a claim, which is
-    the narrow case the lease is for.
+    `publishing` records this as a *queueing* drop, which the event log defines as a write that
+    may still have been applied -- Redis, RabbitMQ and Kafka can all fail after the bytes went.
+    Releasing the claim would offer that failure to the very next run and send a second copy to
+    somebody; holding it makes this the case `--claim-lease` already exists for. Found by a
+    review reading the transports rather than the comment, which claimed nothing was queued.
     """
     identifier = a_failure()
 
     def refuse(self, function='send_message', **kwargs):
-        """A broker that dropped."""
-        msg = 'the broker refused the write'
+        """A broker that raised after the write may already have landed."""
+        msg = 'the broker stopped answering'
         raise ConnectionError(msg)
 
     monkeypatch.setattr(TelegramBot, 'enqueue', refuse)
 
     replay(since=since())
 
-    assert not TelegramReplayClaim.objects.filter(correlation_id=identifier).exists(), (
-        'a refused write left a claim behind, so the next run cannot try again'
-    )
+    claim = TelegramReplayClaim.objects.get(correlation_id=identifier)
+    assert claim.queued_at is None, 'nothing said the message reached the queue'
+
+    monkeypatch.undo()
+    assert 'another run holds it' in replay(since=since()), 'the next run offered the same failure again'
+    assert list(queued) == [], 'and would have sent a second copy of a message that may have landed'
+
+    TelegramReplayClaim.objects.filter(pk=claim.pk).update(claimed_at=timezone.now() - datetime.timedelta(seconds=5))
+    assert 'replayed 1' in replay(since=since(), claim_lease=1), 'the lease is how an operator says it did not land'
+    assert len(queued) == 1
 
 
 @pytest.mark.django_db(transaction=True)

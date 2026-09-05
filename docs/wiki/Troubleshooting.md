@@ -464,12 +464,16 @@ its message is queued, and that column is unique, so the second run is refused b
 rather than by a read it would have to trust. It says so per row: *another run holds it
 (`<worker>`, since `<time>`)*.
 
-What is left is one narrow case, and it is the mover's trade in the same words. A claim is
-released when the queue write fails, so only a run that *died* between claiming and queueing
-leaves one behind — and `--claim-lease` (an hour by default) is how long the next run believes
-it before taking over. Taking one over can send a second copy, because the message may have
-reached the queue in the instant before that process went; the log says
-*taking over a replay claim from a run that did not finish* when it happens.
+What is left is one narrow case, and it is the mover's trade in the same words. A claim stands
+until its message is known to have reached the queue, and a queue write that *raised* does not
+say that either way — the event log defines a queueing drop as a write that may still have been
+applied, and all three networked transports can fail after the bytes went. So a refused replay
+keeps its claim, exactly like one from a run that died on that line, and `--claim-lease` (an
+hour by default) is how long the next run believes it before taking over. Taking one over can
+send a second copy, because the message may have reached the queue after all; the log says
+*taking over a replay claim whose queue write never answered* when it happens. Where you know
+it did not land — a payload the broker will refuse however often it is offered — `--claim-lease 1`
+on the next run is the way to say so.
 
 ## `ModuleNotFoundError: No module named 'telegram_bot'`
 

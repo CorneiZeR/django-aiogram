@@ -128,11 +128,11 @@ class Verdict(NamedTuple):
     skipped: bool = False
 
 
-#: how long a claim is believed before another run may take it over. A claim is released when
-#: the queue write *fails*, so the only one that outlives its run is one whose process died --
-#: and an hour is far past a command that spends milliseconds per row. Retaking one can send a
-#: second copy, exactly as the mover's `--lease` can: the message may have reached the queue in
-#: the instant before the process went
+#: how long a claim is believed before another run may take it over. A claim outlives its run
+#: whenever the queue write did not plainly answer -- the process died, or `publish` raised
+#: after the bytes went -- and an hour is far past a command that spends milliseconds per row.
+#: Retaking one can send a second copy, exactly as the mover's `--lease` can: the message may
+#: have reached the queue in the instant before the answer stopped coming
 DEFAULT_CLAIM_LEASE = 3600
 
 #: how many messages one run may put back, unless an operator says otherwise. A default rather
@@ -171,11 +171,12 @@ class Command(BaseCommand):
     own writes, because a claim on a database ``EVENT_LOG_DATABASE`` may point somewhere else
     entirely is not a claim at all.
 
-    What remains, said plainly: a claim is released when the queue write fails, so only a run
-    that *dies* between claiming and queueing leaves one -- and after ``--claim-lease`` the next
-    run takes it over, which may send a second copy if the message reached the queue in that
-    instant. The mover's ``--lease`` makes the same trade for the same reason. A replay made by
-    something other than this command is still not known to it.
+    What remains, said plainly: a claim stands until its message is known to have reached the
+    queue or ``--claim-lease`` runs out, because a queue write that raised is not proof the
+    message stayed out -- the event log defines a queueing drop as a write that *may still have
+    been applied*. So a refusal holds its row for the lease, and taking it over afterwards may
+    send a second copy. The mover's ``--lease`` makes the same trade for the same reason. A
+    replay made by something other than this command is still not known to it.
     """
 
     help = 'Queue failed sends again, from the arguments the event log recorded.'
@@ -219,9 +220,9 @@ class Command(BaseCommand):
             '--claim-lease',
             type=int,
             default=DEFAULT_CLAIM_LEASE,
-            help=f'seconds before a claim left by a process that died is taken over (default '
-            f'{DEFAULT_CLAIM_LEASE}). Retaking one may send a second copy, since the message '
-            f'may have reached the queue in the instant before that process went.',
+            help=f'seconds before a claim whose queue write never answered -- the process died, '
+            f'or publish raised -- is taken over (default {DEFAULT_CLAIM_LEASE}). Retaking one '
+            f'may send a second copy, since the message may have reached the queue anyway.',
         )
         parser.add_argument(
             '--dry-run',
@@ -399,12 +400,21 @@ class Command(BaseCommand):
         try:
             replacement = bot.enqueue(row.function, **arguments)
         except Exception as error:
-            # released, not left behind: nothing was queued, so the next run should be free to
-            # try again. Only a process that *dies* here leaves a claim, which is what the lease
-            # is for
-            claim.delete()
-            logger.exception('could not replay a failed send', extra={'tg_replay_of': str(row.correlation_id)})
-            failed = f'the queue write refused it: {type(error).__name__}'
+            # kept, not released: a raise here is not proof the message stayed out of the queue.
+            # `publishing` records exactly this as a *queueing* drop, which the event log defines
+            # as a write that may still have been applied -- all three networked transports can
+            # fail after the bytes went. Deleting the claim would hand the same failure to the
+            # next run and send somebody a second copy; holding it makes this the case the lease
+            # already exists for, and `--claim-lease` is the operator's answer when they know it
+            # did not land
+            logger.exception(
+                'could not replay a failed send',
+                extra={'tg_replay_of': str(row.correlation_id), 'tg_claimed_by': claim.claimed_by},
+            )
+            failed = (
+                f'the queue write raised {type(error).__name__}; the claim stands until '
+                f'--claim-lease, since the message may have reached the queue anyway'
+            )
             self.stdout.write(f'refused {row.short_id or row.correlation_id} ({row.function}): {failed}')
             return Verdict(failed)
         # the claim says the message reached the queue before anything else is written: a crash
@@ -474,9 +484,9 @@ class Command(BaseCommand):
 
         A claim whose replacement reached the queue always stands: that failure is handled, this
         run or an earlier one. A claim with no ``queued_at`` belongs to a run that is working --
-        or to one that died mid-flight, and after ``--claim-lease`` this treats it as the latter,
-        which is the mover's trade in the same words: the alternative is a message nothing will
-        ever put back.
+        or to one whose queue write never answered, by dying or by raising -- and after
+        ``--claim-lease`` this treats it as the latter, which is the mover's trade in the same
+        words: the alternative is a message nothing will ever put back.
 
         ``takeover=False`` answers the same question and **writes nothing**, which is what a dry
         run needs: it has to predict the live run -- so a lapsed claim is no obstacle there
@@ -493,7 +503,7 @@ class Command(BaseCommand):
             return claim
         if takeover:
             logger.warning(
-                'taking over a replay claim from a run that did not finish',
+                'taking over a replay claim whose queue write never answered',
                 extra={'tg_replay_of': str(row.correlation_id), 'tg_claimed_by': claim.claimed_by},
             )
             claim.delete()

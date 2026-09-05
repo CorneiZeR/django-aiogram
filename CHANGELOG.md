@@ -156,15 +156,25 @@
   messages a second time. One statement settles it, before the first replay:
 
   ```python
+  earliest = {}
+  for row in TelegramEvent.objects.using(log_alias()).filter(kind='outbound.replayed').order_by('created_at'):
+      earliest.setdefault(row.detail['replay_of'], row.created_at)
   TelegramReplayClaim.objects.bulk_create(
-      TelegramReplayClaim(correlation_id=row.detail['replay_of'], claimed_by='backfill', queued_at=row.created_at)
-      for row in TelegramEvent.objects.using(log_alias()).filter(kind='outbound.replayed')
+      [TelegramReplayClaim(correlation_id=k, claimed_by='backfill', queued_at=v) for k, v in earliest.items()],
+      ignore_conflicts=True,
   )
   ```
 
-  A claim is released when the queue write fails, so only a run that *died* between claiming and
-  queueing leaves one — and `--claim-lease`, an hour by default, is how long the next run
-  believes it. Taking one over may send a second copy, the mover's `--lease` trade in the same
+  Deduplicated and conflict-safe on purpose: the race this release closes is exactly what could
+  have written two `outbound.replayed` rows naming one failure, and `correlation_id` is unique —
+  a plain `bulk_create` would raise on that pair and leave the rest of the backfill undone. Read
+  in Python rather than through `detail__replay_of`, so it needs no JSON key lookup from a
+  database that may be the log's own.
+
+  A claim stands until its message is known to have reached the queue: a run that *died* between
+  claiming and queueing leaves one, and so does a queue write that raised, since that is not
+  proof the message stayed out. `--claim-lease`, an hour by default, is how long the next run
+  believes it; taking one over may send a second copy, the mover's `--lease` trade in the same
   words.
 
   `--limit` defaults to 100: bounded rather than idempotent, because a slipped date range would

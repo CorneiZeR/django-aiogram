@@ -187,11 +187,12 @@ class TelegramReplayClaim(models.Model):
     This lives with the caller's own writes, like the schedule, so a claim is readable and
     enforceable without the log's alias being reachable at all.
 
-    A claim is released when the queue write fails, so a refusal leaves nothing behind. What
-    survives is a claim from a run that *died* between claiming and queueing, and that is what
-    ``queued_at`` and the lease are for: the row says whether the message reached the queue, and
-    a claim that never got there is retakeable after ``--claim-lease``. Retaking one may send a
-    second copy -- the same trade, and the same arithmetic answer, as the mover's own lease.
+    A claim survives a queue write that did not answer -- a process that died between claiming
+    and queueing, or a ``publish`` that raised after the bytes went -- and that is what
+    ``queued_at`` and the lease are for: the row says whether the message is known to have
+    reached the queue, and one that never said so is retakeable after ``--claim-lease``. Retaking
+    one may send a second copy -- the same trade, and the same arithmetic answer, as the mover's
+    own lease.
     """
 
     id = models.BigAutoField(primary_key=True)
