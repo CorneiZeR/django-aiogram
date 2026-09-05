@@ -183,6 +183,12 @@ Packaging-only work does not need the Redis suite, and vice versa.
   that got through in 4.1 was a sentinel with a twin: `--limit 0` documented as
   "no bound" and `--limit -1` behaving as one too, because the comparison read
   `<= 0`. Refuse what the help text does not offer, by name.
+
+  A **documented bound** is the same demand from the other side: a case at it and
+  one past it. Repetition proves nothing there — 4.1's `--limit` counted the rows
+  a run read instead of the messages it sent, which only a second run finds, and
+  `--limit -1` slipped through the same review, which only a value past the bound
+  finds. Two claims, two kinds of case.
 - **A read is not a transition, and the database is what decides one.** Where a
   claim, a lease or a takeover is expressed as *read, decide, write*, put the
   condition the read relied on into the write and treat zero rows as the answer

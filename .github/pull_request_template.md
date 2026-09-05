@@ -20,4 +20,5 @@ The first three apply to every pull request. Strike out the rest with
 - [ ] A documented bound has a case *at* it and one *past* it — running twice
       says nothing about where a limit stops
 - [ ] New flags and settings were tried with the wrong values: negative, zero,
-      empty, absent, enormous, and whatever the help text calls special
+      empty, absent, enormous, the wrong type, and whatever the help text calls
+      special
