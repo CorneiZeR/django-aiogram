@@ -1169,22 +1169,26 @@
 the lowest section that applies to the version you are on and work <strong>up</strong> the page, one release
 at a time: each covers a single hop and assumes the ones below it are done.</p>
 <h1 id="from-40-to-41">From 4.0 to 4.1<a class="headerlink" href="#from-40-to-41" title="Link to this section">&para;</a></h1>
-<p><strong>One required step: run <code>migrate</code>.</strong> 4.1 adds a table, and a project that skips the
+<p><strong>One required step: run <code>migrate</code>.</strong> 4.1 adds two tables, and a project that skips the
 migration and then passes an <code>eta</code> gets an error rather than a scheduled message.</p>
 <p>Everything else is optional. Every setting 4.0 had keeps its meaning and its default, no
 existing behaviour changes, and the wire format is unchanged — so the bot container and the
 web tier may be deployed in either order.</p>
-<h2 id="run-migrate-there-is-a-second-table">Run <code>migrate</code>: there is a second table<a class="headerlink" href="#run-migrate-there-is-a-second-table" title="Link to this section">&para;</a></h2>
-<p>4.1 adds <code>django_aiogram_scheduled</code>, which is where a send with an <code>eta</code> waits. Nothing uses
-it until a caller passes one, so the migration is safe on a running deployment — it creates
-an empty table and one index.</p>
-<p><strong>It is created wherever your own tables go.</strong> The router that sends the event log to its
-own alias routes by <em>model</em> from 4.1 rather than by app label: it keeps the schedule off a
-<strong>separate</strong> event-log database and says nothing about it otherwise, so with
-<code>EVENT_LOG_DATABASE</code> unset — or naming <code>default</code> — the table lands on <code>default</code> like any of
+<h2 id="run-migrate-there-are-two-more-tables">Run <code>migrate</code>: there are two more tables<a class="headerlink" href="#run-migrate-there-are-two-more-tables" title="Link to this section">&para;</a></h2>
+<p>4.1 adds <code>django_aiogram_scheduled</code>, which is where a send with an <code>eta</code> waits, and
+<code>django_aiogram_replay_claim</code>, one row per failure <code>manage.py tgbot_replay</code> is putting back.
+Nothing uses either until a caller passes an <code>eta</code> or an operator runs the replay, so the
+migrations are safe on a running deployment: two empty tables, the schedule's index on
+<code>correlation_id</code> and its <code>dja_scheduled_due</code> index for the mover's query, and the claim's unique
+<code>correlation_id</code>, which is what stops two <code>tgbot_replay</code> runs recovering one message twice.</p>
+<p><strong>They are created wherever your own tables go.</strong> The router that sends the event log to its
+own alias routes by <em>model</em> from 4.1 rather than by app label: it keeps both off a
+<strong>separate</strong> event-log database and says nothing about them otherwise, so with
+<code>EVENT_LOG_DATABASE</code> unset — or naming <code>default</code> — they land on <code>default</code> like any of
 your own. A project that installed <code>TelegramEventLogRouter</code> gets this for free; one that wrote
 its own router matching <code>app_label == 'django_aiogram'</code> should narrow it to <code>TelegramEvent</code>,
-or the schedule will be created somewhere the mover does not read.</p>
+or the schedule will be created somewhere the mover does not read and the replay claim
+somewhere it cannot be enforced.</p>
 <p>And if you use <code>eta</code>, schedule <code>manage.py tgbot_dispatch_scheduled</code> —
 <strong><a href="../Deployment/">Deployment</a></strong> has the container.</p>
 <h2 id="your-own-tests-can-stop-reading-the-queue-by-hand">Your own tests can stop reading the queue by hand<a class="headerlink" href="#your-own-tests-can-stop-reading-the-queue-by-hand" title="Link to this section">&para;</a></h2>
@@ -1834,7 +1838,7 @@ it — see the section above.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 4, 2026 03:39:47 UTC">September 4, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 5, 2026 07:52:13 UTC">September 5, 2026</span>
   </span>
 
     

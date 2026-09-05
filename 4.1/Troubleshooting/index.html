@@ -2100,23 +2100,32 @@ was made with, and the feed records a <em>description</em> of them — so:</p>
 <li><code>the worker never acknowledged it (NotScheduled), so the queue redelivers it on restart</code> — the
   send was refused while the container was shutting down and the message stayed in flight on the
   transport. Restart the worker; it comes back on its own.</li>
-<li><code>it has been replayed already; the row joining them says so</code> — an <code>outbound.replayed</code> row
-  names this failure, from this run, an earlier one, or another run that finished while this one
-  was walking. <strong>This is what makes the command
-  re-runnable</strong>: the selection is bounded, so five hundred failures are walked a hundred at a
-  time, and without it every run would replay the same oldest hundred and never reach the
-  rest.</li>
+<li>
+<p><code>it has been replayed already; one failure gets one replacement</code> — a claim in
+  <code>django_aiogram_replay_claim</code> names this failure with its replacement queued, from this run, an
+  earlier one, or another run that finished while this one was walking. Under <code>--dry-run</code> nothing
+  is claimed, so a second ending for the same message is answered from what the run itself has
+  already said it would do. <strong>This is what makes the command re-runnable</strong>: the selection is bounded, so five hundred failures are walked a hundred
+  at a time, and without it every run would replay the same oldest hundred and never reach the
+  rest.</p>
+</li>
+<li>
+<p><code>two runs kept taking it from each other; the next run gets it</code> — this run read the row free
+  and lost the insert three times running, which is two runs on a lease short enough to expire
+  between them. Nothing is wrong with the message and nothing sent it; the next run reaches it.</p>
+</li>
 </ul>
 <p>So <code>EVENT_LOG_PAYLOAD: 'full'</code> is what makes replay possible, and it is not a guarantee: it is
 decided per row, not per setting. Set it before you need it — a failure recorded under
 <code>'summary'</code> cannot be upgraded afterwards.</p>
 <p>Each replay is a <strong>new</strong> message with a new correlation id, and an <code>outbound.replayed</code> row
-joins it to the one it stands in for (<code>detail.replay_of</code>). That row is what stops the <em>next</em>
-run selecting the same failure, so the command refuses to run at all when <code>EVENT_LOG_KINDS</code>
-excludes <code>outbound.replayed</code>, and says so per message if the feed would not take the row.
-Unlike every other row this package writes, it is written synchronously and its answer is
-read: the recorder drops rather than waits, which is right in the send path and wrong for the
-one row that prevents a duplicate.</p>
+joins it to the one it stands in for (<code>detail.replay_of</code>). The claim is what stops the <em>next</em>
+run selecting the same failure; this row is what lets anybody read afterwards which failure was
+repaired, and without it the feed shows a fresh send that stands in for nothing. So the command
+refuses to run at all when <code>EVENT_LOG_KINDS</code> excludes <code>outbound.replayed</code>, and says so per
+message if the feed would not take the row. Unlike every other row this package writes, it is
+written synchronously and its answer is read: the recorder drops rather than waits, which is
+right in the send path and wrong for a row an operator is standing there waiting on.</p>
 <p>Run it again for the next hundred, and again: <code>--limit</code> counts the messages a run <em>sends</em>
 rather than the rows it reads, so each run walks past what the last one did and reaches the
 next. The report keeps the two apart — <code>replayed 100; refused 3; skipped 100</code> — because a skip
@@ -2124,22 +2133,31 @@ is a message that needed nothing, and a refusal is one somebody has to decide ab
 default because a slipped date range would otherwise empty a month of failures into the queue;
 <code>--limit 0</code> is the deliberate unbounded mode, and a negative number is refused as the typo it
 is.</p>
-<p>That is not the same as idempotence, and the difference matters in three ways: the guard is a
-<em>row</em>, so a replay whose join row the feed refused is offered again — the run says which, in
-the report and in the log; a failure replayed by something other than this command is not known
-to it; and <strong>two runs at once can both send the same message</strong>, because each reads the rows
-before either writes its own. Run one at a time.</p>
-<p>There is nothing for the command to claim instead. The event log is insert-only — that is what
-lets a web process and a worker write one message's history with no coordination — so a run
-cannot take ownership of a failure the way <code>tgbot_dispatch_scheduled</code> claims a scheduled send.
-What is bounded is the damage, twice over: the join row is written per message right after it is
-queued, and read again right <em>before</em> the next send — so two runs have to collide inside one
-query rather than anywhere inside a walk of two hundred rows. What is left is a duplicate
-message, which is the failure mode this package documents everywhere else too: a lease that
-lapses mid-publish sends twice, a cancellation can lose its race, a consumer redelivers.</p>
-<p>The exceptions stay: a message whose join row the feed refused is offered again — the first
-run's report names those — and one replayed by something other than this command is not known to
-it.</p>
+<p>That is not the same as idempotence, and the difference is one thing rather than three now: a
+failure replayed by something other than this command is not known to it. A replay whose <em>feed</em>
+row the writer refused is still recorded — the claim is written before the queue write and
+marked as soon as it lands, so no later run offers that failure again; what is missing is the
+history a person reads, which the run names in its report and in the log.</p>
+<p><strong>Two runs at once are safe.</strong> Each failure is claimed in <code>django_aiogram_replay_claim</code> before
+its message is queued, and that column is unique, so the second run is refused by the database
+rather than by a read it would have to trust. It says so per row: <em>another run holds it
+(<code>&lt;worker&gt;</code>, since <code>&lt;time&gt;</code>)</em>.</p>
+<p>What is left is one narrow case, and it is the mover's trade in the same words. A claim stands
+until its message is known to have reached the queue, and a queue write that <em>raised</em> does not
+say that either way — the event log defines a queueing drop as a write that may still have been
+applied, and all three networked transports can fail after the bytes went. So a refused replay
+keeps its claim, exactly like one from a run that died on that line, and <code>--claim-lease</code> (an
+hour by default) is how long the next run believes it before taking over. Taking one over can
+send a second copy, because the message may have reached the queue after all; the log says
+<em>taking over a replay claim whose queue write never answered</em> when it happens. Where you know
+it did not land — a payload the broker will refuse however often it is offered — <code>--claim-lease 1</code>
+on the next run is the way to say so.</p>
+<p>A lease that short has its own edge, and the command survives it rather than pretending it away:
+a queue write slower than the lease loses its claim to another run mid-call. The message this run
+queued still went, so the run says <em>1 claim was taken over while the message was being queued</em>
+and carries on to the rest — ending there would leave the remaining failures neither replayed nor
+reported. Two runs and a one-second lease is how a message goes twice; the report and the log both
+name the messages it could have happened to.</p>
 <h2 id="modulenotfounderror-no-module-named-telegram_bot"><code>ModuleNotFoundError: No module named 'telegram_bot'</code><a class="headerlink" href="#modulenotfounderror-no-module-named-telegram_bot" title="Link to this section">&para;</a></h2>
 <p>The 1.x package name was a deprecated shim in 2.x and is gone in 3.0. The
 package is <code>django_aiogram</code>: use it in <code>INSTALLED_APPS</code>, import from it,
@@ -2212,7 +2230,7 @@ that is <code>view_telegramevent_payload</code> doing its job. See
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 5, 2026 01:49:28 UTC">September 5, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 5, 2026 07:52:13 UTC">September 5, 2026</span>
   </span>
 
     
