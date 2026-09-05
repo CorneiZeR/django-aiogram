@@ -451,10 +451,11 @@ default because a slipped date range would otherwise empty a month of failures i
 `--limit 0` is the deliberate unbounded mode, and a negative number is refused as the typo it
 is.
 
-That is not the same as idempotence, and the difference matters in three ways: the guard is a
-*row*, so a replay whose join row the feed refused is offered again — the run says which, in
-the report and in the log — and a failure replayed by something other than this command is not
-known to it.
+That is not the same as idempotence, and the difference is one thing rather than three now: a
+failure replayed by something other than this command is not known to it. A replay whose *feed*
+row the writer refused is still recorded — the claim is written before the queue write and
+marked as soon as it lands, so no later run offers that failure again; what is missing is the
+history a person reads, which the run names in its report and in the log.
 
 **Two runs at once are safe.** Each failure is claimed in `django_aiogram_replay_claim` before
 its message is queued, and that column is unique, so the second run is refused by the database

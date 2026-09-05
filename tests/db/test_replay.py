@@ -559,7 +559,7 @@ def test_a_feed_that_refuses_the_join_row_outright_does_not_end_the_run(queued, 
     output = replay(since=since())
 
     assert [one.kwargs['chat_id'] for one in queued] == [1, 2], 'the run stopped at the first refusal'
-    assert '2 replays were queued without a row joining it' in output
+    assert '2 replays were queued without a row joining it' in output  # the claim still records them
 
 
 @pytest.mark.django_db(transaction=True)
@@ -871,6 +871,49 @@ def test_a_dry_run_takes_no_claims(queued):
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_dry_run_does_not_release_a_stale_claim_either(queued):
+    """Reading is not writing, and the takeover is a delete.
+
+    A dry run has to *predict* the live run -- so a lapsed claim is no obstacle to what it
+    reports -- while leaving the row for the run that will actually take it. The first version
+    of the lease deleted it from here, which made `--dry-run` a command that changes the
+    database: the opposite of what it is read for.
+    """
+    identifier = a_failure()
+    stale = TelegramReplayClaim.objects.create(correlation_id=identifier, claimed_by='a-run-that-died')
+    TelegramReplayClaim.objects.filter(pk=stale.pk).update(claimed_at=timezone.now() - datetime.timedelta(seconds=7200))
+
+    output = replay(since=since(), dry_run=True, claim_lease=3600)
+
+    assert TelegramReplayClaim.objects.filter(pk=stale.pk).exists(), 'a dry run deleted a claim'
+    assert 'would replay 1' in output, 'a dry run did not predict the takeover the live run would make'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS, USE_TZ=False)
+def test_a_claim_is_reported_on_a_project_that_stores_naive_datetimes(queued):
+    """`timezone.localtime` raises on a naive datetime, and `USE_TZ = False` stores nothing else.
+
+    Measured: *localtime() cannot be applied to a naive datetime*. So the one line that renders
+    a claim's age for a person took the whole command down on those projects -- a crash in the
+    reporting of a skip, which is the least deserving place for one.
+    """
+    identifier = a_failure()
+    TelegramReplayClaim.objects.create(
+        correlation_id=identifier,
+        claimed_by='a-run-still-working',
+        # the shape `USE_TZ = False` stores, which is the whole case
+        claimed_at=datetime.datetime(2026, 9, 5, 12, 0),  # noqa: DTZ001
+    )
+
+    output = replay(since=since())
+
+    assert 'another run holds it (a-run-still-working, since 12:00:00)' in output
+    assert list(queued) == []
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
 def test_a_negative_limit_is_not_the_unbounded_mode(queued):
     """`--limit 0` is the deliberate one; `--limit -1` is a typo that would replay everything."""
     a_failure()
@@ -922,7 +965,7 @@ def test_a_join_row_the_feed_would_not_take_is_reported_rather_than_assumed(queu
     output = replay(since=since())
 
     assert len(queued) == 1, 'the message itself still went'
-    assert 'the feed did not take the row joining them' in output
+    assert 'the feed has no row joining them' in output
     assert '1 replay was queued without a row joining it' in output
 
 

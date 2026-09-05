@@ -414,10 +414,10 @@ class Command(BaseCommand):
             'replayed a failed send',
             extra={'tg_function': row.function, 'tg_replay_of': str(row.correlation_id)},
         )
-        note = '' if recorded else ' (the feed did not take the row joining them; see the log)'
+        note = '' if recorded else ' (the feed has no row joining them; see the log)'
         if not recorded:
             logger.error(
-                'a replay was queued and not recorded, so a later run may select it again',
+                'a replay was queued and the feed did not record it, so its history has a hole',
                 extra={'tg_replay_of': str(row.correlation_id)},
             )
         self.stdout.write(f'replayed {row.short_id or row.correlation_id} as {replacement}{note}')
@@ -435,7 +435,7 @@ class Command(BaseCommand):
         took, so a second ending for the same message is skipped; nothing is written here, so
         this remembers instead.
         """
-        held = self._claim_on(row)
+        held = self._claim_on(row, takeover=False)
         if held is not None:
             return self._say_claimed(row, held)
         if row.correlation_id in self._simulated:
@@ -466,33 +466,46 @@ class Command(BaseCommand):
             # race the constraint exists for. Read its claim back so the report can name it
             return None, self._claim_on(row)
 
-    def _claim_on(self, row: TelegramEvent) -> 'TelegramReplayClaim | None':
+    def _claim_on(self, row: TelegramEvent, *, takeover: bool = True) -> 'TelegramReplayClaim | None':
         """Answer with the claim standing in the way of replaying this failure, if one does.
 
         A claim whose replacement reached the queue always stands: that failure is handled, this
         run or an earlier one. A claim with no ``queued_at`` belongs to a run that is working --
-        or to one that died mid-flight, and after ``--claim-lease`` this treats it as the latter
-        and takes it over, which is the mover's trade in the same words: the alternative is a
-        message nothing will ever put back.
+        or to one that died mid-flight, and after ``--claim-lease`` this treats it as the latter,
+        which is the mover's trade in the same words: the alternative is a message nothing will
+        ever put back.
+
+        ``takeover=False`` answers the same question and **writes nothing**, which is what a dry
+        run needs: it has to predict the live run -- so a lapsed claim is no obstacle there
+        either -- while leaving the row for the run that will actually take it. Deleting from a
+        dry run was the shape this had first, and it made ``--dry-run`` a command that changes
+        the database.
         """
         claim = TelegramReplayClaim.objects.filter(correlation_id=row.correlation_id).first()
         if claim is None:
             return None
         if claim.queued_at is not None:
             return claim
-        if self._claim_lease and claim.claimed_at < self._started - datetime.timedelta(seconds=self._claim_lease):
+        if not self._lapsed(claim):
+            return claim
+        if takeover:
             logger.warning(
                 'taking over a replay claim from a run that did not finish',
                 extra={'tg_replay_of': str(row.correlation_id), 'tg_claimed_by': claim.claimed_by},
             )
             claim.delete()
-            return None
-        return claim
+        return None
+
+    def _lapsed(self, claim: 'TelegramReplayClaim') -> bool:
+        """Whether a claim is old enough that the run holding it must be gone."""
+        if not self._claim_lease:
+            return False
+        return claim.claimed_at < self._started - datetime.timedelta(seconds=self._claim_lease)
 
     def _say_claimed(self, row: TelegramEvent, held: 'TelegramReplayClaim | None') -> Verdict:
         """Report a failure somebody else owns, and answer with the reason it was skipped."""
         if held is not None and held.queued_at is None:
-            reason = SKIPPED_CLAIMED.format(by=held.claimed_by or 'another run', at=timezone.localtime(held.claimed_at))
+            reason = SKIPPED_CLAIMED.format(by=held.claimed_by or 'another run', at=_local(held.claimed_at))
         else:
             reason = SKIPPED_REPLAYED
         self.stdout.write(f'skipped {row.short_id or row.correlation_id} ({row.function}): {reason}')
@@ -599,8 +612,9 @@ class Command(BaseCommand):
         if self._unrecorded:
             were = 'replay was' if self._unrecorded == 1 else 'replays were'
             self.stdout.write(
-                f'{self._unrecorded} {were} queued without a row joining it to the failure: '
-                f'a later run will select that failure again, so read the log before repeating this one'
+                f'{self._unrecorded} {were} queued without a row joining it to the failure in the '
+                f'feed: the claim records it, so no later run will send it again, but the history '
+                f'of those messages has a hole in it -- read the log'
             )
         for reason, count in refused.most_common():
             self.stdout.write(f'  {count} x {reason}')
@@ -614,6 +628,17 @@ class Command(BaseCommand):
                 'tg_skipped': sum(skipped.values()),
             },
         )
+
+
+def _local(moment: datetime.datetime) -> datetime.datetime:
+    """Render a stored moment in the project's timezone, whichever kind it stores.
+
+    ``timezone.localtime`` raises ``ValueError`` on a naive datetime, and a project with
+    ``USE_TZ = False`` stores nothing else -- so the one line that formats a claim's age for a
+    person took the whole command down there. Measured: *"localtime() cannot be applied to a
+    naive datetime"*.
+    """
+    return timezone.localtime(moment) if timezone.is_aware(moment) else moment
 
 
 def _deliberate(row: TelegramEvent) -> str:
