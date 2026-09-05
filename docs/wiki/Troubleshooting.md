@@ -362,6 +362,114 @@ message per second to the same chat, 20 per minute to a group. Verify with `RATE
 set to `None`; if it speeds up, tune the numbers rather than removing them, or
 Telegram will start refusing.
 
+## Telegram was down; what did we lose, and can it be sent again
+
+The feed answers the first half: `outbound.failed` and `outbound.dropped` rows over the
+window, which the admin filters by kind and by time. `manage.py tgbot_replay` answers the
+second, from the same rows:
+
+```shell
+python manage.py tgbot_replay --since 2026-09-04T10:00 --dry-run
+python manage.py tgbot_replay --since 2026-09-04T10:00 --limit 50
+```
+
+`--dry-run` first, always: this is the one command in the package whose mistake is measured in
+messages people receive. It prints the call it would make for each row, and the reason for
+each row it will not — **and it answers what the live run would answer**, including the
+failures already replayed and the messages whose several endings are one message. It is read
+instead of the live run, so a difference between them would be the worst kind of bug this
+command could have.
+
+**Both endings are selected by default, and the reason is not guessable from the names.**
+Rate-limit exhaustion — the case this section is named after — is recorded as
+`outbound.dropped` with `detail.max_retries`, not as `outbound.failed`, so a default of
+`outbound.failed` alone would replay the smaller half and leave an operator concluding the rest
+was fine. `--kind` narrows to one when you know which half you are looking at.
+
+`outbound.dropped` covers more than a loss, which is why the default can include it safely —
+three of its shapes are read rather than trusted:
+
+- **past `--grace`** (`TooLate`) — skipped, because the deployment already decided not to send it.
+- **never acknowledged** (`NotScheduled`) — skipped, because the message is still the queue's. A
+  worker refusing a send at shutdown does not acknowledge it, so the transport hands it back when
+  the container comes up; replaying it would be the second copy. The same code also covers a
+  direct `send_raw` refused the same way, which *is* lost — but that one was never queued, so
+  nothing recorded its arguments and it cannot be replayed either way.
+- **a queue write that failed** (`detail.stage`) — refused for want of arguments, because the row
+  that records it is written before the payload reaches a transport and the `outbound.queued` row
+  never happened.
+
+**Most refusals are honest ones, and they say which.** A replay needs the arguments the send
+was made with, and the feed records a *description* of them — so:
+
+- `the arguments were recorded as omitted rather than in full` — a photo, a document, or any
+  value the log replaces with a marker. Nothing to replay from.
+- `... as truncated ...` — the arguments did not fit the column and were capped.
+- `a value was redacted, and redaction is one-way` — a token-shaped value or a
+  `EVENT_LOG_REDACT_KEYS` key was blanked on the way in. Anywhere in the text, not only as the
+  whole of a value: a body reading `the token is ***, keep it` is refused, and so is one that
+  merely writes `***` for emphasis. The second is the cost of the first.
+- `... keys is the cap, and a mapping at it cannot be told from one cut to it` — fifty is
+  where the log stops keeping keys or items, and a structure sitting exactly there might be
+  whole or might be cut. Refused, because the alternative is a call sent with items missing.
+- `no outbound.queued or outbound.scheduled row carries its arguments` — the failure row names
+  the function and the chat, and the arguments live on the row the *producer* wrote. With
+  `EVENT_LOG_PAYLOAD: 'none'` there never was one; after `tgbot_prune_events` there is not one
+  any more, however recent the failure.
+- `it was sent in the end, so nothing was lost` — the ending selected is not the end of that
+  message's story. A mover that failed three times and published on the fourth leaves three
+  drop rows and an `outbound.sent`, and Telegram has the message.
+- `the deployment discarded it on purpose (TooLate), so this is not a loss` — `--grace` refused
+  that message deliberately; replaying it would be the outage twice.
+- `the worker never acknowledged it (NotScheduled), so the queue redelivers it on restart` — the
+  send was refused while the container was shutting down and the message stayed in flight on the
+  transport. Restart the worker; it comes back on its own.
+- `it has been replayed already; the row joining them says so` — an `outbound.replayed` row
+  names this failure, from this run, an earlier one, or another run that finished while this one
+  was walking. **This is what makes the command
+  re-runnable**: the selection is bounded, so five hundred failures are walked a hundred at a
+  time, and without it every run would replay the same oldest hundred and never reach the
+  rest.
+
+So `EVENT_LOG_PAYLOAD: 'full'` is what makes replay possible, and it is not a guarantee: it is
+decided per row, not per setting. Set it before you need it — a failure recorded under
+`'summary'` cannot be upgraded afterwards.
+
+Each replay is a **new** message with a new correlation id, and an `outbound.replayed` row
+joins it to the one it stands in for (`detail.replay_of`). That row is what stops the *next*
+run selecting the same failure, so the command refuses to run at all when `EVENT_LOG_KINDS`
+excludes `outbound.replayed`, and says so per message if the feed would not take the row.
+Unlike every other row this package writes, it is written synchronously and its answer is
+read: the recorder drops rather than waits, which is right in the send path and wrong for the
+one row that prevents a duplicate.
+
+Run it again for the next hundred, and again: `--limit` counts the messages a run *sends*
+rather than the rows it reads, so each run walks past what the last one did and reaches the
+next. The report keeps the two apart — `replayed 100; refused 3; skipped 100` — because a skip
+is a message that needed nothing, and a refusal is one somebody has to decide about. `--limit` is 100 by
+default because a slipped date range would otherwise empty a month of failures into the queue;
+`--limit 0` is the deliberate unbounded mode, and a negative number is refused as the typo it
+is.
+
+That is not the same as idempotence, and the difference matters in three ways: the guard is a
+*row*, so a replay whose join row the feed refused is offered again — the run says which, in
+the report and in the log; a failure replayed by something other than this command is not known
+to it; and **two runs at once can both send the same message**, because each reads the rows
+before either writes its own. Run one at a time.
+
+There is nothing for the command to claim instead. The event log is insert-only — that is what
+lets a web process and a worker write one message's history with no coordination — so a run
+cannot take ownership of a failure the way `tgbot_dispatch_scheduled` claims a scheduled send.
+What is bounded is the damage, twice over: the join row is written per message right after it is
+queued, and read again right *before* the next send — so two runs have to collide inside one
+query rather than anywhere inside a walk of two hundred rows. What is left is a duplicate
+message, which is the failure mode this package documents everywhere else too: a lease that
+lapses mid-publish sends twice, a cancellation can lose its race, a consumer redelivers.
+
+The exceptions stay: a message whose join row the feed refused is offered again — the first
+run's report names those — and one replayed by something other than this command is not known to
+it.
+
 ## `ModuleNotFoundError: No module named 'telegram_bot'`
 
 The 1.x package name was a deprecated shim in 2.x and is gone in 3.0. The

@@ -42,6 +42,11 @@ __all__ = ('DEFAULT_LEASE', 'aschedule', 'cancel', 'claim', 'due_moment', 'sched
 #: publish is not overtaken, short enough that a crash is not a message nobody sends
 DEFAULT_LEASE = 300
 
+#: the key this module adds to an `outbound.scheduled` row's detail, beside the described
+#: arguments. Named rather than spelled twice, because `tgbot_replay` reads that row for the
+#: arguments and has to know which key is not one of them
+DUE_AT_DETAIL = 'due_at'
+
 
 def due_moment(eta: datetime.datetime) -> datetime.datetime:
     """Read a caller's ``eta``, refusing the one shape that silently means another time.
@@ -166,7 +171,7 @@ def _record(function: str, write: 'Queueing', due_at: datetime.datetime) -> None
             correlation_id=identifier,
             function=function,
             chat_id=as_identifier(kwargs.get('chat_id')),
-            detail={**(detail or {}), 'due_at': due_at.isoformat()},
+            detail={**(detail or {}), DUE_AT_DETAIL: due_at.isoformat()},
         )
         for (identifier, kwargs), detail in zip(write.messages, write.details, strict=True)
     ]

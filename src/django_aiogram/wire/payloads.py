@@ -33,6 +33,8 @@ MAX_KEYS = 50
 MAX_ITEMS = 50
 
 _OMITTED = '__omitted__'
+#: written by `bounded` into the marker that replaces a payload too big for the column
+_TRUNCATED = '__truncated__'
 _REDACTED = '***'
 #: <bot id>:<35 base64url characters>, the shape Telegram issues
 _TOKEN_RE = re.compile(r'\b\d{5,}:[A-Za-z0-9_-]{30,}\b')
@@ -58,18 +60,38 @@ class _Unhandled:
 _UNHANDLED = _Unhandled()
 
 
+def _text(value: str, *, bodies: bool) -> Any:  # noqa: ANN401 - a string or a marker
+    """Render one string: whole, previewed, or replaced by its length.
+
+    A marker for the over-long case rather than a prefix and an ellipsis, which is what this
+    was until 4.1. Two readers wanted the difference and neither could see it: a person
+    reading the admin could not tell a truncated body from a message that ended in '…', and
+    :func:`lossy_reason` -- which decides whether ``tgbot_replay`` may send a row again --
+    could not tell it from the whole message. The information is the same either way.
+    """
+    if not bodies:
+        return {_OMITTED: 'text', 'length': len(value)}
+    if len(value) <= MAX_STRING:
+        return value
+    return {_TRUNCATED: True, 'size': len(value), 'preview': value[:MAX_STRING]}
+
+
 def _scalar(value: object, *, bodies: bool) -> Any:  # noqa: ANN401 - see `summarize`
     """Render the values that need no recursion, or report that this is not one."""
     if isinstance(value, (bytes, bytearray, memoryview)):
         return {_OMITTED: 'bytes', 'size': len(value)}
     if isinstance(value, str):
-        if not bodies:
-            return {_OMITTED: 'text', 'length': len(value)}
-        return value if len(value) <= MAX_STRING else value[:MAX_STRING] + '…'
+        return _text(value, bodies=bodies)
     if isinstance(value, bool) or value is None or isinstance(value, (int, float)):
         return value
     if isinstance(value, (datetime.datetime, datetime.date, Decimal)):
-        return str(value)
+        # rendered *and* said so, with the value kept for a reader. `serialise` preserves these
+        # types on the wire and this does not -- a `Decimal('9.99')` reaches a row as `'9.99'`
+        # and a `datetime` as `'2026-09-04 12:00:00+00:00'` -- so a replay built from the row
+        # would hand a string to a field that had a number or an instant, where pydantic
+        # coerces it differently or refuses it in the worker. The marker is what
+        # `lossy_reason` refuses; the value is what the admin still shows
+        return {_OMITTED: type(value).__name__, 'value': str(value)}
     return _UNHANDLED
 
 
@@ -87,10 +109,19 @@ def summarize(value: object, *, bodies: bool, depth: int = 0) -> Any:  # noqa: A
     if isinstance(value, Enum):
         return summarize(value.value, bodies=bodies, depth=depth)
     if isinstance(value, dict):
-        pairs = list(value.items())[:MAX_KEYS]
-        return {str(key): summarize(item, bodies=bodies, depth=depth + 1) for key, item in pairs}
+        pairs = list(value.items())
+        kept = {str(key): summarize(item, bodies=bodies, depth=depth + 1) for key, item in pairs[:MAX_KEYS]}
+        # the same reasoning as the string cap above, and the same reason it is a marker: a
+        # dict cut to fifty keys is indistinguishable from a dict of fifty keys, and one of
+        # them is a call that must not be replayed. Argument names never begin with `__`, so
+        # the marker cannot collide with a key it sits beside
+        return kept if len(pairs) <= MAX_KEYS else {**kept, _OMITTED: 'keys', 'keys': len(pairs)}
     if isinstance(value, (list, tuple, set, frozenset)):
-        return [summarize(item, bodies=bodies, depth=depth + 1) for item in list(value)[:MAX_ITEMS]]
+        items = list(value)
+        shown = [summarize(item, bodies=bodies, depth=depth + 1) for item in items[:MAX_ITEMS]]
+        # wrapped rather than marked in place, because a list has no key to put a marker
+        # under and appending one would change what the last element is
+        return shown if len(items) <= MAX_ITEMS else {_TRUNCATED: True, 'size': len(items), 'preview': shown}
     # aiogram models and input files land here; the class name is what a reader wants
     return {_OMITTED: type(value).__name__}
 
@@ -185,11 +216,81 @@ def _overflow(text: str, cap: int) -> dict[str, Any]:
     """
     kept = cap // 2
     while kept >= 0:
-        marker: dict[str, Any] = {'__truncated__': True, 'size': len(text), 'preview': text[:kept]}
+        marker: dict[str, Any] = {_TRUNCATED: True, 'size': len(text), 'preview': text[:kept]}
         if len(json.dumps(marker, ensure_ascii=False).encode('utf-8')) <= cap:
             return marker
         kept = kept // 2 if kept > _FINE_TUNE_BELOW else kept - 1
     return {}
+
+
+def lossy_reason(recorded: object) -> str:
+    """Say why ``recorded`` is not the arguments that were sent, or ``''`` where it is.
+
+    This module is deliberately lossy -- summarize, redact, cap -- so a row's arguments are a
+    *description* of a call rather than the call. ``manage.py tgbot_replay`` needs to know
+    which rows are the exception, and this is the only place that knows what the loss looks
+    like: the three markers below are written here and nowhere else.
+
+    **Per row, not per setting.** ``EVENT_LOG_PAYLOAD: 'full'`` is necessary and not
+    sufficient: ``'full'`` still replaces bytes and unknown objects with an omission marker,
+    still caps a payload that does not fit :func:`bounded`, and still redacts. So a photo send
+    is unreplayable under ``'full'`` while the text message beside it is fine, and the answer
+    has to be read off the row rather than off the configuration.
+
+    **Anywhere in a string, not only as the whole of one.** Two things redact here and they
+    leave different shapes: :func:`redact_values` replaces a whole value whose *key* matched,
+    while :func:`redact_text` substitutes a token-shaped run *inside* text -- so a body reads
+    ``'the token is ***, keep it'`` and an equality test sees nothing wrong with it. Measured,
+    and a replay would have sent that sentence to the chat.
+
+    So a message whose text merely contains ``'***'`` is refused. That is the trade in the
+    honest direction, and it is the one available: recording which keys were redacted instead
+    would read as complete and not be, because ``eventlog.writer.to_row`` redacts ``detail``
+    again at the boundary -- deliberately, for the caller who builds an ``Event`` by hand --
+    and nothing there knows which of a row's keys are a call's arguments.
+
+    **A row written before 4.1 needs the last two checks.** Until then the string cap left a
+    prefix and an ellipsis rather than a marker, so a body over ``MAX_STRING`` reads as an
+    ordinary string -- and a replay would have sent two thousand characters of a longer
+    message. Nothing else can produce a stored string that long, so the length is the signal.
+
+    The key and item caps of such a row leave no signal at all: a mapping cut to fifty keys is
+    a mapping of fifty keys. So a structure sitting exactly *at* a cap is refused, whichever
+    version wrote it -- the alternative is replaying a call with items missing, and this
+    package cannot tell the two apart from the stored shape. Fifty keyword arguments is not a
+    Telegram method and fifty items is past every list Telegram takes, so what this costs is a
+    keyboard of exactly fifty rows, retyped by hand.
+
+    A ``datetime``, a ``date`` and a ``Decimal`` are lossy here too, which is less obvious
+    than the rest: :func:`~django_aiogram.wire.serializers.encode` keeps their types on the
+    wire and this renders them as text, so a replay would hand ``'9.99'`` to a field that had
+    a number. They carry an omission marker as of 4.1 for that reason, and the string beside
+    it, so the refusal is exact and a reader still sees the value.
+    """
+    if isinstance(recorded, dict):
+        return _lossy_mapping(recorded)
+    if isinstance(recorded, (list, tuple)):
+        if len(recorded) >= MAX_ITEMS:
+            return f'{len(recorded)} items is the cap, and a list at it cannot be told from one cut to it'
+        return next((reason for reason in map(lossy_reason, recorded) if reason), '')
+    if isinstance(recorded, str) and _REDACTED in recorded:
+        return 'a value was redacted, and redaction is one-way'
+    if isinstance(recorded, str) and len(recorded) > MAX_STRING:
+        return f'the arguments were recorded as truncated rather than in full (a {len(recorded)}-character prefix)'
+    return ''
+
+
+def _lossy_mapping(recorded: dict[Any, Any]) -> str:
+    """Answer for a mapping, which is the half that recurses: a marker here, or one below."""
+    if len(recorded) >= MAX_KEYS:
+        return f'{len(recorded)} keys is the cap, and a mapping at it cannot be told from one cut to it'
+    for key, value in recorded.items():
+        if key in {_OMITTED, _TRUNCATED}:
+            return f'the arguments were recorded as {key.strip("_")} rather than in full'
+        reason = lossy_reason(value)
+        if reason:
+            return reason if reason.startswith('the arguments') else f'{key}: {reason}'
+    return ''
 
 
 def describe(kwargs: dict[str, Any]) -> dict[str, Any]:

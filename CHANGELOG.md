@@ -87,6 +87,75 @@
   a batch dropped as late or refused by the broker is still a batch, and counting the publish
   would hold every row behind it for another `--interval`.
 
+- **A failed send can be replayed from the row that recorded it.** A send that exhausted its
+  retries wrote an `outbound.failed` row and stopped existing, so the answer to "Telegram was
+  down for ten minutes, what did we lose" was a changelist an operator read and then retyped.
+  `manage.py tgbot_replay --since <moment> --dry-run` now says what can be sent again, and the
+  same command without `--dry-run` sends it.
+
+  **The failure row does not carry the call**, which is the shape of the whole feature: it
+  names the function, the chat and the error, while the arguments are on the `outbound.queued`
+  row the producer wrote — or on `outbound.scheduled` for a send made with an `eta`. So a
+  replay reads two rows joined by the correlation id, and a failure whose describing row was
+  pruned is not replayable however recent the failure is.
+
+  **A recorded argument is a description of an argument.** `wire/payloads.py` summarizes,
+  redacts and caps, in that order, and is never lossless — so `EVENT_LOG_PAYLOAD: 'full'` is
+  necessary and not sufficient, and replayability is decided per row rather than per setting:
+  `'full'` still replaces bytes with a marker, still caps a payload too big for the column,
+  and still redacts. `payloads.lossy_reason` is the one place that knows what the loss looks
+  like, and each refusal names which kind it hit rather than saying nothing happened.
+
+  A `datetime`, a `date` and a `Decimal` are marked as well, for a reason that is less obvious
+  than the caps: `serializers.encode` keeps their types on the wire and `describe` renders them
+  as text, so a replay built from a row would hand `'9.99'` to a field that had a number —
+  coerced differently by pydantic, or refused in the worker. The rendered value stays beside
+  the marker, so a reader loses nothing.
+
+  **Three of those caps are now visible in what they produce, which is a change to what the
+  feed stores.** A body over `MAX_STRING` was recorded as a prefix and an ellipsis, a mapping
+  over `MAX_KEYS` as fewer keys, and a sequence over `MAX_ITEMS` as fewer items — each
+  indistinguishable from the whole thing, to a person reading the admin as much as to a
+  replay. They are markers now: `{'__truncated__': true, 'size': …, 'preview': …}` for a body
+  and a sequence, and an `__omitted__: 'keys'` entry beside the keys that were kept. Same
+  information, in a shape that says what happened. Rows written by 4.0 keep the old shape, and
+  a body among them is caught by its length instead, since nothing else can store a string
+  that long.
+
+  Each replay is a new message under a **new** correlation id, with an `outbound.replayed` row
+  under that id carrying `detail.replay_of` — reusing the id would make one message look as
+  though it had been sent twice, and the failure rate is read off these kinds. That row is also
+  what stops the *next* run selecting the same failure, so it is the one row in this package
+  written synchronously, with its answer read: the recorder drops rather than waits, which is
+  right in the send path and wrong here. The command refuses to run when `EVENT_LOG_KINDS`
+  excludes the kind, and says so per message when the feed will not take the row.
+
+  **What it will not replay, beyond the lossy rows.** A send the worker refused while shutting
+  down (`NotScheduled`) is left to the queue, which still holds it unacknowledged and hands it
+  back on restart. A message with an `outbound.sent` under its id went out in the end — a mover that failed three times and published on the fourth
+  leaves three drop rows and a delivery — and a message with several endings recorded is
+  replayed once, since an id is one message here the way `bot.outcome()` reads it.
+  `outbound.retried` is not selectable at all: that send went on to succeed or fail under the
+  same id. And a failure an `outbound.replayed` row already names is skipped, which is what
+  makes a bounded run repeatable: without it, five runs over five hundred failures would have
+  replayed the same oldest hundred five times and never reached the rest.
+
+  `--limit` defaults to 100: bounded rather than idempotent, because a slipped date range would
+  otherwise empty a month of failures into the queue at once. `--limit 0` is the deliberate
+  unbounded mode and a negative number is refused. Selection is by window, kind, chat or
+  correlation id.
+
+  **Both endings are selected by default**, which is not guessable from their names: rate-limit
+  exhaustion — the case an operator means by "Telegram was down" — is recorded as
+  `outbound.dropped` with `detail.max_retries` rather than as `outbound.failed`, so a default
+  of the latter alone replayed the smaller half. That is safe because `outbound.dropped` is
+  read rather than trusted: a drop past `--grace` is skipped as a decision already taken, and
+  the ones whose queue write never landed carry no arguments to replay from.
+
+  It refuses to run with `EVENT_LOG` off, since the feed is the only source it has, and with
+  `ENABLED` off, where every replay would be a no-op reporting success. `--dry-run` works in
+  both.
+
 - **A send can be checked before it is made, by aiogram rather than by us.** `bot.send('send_mesage', ...)`
   passes every type checker and every linter, and is refused where the payload is built — in a
   web request, as an exception about a name the caller already wrote. The keyword arguments

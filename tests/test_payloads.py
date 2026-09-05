@@ -53,10 +53,18 @@ def test_text_is_a_length_unless_bodies_are_asked_for():
 
 
 def test_a_long_body_is_cut_rather_than_stored_whole():
+    """A marker since 4.1, where it was a prefix and an ellipsis before.
+
+    The information is the same and the shape is not, which is the point: two readers wanted
+    the difference and neither could see it. A person reading the admin could not tell a
+    truncated body from a message that ended in '…', and `lossy_reason` -- which decides
+    whether `tgbot_replay` may send a row again -- could not tell it from the whole message.
+    """
     kept = summarize('x' * (MAX_STRING + 100), bodies=True)
 
-    assert len(kept) == MAX_STRING + 1  # the ellipsis
-    assert kept.endswith('…')
+    assert kept['__truncated__'] is True
+    assert kept['size'] == MAX_STRING + 100
+    assert len(kept['preview']) == MAX_STRING
 
 
 def test_scalars_survive_unchanged():
@@ -73,9 +81,16 @@ def test_an_enum_arrives_as_its_value():
     assert summarize(Colour.RED, bodies=True) == 'red'
 
 
-def test_dates_and_decimals_are_readable():
-    assert summarize(datetime.date(2026, 8, 9), bodies=True) == '2026-08-09'
-    assert summarize(Decimal('1.50'), bodies=True) == '1.50'
+def test_dates_and_decimals_are_readable_and_say_they_were_rendered():
+    """Readable for a person, and marked for `tgbot_replay`, which is a 4.1 addition.
+
+    `serializers.encode` keeps these types on the wire and this renders them as text, so a
+    replay built from a row would hand `'1.50'` to a field that had a `Decimal` -- coerced
+    differently or refused in the worker. The value stays beside the marker, so nothing a
+    reader wanted is gone.
+    """
+    assert summarize(datetime.date(2026, 8, 9), bodies=True) == {'__omitted__': 'date', 'value': '2026-08-09'}
+    assert summarize(Decimal('1.50'), bodies=True) == {'__omitted__': 'Decimal', 'value': '1.50'}
 
 
 def test_an_unknown_object_arrives_as_its_class_name():
@@ -97,11 +112,33 @@ def test_recursion_stops_at_the_depth_cap():
 
 
 def test_wide_structures_are_cut():
+    """And say that they were, since 4.1: a cut of fifty is not a fifty.
+
+    Both caps were invisible in the result -- a dict cut to fifty keys read exactly like a
+    dict of fifty keys -- and one of those is a call `tgbot_replay` must refuse to send again.
+    """
     wide = {str(index): index for index in range(MAX_KEYS + 20)}
     long_list = list(range(MAX_ITEMS + 20))
 
-    assert len(summarize(wide, bodies=True)) == MAX_KEYS
-    assert len(summarize(long_list, bodies=True)) == MAX_ITEMS
+    cut_dict = summarize(wide, bodies=True)
+    cut_list = summarize(long_list, bodies=True)
+
+    assert len(cut_dict) == MAX_KEYS + 2, 'the kept keys, plus the marker and the count'
+    assert cut_dict['__omitted__'] == 'keys'
+    assert cut_dict['keys'] == MAX_KEYS + 20
+    assert cut_list['__truncated__'] is True
+    assert cut_list['size'] == MAX_ITEMS + 20
+    assert len(cut_list['preview']) == MAX_ITEMS
+
+
+def test_a_structure_at_the_cap_is_not_marked():
+    """Exactly fifty is not a cut, and marking it would refuse a call that is whole."""
+    exact = {str(index): index for index in range(MAX_KEYS)}
+
+    kept = summarize(exact, bodies=True)
+
+    assert len(kept) == MAX_KEYS
+    assert '__omitted__' not in kept
 
 
 @override_settings(TELEGRAM_BOT=SETTINGS)
