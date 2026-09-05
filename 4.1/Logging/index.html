@@ -1400,6 +1400,14 @@ structlog backend can index and filter them.</p>
 <td>the event log kind of a row</td>
 </tr>
 <tr>
+<td><code>tg_replay_of</code></td>
+<td>the correlation id a replayed send is standing in for</td>
+</tr>
+<tr>
+<td><code>tg_replayed</code>, <code>tg_refused</code>, <code>tg_skipped</code></td>
+<td>how many sends one <code>tgbot_replay</code> run put back, how many it could not, and how many needed nothing — sent in the end, replayed already, or discarded on purpose past <code>--grace</code></td>
+</tr>
+<tr>
 <td><code>tg_receiver</code></td>
 <td>the <code>events_recorded</code> receiver that raised</td>
 </tr>
@@ -1600,6 +1608,21 @@ structlog backend can index and filter them.</p>
 <td>the signal dispatch itself raised, not a receiver — Django's own failure logging cannot name a callable instance. The batch reached the database if the event log is on; some receivers may have missed it</td>
 </tr>
 <tr>
+<td><code>could not replay a failed send</code></td>
+<td>ERROR</td>
+<td>one row's queue write raised, and the run carried on with the rest. <code>tg_replay_of</code> names it. One bad row must not take a hundred-row replay down halfway, with no way to tell which half went</td>
+</tr>
+<tr>
+<td><code>replayed a failed send</code></td>
+<td>INFO</td>
+<td><code>tgbot_replay</code> queued one message again. <code>tg_replay_of</code> names the id it stands in for, <code>tg_function</code> the method</td>
+</tr>
+<tr>
+<td><code>replay finished</code></td>
+<td>INFO</td>
+<td>one <code>tgbot_replay</code> run is done: <code>tg_replayed</code> put back, <code>tg_refused</code> it could not, <code>tg_skipped</code> needed nothing — delivered in the end, replayed already, or discarded past <code>--grace</code>. Neither count is an error: a refusal is usually a row whose arguments were never recorded in full, and a skip is usually a previous run's work</td>
+</tr>
+<tr>
 <td><code>delivery started</code></td>
 <td>INFO</td>
 <td>the consumer is up</td>
@@ -1684,7 +1707,7 @@ of its values.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 4, 2026 07:42:34 UTC">September 4, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 5, 2026 01:49:28 UTC">September 5, 2026</span>
   </span>
 
     

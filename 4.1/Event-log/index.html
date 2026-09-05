@@ -1667,6 +1667,10 @@ gives you <code>sent</code> rows with no <code>queued</code> rows to match. That
 <td>it had not completed when the row was written: serialization failed, queueing refused it, retries were exhausted, or shutdown canceled it. <code>detail.stage</code> says which. Not the same as <em>never sent</em> — a queueing error can follow a write that landed, and a cancellation can land after Telegram took the request</td>
 </tr>
 <tr>
+<td><code>outbound.replayed</code></td>
+<td><code>manage.py tgbot_replay</code> queued a failed send again. Written under the <strong>new</strong> id, with the old one in <code>detail.replay_of</code> and the ending it replays in <code>detail.replay_of_kind</code> — a replay is not a fresh send, and a feed that could not tell them apart would make the failure rate unreadable</td>
+</tr>
+<tr>
 <td><code>inbound.received</code></td>
 <td>an update arrived, by polling or webhook</td>
 </tr>
@@ -2116,6 +2120,21 @@ decision it is. <code>'none'</code> stores no payload at all.</p>
 <p>Credentials are stripped from <code>detail</code> and <code>error</code> either way. That matters more
 than it sounds: the bot token is in the API URL, aiogram puts the URL in its
 exception messages, and those messages are what an <code>error</code> column holds.</p>
+<p><strong>A value the log could not keep whole says so.</strong> <code>detail</code> carries markers rather than quietly
+shorter data: <code>{"__omitted__": "bytes", "size": …}</code> for a file, <code>{"__truncated__": true,
+"size": …, "preview": …}</code> for a body or a list too long to store, and an <code>"__omitted__":
+"keys"</code> entry beside the keys of a mapping that had more. A <code>datetime</code>, a <code>date</code> and a
+<code>Decimal</code> are marked too — <code>{"__omitted__": "Decimal", "value": "9.99"}</code> — because the row
+keeps them as text while the queue keeps their type. Since 4.1: before it, an over-long body
+was a prefix and an ellipsis, which read exactly like a message that ended in one, and the
+rest were invisible.</p>
+<p><strong>This is also the setting that decides whether a failed send can be replayed</strong>, which is a
+reason to choose it before an incident rather than during one:
+<code>manage.py tgbot_replay</code> sends a message again from the arguments the feed recorded, so it
+needs them recorded in full — and even <code>'full'</code> is decided per row, since bytes are still
+replaced by a marker, an oversized payload is still capped and credentials are still redacted.
+A failure recorded under <code>'summary'</code> cannot be upgraded afterwards. See
+<strong><a href="../Troubleshooting/#telegram-was-down-what-did-we-lose-and-can-it-be-sent-again">Troubleshooting</a></strong>.</p>
 <h2 id="the-admin-and-who-may-see-what">The admin, and who may see what<a class="headerlink" href="#the-admin-and-who-may-see-what" title="Link to this section">&para;</a></h2>
 <p>With the flag on and <code>django.contrib.admin</code> installed, the feed appears in the
 admin as a read-only list. Add, change and delete are refused outright — rows
@@ -2356,7 +2375,7 @@ express.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 4, 2026 07:42:34 UTC">September 4, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 5, 2026 01:49:28 UTC">September 5, 2026</span>
   </span>
 
     
