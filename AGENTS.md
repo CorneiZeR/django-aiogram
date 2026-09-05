@@ -183,6 +183,18 @@ Packaging-only work does not need the Redis suite, and vice versa.
   that got through in 4.1 was a sentinel with a twin: `--limit 0` documented as
   "no bound" and `--limit -1` behaving as one too, because the comparison read
   `<= 0`. Refuse what the help text does not offer, by name.
+- **A read is not a transition, and the database is what decides one.** Where a
+  claim, a lease or a takeover is expressed as *read, decide, write*, put the
+  condition the read relied on into the write and treat zero rows as the answer
+  rather than as an error. 4.1's replay takeover deleted the claim its read had
+  found, so a run that marked that claim queued in the instant between the two
+  lost it and sent the message again; the delete carries
+  `queued_at__isnull=True` now, and a delete that removes nothing re-reads.
+- **A write that raised is not proof it did not happen.** A transport can fail
+  after the bytes went — the event log says so in its own definition of a
+  queueing drop — so a `publish` that raises is *unknown*, not *refused*.
+  Release a claim only where nothing can have been queued; otherwise leave it to
+  the lease, which is the same trade the mover makes.
 - **Do not build a guarantee on something documented as dropping.** Before
   leaning on a component, read its docstring for "never blocks", "drops rather
   than", "best effort", "may lose". The recorder says all of that on purpose,
