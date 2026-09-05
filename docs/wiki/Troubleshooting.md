@@ -375,7 +375,10 @@ python manage.py tgbot_replay --since 2026-09-04T10:00 --limit 50
 
 `--dry-run` first, always: this is the one command in the package whose mistake is measured in
 messages people receive. It prints the call it would make for each row, and the reason for
-each row it will not.
+each row it will not — **and it answers what the live run would answer**, including the
+failures already replayed and the messages whose several endings are one message. It is read
+instead of the live run, so a difference between them would be the worst kind of bug this
+command could have.
 
 **Both endings are selected by default, and the reason is not guessable from the names.**
 Rate-limit exhaustion — the case this section is named after — is recorded as

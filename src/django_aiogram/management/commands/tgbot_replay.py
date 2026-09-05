@@ -196,6 +196,9 @@ class Command(BaseCommand):
     #: the moment the run began, which is the upper end of the window when `--until` is absent
     _started: datetime.datetime
 
+    #: what a dry run has already said it would send, since it writes no join row to read back
+    _simulated: set[uuid.UUID]
+
     def handle(self, *args: Any, **options: Any) -> None:
         """Walk the selection until the bound is spent on messages that actually went.
 
@@ -213,6 +216,7 @@ class Command(BaseCommand):
         is what paging is.
         """
         self._unrecorded = 0
+        self._simulated = set()
         self._started = timezone.now()
         self._refuse_where_there_is_nothing_to_read(dry_run=options['dry_run'])
         refused: Counter[str] = Counter()
@@ -339,18 +343,23 @@ class Command(BaseCommand):
         if reason:
             self.stdout.write(f'refused {row.short_id or row.correlation_id} ({row.function}): {reason}')
             return reason
-        if dry_run:
-            self.stdout.write(f'would replay {row.short_id or row.correlation_id}: {row.function}({_shown(arguments)})')
-            return ''
-        # read once more, as late as it can be read. Two runs at once is a race this cannot
-        # close -- there is nothing here to claim, see the class docstring -- and the window it
-        # *can* remove is the one that spans a whole window of rows: without this, a second run
-        # started while the first was working through two hundred rows duplicated every message
-        # the first had not yet reached. With it, the two have to land inside the same query.
-        # Not a claim, and the reply on the thread says so rather than implying otherwise
-        if self._already_replayed(row):
+        # read once more, as late as it can be read, and **before the dry-run branch** so that
+        # a dry run predicts the live one. Two runs at once is a race this cannot close -- there
+        # is nothing here to claim, see the class docstring -- and the window it *can* remove is
+        # the one that spans a whole window of rows: without this, a second run started while
+        # the first was working through two hundred rows duplicated every message the first had
+        # not yet reached. With it, the two have to land inside the same query. Not a claim, and
+        # the reply on the thread says so rather than implying otherwise
+        if self._already_replayed(row) or row.correlation_id in self._simulated:
             self.stdout.write(f'skipped {row.short_id or row.correlation_id} ({row.function}): {SKIPPED_REPLAYED}')
             return SKIPPED_REPLAYED
+        if dry_run:
+            # what a live run gets from the join row it writes, a dry run has to remember for
+            # itself: nothing is written, so a second ending for this message later in the walk
+            # would otherwise be reported as a second message to send
+            self._simulated.add(row.correlation_id)
+            self.stdout.write(f'would replay {row.short_id or row.correlation_id}: {row.function}({_shown(arguments)})')
+            return ''
 
         from django_aiogram import bot  # noqa: PLC0415 - building a bot is the last thing this does
 

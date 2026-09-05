@@ -125,6 +125,39 @@ def test_a_dry_run_queues_nothing_and_says_what_it_would_have_sent(queued):
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_dry_run_predicts_the_live_one(queued):
+    """A dry run is read *instead of* the live run, so it has to answer the same.
+
+    Two ways it did not. The already-replayed check ran after the dry-run branch, so a failure
+    a live run would skip was reported as one it would send. And a dry run writes no join row,
+    so a second ending for the same message -- which a live run skips because the row it just
+    wrote says so -- was counted as a second message.
+    """
+    replayed_before = a_failure(chat_id=1)
+    replay(since=since())
+    assert len(queued) == 1
+
+    twice = a_failure(chat_id=2, kind=EventKind.OUTBOUND_DROPPED.value)
+    TelegramEvent.objects.create(
+        kind=EventKind.OUTBOUND_DROPPED.value,
+        correlation_id=twice,
+        function='send_message',
+        chat_id=2,
+        detail={'stage': 'sending'},
+    )
+
+    output = replay(since=since(), dry_run=True)
+
+    # whole ids, not prefixes: these are UUIDv7, so two made in the same millisecond share their
+    # first characters and a `[:8]` slice matched the wrong one -- an assertion of mine that
+    # failed on correct output
+    assert f'would replay {twice}' in output, 'the message with two endings was not offered once'
+    assert f'would replay {replayed_before}' not in output, 'a failure the live run would skip was offered'
+    assert 'would replay 1; refused 0; skipped 2' in output, output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
 @pytest.mark.parametrize(
     ('arguments', 'expected'),
     [
