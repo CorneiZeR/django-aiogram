@@ -149,6 +149,19 @@
   twice, which is the wrong side of at-least-once for a command that exists to repair an
   incident.
 
+  The claim replaced an `outbound.replayed` lookup in the feed, and both ship in this release,
+  so an upgrade from 4.0 gets the whole shape at once and has nothing to carry over. **Running
+  from git between the two changes is the exception**: replays made then are recorded in the
+  feed and unknown to the claim table, so the first run after upgrading could send those
+  messages a second time. One statement settles it, before the first replay:
+
+  ```python
+  TelegramReplayClaim.objects.bulk_create(
+      TelegramReplayClaim(correlation_id=row.detail['replay_of'], claimed_by='backfill', queued_at=row.created_at)
+      for row in TelegramEvent.objects.using(log_alias()).filter(kind='outbound.replayed')
+  )
+  ```
+
   A claim is released when the queue write fails, so only a run that *died* between claiming and
   queueing leaves one — and `--claim-lease`, an hour by default, is how long the next run
   believes it. Taking one over may send a second copy, the mover's `--lease` trade in the same
