@@ -7,11 +7,13 @@ gone -- and the two that replay assert the new id and the row that joins it to t
 """
 
 import datetime
+import logging
 import uuid
 from io import StringIO
 
 import pytest
 from django.core.management import CommandError, call_command
+from django.db import IntegrityError
 from django.test import override_settings
 from django.utils import timezone
 
@@ -20,8 +22,8 @@ from django_aiogram.broker.registry import use_broker
 from django_aiogram.config.enums import EventKind
 from django_aiogram.eventlog.events import new_correlation_id
 from django_aiogram.eventlog.recorder import recorder
-from django_aiogram.management.commands.tgbot_replay import DEFAULT_LIMIT
-from django_aiogram.models import TelegramEvent
+from django_aiogram.management.commands.tgbot_replay import DEFAULT_LIMIT, Command
+from django_aiogram.models import TelegramEvent, TelegramReplayClaim
 from django_aiogram.testing import InMemoryBroker
 from django_aiogram.testing.capture import Captured
 
@@ -558,7 +560,27 @@ def test_a_feed_that_refuses_the_join_row_outright_does_not_end_the_run(queued, 
     output = replay(since=since())
 
     assert [one.kwargs['chat_id'] for one in queued] == [1, 2], 'the run stopped at the first refusal'
-    assert '2 replays were queued without a row joining it' in output
+    assert '2 replays were queued without a row joining it' in output  # the claim still records them
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(
+    TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_DATABASE': 'logs'},
+    DATABASE_ROUTERS=['django_aiogram.eventlog.dbrouter.TelegramEventLogRouter'],
+)
+def test_the_claim_is_not_created_on_the_log_database():
+    """A claim on a database the log may point elsewhere is not a claim at all.
+
+    The same rule the schedule has, and for a sharper reason: the schedule merely needs to be
+    where the mover reads, while this one has to be where the constraint can refuse a second
+    run. Asked of `django.db.router` rather than the class, because that is what decides at
+    migrate time.
+    """
+    from django.db import router
+
+    assert router.allow_migrate('logs', 'django_aiogram', model=TelegramReplayClaim) is False
+    assert router.allow_migrate('default', 'django_aiogram', model=TelegramReplayClaim) is True
+    assert router.allow_migrate('logs', 'django_aiogram', model=TelegramEvent) is True
 
 
 @pytest.mark.django_db(transaction=True)
@@ -620,7 +642,7 @@ def test_one_row_the_queue_refuses_does_not_take_the_run_down(queued, monkeypatc
     assert len(calls) == 2, 'the run stopped at the row that raised'
     assert queued.kwargs == [{'chat_id': 2, 'text': 'lost'}]
     assert 'replayed 1; refused 1' in output
-    assert 'the queue write refused it: ConnectionError' in output
+    assert 'the queue write raised ConnectionError' in output
 
 
 @pytest.mark.django_db(transaction=True)
@@ -730,31 +752,26 @@ def test_what_needs_nothing_is_counted_apart_from_what_cannot_be_replayed(queued
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(TELEGRAM_BOT=SETTINGS)
-def test_a_replay_that_landed_mid_walk_is_seen_before_the_send(queued, monkeypatch):
-    """Another run finishing while this one walks must not cost a duplicate message.
+def test_a_failure_another_run_holds_is_left_to_it(queued, monkeypatch):
+    """The claim decides the race now, rather than narrowing it.
 
-    The window's answers are read for two hundred rows at a time, so without a second look a
-    run started while the first was working through them sent every message the first had not
-    yet reached. Asked again immediately before the send, the two have to collide inside one
-    query instead.
+    Until 4.1 this read the feed for an `outbound.replayed` row, which is written *after* the
+    message is queued -- so two runs could both read nothing and both send. A claim is taken
+    before the queue write and enforced by a unique constraint, so the second run is told by
+    the database.
 
-    Not a claim, and this case does not pretend otherwise: it drives the *ordering* by having
-    the competing row land while this row is being prepared.
+    The competitor lands while this row is being prepared, which is the ordering that used to
+    produce the duplicate.
     """
     from django_aiogram.management.commands.tgbot_replay import Command
 
     a_failure()
-    # the seam between the window read and the send, which is where a competing run's row lands
     real = Command._arguments_for
 
     def land_a_competitor(self, row):
-        """What another run's join row looks like, arriving between the two reads."""
-        TelegramEvent.objects.create(
-            kind=EventKind.OUTBOUND_REPLAYED.value,
-            correlation_id=new_correlation_id(),
-            function=row.function,
-            chat_id=row.chat_id,
-            detail={'replay_of': str(row.correlation_id)},
+        """What another run's claim looks like, arriving between the read and the send."""
+        TelegramReplayClaim.objects.get_or_create(
+            correlation_id=row.correlation_id, defaults={'claimed_by': 'another-run'}
         )
         return real(self, row)
 
@@ -762,9 +779,267 @@ def test_a_replay_that_landed_mid_walk_is_seen_before_the_send(queued, monkeypat
 
     output = replay(since=since())
 
-    assert list(queued) == [], 'the message was sent although another run had already replayed it'
-    assert 'it has been replayed already' in output
+    assert list(queued) == [], 'the message was sent although another run held the failure'
+    assert 'another run holds it (another-run' in output
     assert 'replayed 0; refused 0; skipped 1' in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_claim_taken_over_mid_queue_does_not_take_the_run_down(queued, monkeypatch, caplog):
+    """A queue write slower than `--claim-lease` loses the row it is holding.
+
+    Another run reads the claim as lapsed, deletes it and makes its own -- and the write back
+    here then matches nothing. `save(update_fields=...)` raises `DatabaseError` on that, which
+    would end the run at that row and leave the rest neither replayed nor reported: the one
+    thing this loop promises not to do. A lease of a second is not hypothetical either, since
+    that is what the docs tell an operator to pass when they know a write did not land.
+    """
+    first, second = a_failure(chat_id=1), a_failure(chat_id=2)
+    enqueue = TelegramBot.enqueue
+
+    def take_the_claim_over(self, function='send_message', **kwargs):
+        """The other run, arriving while this call is still in the transport."""
+        if kwargs.get('chat_id') == 1:
+            TelegramReplayClaim.objects.all().delete()
+        return enqueue(self, function, **kwargs)
+
+    monkeypatch.setattr(TelegramBot, 'enqueue', take_the_claim_over)
+
+    with caplog.at_level(logging.WARNING, logger='django_aiogram'):
+        output = replay(since=since())
+
+    assert len(queued) == 2, 'the run stopped at the row whose claim went'
+    assert 'replayed 2; refused 0' in output
+    assert '1 claim was taken over while the message was being queued' in output
+    assert 'a replay claim was taken over while its message was being queued' in caplog.text
+    assert TelegramReplayClaim.objects.get(correlation_id=second).queued_at is not None, (
+        'the row that kept its claim still recorded reaching the queue'
+    )
+    assert not TelegramReplayClaim.objects.filter(correlation_id=first).exists(), (
+        'and the one that lost it was not resurrected by the write back'
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_claim_that_finished_while_being_read_is_not_taken_over(queued, monkeypatch):
+    """The takeover is a delete, so the delete has to be the transition -- not the read before it.
+
+    A claim old enough to look lapsed can be marked queued in the instant between the two, and an
+    unconditional delete then removed a *finished* claim: the run took the failure, sent it again,
+    and somebody got the message twice. `_lapsed` is where this test puts the other run, because
+    that is exactly the gap -- it is called after the row is read and before it is deleted.
+    """
+    identifier = a_failure()
+    stale = TelegramReplayClaim.objects.create(correlation_id=identifier, claimed_by='the-other-run')
+    TelegramReplayClaim.objects.filter(pk=stale.pk).update(claimed_at=timezone.now() - datetime.timedelta(hours=2))
+
+    def finish_it_first(self, claim):
+        """The other run's queue write lands while this one is deciding the claim is stale."""
+        TelegramReplayClaim.objects.filter(pk=claim.pk).update(queued_at=timezone.now())
+        return True
+
+    monkeypatch.setattr(Command, '_lapsed', finish_it_first)
+
+    output = replay(since=since())
+
+    assert list(queued) == [], 'a finished claim was taken over, so the message went twice'
+    assert TelegramReplayClaim.objects.filter(pk=stale.pk).exists(), 'the claim was deleted anyway'
+    assert 'it has been replayed already' in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_losing_the_insert_to_a_claim_that_is_then_gone_is_retried(queued, monkeypatch):
+    """The constraint refuses the second insert; by the read after it, the row may not be there.
+
+    `_claim_on` takes over a lapsed claim, and a one-second lease -- what the docs tell an
+    operator to pass when they know a write did not land -- makes that ordinary. Answering with
+    the first refusal reported a failure as *already replayed* while nothing held it, and left it
+    to a later run that would read the same empty table.
+    """
+    a_failure()
+    real_create, refused = TelegramReplayClaim.objects.create, []
+
+    def refuse_the_first_insert(**fields):
+        """The other run, inserting between this run's read and its own write."""
+        refused.append(fields)
+        if len(refused) == 1:
+            msg = 'UNIQUE constraint failed: django_aiogram_replay_claim.correlation_id'
+            raise IntegrityError(msg)
+        return real_create(**fields)
+
+    monkeypatch.setattr(TelegramReplayClaim.objects, 'create', refuse_the_first_insert)
+
+    output = replay(since=since())
+
+    assert len(refused) == 2, 'it concluded from one refusal instead of looking again'
+    assert len(queued) == 1, 'the failure was reported as replayed by somebody and never sent'
+    assert 'replayed 1' in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_row_two_runs_keep_taking_from_each_other_is_left_for_the_next_run(queued, monkeypatch):
+    """Retrying is bounded, and what it gives up with is not `already replayed`.
+
+    Nothing is wrong with the message and nothing sent it, so the report says so in its own
+    words and the run walks on -- the alternative is a loop against another run's writes.
+    """
+    a_failure()
+
+    def always_refuse(**fields):
+        """A neighbour that takes the row every time this run writes and drops it every time it reads."""
+        msg = 'UNIQUE constraint failed: django_aiogram_replay_claim.correlation_id'
+        raise IntegrityError(msg)
+
+    monkeypatch.setattr(TelegramReplayClaim.objects, 'create', always_refuse)
+
+    output = replay(since=since())
+
+    assert list(queued) == []
+    assert 'two runs kept taking it from each other' in output
+    assert 'replayed 0; refused 0; skipped 1' in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_two_runs_cannot_both_take_one_failure(queued):
+    """The constraint, asked directly: one insert wins and the other is refused.
+
+    Not through the command -- this is the property the whole change rests on, and it is worth
+    one case that names it in the database's own terms.
+    """
+    identifier = new_correlation_id()
+    TelegramReplayClaim.objects.create(correlation_id=identifier, claimed_by='first')
+
+    with pytest.raises(IntegrityError):
+        TelegramReplayClaim.objects.create(correlation_id=identifier, claimed_by='second')
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_claim_whose_run_died_is_taken_over_after_its_lease(queued):
+    """A claim whose queue write never answered outlives its run -- it died, or `publish` raised.
+
+    Then the message is neither queued nor claimable, which is a message nothing will ever put
+    back -- so the lease takes it over, and what that can cost is a second copy: the queue may
+    have taken it in the instant before the answer stopped coming. The mover's `--lease` makes
+    the same trade in the same words.
+    """
+    identifier = a_failure()
+    stale = TelegramReplayClaim.objects.create(correlation_id=identifier, claimed_by='a-run-that-died')
+    TelegramReplayClaim.objects.filter(pk=stale.pk).update(claimed_at=timezone.now() - datetime.timedelta(seconds=7200))
+
+    replay(since=since(), claim_lease=3600)
+
+    assert len(queued) == 1, 'a claim from a dead run kept the message from ever going back'
+    taken = TelegramReplayClaim.objects.get(correlation_id=identifier)
+    assert taken.queued_at is not None
+    assert taken.claimed_by != 'a-run-that-died', 'the claim was reused rather than retaken'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_fresh_claim_is_not_taken_over(queued):
+    """The other half of the lease: a run that is working is left alone."""
+    identifier = a_failure()
+    TelegramReplayClaim.objects.create(correlation_id=identifier, claimed_by='a-run-still-working')
+
+    output = replay(since=since())
+
+    assert list(queued) == []
+    assert 'another run holds it (a-run-still-working' in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_queue_write_that_raised_keeps_its_claim(queued, monkeypatch):
+    """A raise is not proof the message stayed out of the queue.
+
+    `publishing` records this as a *queueing* drop, which the event log defines as a write that
+    may still have been applied -- Redis, RabbitMQ and Kafka can all fail after the bytes went.
+    Releasing the claim would offer that failure to the very next run and send a second copy to
+    somebody; holding it makes this the case `--claim-lease` already exists for. Found by a
+    review reading the transports rather than the comment, which claimed nothing was queued.
+    """
+    identifier = a_failure()
+
+    def refuse(self, function='send_message', **kwargs):
+        """A broker that raised after the write may already have landed."""
+        msg = 'the broker stopped answering'
+        raise ConnectionError(msg)
+
+    monkeypatch.setattr(TelegramBot, 'enqueue', refuse)
+
+    replay(since=since())
+
+    claim = TelegramReplayClaim.objects.get(correlation_id=identifier)
+    assert claim.queued_at is None, 'nothing said the message reached the queue'
+
+    monkeypatch.undo()
+    assert 'another run holds it' in replay(since=since()), 'the next run offered the same failure again'
+    assert list(queued) == [], 'and would have sent a second copy of a message that may have landed'
+
+    TelegramReplayClaim.objects.filter(pk=claim.pk).update(claimed_at=timezone.now() - datetime.timedelta(seconds=5))
+    assert 'replayed 1' in replay(since=since(), claim_lease=1), 'the lease is how an operator says it did not land'
+    assert len(queued) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_dry_run_takes_no_claims(queued):
+    """It is read instead of the live run, and a claim taken here would be held by a run that
+    queued nothing -- locking every row it looked at until the lease ran out."""
+    a_failure()
+
+    replay(since=since(), dry_run=True)
+
+    assert not TelegramReplayClaim.objects.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_dry_run_does_not_release_a_stale_claim_either(queued):
+    """Reading is not writing, and the takeover is a delete.
+
+    A dry run has to *predict* the live run -- so a lapsed claim is no obstacle to what it
+    reports -- while leaving the row for the run that will actually take it. The first version
+    of the lease deleted it from here, which made `--dry-run` a command that changes the
+    database: the opposite of what it is read for.
+    """
+    identifier = a_failure()
+    stale = TelegramReplayClaim.objects.create(correlation_id=identifier, claimed_by='a-run-that-died')
+    TelegramReplayClaim.objects.filter(pk=stale.pk).update(claimed_at=timezone.now() - datetime.timedelta(seconds=7200))
+
+    output = replay(since=since(), dry_run=True, claim_lease=3600)
+
+    assert TelegramReplayClaim.objects.filter(pk=stale.pk).exists(), 'a dry run deleted a claim'
+    assert 'would replay 1' in output, 'a dry run did not predict the takeover the live run would make'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS, USE_TZ=False)
+def test_a_claim_is_reported_on_a_project_that_stores_naive_datetimes(queued):
+    """`timezone.localtime` raises on a naive datetime, and `USE_TZ = False` stores nothing else.
+
+    Measured: *localtime() cannot be applied to a naive datetime*. So the one line that renders
+    a claim's age for a person took the whole command down on those projects -- a crash in the
+    reporting of a skip, which is the least deserving place for one.
+    """
+    identifier = a_failure()
+    TelegramReplayClaim.objects.create(
+        correlation_id=identifier,
+        claimed_by='a-run-still-working',
+        # the shape `USE_TZ = False` stores, which is the whole case
+        claimed_at=datetime.datetime(2026, 9, 5, 12, 0),  # noqa: DTZ001
+    )
+
+    output = replay(since=since())
+
+    assert 'another run holds it (a-run-still-working, since 12:00:00)' in output
+    assert list(queued) == []
 
 
 @pytest.mark.django_db(transaction=True)
@@ -783,10 +1058,10 @@ def test_a_negative_limit_is_not_the_unbounded_mode(queued):
 @override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_KINDS': ['outbound.failed', 'outbound.queued']})
 def test_a_replay_the_feed_would_not_record_is_refused(queued):
     """`EVENT_LOG_KINDS` excluding the replay kind means the message goes and nothing joins it
-    to the failure -- so the next run selects that failure again and sends a second copy.
+    to the failure -- the feed shows a fresh send, and no one can read which failure it repaired.
 
-    Refused rather than warned, because the operator can fix it in one line and the cost of
-    not fixing it is a duplicate message nobody predicted.
+    Refused rather than warned, because the operator can fix it in one line and what is lost
+    otherwise cannot be reconstructed afterwards.
     """
     a_failure()
 
@@ -804,8 +1079,8 @@ def test_a_join_row_the_feed_would_not_take_is_reported_rather_than_assumed(queu
 
     Handed to the recorder instead, the row would be dropped rather than waited for -- that is
     the recorder's contract, and it is right for the send path and wrong here: the run would
-    print `replayed 1; refused 0` with nothing joining the new message to the failure, and the
-    next run would select that failure and send a second copy.
+    print `replayed 1; refused 0` while the feed showed a send standing in for nothing, and the
+    history of what was repaired would have a hole in it.
     """
     from django_aiogram.management.commands import tgbot_replay as command
 
@@ -820,7 +1095,7 @@ def test_a_join_row_the_feed_would_not_take_is_reported_rather_than_assumed(queu
     output = replay(since=since())
 
     assert len(queued) == 1, 'the message itself still went'
-    assert 'the feed did not take the row joining them' in output
+    assert 'the feed has no row joining them' in output
     assert '1 replay was queued without a row joining it' in output
 
 

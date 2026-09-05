@@ -124,11 +124,11 @@
 
   Each replay is a new message under a **new** correlation id, with an `outbound.replayed` row
   under that id carrying `detail.replay_of` — reusing the id would make one message look as
-  though it had been sent twice, and the failure rate is read off these kinds. That row is also
-  what stops the *next* run selecting the same failure, so it is the one row in this package
-  written synchronously, with its answer read: the recorder drops rather than waits, which is
-  right in the send path and wrong here. The command refuses to run when `EVENT_LOG_KINDS`
-  excludes the kind, and says so per message when the feed will not take the row.
+  though it had been sent twice, and the failure rate is read off these kinds. It is the one row
+  in this package written synchronously, with its answer read: the recorder drops rather than
+  waits, which is right in the send path and wrong for the row that says which failure was
+  repaired. The command refuses to run when `EVENT_LOG_KINDS` excludes the kind, and says so per
+  message when the feed will not take the row.
 
   **What it will not replay, beyond the lossy rows.** A send the worker refused while shutting
   down (`NotScheduled`) is left to the queue, which still holds it unacknowledged and hands it
@@ -136,9 +136,61 @@
   leaves three drop rows and a delivery — and a message with several endings recorded is
   replayed once, since an id is one message here the way `bot.outcome()` reads it.
   `outbound.retried` is not selectable at all: that send went on to succeed or fail under the
-  same id. And a failure an `outbound.replayed` row already names is skipped, which is what
-  makes a bounded run repeatable: without it, five runs over five hundred failures would have
-  replayed the same oldest hundred five times and never reached the rest.
+  same id. And a failure a claim already names is skipped, which is what makes a bounded run
+  repeatable: without it, five runs over five hundred failures would have replayed the same
+  oldest hundred five times and never reached the rest.
+
+  **Two runs at once are safe**, which took a table to make true. Each failure is claimed in
+  `django_aiogram_replay_claim` before its message is queued, and that column is unique — the
+  one claim that is atomic on all four databases this package supports, since SQLite has neither
+  advisory locks nor `GET_LOCK`, and the same reasoning that made the mover's claim a
+  compare-and-set update. Without it both runs could read that a failure had not been replayed,
+  both queue it, and both write the row saying so afterwards: a recovered message delivered
+  twice, which is the wrong side of at-least-once for a command that exists to repair an
+  incident.
+
+  The claim replaced an `outbound.replayed` lookup in the feed, and both ship in this release,
+  so an upgrade from 4.0 gets the whole shape at once and has nothing to carry over. **Running
+  from git between the two changes is the exception**: replays made then are recorded in the
+  feed and unknown to the claim table, so the first run after upgrading could send those
+  messages a second time. One statement settles it, before the first replay:
+
+  ```python
+  earliest = {}
+  for row in TelegramEvent.objects.using(log_alias()).filter(kind='outbound.replayed').order_by('created_at'):
+      earliest.setdefault(row.detail['replay_of'], row.created_at)
+  TelegramReplayClaim.objects.bulk_create(
+      [TelegramReplayClaim(correlation_id=k, claimed_by='backfill', queued_at=v) for k, v in earliest.items()],
+      ignore_conflicts=True,
+  )
+  ```
+
+  Deduplicated and conflict-safe on purpose: the race this release closes is exactly what could
+  have written two `outbound.replayed` rows naming one failure, and `correlation_id` is unique —
+  a plain `bulk_create` would raise on that pair and leave the rest of the backfill undone. Read
+  in Python rather than through `detail__replay_of`, so it needs no JSON key lookup from a
+  database that may be the log's own.
+
+  Both halves of the claim are conditional for the same reason. Taking a lapsed one over deletes
+  only a row that is still unqueued, because the run holding it may mark it queued in the instant
+  between the read and the delete — an unconditional delete took a *finished* claim away, and the
+  message went twice. And a run that loses the insert looks again rather than concluding: the row
+  it lost to may already be gone, since a short lease lets the next reader take it over. Three
+  rounds of that and the failure is left for another run, reported in its own words — *two runs
+  kept taking it from each other* — rather than as one that was already replayed.
+
+  A queue write slower than the lease loses its claim to another run mid-call, and the write
+  back is conditional for that reason: the row may be gone, and `save(update_fields=…)` raises
+  on an update that matches nothing, which would have ended the run at that row with the rest
+  of the failures neither replayed nor reported. It is counted and reported instead — *1 claim
+  was taken over while the message was being queued* — since the message went and another run
+  may have sent it too.
+
+  A claim stands until its message is known to have reached the queue: a run that *died* between
+  claiming and queueing leaves one, and so does a queue write that raised, since that is not
+  proof the message stayed out. `--claim-lease`, an hour by default, is how long the next run
+  believes it; taking one over may send a second copy, the mover's `--lease` trade in the same
+  words.
 
   `--limit` defaults to 100: bounded rather than idempotent, because a slipped date range would
   otherwise empty a month of failures into the queue at once. `--limit 0` is the deliberate
@@ -266,8 +318,9 @@
   The old recipe stays on the page as the escape hatch, for a test that really does mean to
   assert on the bytes.
 
-- **A second table, and the router narrowed to match.** `django_aiogram_scheduled` is where
-  those rows wait, and it is **not** routed to `EVENT_LOG_DATABASE`: the feed is a record and
+- **Two more tables, and the router narrowed to match.** `django_aiogram_scheduled` is where
+  those rows wait — and `django_aiogram_replay_claim` is one row per failure `tgbot_replay` is
+  putting back, described with that command below. Neither is routed to `EVENT_LOG_DATABASE`: the feed is a record and
   may live in a warehouse of its own, while this is operational state a producer writes and a
   mover consumes. `TelegramEventLogRouter` therefore routes by *model* rather than by app
   label — routed as before, a project with a log database would have had this table created

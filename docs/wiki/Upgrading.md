@@ -6,26 +6,30 @@ at a time: each covers a single hop and assumes the ones below it are done.
 
 # From 4.0 to 4.1
 
-**One required step: run `migrate`.** 4.1 adds a table, and a project that skips the
+**One required step: run `migrate`.** 4.1 adds two tables, and a project that skips the
 migration and then passes an `eta` gets an error rather than a scheduled message.
 
 Everything else is optional. Every setting 4.0 had keeps its meaning and its default, no
 existing behaviour changes, and the wire format is unchanged — so the bot container and the
 web tier may be deployed in either order.
 
-## Run `migrate`: there is a second table
+## Run `migrate`: there are two more tables
 
-4.1 adds `django_aiogram_scheduled`, which is where a send with an `eta` waits. Nothing uses
-it until a caller passes one, so the migration is safe on a running deployment — it creates
-an empty table and one index.
+4.1 adds `django_aiogram_scheduled`, which is where a send with an `eta` waits, and
+`django_aiogram_replay_claim`, one row per failure `manage.py tgbot_replay` is putting back.
+Nothing uses either until a caller passes an `eta` or an operator runs the replay, so the
+migrations are safe on a running deployment: two empty tables, the schedule's index on
+`correlation_id` and its `dja_scheduled_due` index for the mover's query, and the claim's unique
+`correlation_id`, which is what stops two `tgbot_replay` runs recovering one message twice.
 
-**It is created wherever your own tables go.** The router that sends the event log to its
-own alias routes by *model* from 4.1 rather than by app label: it keeps the schedule off a
-**separate** event-log database and says nothing about it otherwise, so with
-`EVENT_LOG_DATABASE` unset — or naming `default` — the table lands on `default` like any of
+**They are created wherever your own tables go.** The router that sends the event log to its
+own alias routes by *model* from 4.1 rather than by app label: it keeps both off a
+**separate** event-log database and says nothing about them otherwise, so with
+`EVENT_LOG_DATABASE` unset — or naming `default` — they land on `default` like any of
 your own. A project that installed `TelegramEventLogRouter` gets this for free; one that wrote
 its own router matching `app_label == 'django_aiogram'` should narrow it to `TelegramEvent`,
-or the schedule will be created somewhere the mover does not read.
+or the schedule will be created somewhere the mover does not read and the replay claim
+somewhere it cannot be enforced.
 
 And if you use `eta`, schedule `manage.py tgbot_dispatch_scheduled` —
 **[Deployment](Deployment.md)** has the container.

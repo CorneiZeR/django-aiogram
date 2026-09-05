@@ -31,10 +31,11 @@ import logging
 import uuid
 from argparse import ArgumentParser
 from collections import Counter
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from django.conf import settings as django_settings
 from django.core.management import BaseCommand, CommandError
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -44,7 +45,7 @@ from django_aiogram.eventlog.events import worker_identity
 from django_aiogram.eventlog.recorder import recorder
 from django_aiogram.eventlog.records import Event
 from django_aiogram.eventlog.writer import log_alias, write_batch
-from django_aiogram.models import TelegramEvent
+from django_aiogram.models import TelegramEvent, TelegramReplayClaim
 from django_aiogram.producer.scheduling import DUE_AT_DETAIL
 from django_aiogram.wire.payloads import lossy_reason
 
@@ -103,10 +104,45 @@ ARGUMENT_KINDS = (EventKind.OUTBOUND_QUEUED.value, EventKind.OUTBOUND_SCHEDULED.
 #: places -- the per-row line, the report, the log field's documentation and the page. Counted
 #: apart from the refusals, since a refusal asks somebody to decide and these do not
 SKIPPED_DELIVERED = 'it was sent in the end, so nothing was lost'
-SKIPPED_REPLAYED = 'it has been replayed already; the row joining them says so'
+#: said by two paths -- a claim naming it in a live run, and this run's own memory in a dry one,
+#: which is why the sentence names neither
+SKIPPED_REPLAYED = 'it has been replayed already; one failure gets one replacement'
 SKIPPED_DELIBERATE = 'the deployment discarded it on purpose ({code}), so this is not a loss'
 SKIPPED_UNACKNOWLEDGED = 'the worker never acknowledged it ({code}), so the queue redelivers it on restart'
-SKIP_REASONS = frozenset({SKIPPED_DELIVERED, SKIPPED_REPLAYED})
+SKIPPED_CLAIMED = 'another run holds it ({by}, since {at:%H:%M:%S}); one run at a time reaches it'
+#: said when the row was free every time this run looked and taken every time it wrote, which is
+#: two runs arriving together on a lease short enough to expire between them. Not a refusal and
+#: not a replay: nothing is wrong with the message, and the next run reaches it
+SKIPPED_CONTESTED = 'two runs kept taking it from each other; the next run gets it'
+
+#: how many times one row's claim is attempted before this run leaves it to another. Three,
+#: because each retry costs one insert and the state it retries into is one another run has just
+#: written -- a fourth read says nothing a third did not
+CLAIM_ATTEMPTS = 3
+
+
+class Verdict(NamedTuple):
+    """What one row came to, and which column of the report it belongs in.
+
+    ``reason`` empty means the message was queued. Otherwise it is the line the operator reads,
+    and ``skipped`` says whether it is a *skip* -- nothing to do here -- or a **refusal**, which
+    is something somebody has to decide about.
+
+    A flag rather than a set of known strings, which is what this was until the claim landed: two
+    of the reasons name a worker and a time, so membership of a frozenset classified them as
+    refusals. Deciding at the point that knows is the fix; matching on the text was the bug.
+    """
+
+    reason: str
+    skipped: bool = False
+
+
+#: how long a claim is believed before another run may take it over. A claim outlives its run
+#: whenever the queue write did not plainly answer -- the process died, or `publish` raised
+#: after the bytes went -- and an hour is far past a command that spends milliseconds per row.
+#: Retaking one can send a second copy, exactly as the mover's `--lease` can: the message may
+#: have reached the queue in the instant before the answer stopped coming
+DEFAULT_CLAIM_LEASE = 3600
 
 #: how many messages one run may put back, unless an operator says otherwise. A default rather
 #: than "all of them", because a slipped date range would otherwise empty a month of failures
@@ -126,25 +162,30 @@ SHOWN_WIDTH = 40
 class Command(BaseCommand):
     """Select failed sends and queue them again, or say why they cannot be.
 
-    **One run at a time.** Two of these with overlapping selections can both read a failure
-    before either has written the row that says it was replayed, and then both send it. There
-    is nothing here to claim against that, and the absence is a design decision rather than an
-    omission: the event log is insert-only -- which is what lets a web process and a worker
-    write one message's history with no coordination -- so there is no row a run can take
-    ownership of the way ``tgbot_dispatch_scheduled`` claims a scheduled send.
+    **Two runs at once are safe now, and they were not until 4.1.** Both could read that a
+    failure had not been replayed, both queue it, and both write the row saying so afterwards --
+    a recovered message delivered twice, which is the wrong side of the at-least-once trade for
+    a command whose whole purpose is repairing an incident. The narrowing that came first, a
+    second read immediately before the send, made the window small and left it open.
 
-    What is bounded is the damage, and it is bounded twice. The guard is a row written per
-    message immediately after it is queued, and the row is read again immediately *before* the
-    next send -- so two runs have to collide inside one query rather than anywhere inside a walk
-    of two hundred rows. What is left is a duplicate message, which is the failure mode this
-    whole package documents: a lease that lapses mid-publish sends twice, a cancellation can
-    lose its race, a consumer redelivers. Closing it here alone would need a coordination
-    primitive the rest of the package deliberately does not have.
+    `TelegramReplayClaim` closes it: one row per failure with a **unique** constraint, inserted
+    before the queue write, so the second run is told by the database rather than by a read it
+    would have to trust. That is the one claim that is atomic on all four databases this package
+    supports -- PostgreSQL has advisory locks and MySQL has ``GET_LOCK``, SQLite has neither --
+    and it is the same reasoning that made the mover's claim a compare-and-set update rather
+    than ``SELECT ... FOR UPDATE SKIP LOCKED``.
 
-    The exceptions to the guard are the same two the page carries: a message whose join row the
-    feed refused is offered again, and one replayed by something other than this command is not
-    known to it. Serialising two operators' shells is not something a management command can do,
-    so this says so instead, the way the rest of this package states the races it cannot close.
+    The event log stays insert-only, which is what lets a web process and a worker write one
+    message's history with no coordination. The claim is not in it: it lives with the caller's
+    own writes, because a claim on a database ``EVENT_LOG_DATABASE`` may point somewhere else
+    entirely is not a claim at all.
+
+    What remains, said plainly: a claim stands until its message is known to have reached the
+    queue or ``--claim-lease`` runs out, because a queue write that raised is not proof the
+    message stayed out -- the event log defines a queueing drop as a write that *may still have
+    been applied*. So a refusal holds its row for the lease, and taking it over afterwards may
+    send a second copy. The mover's ``--lease`` makes the same trade for the same reason. A
+    replay made by something other than this command is still not known to it.
     """
 
     help = 'Queue failed sends again, from the arguments the event log recorded.'
@@ -185,6 +226,14 @@ class Command(BaseCommand):
             'which is a deliberate thing to type.',
         )
         parser.add_argument(
+            '--claim-lease',
+            type=int,
+            default=DEFAULT_CLAIM_LEASE,
+            help=f'seconds before a claim whose queue write never answered -- the process died, '
+            f'or publish raised -- is taken over (default {DEFAULT_CLAIM_LEASE}). Retaking one '
+            f'may send a second copy, since the message may have reached the queue anyway.',
+        )
+        parser.add_argument(
             '--dry-run',
             action='store_true',
             help='say what would be replayed, and why anything is refused, without queueing.',
@@ -193,11 +242,18 @@ class Command(BaseCommand):
     #: replays whose join row the feed would not take, counted so the report can say so
     _unrecorded = 0
 
+    #: replays whose claim another run took over while the message was being queued, counted for
+    #: the same reason: each one is a message that may have gone twice
+    _taken_over = 0
+
     #: the moment the run began, which is the upper end of the window when `--until` is absent
     _started: datetime.datetime
 
-    #: what a dry run has already said it would send, since it writes no join row to read back
+    #: what a dry run has already said it would send, since it takes no claim to read back
     _simulated: set[uuid.UUID]
+
+    #: seconds after which a claim whose run never queued anything is taken over
+    _claim_lease: int
 
     def handle(self, *args: Any, **options: Any) -> None:
         """Walk the selection until the bound is spent on messages that actually went.
@@ -216,7 +272,9 @@ class Command(BaseCommand):
         is what paging is.
         """
         self._unrecorded = 0
+        self._taken_over = 0
         self._simulated = set()
+        self._claim_lease = max(0, options['claim_lease'])
         self._started = timezone.now()
         self._refuse_where_there_is_nothing_to_read(dry_run=options['dry_run'])
         refused: Counter[str] = Counter()
@@ -239,15 +297,15 @@ class Command(BaseCommand):
                     self.stdout.write(f'skipped {row.short_id or row.correlation_id} ({row.function}): {nothing}')
                     skipped[nothing] += 1
                     continue
-                reason = self._replay(row, dry_run=options['dry_run'])
-                if reason in SKIP_REASONS:
-                    skipped[reason] += 1
+                verdict = self._replay(row, dry_run=options['dry_run'])
+                if verdict.skipped:
+                    skipped[verdict.reason] += 1
                     continue
-                if reason:
-                    refused[reason] += 1
+                if verdict.reason:
+                    refused[verdict.reason] += 1
                     continue
-                # nothing to record for the next ending of this message: the join row was
-                # written synchronously just now, so `_already_replayed` sees it on the way past
+                # nothing to record for the next ending of this message: the claim taken a
+                # moment ago is what `_claim_on` reads on the way past
                 replayed += 1
         self._report(replayed, refused, skipped, dry_run=options['dry_run'])
 
@@ -277,8 +335,9 @@ class Command(BaseCommand):
             msg = (
                 f"{SETTINGS_NAME}['EVENT_LOG_KINDS'] excludes {EventKind.OUTBOUND_REPLAYED.value!r}, "
                 f'so a replay would send the message and record nothing joining it to the '
-                f'failure -- and a later run would select that failure again. Add the kind, or '
-                f'read the selection with --dry-run.'
+                f'failure. The claim still stops a second run repeating it, but the feed would '
+                f'show a fresh send that repaired nothing. Add the kind, or read the selection '
+                f'with --dry-run.'
             )
             raise CommandError(msg)
 
@@ -330,7 +389,7 @@ class Command(BaseCommand):
             raise CommandError(msg)
         return None if limit == 0 else limit
 
-    def _replay(self, row: TelegramEvent, *, dry_run: bool) -> str:
+    def _replay(self, row: TelegramEvent, *, dry_run: bool) -> Verdict:
         """Queue one message again, or answer with why it cannot be.
 
         **One row never takes the run down with it**, which is the difference between a
@@ -342,68 +401,180 @@ class Command(BaseCommand):
         arguments, reason = self._arguments_for(row)
         if reason:
             self.stdout.write(f'refused {row.short_id or row.correlation_id} ({row.function}): {reason}')
-            return reason
-        # read once more, as late as it can be read, and **before the dry-run branch** so that
-        # a dry run predicts the live one. Two runs at once is a race this cannot close -- there
-        # is nothing here to claim, see the class docstring -- and the window it *can* remove is
-        # the one that spans a whole window of rows: without this, a second run started while
-        # the first was working through two hundred rows duplicated every message the first had
-        # not yet reached. With it, the two have to land inside the same query. Not a claim, and
-        # the reply on the thread says so rather than implying otherwise
-        if self._already_replayed(row) or row.correlation_id in self._simulated:
-            self.stdout.write(f'skipped {row.short_id or row.correlation_id} ({row.function}): {SKIPPED_REPLAYED}')
-            return SKIPPED_REPLAYED
+            return Verdict(reason)
         if dry_run:
-            # what a live run gets from the join row it writes, a dry run has to remember for
-            # itself: nothing is written, so a second ending for this message later in the walk
-            # would otherwise be reported as a second message to send
-            self._simulated.add(row.correlation_id)
-            self.stdout.write(f'would replay {row.short_id or row.correlation_id}: {row.function}({_shown(arguments)})')
-            return ''
+            return self._would_replay(row, arguments)
+
+        claim, held = self._claim(row)
+        if claim is None:
+            return self._say_claimed(row, held)
 
         from django_aiogram import bot  # noqa: PLC0415 - building a bot is the last thing this does
 
         try:
             replacement = bot.enqueue(row.function, **arguments)
         except Exception as error:
-            logger.exception('could not replay a failed send', extra={'tg_replay_of': str(row.correlation_id)})
-            failed = f'the queue write refused it: {type(error).__name__}'
+            # kept, not released: a raise here is not proof the message stayed out of the queue.
+            # `publishing` records exactly this as a *queueing* drop, which the event log defines
+            # as a write that may still have been applied -- all three networked transports can
+            # fail after the bytes went. Deleting the claim would hand the same failure to the
+            # next run and send somebody a second copy; holding it makes this the case the lease
+            # already exists for, and `--claim-lease` is the operator's answer when they know it
+            # did not land
+            logger.exception(
+                'could not replay a failed send',
+                extra={'tg_replay_of': str(row.correlation_id), 'tg_claimed_by': claim.claimed_by},
+            )
+            failed = (
+                f'the queue write raised {type(error).__name__}; the claim stands until '
+                f'--claim-lease, since the message may have reached the queue anyway'
+            )
             self.stdout.write(f'refused {row.short_id or row.correlation_id} ({row.function}): {failed}')
-            return failed
+            return Verdict(failed)
+        # the claim says the message reached the queue before anything else is written: a crash
+        # after this line leaves a claim a later run can read as finished rather than as stale.
+        #
+        # Conditional, because by now the row may not be ours: an `enqueue` slower than
+        # `--claim-lease` -- which is a *second* when an operator sets it that low, as the docs
+        # tell them to when they know a write did not land -- lets another run take it over and
+        # make its own. `save(update_fields=...)` raises `DatabaseError` when its update matches
+        # nothing -- `NotUpdated` on Django 6, a subclass of it since 5.2 raised the base class --
+        # so that took the whole run down at whichever row it happened to, which is the one thing
+        # this loop promises not to do
+        kept = TelegramReplayClaim.objects.filter(pk=claim.pk).update(
+            queued_at=timezone.now(), replacement_id=replacement
+        )
+        if not kept:
+            self._taken_over += 1
+            logger.warning(
+                'a replay claim was taken over while its message was being queued',
+                extra={'tg_replay_of': str(row.correlation_id), 'tg_claimed_by': claim.claimed_by},
+            )
         recorded = self._record_replay(row, replacement)
         logger.info(
             'replayed a failed send',
             extra={'tg_function': row.function, 'tg_replay_of': str(row.correlation_id)},
         )
-        note = '' if recorded else ' (the feed did not take the row joining them; see the log)'
+        note = '' if recorded else ' (the feed has no row joining them; see the log)'
+        note += '' if kept else ' (its claim was taken over while this was queueing; see the log)'
         if not recorded:
             logger.error(
-                'a replay was queued and not recorded, so a later run may select it again',
+                'a replay was queued and the feed did not record it, so its history has a hole',
                 extra={'tg_replay_of': str(row.correlation_id)},
             )
         self.stdout.write(f'replayed {row.short_id or row.correlation_id} as {replacement}{note}')
         self._unrecorded += 0 if recorded else 1
-        return ''
+        return Verdict('')
 
-    @staticmethod
-    def _already_replayed(row: TelegramEvent) -> bool:
-        """Whether a replay already stands in for this failure, asked at this instant.
+    def _would_replay(self, row: TelegramEvent, arguments: dict[str, Any]) -> Verdict:
+        """Say what a live run would do with this row, and take nothing while saying it.
 
-        **Per row, immediately before the send, and the only place this is asked.** The window
-        pass used to ask it too and no longer does -- see :meth:`_nothing_to_do_for`, which is
-        about deliveries alone now -- so a reader looking for where the marker is read has one
-        answer rather than two.
+        A dry run is read *instead of* the live one, so it answers the same questions -- but it
+        may not answer them by claiming: a claim taken here would be held by a run that queued
+        nothing, and every row it looked at would be locked until the lease ran out.
 
-        It narrows a race rather than closing one, and the difference matters: what it removes
-        is the window spanning two hundred rows, so two runs have to collide inside one query
-        rather than anywhere inside a walk. The rest needs a claim row with a unique
-        constraint, which is a schema change and is issue #105.
+        Which leaves one thing it has to do for itself. A live run reads back the claim it just
+        took, so a second ending for the same message is skipped; nothing is written here, so
+        this remembers instead.
         """
-        return (
-            TelegramEvent.objects.using(log_alias())
-            .filter(kind=EventKind.OUTBOUND_REPLAYED.value, detail__replay_of=str(row.correlation_id))
-            .exists()
-        )
+        held = self._claim_on(row, takeover=False)
+        if held is not None:
+            return self._say_claimed(row, held)
+        if row.correlation_id in self._simulated:
+            self.stdout.write(f'skipped {row.short_id or row.correlation_id} ({row.function}): {SKIPPED_REPLAYED}')
+            return Verdict(SKIPPED_REPLAYED, skipped=True)
+        self._simulated.add(row.correlation_id)
+        self.stdout.write(f'would replay {row.short_id or row.correlation_id}: {row.function}({_shown(arguments)})')
+        return Verdict('')
+
+    def _claim(self, row: TelegramEvent) -> 'tuple[TelegramReplayClaim | None, TelegramReplayClaim | None]':
+        """Take this failure, or answer with the claim that already holds it.
+
+        One ``INSERT`` against a unique column, which is the only claim that is atomic on every
+        database this package supports -- so the second run to arrive is told by an
+        ``IntegrityError`` rather than by a read it would have to trust. Everything else here is
+        deciding what a claim that is *already* there means.
+
+        **It reads again after losing the insert**, because the row it lost to may be gone by
+        then: :meth:`_claim_on` takes over a lapsed claim, and a lease short enough for that --
+        the second the documentation recommends when an operator knows a write did not land --
+        makes it ordinary rather than exotic. Answering with the first refusal reported a failure
+        as *already replayed* when nothing held it at all, and left it for a later run that would
+        read the same empty table.
+        """
+        for _ in range(CLAIM_ATTEMPTS):
+            held = self._claim_on(row)
+            if held is not None:
+                return None, held
+            try:
+                with transaction.atomic():
+                    return TelegramReplayClaim.objects.create(
+                        correlation_id=row.correlation_id, claimed_by=worker_identity()
+                    ), None
+            except IntegrityError:
+                # the other run inserted between the read above and this line, which is exactly
+                # the race the constraint exists for -- so look again rather than concluding
+                continue
+        return None, None
+
+    def _claim_on(self, row: TelegramEvent, *, takeover: bool = True) -> 'TelegramReplayClaim | None':
+        """Answer with the claim standing in the way of replaying this failure, if one does.
+
+        A claim whose replacement reached the queue always stands: that failure is handled, this
+        run or an earlier one. A claim with no ``queued_at`` belongs to a run that is working --
+        or to one whose queue write never answered, by dying or by raising -- and after
+        ``--claim-lease`` this treats it as the latter, which is the mover's trade in the same
+        words: the alternative is a message nothing will ever put back.
+
+        ``takeover=False`` answers the same question and **writes nothing**, which is what a dry
+        run needs: it has to predict the live run -- so a lapsed claim is no obstacle there
+        either -- while leaving the row for the run that will actually take it. Deleting from a
+        dry run was the shape this had first, and it made ``--dry-run`` a command that changes
+        the database.
+        """
+        claim = TelegramReplayClaim.objects.filter(correlation_id=row.correlation_id).first()
+        if claim is None:
+            return None
+        if claim.queued_at is not None:
+            return claim
+        if not self._lapsed(claim):
+            return claim
+        if takeover:
+            # conditional, and re-read when it removes nothing: the run holding this row may have
+            # marked it queued between the read above and this line, and an unconditional delete
+            # took a *finished* claim away -- after which the next run replays a message that
+            # went. The delete is the transition, so the database decides it rather than the read
+            taken, _ = TelegramReplayClaim.objects.filter(pk=claim.pk, queued_at__isnull=True).delete()
+            if not taken:
+                return TelegramReplayClaim.objects.filter(pk=claim.pk).first()
+            logger.warning(
+                'taking over a replay claim whose queue write never answered',
+                extra={'tg_replay_of': str(row.correlation_id), 'tg_claimed_by': claim.claimed_by},
+            )
+        return None
+
+    def _lapsed(self, claim: 'TelegramReplayClaim') -> bool:
+        """Whether a claim is old enough that the run holding it must be gone."""
+        if not self._claim_lease:
+            return False
+        return claim.claimed_at < self._started - datetime.timedelta(seconds=self._claim_lease)
+
+    def _say_claimed(self, row: TelegramEvent, held: 'TelegramReplayClaim | None') -> Verdict:
+        """Report a failure somebody else owns, and answer with the reason it was skipped.
+
+        No claim at all is a third answer rather than a replay: :meth:`_claim` gives up after
+        ``CLAIM_ATTEMPTS`` rounds of losing the insert to a run that then let the row go, and
+        calling that *already replayed* would be a message nobody sent described as one that
+        went.
+        """
+        if held is None:
+            reason = SKIPPED_CONTESTED
+        elif held.queued_at is None:
+            reason = SKIPPED_CLAIMED.format(by=held.claimed_by or 'another run', at=_local(held.claimed_at))
+        else:
+            reason = SKIPPED_REPLAYED
+        self.stdout.write(f'skipped {row.short_id or row.correlation_id} ({row.function}): {reason}')
+        return Verdict(reason, skipped=True)
 
     @staticmethod
     def _nothing_to_do_for(rows: 'list[TelegramEvent]') -> dict[uuid.UUID, str]:
@@ -415,11 +586,11 @@ class Command(BaseCommand):
         caller retried.
 
         **It used to ask two**, the second being whether a replay already stood in for the row.
-        That answer now comes from :meth:`_already_replayed`, per row and immediately before the
-        send, which is both later and exact -- and once it existed, re-applying this pull
-        request's swaps showed the window's copy of it made no difference to any case, because
-        anything it missed was caught a moment later. Two mechanisms for one property, one of
-        them unobservable; this is the one that went.
+        That answer comes from the claim table now -- :meth:`_claim_on`, per row and against a
+        unique constraint, so it decides the race rather than merely narrowing it. It read the
+        feed's ``detail.replay_of`` until 4.1, which was both later than this window pass and
+        weaker than a claim, and needed a JSON key lookup to behave the same on three
+        databases; the claim is an indexed column and needs nothing of the sort.
 
         Not a refusal: nothing here is wrong, and the report counts these apart from the rows a
         replay cannot be made from. An operator reads the two differently.
@@ -463,11 +634,12 @@ class Command(BaseCommand):
 
         **Written through the writer rather than handed to the recorder**, which is the one
         place in this package that does that, and the reason is the recorder's own contract: it
-        never blocks and drops rather than waiting, so a queue write nobody watched could
-        report ``replayed 1`` with no row joining the new message to the failure -- and the next
-        run would select that failure again and send a second copy. The recorder is built that
-        way because it sits in the send path. This is a management command an operator is
-        watching, so it can afford to wait and to be told.
+        never blocks and drops rather than waiting, so a queue write nobody watched could report
+        ``replayed 1`` while the feed shows a send that stands in for nothing. The claim is what
+        keeps the next run off that failure; this row is what lets anybody read afterwards which
+        failure was repaired, and a dropped one is a hole in that history rather than a duplicate
+        message. The recorder is built that way because it sits in the send path. This is a
+        management command an operator is watching, so it can afford to wait and to be told.
         """
         event = Event(
             kind=EventKind.OUTBOUND_REPLAYED.value,
@@ -506,8 +678,16 @@ class Command(BaseCommand):
         if self._unrecorded:
             were = 'replay was' if self._unrecorded == 1 else 'replays were'
             self.stdout.write(
-                f'{self._unrecorded} {were} queued without a row joining it to the failure: '
-                f'a later run will select that failure again, so read the log before repeating this one'
+                f'{self._unrecorded} {were} queued without a row joining it to the failure in the '
+                f'feed: the claim records it, so no later run will send it again, but the history '
+                f'of those messages has a hole in it -- read the log'
+            )
+        if self._taken_over:
+            were = 'claim was' if self._taken_over == 1 else 'claims were'
+            self.stdout.write(
+                f'{self._taken_over} {were} taken over while the message was being queued, so '
+                f'another run may have sent the same message: the queue write outlasted '
+                f'--claim-lease -- read the log, and give the next run a longer one'
             )
         for reason, count in refused.most_common():
             self.stdout.write(f'  {count} x {reason}')
@@ -521,6 +701,17 @@ class Command(BaseCommand):
                 'tg_skipped': sum(skipped.values()),
             },
         )
+
+
+def _local(moment: datetime.datetime) -> datetime.datetime:
+    """Render a stored moment in the project's timezone, whichever kind it stores.
+
+    ``timezone.localtime`` raises ``ValueError`` on a naive datetime, and a project with
+    ``USE_TZ = False`` stores nothing else -- so the one line that formats a claim's age for a
+    person took the whole command down there. Measured: *"localtime() cannot be applied to a
+    naive datetime"*.
+    """
+    return timezone.localtime(moment) if timezone.is_aware(moment) else moment
 
 
 def _deliberate(row: TelegramEvent) -> str:

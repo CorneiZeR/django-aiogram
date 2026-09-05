@@ -1,11 +1,14 @@
-"""The two tables this app ships: the append-only feed, and the sends waiting for a time.
+"""The three tables this app ships: the append-only feed, and two pieces of operational state.
 
 Django imports this on every ``django.setup()`` — before ``AppConfig.ready()``
 and regardless of ``ENABLED`` — so it may not reach aiogram, directly or
 otherwise, and may not read settings at import time.
 
-`TelegramScheduledSend` is the second, and the only mutable row this app has: a mover
-claims one, publishes it and deletes it. Everything below is about the feed.
+`TelegramScheduledSend` holds the sends waiting for a time: a mover claims one, publishes it
+and deletes it. `TelegramReplayClaim` is one row per failure `tgbot_replay` is putting back,
+and it exists because a unique constraint is the only thing that is atomic on all four
+databases this package supports. Both are mutable, and neither is routed to a log database of
+its own. Everything else below is about the feed.
 
 Rows are inserted and never updated. The stages of one outbound message are
 three rows sharing a ``correlation_id``: the web process writes the queued row
@@ -163,3 +166,59 @@ class TelegramScheduledSend(models.Model):
     def __str__(self) -> str:
         """Name the row the way an admin list reads."""
         return f'{self.function} at {self.due_at:%Y-%m-%d %H:%M:%S}'
+
+
+class TelegramReplayClaim(models.Model):
+    """One failure ``manage.py tgbot_replay`` is putting back, claimed so that nothing else does.
+
+    **A row with a unique constraint, because that is the only claim that is atomic on all four
+    databases this package supports.** PostgreSQL has advisory locks and MySQL has ``GET_LOCK``;
+    SQLite has neither, which is the same reason `producer/scheduling.claim` is a compare-and-set
+    update rather than ``SELECT ... FOR UPDATE SKIP LOCKED``. Two runs racing for one failure
+    therefore produce one ``INSERT`` and one ``IntegrityError``, everywhere.
+
+    Without it the command read whether a failure had been replayed, queued the message, and
+    then wrote the row saying so -- three steps two processes could interleave, which is a
+    recovered message delivered twice. For a command whose whole purpose is repairing an
+    incident, that is the wrong side of the at-least-once trade this package makes elsewhere.
+
+    **The claim is not the audit row.** ``outbound.replayed`` in the feed is what a person reads,
+    and the feed may live on ``EVENT_LOG_DATABASE`` -- a different database, unjoinable in SQL.
+    This lives with the caller's own writes, like the schedule, so a claim is readable and
+    enforceable without the log's alias being reachable at all.
+
+    A claim survives a queue write that did not answer -- a process that died between claiming
+    and queueing, or a ``publish`` that raised after the bytes went -- and that is what
+    ``queued_at`` and the lease are for: the row says whether the message is known to have
+    reached the queue, and one that never said so is retakeable after ``--claim-lease``. Retaking
+    one may send a second copy -- the same trade, and the same arithmetic answer, as the mover's
+    own lease.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    #: the failure being replayed, and the whole point of the table: **unique**, so the second
+    #: run to reach it is told by the database rather than by a read it has to trust
+    correlation_id = models.UUIDField(unique=True)
+    claimed_at = models.DateTimeField(default=timezone.now)
+    #: which process holds it, so a stale claim names something an operator can look at
+    claimed_by = models.CharField(max_length=128, blank=True)
+    #: when the replacement reached the queue, and ``None`` while it has not. The difference
+    #: between "this failure is handled" and "somebody is handling it", which is what makes a
+    #: crashed run recoverable without guessing
+    queued_at = models.DateTimeField(null=True, blank=True)
+    #: the id the replacement went out under, so the pair is joinable here as well as through
+    #: the feed's ``detail.replay_of`` -- which is on the log's alias and may be elsewhere
+    replacement_id = models.UUIDField(null=True, blank=True)
+
+    class Meta:
+        """One row per failure, and no index beyond the one the constraint already builds."""
+
+        db_table = 'django_aiogram_replay_claim'
+        ordering = ('claimed_at', 'id')
+        verbose_name = 'telegram replay claim'
+        verbose_name_plural = 'telegram replay claims'
+
+    def __str__(self) -> str:
+        """Name the row the way an admin list reads."""
+        state = 'queued' if self.queued_at else 'claimed'
+        return f'{state} {self.correlation_id}'

@@ -424,24 +424,30 @@ was made with, and the feed records a *description* of them — so:
 - `the worker never acknowledged it (NotScheduled), so the queue redelivers it on restart` — the
   send was refused while the container was shutting down and the message stayed in flight on the
   transport. Restart the worker; it comes back on its own.
-- `it has been replayed already; the row joining them says so` — an `outbound.replayed` row
-  names this failure, from this run, an earlier one, or another run that finished while this one
-  was walking. **This is what makes the command
-  re-runnable**: the selection is bounded, so five hundred failures are walked a hundred at a
-  time, and without it every run would replay the same oldest hundred and never reach the
+- `it has been replayed already; one failure gets one replacement` — a claim in
+  `django_aiogram_replay_claim` names this failure with its replacement queued, from this run, an
+  earlier one, or another run that finished while this one was walking. Under `--dry-run` nothing
+  is claimed, so a second ending for the same message is answered from what the run itself has
+  already said it would do. **This is what makes the command re-runnable**: the selection is bounded, so five hundred failures are walked a hundred
+  at a time, and without it every run would replay the same oldest hundred and never reach the
   rest.
+
+- `two runs kept taking it from each other; the next run gets it` — this run read the row free
+  and lost the insert three times running, which is two runs on a lease short enough to expire
+  between them. Nothing is wrong with the message and nothing sent it; the next run reaches it.
 
 So `EVENT_LOG_PAYLOAD: 'full'` is what makes replay possible, and it is not a guarantee: it is
 decided per row, not per setting. Set it before you need it — a failure recorded under
 `'summary'` cannot be upgraded afterwards.
 
 Each replay is a **new** message with a new correlation id, and an `outbound.replayed` row
-joins it to the one it stands in for (`detail.replay_of`). That row is what stops the *next*
-run selecting the same failure, so the command refuses to run at all when `EVENT_LOG_KINDS`
-excludes `outbound.replayed`, and says so per message if the feed would not take the row.
-Unlike every other row this package writes, it is written synchronously and its answer is
-read: the recorder drops rather than waits, which is right in the send path and wrong for the
-one row that prevents a duplicate.
+joins it to the one it stands in for (`detail.replay_of`). The claim is what stops the *next*
+run selecting the same failure; this row is what lets anybody read afterwards which failure was
+repaired, and without it the feed shows a fresh send that stands in for nothing. So the command
+refuses to run at all when `EVENT_LOG_KINDS` excludes `outbound.replayed`, and says so per
+message if the feed would not take the row. Unlike every other row this package writes, it is
+written synchronously and its answer is read: the recorder drops rather than waits, which is
+right in the send path and wrong for a row an operator is standing there waiting on.
 
 Run it again for the next hundred, and again: `--limit` counts the messages a run *sends*
 rather than the rows it reads, so each run walks past what the last one did and reaches the
@@ -451,24 +457,34 @@ default because a slipped date range would otherwise empty a month of failures i
 `--limit 0` is the deliberate unbounded mode, and a negative number is refused as the typo it
 is.
 
-That is not the same as idempotence, and the difference matters in three ways: the guard is a
-*row*, so a replay whose join row the feed refused is offered again — the run says which, in
-the report and in the log; a failure replayed by something other than this command is not known
-to it; and **two runs at once can both send the same message**, because each reads the rows
-before either writes its own. Run one at a time.
+That is not the same as idempotence, and the difference is one thing rather than three now: a
+failure replayed by something other than this command is not known to it. A replay whose *feed*
+row the writer refused is still recorded — the claim is written before the queue write and
+marked as soon as it lands, so no later run offers that failure again; what is missing is the
+history a person reads, which the run names in its report and in the log.
 
-There is nothing for the command to claim instead. The event log is insert-only — that is what
-lets a web process and a worker write one message's history with no coordination — so a run
-cannot take ownership of a failure the way `tgbot_dispatch_scheduled` claims a scheduled send.
-What is bounded is the damage, twice over: the join row is written per message right after it is
-queued, and read again right *before* the next send — so two runs have to collide inside one
-query rather than anywhere inside a walk of two hundred rows. What is left is a duplicate
-message, which is the failure mode this package documents everywhere else too: a lease that
-lapses mid-publish sends twice, a cancellation can lose its race, a consumer redelivers.
+**Two runs at once are safe.** Each failure is claimed in `django_aiogram_replay_claim` before
+its message is queued, and that column is unique, so the second run is refused by the database
+rather than by a read it would have to trust. It says so per row: *another run holds it
+(`<worker>`, since `<time>`)*.
 
-The exceptions stay: a message whose join row the feed refused is offered again — the first
-run's report names those — and one replayed by something other than this command is not known to
-it.
+What is left is one narrow case, and it is the mover's trade in the same words. A claim stands
+until its message is known to have reached the queue, and a queue write that *raised* does not
+say that either way — the event log defines a queueing drop as a write that may still have been
+applied, and all three networked transports can fail after the bytes went. So a refused replay
+keeps its claim, exactly like one from a run that died on that line, and `--claim-lease` (an
+hour by default) is how long the next run believes it before taking over. Taking one over can
+send a second copy, because the message may have reached the queue after all; the log says
+*taking over a replay claim whose queue write never answered* when it happens. Where you know
+it did not land — a payload the broker will refuse however often it is offered — `--claim-lease 1`
+on the next run is the way to say so.
+
+A lease that short has its own edge, and the command survives it rather than pretending it away:
+a queue write slower than the lease loses its claim to another run mid-call. The message this run
+queued still went, so the run says *1 claim was taken over while the message was being queued*
+and carries on to the rest — ending there would leave the remaining failures neither replayed nor
+reported. Two runs and a one-second lease is how a message goes twice; the report and the log both
+name the messages it could have happened to.
 
 ## `ModuleNotFoundError: No module named 'telegram_bot'`
 
