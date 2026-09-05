@@ -1,6 +1,6 @@
 # Changelog
 
-## 4.1.0 - unreleased
+## 4.1.0 - 2026-09-06
 
 ### Added
 
@@ -227,8 +227,8 @@
   site rather than a `TypeError` in the worker.
 
   **Nothing here declares those signatures, which is the whole design.** aiogram has 181
-  methods with 1153 arguments between them, every one already declared, typed and versioned
-  there; a hand-written or generated surface would be that many chances to drift. `resolve_call`
+  methods, with 972 arguments between them on 3.30, every one already declared, typed and
+  versioned there; a hand-written or generated surface would be that many chances to drift. `resolve_call`
   reads the model the caller built, so a project on a newer aiogram gets its newer arguments
   with no release here.
 
