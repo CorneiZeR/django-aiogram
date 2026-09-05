@@ -1029,16 +1029,19 @@ def test_a_claim_is_reported_on_a_project_that_stores_naive_datetimes(queued):
     reporting of a skip, which is the least deserving place for one.
     """
     identifier = a_failure()
+    # naive, which is the whole case, and *now* rather than a written-down moment: the claim has
+    # to be younger than `--claim-lease` or the run takes it over instead of reporting it, and a
+    # fixed hour makes that true for an hour on the day it was written and false afterwards
+    held_since = datetime.datetime.now().replace(microsecond=0)  # noqa: DTZ005
     TelegramReplayClaim.objects.create(
         correlation_id=identifier,
         claimed_by='a-run-still-working',
-        # the shape `USE_TZ = False` stores, which is the whole case
-        claimed_at=datetime.datetime(2026, 9, 5, 12, 0),  # noqa: DTZ001
+        claimed_at=held_since,
     )
 
     output = replay(since=since())
 
-    assert 'another run holds it (a-run-still-working, since 12:00:00)' in output
+    assert f'another run holds it (a-run-still-working, since {held_since:%H:%M:%S})' in output
     assert list(queued) == []
 
 
