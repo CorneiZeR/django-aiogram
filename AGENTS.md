@@ -158,7 +158,69 @@ Packaging-only work does not need the Redis suite, and vice versa.
   subprocesses; an eager import anywhere on the boot path fails them.
 - **Every change carries a test, and the test must fail without the change.**
   Revert your fix, watch the test fail, put it back. A test that passes either
-  way is worse than none, because it reads as coverage.
+  way is worse than none, because it reads as coverage. Swap the source to check
+  it — never `git checkout` on a file with uncommitted work.
+
+  And re-apply the **earlier** swaps of the same piece of work after a change
+  that alters behaviour rather than adding a branch: a later change can empty a
+  case written two rounds ago and leave it green. It happened in 4.1 — a
+  de-duplication in `tgbot_replay` made a case about `--since` parsing pass
+  whatever the parser did, because its second run then skipped the row either
+  way. `tests/test_suite_discipline.py` catches an assertion that was true
+  before the code ran; it cannot catch one that stopped mattering.
+- **A guard is as complete as the branches it was built from.** When you add a
+  check — a validator, a refusal, a "may this be replayed" predicate — walk
+  **every `return`** of the thing it guards rather than the cases already
+  marked, and prefer the invariant to the enumeration. 4.1's replay refusal was
+  built from the three loss markers `wire/payloads.py` had, and that module lost
+  data in four more ways with no marker; the four are one property —
+  *if `lossy_reason` says nothing was lost, the recorded value equals the
+  input* — and stating it that way is what makes a new loss path a failure
+  rather than a silence. It is not coverage: a property test checks generated
+  inputs, so a branch the generator never reaches stays unexercised, and the
+  cases whose input it cannot produce are still written by hand.
+- **A new flag is a new adversary.** Every argument a command gains, and every
+  setting the package reads, gets the short list tried before anyone else does: negative, zero, empty, absent,
+  enormous, the wrong type, and the value the help text calls special. The one
+  that got through in 4.1 was a sentinel with a twin: `--limit 0` documented as
+  "no bound" and `--limit -1` behaving as one too, because the comparison read
+  `<= 0`. Refuse what the help text does not offer, by name — a command says so
+  with `CommandError`, a setting with the check that owns it.
+
+  A **documented bound** is the same demand from the other side: a case at it and
+  one past it. Repetition proves nothing there — 4.1's `--limit` counted the rows
+  a run read instead of the messages it sent, which only a second run finds, and
+  `--limit -1` slipped through the same review, which only a value past the bound
+  finds. Two claims, two kinds of case.
+- **A moment written down is true for an hour.** A case that hard-codes a time
+  and then leans on how old something is passes while the clock agrees with it
+  and lies afterwards. 4.1 wrote a claim at `12:00` and asserted the run would
+  report it rather than take it over, which is true until the default hour of
+  `--claim-lease` runs out: green in review, red on `master` that afternoon.
+  Derive the moment from `now()` and read the assertion back from the same
+  value, so the case says what it means at every hour.
+- **A read is not a transition, and the database is what decides one.** Where a
+  claim, a lease or a takeover is expressed as *read, decide, write*, put the
+  condition the read relied on into the write and treat zero rows as the answer
+  rather than as an error. 4.1's replay takeover deleted the claim its read had
+  found, so a run that marked that claim queued in the instant between the two
+  lost it and sent the message again; the delete carries
+  `queued_at__isnull=True` now, and a delete that removes nothing re-reads.
+- **A write that raised is not proof it did not happen.** A transport can fail
+  after the bytes went — the event log says so in its own definition of a
+  queueing drop — so a `publish` that raises is *unknown*, not *refused*.
+  Release a claim only where nothing can have been queued; otherwise leave it to
+  the lease, which is the same trade the mover makes. 4.1's replay released it,
+  so the next run took the same failure and sent a message that had already
+  gone.
+- **Do not build a guarantee on something documented as dropping.** Before
+  leaning on a component, read its docstring for "never blocks", "drops rather
+  than", "best effort", "may lose". The recorder says all of that on purpose,
+  because it sits in the send path — so the one row whose absence causes a
+  duplicate message goes through `eventlog.writer` and its answer is read.
+  `tgbot_replay` is the only place in the package that writes a row that way,
+  and the reason is written where it does it — 4.1 built that row on the
+  recorder first, which drops rather than waits.
 - **Values go in `extra`, not in the message.** `logger.warning('rate limited',
   extra={'tg_function': name})`, never an f-string. Keys are `tg_`-prefixed so
   they cannot collide with `LogRecord` attributes.
@@ -320,3 +382,25 @@ and `pytest`. Say why the change is needed and what failure it produces.
 [CodeRabbit](https://github.com/apps/coderabbitai) reviews automatically;
 answer its findings, fix what is still valid and say plainly what you skipped
 and why.
+
+**Every promise about the software needs a case named after it.** A page that
+says "run it again for the next hundred" is a claim about behaviour across runs,
+and a case written from the code path tests the mechanism instead: 4.1 shipped
+that sentence twice while it was false, because the fix each time was read off
+the diff rather than off the sentence. List the claims your `docs/wiki` diff
+adds — and the ones in a docstring, a `--help` string or a check's hint, which
+are documentation a reader trusts the same way — and name a test for each.
+
+This file and `.github/` are the exception, and it is a real one rather than a
+convenience: they describe how the work is done, not what the package does, so
+there is nothing for a case to run. What holds them honest instead is a
+demand one level up: a rule earns its place by naming what it cost. Every rule
+added since 4.1 cites the release and the defect it came from, older ones say it
+where somebody knew, and a rule that cannot name a cost is a preference — which
+is the argument for deleting it rather than for writing it down.
+
+**A round of fixes is the newest and least-read code on the branch.** On the
+largest 4.1 pull request, eleven of thirteen review findings were in the two
+files it had just written, and none of them was caught by a gate here. So the
+sweep, the guard rule above and the earlier rounds' swaps belong to *answering*
+a finding as much as to writing the change.
