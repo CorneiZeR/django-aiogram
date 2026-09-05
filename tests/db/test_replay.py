@@ -7,6 +7,7 @@ gone -- and the two that replay assert the new id and the row that joins it to t
 """
 
 import datetime
+import logging
 import uuid
 from io import StringIO
 
@@ -781,6 +782,43 @@ def test_a_failure_another_run_holds_is_left_to_it(queued, monkeypatch):
     assert list(queued) == [], 'the message was sent although another run held the failure'
     assert 'another run holds it (another-run' in output
     assert 'replayed 0; refused 0; skipped 1' in output
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT=SETTINGS)
+def test_a_claim_taken_over_mid_queue_does_not_take_the_run_down(queued, monkeypatch, caplog):
+    """A queue write slower than `--claim-lease` loses the row it is holding.
+
+    Another run reads the claim as lapsed, deletes it and makes its own -- and the write back
+    here then matches nothing. `save(update_fields=...)` raises `DatabaseError` on that, which
+    would end the run at that row and leave the rest neither replayed nor reported: the one
+    thing this loop promises not to do. A lease of a second is not hypothetical either, since
+    that is what the docs tell an operator to pass when they know a write did not land.
+    """
+    first, second = a_failure(chat_id=1), a_failure(chat_id=2)
+    enqueue = TelegramBot.enqueue
+
+    def take_the_claim_over(self, function='send_message', **kwargs):
+        """The other run, arriving while this call is still in the transport."""
+        if kwargs.get('chat_id') == 1:
+            TelegramReplayClaim.objects.all().delete()
+        return enqueue(self, function, **kwargs)
+
+    monkeypatch.setattr(TelegramBot, 'enqueue', take_the_claim_over)
+
+    with caplog.at_level(logging.WARNING, logger='django_aiogram'):
+        output = replay(since=since())
+
+    assert len(queued) == 2, 'the run stopped at the row whose claim went'
+    assert 'replayed 2; refused 0' in output
+    assert '1 claim was taken over while the message was being queued' in output
+    assert 'a replay claim was taken over while its message was being queued' in caplog.text
+    assert TelegramReplayClaim.objects.get(correlation_id=second).queued_at is not None, (
+        'the row that kept its claim still recorded reaching the queue'
+    )
+    assert not TelegramReplayClaim.objects.filter(correlation_id=first).exists(), (
+        'and the one that lost it was not resurrected by the write back'
+    )
 
 
 @pytest.mark.django_db(transaction=True)

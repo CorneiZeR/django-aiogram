@@ -233,6 +233,10 @@ class Command(BaseCommand):
     #: replays whose join row the feed would not take, counted so the report can say so
     _unrecorded = 0
 
+    #: replays whose claim another run took over while the message was being queued, counted for
+    #: the same reason: each one is a message that may have gone twice
+    _taken_over = 0
+
     #: the moment the run began, which is the upper end of the window when `--until` is absent
     _started: datetime.datetime
 
@@ -259,6 +263,7 @@ class Command(BaseCommand):
         is what paging is.
         """
         self._unrecorded = 0
+        self._taken_over = 0
         self._simulated = set()
         self._claim_lease = max(0, options['claim_lease'])
         self._started = timezone.now()
@@ -418,16 +423,31 @@ class Command(BaseCommand):
             self.stdout.write(f'refused {row.short_id or row.correlation_id} ({row.function}): {failed}')
             return Verdict(failed)
         # the claim says the message reached the queue before anything else is written: a crash
-        # after this line leaves a claim a later run can read as finished rather than as stale
-        claim.queued_at = timezone.now()
-        claim.replacement_id = replacement
-        claim.save(update_fields=('queued_at', 'replacement_id'))
+        # after this line leaves a claim a later run can read as finished rather than as stale.
+        #
+        # Conditional, because by now the row may not be ours: an `enqueue` slower than
+        # `--claim-lease` -- which is a *second* when an operator sets it that low, as the docs
+        # tell them to when they know a write did not land -- lets another run take it over and
+        # make its own. `save(update_fields=...)` raises `DatabaseError` when its update matches
+        # nothing -- `NotUpdated` on Django 6, a subclass of it since 5.2 raised the base class --
+        # so that took the whole run down at whichever row it happened to, which is the one thing
+        # this loop promises not to do
+        kept = TelegramReplayClaim.objects.filter(pk=claim.pk).update(
+            queued_at=timezone.now(), replacement_id=replacement
+        )
+        if not kept:
+            self._taken_over += 1
+            logger.warning(
+                'a replay claim was taken over while its message was being queued',
+                extra={'tg_replay_of': str(row.correlation_id), 'tg_claimed_by': claim.claimed_by},
+            )
         recorded = self._record_replay(row, replacement)
         logger.info(
             'replayed a failed send',
             extra={'tg_function': row.function, 'tg_replay_of': str(row.correlation_id)},
         )
         note = '' if recorded else ' (the feed has no row joining them; see the log)'
+        note += '' if kept else ' (its claim was taken over while this was queueing; see the log)'
         if not recorded:
             logger.error(
                 'a replay was queued and the feed did not record it, so its history has a hole',
@@ -629,6 +649,13 @@ class Command(BaseCommand):
                 f'{self._unrecorded} {were} queued without a row joining it to the failure in the '
                 f'feed: the claim records it, so no later run will send it again, but the history '
                 f'of those messages has a hole in it -- read the log'
+            )
+        if self._taken_over:
+            were = 'claim was' if self._taken_over == 1 else 'claims were'
+            self.stdout.write(
+                f'{self._taken_over} {were} taken over while the message was being queued, so '
+                f'another run may have sent the same message: the queue write outlasted '
+                f'--claim-lease -- read the log, and give the next run a longer one'
             )
         for reason, count in refused.most_common():
             self.stdout.write(f'  {count} x {reason}')

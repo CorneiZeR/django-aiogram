@@ -171,6 +171,13 @@
   in Python rather than through `detail__replay_of`, so it needs no JSON key lookup from a
   database that may be the log's own.
 
+  A queue write slower than the lease loses its claim to another run mid-call, and the write
+  back is conditional for that reason: the row may be gone, and `save(update_fields=…)` raises
+  on an update that matches nothing, which would have ended the run at that row with the rest
+  of the failures neither replayed nor reported. It is counted and reported instead — *1 claim
+  was taken over while the message was being queued* — since the message went and another run
+  may have sent it too.
+
   A claim stands until its message is known to have reached the queue: a run that *died* between
   claiming and queueing leaves one, and so does a queue write that raised, since that is not
   proof the message stayed out. `--claim-lease`, an hour by default, is how long the next run

@@ -475,6 +475,13 @@ send a second copy, because the message may have reached the queue after all; th
 it did not land — a payload the broker will refuse however often it is offered — `--claim-lease 1`
 on the next run is the way to say so.
 
+A lease that short has its own edge, and the command survives it rather than pretending it away:
+a queue write slower than the lease loses its claim to another run mid-call. The message this run
+queued still went, so the run says *1 claim was taken over while the message was being queued*
+and carries on to the rest — ending there would leave the remaining failures neither replayed nor
+reported. Two runs and a one-second lease is how a message goes twice; the report and the log both
+name the messages it could have happened to.
+
 ## `ModuleNotFoundError: No module named 'telegram_bot'`
 
 The 1.x package name was a deprecated shim in 2.x and is gone in 3.0. The
