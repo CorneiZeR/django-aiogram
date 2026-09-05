@@ -51,8 +51,8 @@ the bot container. What changed is where a mistake lands:
 | a misspelled argument | in the worker | at the call, by name |
 
 **This package declares none of those signatures**, which is the point: aiogram has 181
-methods with 1153 arguments between them, and every one of them is already declared, typed and
-versioned there. So the shortcuts cannot drift from the API — they *are* the API — and a
+methods, with 972 arguments between them on 3.30, and every one of them is already declared,
+typed and versioned there. So the shortcuts cannot drift from the API — they *are* the API — and a
 project on a newer aiogram gets its newer arguments with no release here.
 
 The last row is this package's own doing rather than a type checker's. aiogram's models accept

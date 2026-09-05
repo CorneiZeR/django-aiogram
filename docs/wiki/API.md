@@ -66,7 +66,9 @@ bot.send(SendMessage(chat_id=CHAT_ID, text='hello'))
 Everything else is identical — same correlation id, same route, same events — and the
 arguments are checked by whatever type checker the project runs, because they are aiogram's
 own model fields. This package declares no signature of its own for them, so there is nothing
-to drift: 181 methods and 1153 arguments stay where they are already declared and versioned. A
+to drift: 181 methods, and the arguments between them — 972 on aiogram 3.30, a number that
+moves with the library rather than with a release here — stay where they are already declared
+and versioned. A
 field aiogram does not know is refused at the call, since aiogram itself allows unknown ones
 and the worker would not. `send_many` and `send_raw` do not take one — see
 **[Sending messages](Sending-messages.md#checked-before-it-is-sent)**.
