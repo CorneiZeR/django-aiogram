@@ -52,7 +52,7 @@ REFUSING = {
 }
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_list_reads_the_key_belonging_to_the_name(redis_server):
     """A worker that is gone left a list behind, and its name is how anyone reaches it."""
     redis_server.rpush('TELEGRAM_BOT_MESSAGE:processing:gone', b'one', b'two')
@@ -62,7 +62,7 @@ def test_the_list_reads_the_key_belonging_to_the_name(redis_server):
     assert broker.inflight_depth('gone') == 2
 
 
-@override_settings(TELEGRAM_BOT=STREAMS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=STREAMS)
 def test_streams_takes_one_consumers_share_from_the_summary(redis_server):
     """The breakdown rides along with the total, so a name costs no second round trip.
 
@@ -88,7 +88,7 @@ def test_a_transport_that_cannot_answer_refuses_rather_than_saying_zero(path):
     worker names wants to know which transport declined and which name it was asking about
     without parsing the sentence back apart.
     """
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'BROKER': path, **REFUSING[path]}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'BROKER': path, **REFUSING[path]}):
         broker = import_string(path)()
 
         assert broker.inflight_depth() == 0, 'this process holds nothing, and can still say so'
@@ -109,7 +109,7 @@ def test_a_transport_that_cannot_answer_refuses_rather_than_saying_zero(path):
 @pytest.mark.parametrize('path', sorted(REFUSING))
 def test_the_awaiting_half_refuses_the_same_way(path):
     """Two entry points, one rule -- and the async one is the exporter's, so it must not differ."""
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'BROKER': path, **REFUSING[path]}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'BROKER': path, **REFUSING[path]}):
         broker = import_string(path)()
 
         with pytest.raises(WorkerDepthUnavailableError):
@@ -126,7 +126,7 @@ class RecordingBroker(RedisListBroker):
         return 11
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'BROKER': 'tests.test_inflight_by_worker.RecordingBroker'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'BROKER': 'tests.test_inflight_by_worker.RecordingBroker'})
 def test_the_public_method_asks_the_transport_and_touches_no_client(monkeypatch):
     """The defect as a caller met it: a name went to a Redis client whatever `BROKER` said.
 

@@ -360,7 +360,7 @@ def test_the_check_reports_the_table_and_names_the_command(old_table):
     # the *subject*, not merely the presence of the name: Django prints the id and then the
     # message, so the message's first words say what the sentence is about. Without a label this
     # rule inherited the settings name and rendered as
-    # `TELEGRAM_BOT django_redis_aiogram_event is still on the 'default' database`, which sends a
+    # `TELEGRAM_BOT_DEFAULTS django_redis_aiogram_event is still on the 'default' database`, which sends a
     # reader looking for a setting by that name. It is about a table
     assert found[0].msg.startswith(OLD_TABLE), found[0].msg
 

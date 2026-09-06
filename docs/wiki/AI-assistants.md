@@ -34,8 +34,8 @@ Project uses django-aiogram 4.x. Rules:
   shared bot: @bot.message(F.text), @bot.callback_query(...). They are ordinary
   async Django code; use afirst()/sync_to_async for the ORM.
 - Bot-wide defaults such as parse_mode belong in
-  TELEGRAM_BOT['DEFAULT_BOT_PROPERTIES'], not in every send call.
-- Settings live in the TELEGRAM_BOT dict; scalars can come from
+  TELEGRAM_BOT_DEFAULTS['DEFAULT_BOT_PROPERTIES'], not in every send call.
+- Settings live in the TELEGRAM_BOT_DEFAULTS dict; scalars can come from
   DJANGO_AIOGRAM_<NAME> environment variables.
 - The package is safe to import with no TOKEN and no Redis. Do not add
   placeholder credentials to make imports work, and do not guard imports in
@@ -95,7 +95,7 @@ Project uses django-aiogram 4.x. Rules:
   hook: there is none. It fires with EVENT_LOG off, so metrics need no table and no
   migration, and the exporter must run in the start_tgbot container because that is
   where send outcomes are recorded.
-- The event log is off by default (TELEGRAM_BOT['EVENT_LOG']). Turning it on
+- The event log is off by default (TELEGRAM_BOT_DEFAULTS['EVENT_LOG']). Turning it on
   needs a retention job — `manage.py tgbot_prune_events` — or the table grows
   without bound. Message bodies are not stored unless EVENT_LOG_PAYLOAD='full',
   which is a personal-data decision, not a verbosity one.
@@ -125,7 +125,7 @@ Docker kills it at the timeout. Leave `DJANGO_AIOGRAM_ENABLED` unset on the othe
 — they queue messages."*
 
 **Turn on the event log.** *"Run `manage.py migrate` first, then enable
-`TELEGRAM_BOT['EVENT_LOG']` in django-aiogram — a process that starts
+`TELEGRAM_BOT_DEFAULTS['EVENT_LOG']` in django-aiogram — a process that starts
 recording before the table exists drops everything it records until someone
 notices. Then set `EVENT_LOG_RETENTION_DAYS` and schedule
 `manage.py tgbot_prune_events` daily. Leave `EVENT_LOG_PAYLOAD` at its default

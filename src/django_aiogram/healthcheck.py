@@ -20,7 +20,7 @@ So this module is the check, and both entry points are thin:
 
 **This module must not import anything that needs the app registry.** No models, no
 aiogram, no :mod:`django_aiogram.producer.client`. Reading
-``django.conf.settings.TELEGRAM_BOT`` imports the settings module and nothing more,
+``django.conf.settings.TELEGRAM_BOT_DEFAULTS`` imports the settings module and nothing more,
 which is the whole saving. ``tests/test_lazy_init.py`` asserts the registry is still
 unpopulated after ``main()`` returns.
 """

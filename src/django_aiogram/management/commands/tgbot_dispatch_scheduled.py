@@ -132,7 +132,7 @@ class Command(BaseCommand):
             # a disabled process reaches neither the broker nor Telegram, so a mover here
             # would claim rows and publish nothing
             msg = (
-                "django-aiogram is disabled (TELEGRAM_BOT['ENABLED'] or DJANGO_AIOGRAM_ENABLED), "
+                "django-aiogram is disabled (TELEGRAM_BOT_DEFAULTS['ENABLED'] or DJANGO_AIOGRAM_ENABLED), "
                 'so a scheduled send has nowhere to go. Nothing was claimed.'
             )
             raise CommandError(msg)

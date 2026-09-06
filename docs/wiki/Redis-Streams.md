@@ -5,7 +5,7 @@ structure behind it: a stream and a consumer group instead of a list. The group 
 the operational story, not the dependency.
 
 ```python
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'BROKER': 'django_aiogram.broker.redis_streams.RedisStreamsBroker',
     'REDIS_URL': 'redis://localhost:6379/0',
     'REDIS_STREAM_KEY': 'telegram-bot',

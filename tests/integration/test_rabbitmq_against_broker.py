@@ -40,7 +40,7 @@ def settings_for(url):
 
 @pytest.fixture
 def broker(broker_channel, amqp_url):
-    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
         yield RabbitMQBroker()
 
 
@@ -54,7 +54,7 @@ def test_a_message_a_killed_worker_held_comes_back(broker, broker_channel, amqp_
     A second broker takes it, which is the replacement container — and it does not have to be
     the same one, which is what `needs_identity` being false means.
     """
-    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
         broker.publish([payload(7)])
         taken = broker.take_nowait()
         assert taken is not None, 'the message was not delivered in the first place'
@@ -76,7 +76,7 @@ def test_an_acknowledged_message_does_not_come_back_after_a_reconnect(broker, am
     The same drop as above, so the two differ only in the acknowledgement — which is the thing
     being tested.
     """
-    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
         broker.publish([payload(8)])
         taken = broker.take_nowait()
         assert taken is not None
@@ -94,7 +94,7 @@ def test_a_release_puts_it_back_at_once(broker, amqp_url):
     up is a single command: the Redis list leaves it in place and a stream has to move an idle
     counter first.
     """
-    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
         broker.publish([payload(9)])
         taken = broker.take_nowait()
         assert taken is not None
@@ -114,7 +114,7 @@ def test_depth_counts_what_is_ready_and_inflight_counts_what_is_held(broker, amq
     consumer — so the in-flight count is this broker's own tally. Asserted together because
     the pair is what a queue-depth alert reads.
     """
-    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
         broker.publish([payload(1), payload(2), payload(3)])
 
         assert broker.depth() == 3
@@ -135,7 +135,7 @@ def test_a_publish_that_cannot_be_routed_raises(broker, broker_channel, amqp_url
     housekeeping does. Without `mandatory` the exchange would drop it silently and `send()`
     would return an id for a message that never existed.
     """
-    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
         broker.publish([payload(1)])  # opens the channel and declares the queue
         broker_channel.queue_delete(queue=AMQP_QUEUE)
 
@@ -177,7 +177,7 @@ def test_the_awaited_halves_work_off_the_loop(broker, amqp_url):
         measuring.append(threading.get_ident())
         return measured(self)
 
-    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
 
         async def on_a_loop():
             await broker.apublish([])
@@ -203,7 +203,7 @@ def test_the_awaited_halves_work_off_the_loop(broker, amqp_url):
 
 def test_waiting_for_a_message_returns_without_one(broker, amqp_url):
     """`take` has to give the consumer its turn back, or a shutdown waits for traffic."""
-    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
         assert broker.take(0.2) is None
 
         broker.publish([payload(5)])
@@ -231,7 +231,7 @@ def test_the_prefetch_is_always_stated_even_when_it_is_unlimited(broker, amqp_ur
 
     monkeypatch.setattr(BlockingChannel, 'basic_qos', recording)
 
-    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
         broker.publish([payload(1)])
 
     assert asked == [0], f'prefetch was not stated to the broker: {asked}'
@@ -251,7 +251,7 @@ def test_a_blocked_connection_cannot_hold_a_call_for_ever(broker, amqp_url):
     """
     from django_aiogram.broker.rabbitmq import client
 
-    with override_settings(TELEGRAM_BOT={**settings_for(amqp_url), 'RABBITMQ_TIMEOUT': 3}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**settings_for(amqp_url), 'RABBITMQ_TIMEOUT': 3}):
         broker.publish([payload(1)])
 
         # `_impl.params` because a `BlockingConnection` is a facade and does not expose the
@@ -264,7 +264,7 @@ def test_a_blocked_connection_cannot_hold_a_call_for_ever(broker, amqp_url):
     # against a setting of 2 left the join at 3 seconds while a blocked publish could sit for a
     # minute. Every other pika parameter in the URL is still the project's
     explicit = f'{amqp_url}?blocked_connection_timeout=7'
-    with override_settings(TELEGRAM_BOT={**settings_for(explicit), 'RABBITMQ_TIMEOUT': 3}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**settings_for(explicit), 'RABBITMQ_TIMEOUT': 3}):
         RabbitMQBroker().publish([payload(2)])
 
         assert client._local.connection._impl.params.blocked_connection_timeout == 3.0, (
@@ -305,7 +305,7 @@ def test_a_settings_change_does_not_reach_across_a_thread(broker, amqp_url, monk
     monkeypatch.setattr(BlockingConnection, 'close', recording_close)
     monkeypatch.setattr(BlockingConnection, 'add_callback_threadsafe', recording_ask)
 
-    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
         asyncio.run(broker.apublish([payload(1)]))
         mine = getattr(client._local, 'connection', None)
         assert [c for c in client._opened if c is not mine], 'apublish opened nothing on another thread'
@@ -318,7 +318,7 @@ def test_a_settings_change_does_not_reach_across_a_thread(broker, amqp_url, monk
     assert asked_from == [here], f'the foreign connection was not asked to close: {asked_from}'
     assert here not in closed_from, 'a connection was closed directly from a thread that does not own it'
 
-    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
         # measured across the publish, because the first message is still in the queue: a
         # `>= 1` here would have held whether or not this one arrived
         before = broker.depth()
@@ -333,7 +333,7 @@ def test_a_handle_from_another_broker_is_refused(broker, amqp_url):
     The Redis list makes the same refusal for the same reason: saying so beats letting the
     driver complain about a type it was handed, which is a traceback naming a method.
     """
-    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
         with pytest.raises(TypeError, match='delivery tag'):
             broker.ack(b'a redis payload')
 
@@ -350,7 +350,7 @@ def test_taking_again_after_the_connection_was_replaced(broker, amqp_url):
     consumer was the whole intent. Settings moving under a running consumer is a live path, not
     a theoretical one.
     """
-    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
         broker.publish([payload(1)])
         first = broker.take(2)
         assert first is not None, 'the first take found nothing'
@@ -381,7 +381,7 @@ def test_replacing_a_connection_does_not_leave_the_old_one_open(broker, amqp_url
     """
     from django_aiogram.broker.rabbitmq import client
 
-    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
         broker.publish([payload(1)])
         stranded = client._local.connection
         client._local.channel.close()
@@ -406,7 +406,7 @@ def test_a_tag_from_a_replaced_channel_is_not_sent(broker, amqp_url, caplog):
     dropped, so RabbitMQ has already put the message back. The message coming back is what the
     second half asserts.
     """
-    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
         broker.publish([payload(4)])
         taken = broker.take_nowait()
         assert taken is not None
@@ -443,7 +443,7 @@ def test_a_connection_whose_setup_fails_is_closed(broker, amqp_url, monkeypatch)
 
     monkeypatch.setattr(BlockingChannel, 'queue_declare', refuse)
 
-    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)), pytest.raises(RuntimeError):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)), pytest.raises(RuntimeError):
         broker.publish([payload(1)])
 
     assert opened, 'the setup was never reached, so this proves nothing'
@@ -469,7 +469,7 @@ def test_a_connection_whose_thread_is_gone_is_not_held(broker, amqp_url, broker_
     """
     from django_aiogram.broker.rabbitmq import client
 
-    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
         pool = ThreadPoolExecutor(max_workers=1)
         pool.submit(broker.publish, [payload(21)]).result()
 
@@ -493,7 +493,7 @@ def test_the_in_flight_count_forgets_a_lost_channel(broker, amqp_url):
     the number is too high, and it grows by one per reconnect. Taking the requeued message
     again would then be counted as a second delivery of something this process holds once.
     """
-    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
         broker.publish([payload(3)])
         assert broker.take_nowait() is not None, 'the message was not delivered'
         assert broker.inflight_depth() == 1
@@ -521,7 +521,7 @@ def test_two_threads_never_share_a_channel_number(amqp_url):
 
     seen: list[int] = []
 
-    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
         broker = RabbitMQBroker()
         broker.publish([payload(1)])
         seen.append(client.channel_generation())
@@ -587,7 +587,7 @@ def test_a_confirmed_publish_survives_the_broker_going_away(amqp_url, amqp_conta
         connection.close()
         return True
 
-    with override_settings(TELEGRAM_BOT=settings_for(amqp_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
         RabbitMQBroker().publish([payload(11)])
         # before the restart, not after: this is what the process holds, and a connection to a
         # broker that has gone is not a connection this package should be asked to notice

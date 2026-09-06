@@ -170,7 +170,7 @@ def test_the_client_no_longer_carries_it(name):
 
 
 @pytest.mark.parametrize('name', OBSERVER_DECORATORS)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_every_decorator_registers_on_the_router(name):
     """A decorator that silently stops registering is worse than a missing one."""
     instance = TelegramBot()
@@ -184,7 +184,7 @@ def test_every_decorator_registers_on_the_router(name):
     assert len(observer.handlers) == before + 1, f'{name} registered nothing'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_pre_2_0_shape_still_works_end_to_end():
     """What 1.x code does: build it, reach inside, drive the loop yourself."""
     instance = TelegramBot()
@@ -201,7 +201,7 @@ def test_the_pre_2_0_shape_still_works_end_to_end():
     instance.close()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_construction_arguments_1_x_accepted():
     """`TelegramBot(max_retries=..., loop=...)` is how 1.x code built it."""
     signature = inspect.signature(TelegramBot)
@@ -219,7 +219,7 @@ def test_the_construction_arguments_1_x_accepted():
             supplied.close()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_redis_client_is_shared_and_lives_in_its_own_module(redis_server):
     """Still one connection, and still reachable — through the module rather than the package.
 
@@ -292,7 +292,7 @@ def test_one_family_catches_everything_the_package_raises():
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost:6379/0',
         'DELIVERY': 'django_aiogram.consumer.delivery.BlpopDelivery',

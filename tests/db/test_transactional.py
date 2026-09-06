@@ -68,7 +68,7 @@ def published():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_rolled_back_block_queues_nothing(published):
     with pytest.raises(RuntimeError):
         announce_and_then_fail()
@@ -77,7 +77,7 @@ def test_a_rolled_back_block_queues_nothing(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_write_waits_for_the_commit_rather_than_being_skipped(published):
     """Both halves: it does not happen inside the block, and it does happen after it."""
     with transaction.atomic():
@@ -88,7 +88,7 @@ def test_the_write_waits_for_the_commit_rather_than_being_skipped(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_send_outside_a_transaction_publishes_where_it_stands(published):
     """There is no commit to wait for, so the setting has nothing to change."""
     TelegramBot().send(chat_id=1, text='no transaction here')
@@ -97,7 +97,7 @@ def test_a_send_outside_a_transaction_publishes_where_it_stands(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'TRANSACTIONAL': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'TRANSACTIONAL': False})
 def test_with_the_setting_off_the_write_still_happens_inside_the_block(published):
     """The behaviour every release before 4.1 had, pinned so the default cannot drift."""
     with transaction.atomic():
@@ -106,7 +106,7 @@ def test_with_the_setting_off_the_write_still_happens_inside_the_block(published
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_fan_out_defers_every_chunk(published):
     with transaction.atomic():
         TelegramBot().send_many([1, 2, 3], chunk_size=2, text='to everyone')
@@ -116,7 +116,7 @@ def test_the_fan_out_defers_every_chunk(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_batch_registers_one_commit_hook_however_many_chunks(published):
     """Counted, because the payload assertion above passes with a hook per chunk too."""
     with transaction.atomic():
@@ -125,7 +125,7 @@ def test_a_batch_registers_one_commit_hook_however_many_chunks(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_chunk_that_fails_stops_the_ones_behind_it(published):
     """What the immediate path does, where the raise ends the loop before the next chunk.
 
@@ -142,7 +142,7 @@ def test_a_chunk_that_fails_stops_the_ones_behind_it(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_chunk_that_cannot_be_serialized_does_not_take_the_prepared_ones_with_it(published):
     """The hook is registered before the loop, and reads its list when it runs.
 
@@ -158,7 +158,7 @@ def test_a_chunk_that_cannot_be_serialized_does_not_take_the_prepared_ones_with_
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=LOGGED)
+@override_settings(TELEGRAM_BOT_DEFAULTS=LOGGED)
 def test_the_queued_row_describes_what_was_published_not_what_came_after(published):
     """The row's summary is built beside the payload, not from the commit hook.
 
@@ -177,7 +177,7 @@ def test_the_queued_row_describes_what_was_published_not_what_came_after(publish
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_an_atomic_block_under_manual_management_publishes_immediately(published, caplog):
     """`atomic()` with autocommit off sets `in_atomic_block` and does not commit on exit.
 
@@ -200,7 +200,7 @@ def test_an_atomic_block_under_manual_management_publishes_immediately(published
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_awaiting_producer_has_no_transaction_to_wait_for(published):
     """Pinned rather than aspired to: a coroutine holds its own connection.
 
@@ -214,7 +214,7 @@ def test_the_awaiting_producer_has_no_transaction_to_wait_for(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_payload_that_cannot_be_serialized_raises_where_the_call_was_written(published):
     """Serialization does not wait, so the traceback points at the send and not at a hook."""
     with transaction.atomic(), pytest.raises(SerializationError):
@@ -224,7 +224,7 @@ def test_a_payload_that_cannot_be_serialized_raises_where_the_call_was_written(p
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_nested_value_is_frozen_at_the_call_not_read_again_at_the_commit(published):
     """`**kwargs` copies the mapping, so the layer under it is what a caller still holds.
 
@@ -242,7 +242,7 @@ def test_a_nested_value_is_frozen_at_the_call_not_read_again_at_the_commit(publi
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_publish_that_fails_after_the_commit_does_not_reach_the_caller(published, caplog):
     """The transaction has landed by then, so raising would only break the hooks behind it."""
     RecordingBroker.refuses = True
@@ -254,7 +254,7 @@ def test_a_publish_that_fails_after_the_commit_does_not_reach_the_caller(publish
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'RAISE_EXCEPTION': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'RAISE_EXCEPTION': True})
 def test_raise_exception_lets_a_failed_deferred_publish_out(published):
     RecordingBroker.refuses = True
 
@@ -263,7 +263,7 @@ def test_raise_exception_lets_a_failed_deferred_publish_out(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_autocommit_off_publishes_where_it_stands_and_says_so_once(published, caplog):
     """`on_commit` refuses a manually managed transaction, so honouring the setting there
     would turn every send into a failure. Publishing now is what it falls back to."""
@@ -282,7 +282,7 @@ def test_autocommit_off_publishes_where_it_stands_and_says_so_once(published, ca
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=LOGGED)
+@override_settings(TELEGRAM_BOT_DEFAULTS=LOGGED)
 def test_the_queued_row_waits_with_the_write(published):
     """Nothing is recorded for a message that was never queued."""
     with pytest.raises(RuntimeError):
@@ -298,7 +298,7 @@ def test_the_queued_row_waits_with_the_write(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=LOGGED)
+@override_settings(TELEGRAM_BOT_DEFAULTS=LOGGED)
 def test_a_deferred_publish_that_failed_is_recorded_as_a_queueing_drop(published):
     """The same stage an immediate failure records: the write may still have been applied."""
     RecordingBroker.refuses = True

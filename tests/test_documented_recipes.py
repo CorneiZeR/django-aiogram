@@ -40,7 +40,7 @@ def a_message(text):
     )
 
 
-@override_settings(TELEGRAM_BOT={'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0'})
 def test_the_fakeredis_queue_assertion(monkeypatch):
     """The page tells the reader to patch the broker's client, which is where the write happens.
 
@@ -142,7 +142,7 @@ def test_a_catch_all_registered_earlier_swallows_the_update():
     assert observers == before, 'the recipe left the shared router changed'
 
 
-@override_settings(TELEGRAM_BOT={})
+@override_settings(TELEGRAM_BOT_DEFAULTS={})
 def test_draining_the_queue_without_a_thread(redis_server):
     """Queued by enqueue and read by the consumer, which is the whole path."""
     bot.enqueue(chat_id=42, text='hi')
@@ -158,7 +158,7 @@ def test_draining_the_queue_without_a_thread(redis_server):
     assert redis_server.llen(QUEUE) == 0
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'FSM_STORAGE': 'memory', 'RATE_LIMIT': None})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'FSM_STORAGE': 'memory', 'RATE_LIMIT': None})
 def test_the_capture_recipe_the_page_leads_with():
     """The page's first answer, run as written -- no server, no patching, no settings.
 
@@ -622,7 +622,7 @@ def test_the_grace_table_names_a_timeout_every_shipped_transport_declares():
     assert covered == named, f'the row names {sorted(named - covered)}, which no shipped transport declares'
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})
 def test_the_grace_table_adds_up_to_the_period_the_page_sells():
     """Three waits and a total, all four of which the reader copies into a compose file.
 

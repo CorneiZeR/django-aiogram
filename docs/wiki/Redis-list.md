@@ -5,7 +5,7 @@ changes its imports and nothing else. A Redis list holds the queue: `RPUSH` to p
 blocking pop to take.
 
 ```python
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker',
     'REDIS_URL': 'redis://localhost:6379/0',
 }

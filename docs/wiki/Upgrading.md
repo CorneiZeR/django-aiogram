@@ -55,7 +55,7 @@ project on RabbitMQ or Kafka never had a way to do:
 
 ```python
 # settings/test.py
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'FSM_STORAGE': 'memory',
     'BROKER': 'django_aiogram.testing.InMemoryBroker',
 }
@@ -80,7 +80,7 @@ that calls Telegram directly, which is `send_raw` anywhere and `send` inside the
 container, has no write to defer.
 
 ```python
-TELEGRAM_BOT = {'TRANSACTIONAL': True}
+TELEGRAM_BOT_DEFAULTS = {'TRANSACTIONAL': True}
 ```
 
 Read **[Settings](Settings.md#bot-behavior)** before turning it on: the `outbound.queued`
@@ -112,7 +112,7 @@ from django_aiogram import bot, conf
 from django_aiogram.producer.client import TelegramBot
 ```
 
-`TELEGRAM_BOT` stays as the settings key — it names what it configures, not the package
+`TELEGRAM_BOT_DEFAULTS` stays as the settings key — it names what it configures, not the package
 that reads it. Environment variables move from `DJANGO_REDIS_AIOGRAM_*` to
 `DJANGO_AIOGRAM_*`, the logger from `django_redis_aiogram` to `django_aiogram`, and check
 ids from `django_redis_aiogram.EXXX` to `django_aiogram.EXXX` — so re-silence anything you
@@ -636,7 +636,7 @@ TG_BOT_KEY = os.getenv('TG_BOT_KEY') or '0:placeholder'
 Instead, switch the bot off where it does not belong:
 
 ```python
-TELEGRAM_BOT = {'ENABLED': os.getenv('RUN_BOT') == '1'}
+TELEGRAM_BOT_DEFAULTS = {'ENABLED': os.getenv('RUN_BOT') == '1'}
 ```
 
 or per container with `DJANGO_REDIS_AIOGRAM_ENABLED`. See **[Deployment](Deployment.md)**.
@@ -657,7 +657,7 @@ def default_kwargs(function):
 
 ```python
 # after
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'DEFAULT_BOT_PROPERTIES': {'parse_mode': 'HTML'},
 }
 ```

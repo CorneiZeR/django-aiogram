@@ -33,11 +33,11 @@ def payload(chat_id):
 
 @pytest.fixture
 def broker(redis_server):
-    with override_settings(TELEGRAM_BOT=SETTINGS):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS):
         yield RedisStreamsBroker()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_recovery_steps_over_an_entry_this_package_cannot_read(broker, redis_server):
     """One undecodable entry must not hide every valid one behind it.
 
@@ -68,7 +68,7 @@ def test_recovery_steps_over_an_entry_this_package_cannot_read(broker, redis_ser
     assert again.payload == payload(1)
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_every_reclaimed_entry_comes_back_not_just_the_first(broker, redis_server):
     """A page of pending entries must be delivered entry by entry.
 
@@ -95,7 +95,7 @@ def test_every_reclaimed_entry_comes_back_not_just_the_first(broker, redis_serve
     assert sorted(seen) == sorted(sent), f'{len(seen)} of {len(sent)} released messages came back'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_liveness_comes_from_the_group_with_no_key_to_write(broker, redis_server):
     """The transport answers for itself, and writes nothing to do it.
 
@@ -126,7 +126,7 @@ def test_liveness_comes_from_the_group_with_no_key_to_write(broker, redis_server
     )
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_release_does_not_hand_back_a_send_that_is_still_running(broker, redis_server):
     """The consumer holds several messages at once, so recovery must skip the live ones.
 
@@ -153,7 +153,7 @@ def test_a_release_does_not_hand_back_a_send_that_is_still_running(broker, redis
     assert broker.take_nowait() is None, 'something else came back too'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_url_that_asks_for_decoding_still_delivers(monkeypatch):
     """`decode_responses` is tolerated, so it must not silently deliver nothing.
 
@@ -181,7 +181,7 @@ def test_a_url_that_asks_for_decoding_still_delivers(monkeypatch):
     assert taken.payload == payload(5), 'the payload did not survive the round trip'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_async_half_does_not_reach_for_the_synchronous_client(broker, redis_server, monkeypatch):
     """Creating the group is two round trips, and on `apublish` they belong on the loop.
 
@@ -214,7 +214,7 @@ def test_the_async_half_does_not_reach_for_the_synchronous_client(broker, redis_
     assert inflight == 0, 'nothing was taken, so nothing is in flight'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_reclaiming_by_worker_name_is_refused_here(redis_server):
     """`tgbot_reclaim` names a worker, and on this transport a name selects nothing.
 
@@ -229,7 +229,7 @@ def test_reclaiming_by_worker_name_is_refused_here(redis_server):
         call_command('tgbot_reclaim', worker='gone')
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_awaiting_reads_answer_nothing_rather_than_raising(broker, redis_server):
     """Nothing published yet is nothing waiting, on the awaited halves too.
 

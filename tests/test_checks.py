@@ -48,22 +48,22 @@ def errors(messages):
     return [message for message in messages if isinstance(message, Error)]
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'})
 def test_valid_settings_produce_no_errors():
     assert errors(check_settings()) == []
 
 
-@override_settings(TELEGRAM_BOT={'MAX_RETRIES': 'ten', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'MAX_RETRIES': 'ten', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_wrong_integer_type_is_caught():
     assert 'django_aiogram.E012' in ids(errors(check_settings()))
 
 
-@override_settings(TELEGRAM_BOT={'MAX_RETRIES': True, 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'MAX_RETRIES': True, 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_bool_is_not_accepted_as_integer():
     assert 'django_aiogram.E012' in ids(errors(check_settings()))
 
 
-@override_settings(TELEGRAM_BOT={'MAX_RETRIES': 0, 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'MAX_RETRIES': 0, 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_integer_below_minimum_is_caught():
     assert 'django_aiogram.E012' in ids(errors(check_settings()))
 
@@ -110,7 +110,7 @@ def test_the_boolean_fixture_covers_every_boolean_setting():
     assert set(BOOLEAN_IDS) == booleans, f'the id table and DEFAULTS disagree: {set(BOOLEAN_IDS) ^ booleans}'
 
 
-@override_settings(TELEGRAM_BOT={**HUMAN_BOOLEANS, 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**HUMAN_BOOLEANS, 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_a_configuration_that_boots_and_sends_does_not_fail_the_checks():
     """Every boolean here comes from the environment, which has only strings.
 
@@ -127,7 +127,7 @@ def test_a_configuration_that_boots_and_sends_does_not_fail_the_checks():
     assert reported & boolean_ids == set(), f'a working configuration was refused: {sorted(reported & boolean_ids)}'
 
 
-@override_settings(TELEGRAM_BOT={'TRANSACTIONAL': 'maybe', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TRANSACTIONAL': 'maybe', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_a_transactional_setting_nothing_can_read_is_reported():
     """E049 is not in `EXPECTED_IDS`, so it is asserted here the way E047 and E048 are.
 
@@ -138,7 +138,7 @@ def test_a_transactional_setting_nothing_can_read_is_reported():
     assert 'django_aiogram.E049' in ids(errors(check_settings()))
 
 
-@override_settings(TELEGRAM_BOT={'ENABLED': 'maybe', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'ENABLED': 'maybe', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_a_boolean_nothing_can_read_is_still_caught():
     """The other direction, which is what keeps the rule a rule.
 
@@ -153,7 +153,7 @@ def test_a_boolean_nothing_can_read_is_still_caught():
     assert any("must be one of ['0', '1', 'false'" in str(message) for message in reported), reported
 
 
-@override_settings(TELEGRAM_BOT={'RAISE_EXCEPTION': 'false', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'RAISE_EXCEPTION': 'false', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_raise_exception_accepts_what_the_environment_can_express():
     """It was the last setting demanding a real bool, and only because of a defect.
 
@@ -166,46 +166,46 @@ def test_raise_exception_accepts_what_the_environment_can_express():
     assert 'django_aiogram.E003' not in ids(errors(check_settings()))
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': 42, 'REDIS_URL': 'r://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': 42, 'REDIS_URL': 'r://x'})
 def test_wrong_string_type_is_caught():
     assert 'django_aiogram.E004' in ids(errors(check_settings()))
 
 
-@override_settings(TELEGRAM_BOT={'DELIVERY': 'carrier-pigeon', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'DELIVERY': 'carrier-pigeon', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_unknown_delivery_is_rejected():
     assert 'django_aiogram.E009' in ids(errors(check_settings()))
 
 
-@override_settings(TELEGRAM_BOT={'SERIALIZER': 'yaml', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'SERIALIZER': 'yaml', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_unknown_serializer_is_rejected():
     assert 'django_aiogram.E010' in ids(errors(check_settings()))
 
 
-@override_settings(TELEGRAM_BOT={'DEFAULT_KWARGS': {}, 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'DEFAULT_KWARGS': {}, 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_non_callable_default_kwargs_is_caught():
     assert 'django_aiogram.E015' in ids(errors(check_settings()))
 
 
-@override_settings(TELEGRAM_BOT={'DEFAULT_BOT_PROPERTIES': 'HTML', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'DEFAULT_BOT_PROPERTIES': 'HTML', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_non_mapping_bot_properties_is_caught():
     assert 'django_aiogram.E016' in ids(errors(check_settings()))
 
 
-@override_settings(TELEGRAM_BOT={'TOEKN': 'typo', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOEKN': 'typo', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_typo_in_a_key_is_reported_as_warning():
     messages = check_settings()
     assert errors(messages) == []
     assert 'django_aiogram.W003' in ids(messages)
 
 
-@override_settings(TELEGRAM_BOT={})
+@override_settings(TELEGRAM_BOT_DEFAULTS={})
 def test_missing_credentials_warn_but_do_not_fail():
     messages = check_settings()
     assert errors(messages) == []
     assert {'django_aiogram.W001', 'django_aiogram.W002'} <= ids(messages)
 
 
-@override_settings(TELEGRAM_BOT={'ENABLED': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'ENABLED': False})
 def test_disabled_bot_does_not_warn_about_credentials():
     messages = check_settings()
     assert isinstance(messages, list)
@@ -341,7 +341,7 @@ def emitted_ids():
     """
     found = set()
     for settings in (WRONG_TYPES, WRONG_VALUES, LOG_WITHOUT_A_DATABASE, PICKLE_ON_A_DECODING_URL):
-        with override_settings(TELEGRAM_BOT=settings):
+        with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
             found |= {str(message.id).removeprefix('django_aiogram.') for message in check_settings()}
     return found
 
@@ -357,7 +357,7 @@ def test_every_check_id_is_documented():
     """An operator meeting E021 has to be able to look it up.
 
     Read from the registry rather than from `EXPECTED_IDS`, which is the set of ids
-    the fixtures below *emit*. Some rows cannot be emitted by a `TELEGRAM_BOT` dict at
+    the fixtures below *emit*. Some rows cannot be emitted by a `TELEGRAM_BOT_DEFAULTS` dict at
     all — I001 needs an ephemeral hostname, I002 needs `DATABASE_ROUTERS` — so an id
     added without touching that set was documented only by whoever remembered to.
     """
@@ -379,7 +379,7 @@ def test_the_documented_floor_is_the_floor_the_check_enforces():
     assert f'below {floor}' in row, f'the table does not name the floor the check enforces ({floor}): {row}'
 
     for value, refused in ((floor - 1, True), (floor, False)):
-        with override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_TIMEOUT': value}):
+        with override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_TIMEOUT': value}):
             reported = 'django_aiogram.E030' in ids(errors(check_settings()))
         assert reported is refused, f'REDIS_TIMEOUT={value} is {"accepted" if refused else "refused"}'
 
@@ -447,7 +447,7 @@ def test_a_key_belonging_to_another_transport_is_reported_as_stranded():
     configured — and a line nothing reads is exactly what `W003` exists to name. It is the
     transport's now, so the rule answers.
     """
-    with override_settings(TELEGRAM_BOT={**STREAMS, 'REDIS_MESSAGES_KEY': 'TELEGRAM_BOT_MESSAGE'}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**STREAMS, 'REDIS_MESSAGES_KEY': 'TELEGRAM_BOT_MESSAGE'}):
         found = [message for message in check_settings() if message.id == 'django_aiogram.W003']
 
     assert len(found) == 1, f'W003 reported {[message.msg for message in found]}'
@@ -460,11 +460,11 @@ def test_a_transport_setting_is_validated_only_where_that_transport_is_configure
     Both directions, because either alone is a rule that could be doing nothing: under Streams the
     value is not the package's business, and under the list the same value is still reported.
     """
-    with override_settings(TELEGRAM_BOT={**STREAMS, 'REDIS_MESSAGES_KEY': 42}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**STREAMS, 'REDIS_MESSAGES_KEY': 42}):
         under_streams = ids(check_settings())
 
     listed = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'REDIS_MESSAGES_KEY': 42}
-    with override_settings(TELEGRAM_BOT=listed):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=listed):
         under_the_list = ids(check_settings())
 
     assert 'django_aiogram.E007' not in under_streams, 'a list key was validated on a stream'
@@ -489,7 +489,7 @@ def test_a_transports_own_settings_are_known_without_its_driver(monkeypatch):
         'RABBITMQ_QUEUE': 'tg',
         'RABBITMQ_PREFETCH': 0,
     }
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         found = [message for message in check_settings() if message.id == 'django_aiogram.W003']
 
     assert found == [], f'a transport was told to delete its own settings: {[m.msg for m in found]}'
@@ -512,7 +512,7 @@ def test_the_settings_the_package_reads_are_known_whichever_transport_runs():
         'REDIS_TIMEOUT': 10,
         'BLPOP_TIMEOUT': 5,
     }
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         found = [message for message in check_settings() if message.id == 'django_aiogram.W003']
 
     assert found == [], f'a package-wide setting was called unknown: {[m.msg for m in found]}'
@@ -533,13 +533,13 @@ def test_every_registry_row_guards_a_real_setting():
     assert sorted(guarded - set(DEFAULTS) - declared) == []
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://x', 'WORKER_NAME': 7})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://x', 'WORKER_NAME': 7})
 def test_a_non_string_worker_name_is_reported():
     """It names the in-flight list, so a wrong type breaks reclaim at startup."""
     assert 'django_aiogram.E021' in ids(check_settings())
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://x', 42: 'numeric'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://x', 42: 'numeric'})
 def test_a_non_string_settings_key_is_reported_not_raised():
     """`", ".join` over mixed key types used to raise out of manage.py check."""
     reported = {message.id for message in check_settings()}
@@ -547,7 +547,7 @@ def test_a_non_string_settings_key_is_reported_not_raised():
     assert 'django_aiogram.W003' in reported
 
 
-@override_settings(TELEGRAM_BOT={'ENABLED': 'false', 'TOKEN': '', 'REDIS_URL': ''})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'ENABLED': 'false', 'TOKEN': '', 'REDIS_URL': ''})
 def test_a_textually_disabled_bot_does_not_warn_about_credentials():
     """'false' from the environment disables startup and sending, so the
     credential warnings have to agree rather than nag a disabled process."""
@@ -557,7 +557,7 @@ def test_a_textually_disabled_bot_does_not_warn_about_credentials():
     assert 'django_aiogram.W002' not in reported
 
 
-@override_settings(TELEGRAM_BOT={'ENABLED': 'maybe', 'TOKEN': '', 'REDIS_URL': ''})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'ENABLED': 'maybe', 'TOKEN': '', 'REDIS_URL': ''})
 def test_an_unreadable_enabled_still_warns_and_reports_its_own_problem():
     """E001 owns the type complaint; the warnings assume the bot is on."""
     reported = {message.id for message in check_settings()}
@@ -567,7 +567,7 @@ def test_an_unreadable_enabled_still_warns_and_reports_its_own_problem():
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'BLPOP_TIMEOUT': 30,
         'HEARTBEAT_INTERVAL': 10,
         'REDIS_TIMEOUT': 60,
@@ -591,7 +591,7 @@ def test_a_pop_capped_by_the_heartbeat_is_reported_and_names_it():
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'BLPOP_TIMEOUT': 30,
         'HEARTBEAT_INTERVAL': 60,
         'REDIS_TIMEOUT': 10,
@@ -610,7 +610,7 @@ def test_a_pop_capped_by_the_read_deadline_names_that_instead():
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'BLPOP_TIMEOUT': 30,
         'HEARTBEAT_INTERVAL': 9,
         'REDIS_TIMEOUT': 10,
@@ -637,7 +637,7 @@ def test_a_tie_between_the_two_limits_names_both():
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'BLPOP_TIMEOUT': 10,
         'HEARTBEAT_INTERVAL': 10,
         'REDIS_TIMEOUT': 60,
@@ -659,7 +659,7 @@ def routing_warnings():
     return [message for message in check_settings() if str(message.id).endswith('I002')]
 
 
-@override_settings(TELEGRAM_BOT=ROUTED_LOG, DATABASE_ROUTERS=[])
+@override_settings(TELEGRAM_BOT_DEFAULTS=ROUTED_LOG, DATABASE_ROUTERS=[])
 def test_a_log_database_nothing_routes_to_is_reported():
     """E040, E041 and W005 all pass on this, and `migrate` still never creates the table.
 
@@ -679,7 +679,7 @@ def test_a_log_database_nothing_routes_to_is_reported():
 
 
 @override_settings(
-    TELEGRAM_BOT=ROUTED_LOG,
+    TELEGRAM_BOT_DEFAULTS=ROUTED_LOG,
     DATABASE_ROUTERS=['django_aiogram.eventlog.dbrouter.TelegramEventLogRouter'],
 )
 def test_a_dotted_path_router_satisfies_it():
@@ -687,21 +687,23 @@ def test_a_dotted_path_router_satisfies_it():
     assert routing_warnings() == []
 
 
-@override_settings(TELEGRAM_BOT=ROUTED_LOG, DATABASE_ROUTERS=[TelegramEventLogRouter()])
+@override_settings(TELEGRAM_BOT_DEFAULTS=ROUTED_LOG, DATABASE_ROUTERS=[TelegramEventLogRouter()])
 def test_an_instance_router_satisfies_it_too():
     """`DATABASE_ROUTERS` takes instances as well, and a project mixing the two — a path
     for ours, an instance for its own — is exactly what a string comparison gets wrong."""
     assert routing_warnings() == []
 
 
-@override_settings(TELEGRAM_BOT={'EVENT_LOG': True, 'TOKEN': '1:x', 'REDIS_URL': 'redis://x'}, DATABASE_ROUTERS=[])
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={'EVENT_LOG': True, 'TOKEN': '1:x', 'REDIS_URL': 'redis://x'}, DATABASE_ROUTERS=[]
+)
 def test_a_log_on_the_default_database_needs_no_router():
     """Nothing was pointed anywhere, so nothing needs routing — and warning here would
     be the "fires on a working install" defect this whole issue is about."""
     assert routing_warnings() == []
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '1:x', 'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '1:x', 'REDIS_URL': 'redis://localhost:6379/0'})
 def test_the_defaults_report_nothing():
     """A warning on an untouched install teaches people to ignore the checks.
 
@@ -713,7 +715,7 @@ def test_the_defaults_report_nothing():
     assert reported == [], reported
 
 
-@override_settings(TELEGRAM_BOT={'EVENT_LOG': False, 'EVENT_LOG_SYNC': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG': False, 'EVENT_LOG_SYNC': True})
 def test_the_synchronous_writer_warning_is_silent_while_the_log_is_off():
     """`record()` returns before it ever reads EVENT_LOG_SYNC, so warning here
     would describe a cost nobody is paying — and a warning that is wrong is one
@@ -724,7 +726,7 @@ def test_the_synchronous_writer_warning_is_silent_while_the_log_is_off():
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost:6379/0?decode_responses=true',
         'ALLOW_PICKLE': True,
@@ -742,7 +744,7 @@ def test_a_decoding_url_with_pickle_is_refused():
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost:6379/0?decode_responses=true',
         'ALLOW_PICKLE': False,
@@ -753,13 +755,13 @@ def test_a_decoding_url_without_pickle_is_fine():
     assert 'django_aiogram.E043' not in ids(check_settings())
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'ALLOW_PICKLE': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'ALLOW_PICKLE': True})
 def test_a_plain_url_with_pickle_is_fine():
     assert 'django_aiogram.E043' not in ids(check_settings())
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'TOKEN': '42:x',
         # reads as off and is not: redis-py has no boolean parser for this key, so
         # the string 'false' reaches the connection and enables decoding
@@ -771,30 +773,32 @@ def test_a_url_that_only_looks_like_it_disables_decoding_is_refused():
     assert 'django_aiogram.E043' in ids(check_settings())
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'DRAIN_TIMEOUT': 'soon'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'DRAIN_TIMEOUT': 'soon'})
 def test_an_unreadable_drain_timeout_is_reported():
     """`close()` reads this while shutting down, which is the worst place to raise."""
     assert 'django_aiogram.E044' in ids(check_settings())
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'DRAIN_TIMEOUT': -1})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'DRAIN_TIMEOUT': -1})
 def test_a_negative_drain_timeout_is_reported():
     """A negative budget makes the drain expire before it starts."""
     assert 'django_aiogram.E044' in ids(check_settings())
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'DRAIN_TIMEOUT': float('nan')})
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'DRAIN_TIMEOUT': float('nan')}
+)
 def test_a_drain_timeout_that_is_not_a_number_is_reported():
     """Every comparison against nan is false, so it slips past a plain bound."""
     assert 'django_aiogram.E044' in ids(check_settings())
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'DRAIN_TIMEOUT': 2.5})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'DRAIN_TIMEOUT': 2.5})
 def test_a_fractional_drain_timeout_is_fine():
     assert 'django_aiogram.E044' not in ids(check_settings())
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'})
 def test_a_container_that_forgot_its_hostname_is_warned_about(monkeypatch):
     """The in-flight list is keyed on the worker's name.
 
@@ -808,7 +812,7 @@ def test_a_container_that_forgot_its_hostname_is_warned_about(monkeypatch):
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost',
         'BROKER': 'django_aiogram.broker.redis_streams.RedisStreamsBroker',
@@ -831,7 +835,7 @@ def test_a_transport_that_needs_no_worker_name_is_not_asked_for_one(monkeypatch)
     assert 'django_aiogram.I001' not in ids(check_settings())
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'})
 def test_a_fixed_hostname_is_not_warned_about(monkeypatch):
     """An unset WORKER_NAME is the documented default and correct almost
     everywhere; warning about it as such would fire on every install."""
@@ -840,7 +844,7 @@ def test_a_fixed_hostname_is_not_warned_about(monkeypatch):
     assert 'django_aiogram.I001' not in ids(check_settings())
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'WORKER_NAME': '   '})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'WORKER_NAME': '   '})
 def test_a_padded_name_is_judged_the_way_the_worker_judges_it(monkeypatch):
     """`worker_identity()` takes any truthy value, so a padded name *is* the name.
 
@@ -854,14 +858,14 @@ def test_a_padded_name_is_judged_the_way_the_worker_judges_it(monkeypatch):
     assert 'django_aiogram.I001' not in ids(check_settings())
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'WORKER_NAME': 'bot-1'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'WORKER_NAME': 'bot-1'})
 def test_a_named_worker_is_not_warned_about(monkeypatch):
     monkeypatch.setenv('HOSTNAME', 'ba333cb79e00')
 
     assert 'django_aiogram.I001' not in ids(check_settings())
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})
 def test_a_documented_configuration_survives_fail_level_warning():
     """`check --fail-level WARNING` is what projects run in CI and in entrypoints.
 
@@ -876,7 +880,7 @@ def test_a_documented_configuration_survives_fail_level_warning():
     assert reported == [], f'a working configuration would fail --fail-level WARNING: {ids(reported)}'
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})
 def test_the_worker_name_rule_is_information_and_the_consumer_warns_for_itself(monkeypatch):
     """One rule, two audiences: the check informs, `start_tgbot` warns.
 
@@ -893,7 +897,7 @@ def test_the_worker_name_rule_is_information_and_the_consumer_warns_for_itself(m
     assert worker_name_problems(), 'the command would be told nothing'
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'REDIS_TIMEOUT': 1})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'REDIS_TIMEOUT': 1})
 def test_a_read_deadline_of_one_second_is_refused():
     """At 1 the consumer's blocking pop cannot fit inside the deadline it is capped by.
 
@@ -910,14 +914,14 @@ def test_a_read_deadline_of_one_second_is_refused():
 def test_every_read_deadline_the_check_admits_leaves_room_for_the_pop(timeout):
     """The floor and the ceiling are one statement, so they are asserted together."""
     with override_settings(
-        TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'REDIS_TIMEOUT': timeout}
+        TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'REDIS_TIMEOUT': timeout}
     ):
         assert errors(check_settings()) == [], 'the check refuses a value the consumer can work with'
         ceiling = take_ceiling(RedisListBroker.CALL_TIMEOUT_OPTION, RedisListBroker.call_timeout())
         assert ceiling.seconds < read_timeout(), 'the take cannot outlast the socket it reads through'
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': 42, 'REDIS_URL': 'r://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': 42, 'REDIS_URL': 'r://x'})
 def test_manage_py_check_surfaces_these_ids():
     """Every test above calls `check_settings()` directly, and none goes through Django.
 
@@ -948,7 +952,7 @@ def test_the_checks_are_registered_with_django():
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'ENABLED': True,
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost/0?decode_responses=1',
@@ -990,7 +994,7 @@ def test_a_check_behind_e047_does_not_crash_looking_for_the_driver(monkeypatch):
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'ENABLED': True,
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost',
@@ -1022,7 +1026,7 @@ def test_a_named_broker_whose_driver_is_missing_is_reported_with_the_install_lin
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'ENABLED': True,
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost',
@@ -1046,7 +1050,9 @@ def test_running_the_checks_leaves_no_broker_behind():
     assert registry._broker is None, 'running the checks cached a broker for the whole process'
 
 
-@override_settings(TELEGRAM_BOT={'ENABLED': False, 'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker'})
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={'ENABLED': False, 'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker'}
+)
 def test_a_disabled_process_is_not_asked_to_install_a_driver_it_never_calls(monkeypatch):
     """The rule above, gated the way `W002` is gated, and for the same reason.
 
@@ -1066,7 +1072,7 @@ def test_a_disabled_process_is_not_asked_to_install_a_driver_it_never_calls(monk
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'ENABLED': False,
         'BROKER': 'django_aiogram.producer.client.TelegramBot',
     }
@@ -1090,7 +1096,7 @@ def test_a_broker_setting_naming_something_else_is_refused():
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'ENABLED': True,
         'TOKEN': '42:x',
         'BROKER': 'django_aiogram.broker.kafka.KafkaBroker',
@@ -1111,7 +1117,7 @@ def test_a_kafka_deployment_is_not_asked_for_a_redis_url():
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'ENABLED': True,
         'TOKEN': '42:x',
         'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker',
@@ -1127,7 +1133,7 @@ def test_a_redis_broker_with_no_url_is_still_asked_for_one():
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'ENABLED': True,
         'TOKEN': '42:x',
         'BROKER': 'django_aiogram.broker.kafka.KafkaBroker',
@@ -1146,7 +1152,7 @@ def test_the_fsm_storage_alone_is_enough_to_need_the_url():
     assert reported, 'Redis FSM storage with no URL produced no warning'
 
 
-@override_settings(TELEGRAM_BOT={'ENABLED': True, 'FSM_STORAGE': 'memory', 'REDIS_URL': 'redis://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'ENABLED': True, 'FSM_STORAGE': 'memory', 'REDIS_URL': 'redis://x'})
 def test_the_missing_token_hint_says_sending_rather_than_reaching():
     """The hint is text the code emits, so it is API to whoever reads a failing build.
 
@@ -1163,7 +1169,7 @@ def test_the_missing_token_hint_says_sending_rather_than_reaching():
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'ENABLED': True,
         'TOKEN': '42:x',
         'BROKER': 'django_aiogram.broker.kafka.KafkaBroker',
@@ -1205,7 +1211,9 @@ def test_e009_reports_what_a_string_can_be_wrong_about(value, says):
     of them in its settings file, and being told what to write is the difference between a
     minute and an afternoon.
     """
-    with override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'DELIVERY': value}):
+    with override_settings(
+        TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'DELIVERY': value}
+    ):
         found = [message for message in check_settings() if message.id == 'django_aiogram.E009']
 
     assert len(found) == 1, f'E009 reported {len(found)} problems for {value!r}'
@@ -1216,7 +1224,7 @@ def test_e009_reports_what_a_string_can_be_wrong_about(value, says):
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost',
         'DELIVERY': 'myproject.consumers.NotHereYet',
@@ -1290,7 +1298,7 @@ def test_the_two_lists_of_3x_delivery_names_agree():
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost',
         'DELIVERY': 'myapp.class.Consumer',
@@ -1337,7 +1345,7 @@ class MyOwnRouter:
     ],
     ids=['the router', 'some other 3.x path'],
 )
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'})
 def test_e048_names_the_4_0_path_for_a_3_x_router(routers, says, monkeypatch):
     """A project wrote our dotted path into Django's settings, and 4.0 moved it.
 
@@ -1359,7 +1367,7 @@ def test_e048_names_the_4_0_path_for_a_3_x_router(routers, says, monkeypatch):
     assert len(found) == 1, f'E048 reported {len(found)} problems for {routers}'
     assert says in found[0].msg, found[0].msg
     # the label is Django's setting, not ours: a message introducing itself as
-    # TELEGRAM_BOT['...'] would send the reader to the wrong file
+    # TELEGRAM_BOT_DEFAULTS['...'] would send the reader to the wrong file
     assert found[0].msg.startswith('DATABASE_ROUTERS '), found[0].msg
     assert 'urls.py' in (found[0].hint or ''), 'the hint does not mention the other moved path'
 
@@ -1381,7 +1389,9 @@ def test_e048_is_silent_on_anything_that_is_not_a_3_x_path(routers):
     with the old distribution, and reporting it would make the rule noise on a working setup. This
     one is a real class, so `override_settings` can carry it the way a project's settings would.
     """
-    with override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'}, DATABASE_ROUTERS=routers):
+    with override_settings(
+        TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'}, DATABASE_ROUTERS=routers
+    ):
         found = [message for message in check_settings() if message.id == 'django_aiogram.E048']
 
     assert found == [], f'E048 reported {[message.msg for message in found]} for {routers}'
@@ -1423,7 +1433,7 @@ def test_w004_names_the_deadline_of_the_configured_transport(broker, extra, name
         names: 5,
         **extra,
     }
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         found = [message for message in check_settings() if message.id == 'django_aiogram.W004']
 
     assert len(found) == 1, f'W004 reported {len(found)} problems on {broker}'
@@ -1454,7 +1464,7 @@ def test_w004_is_silent_when_the_transport_deadline_leaves_room():
         'BLPOP_TIMEOUT': 5,
         'HEARTBEAT_INTERVAL': 60,
     }
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         found = [message for message in check_settings() if message.id == 'django_aiogram.W004']
 
     assert found == [], f'W004 reported {[message.msg for message in found]} with room to spare'
@@ -1485,7 +1495,7 @@ class BrokerNeedingMoreThanTheRuleAsks(RedisListBroker):
     def call_timeout(cls) -> float:
         timeout = super().call_timeout()
         if timeout < cls._FLOOR:
-            msg = f"TELEGRAM_BOT['REDIS_TIMEOUT'] is {timeout}, and this transport needs {cls._FLOOR} or more."
+            msg = f"TELEGRAM_BOT_DEFAULTS['REDIS_TIMEOUT'] is {timeout}, and this transport needs {cls._FLOOR} or more."
             raise ImproperlyConfigured(msg)
         return timeout
 
@@ -1502,7 +1512,7 @@ def test_e047_reports_a_broker_that_cannot_name_its_call_deadline(broker):
     that does not declare it is incomplete rather than merely unusual — and `option('')` raises
     `KeyError`, which would surface out of whichever rule asked first.
     """
-    with override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'BROKER': broker}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'BROKER': broker}):
         found = [message for message in check_settings() if message.id == 'django_aiogram.E047']
 
     assert len(found) == 1, f'E047 reported {len(found)} problems for {broker}'
@@ -1522,7 +1532,12 @@ def test_the_checks_survive_a_broker_that_cannot_name_its_call_deadline(broker):
     run — every other finding lost with it, on a configuration one of those findings is about.
     """
     with override_settings(
-        TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'BROKER': broker, 'BLPOP_TIMEOUT': 300}
+        TELEGRAM_BOT_DEFAULTS={
+            'TOKEN': '42:x',
+            'REDIS_URL': 'redis://localhost',
+            'BROKER': broker,
+            'BLPOP_TIMEOUT': 300,
+        }
     ):
         reported = check_settings()
 
@@ -1562,7 +1577,7 @@ def test_e047_reports_a_deadline_the_transport_refuses(broker, option, value):
         'KAFKA_TOPIC': 'tg',
         option: value,
     }
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         found = [message for message in check_settings() if message.id == 'django_aiogram.E047']
 
     assert len(found) == 1, f'E047 reported {len(found)} problems for {option}={value!r}'
@@ -1580,7 +1595,7 @@ def test_one_rule_reports_a_deadline_that_has_a_rule_of_its_own():
     picks it up.
     """
     settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'REDIS_TIMEOUT': 'five'}
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         reported = {str(message.id) for message in check_settings()}
 
     assert 'django_aiogram.E030' in reported, 'the rule that owns REDIS_TIMEOUT said nothing'
@@ -1598,7 +1613,7 @@ def test_the_ceiling_keeps_both_bounds_when_one_name_answers_for_both():
 
     The name is asserted once, too: the hint has to read as one setting, not the same one twice.
     """
-    with override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'HEARTBEAT_INTERVAL': 2}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'HEARTBEAT_INTERVAL': 2}):
         ceiling = take_ceiling('HEARTBEAT_INTERVAL', 100.0)
 
     assert ceiling.seconds == 2, f'the heartbeat bound was lost: {ceiling}'
@@ -1630,7 +1645,7 @@ def test_a_deadline_is_judged_without_the_transport_driver(monkeypatch, enabled)
         'RABBITMQ_QUEUE': 'tg',
         'RABBITMQ_TIMEOUT': 'abc',
     }
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         found = [message for message in check_settings() if message.id == 'django_aiogram.E047']
 
     assert len(found) == 1, f'E047 reported {[message.msg for message in found]}'
@@ -1652,7 +1667,7 @@ def test_e047_reports_a_deadline_only_its_own_transport_refuses():
         'REDIS_TIMEOUT': 3,
         'BROKER': 'tests.test_checks.BrokerNeedingMoreThanTheRuleAsks',
     }
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         reported = check_settings()
 
     found = [message for message in reported if message.id == 'django_aiogram.E047']
@@ -1683,7 +1698,7 @@ def test_the_checks_survive_a_deadline_the_transport_refuses(broker, option):
         'BLPOP_TIMEOUT': 300,
         option: 'abc',
     }
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         reported = check_settings()
 
     found = [message for message in reported if message.id == 'django_aiogram.E047']
@@ -1723,7 +1738,7 @@ def test_w004_reads_a_fractional_transport_deadline(timeout, cap):
         'BLPOP_TIMEOUT': 300,
         'HEARTBEAT_INTERVAL': 600,
     }
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         found = [message for message in check_settings() if message.id == 'django_aiogram.W004']
 
     assert len(found) == 1, f'W004 said nothing about KAFKA_TIMEOUT={timeout!r}'
@@ -1731,7 +1746,7 @@ def test_w004_reads_a_fractional_transport_deadline(timeout, cap):
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost',
         'EVENT_LOG': True,
@@ -1776,7 +1791,7 @@ def test_a_broken_database_backend_does_not_take_the_run_down(monkeypatch):
         'EVENT_LOG_DATABASE': 'default',
     }
 
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         reported = [message.id for message in check_settings()]
 
     # that the run answered at all is asserted by reaching this line; that the *rule* answered is
@@ -1804,7 +1819,7 @@ def test_a_mapping_is_refused_where_a_list_is_meant(key, identifier, value):
     A set is not refused: iterating one gives back what was written.
     """
     settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG': True, key: value}
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         found = [message for message in check_settings() if message.id == identifier]
 
     assert len(found) == 1, f'{identifier} reported {[message.msg for message in found]}'
@@ -1829,7 +1844,7 @@ def test_a_set_is_still_a_collection(key, identifier):
     }
     settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG': True, key: values[key]}
 
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         found = [message for message in check_settings() if message.id == identifier]
 
     assert found == [], [message.msg for message in found]
@@ -1845,7 +1860,7 @@ def test_a_rate_limit_that_is_not_a_number_is_refused(rate):
     it: a bound nothing can exceed is a limiter that is not one.
     """
     settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'RATE_LIMIT': {'overall_per_second': rate}}
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         found = [message for message in check_settings() if message.id == 'django_aiogram.E020']
 
     assert len(found) == 1, f'E020 reported {[message.msg for message in found]}'
@@ -1853,7 +1868,7 @@ def test_a_rate_limit_that_is_not_a_number_is_refused(rate):
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost',
         'EVENT_LOG': True,
@@ -1881,7 +1896,7 @@ def test_a_router_class_in_the_setting_is_not_a_router_in_use():
     that would have said so.
     """
     settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG': True, 'EVENT_LOG_DATABASE': 'logs'}
-    with override_settings(TELEGRAM_BOT=settings, DATABASE_ROUTERS=[TelegramEventLogRouter]):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings, DATABASE_ROUTERS=[TelegramEventLogRouter]):
         found = [message for message in check_settings() if message.id == 'django_aiogram.I002']
 
     assert len(found) == 1, f'I002 reported {[message.msg for message in found]}'
@@ -1890,7 +1905,7 @@ def test_a_router_class_in_the_setting_is_not_a_router_in_use():
 def test_a_router_instance_in_the_setting_is_one():
     """The other half: an instance is what Django calls, and this must not start refusing it."""
     settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG': True, 'EVENT_LOG_DATABASE': 'logs'}
-    with override_settings(TELEGRAM_BOT=settings, DATABASE_ROUTERS=[TelegramEventLogRouter()]):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings, DATABASE_ROUTERS=[TelegramEventLogRouter()]):
         found = [message for message in check_settings() if message.id == 'django_aiogram.I002']
 
     assert found == [], [message.msg for message in found]
@@ -1916,7 +1931,7 @@ def test_an_infinite_setting_is_reported_rather_than_raised(key, identifier):
     case per site is what keeps the next `int()` from arriving without the third exception.
     """
     settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG': True, key: float('inf')}
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         reported = [message.id for message in check_settings()]
 
     assert identifier in reported, reported
@@ -1933,7 +1948,7 @@ def test_a_webhook_without_a_url_is_reported_however_the_mode_is_written(mode):
 
     Both spellings, because either alone is a case that cannot see this.
     """
-    with override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'MODE': mode}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'MODE': mode}):
         found = [message for message in check_settings() if message.id == 'django_aiogram.E027']
 
     assert len(found) == 1, f'E027 reported {[message.msg for message in found]}'
@@ -1948,7 +1963,7 @@ def test_a_frozenset_is_a_collection_too():
         'EVENT_LOG': True,
         'EVENT_LOG_REDACT_KEYS': frozenset({'token'}),
     }
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         found = [message for message in check_settings() if message.id == 'django_aiogram.E035']
 
     assert found == [], [message.msg for message in found]
@@ -1971,14 +1986,14 @@ def test_an_empty_mapping_is_refused_like_any_other(key, identifier):
     type rather than the silence an empty list would get.
     """
     settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG': True, key: {}}
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         found = [message for message in check_settings() if message.id == identifier]
 
     assert len(found) == 1, f'{identifier} reported {[message.msg for message in found]}'
     assert 'dict' in found[0].msg, found[0].msg
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'FSM_STORAGE': '.Storage'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'FSM_STORAGE': '.Storage'})
 def test_a_path_with_an_empty_module_part_is_reported_not_raised():
     """`import_string('.Storage')` reaches `import_module('')`, which raises `ValueError`.
 
@@ -1991,7 +2006,7 @@ def test_a_path_with_an_empty_module_part_is_reported_not_raised():
     assert 'django_aiogram.E019' in reported, reported
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost'})
 def test_the_default_fsm_store_needs_a_driver_and_says_so(monkeypatch):
     """The hole the transport extras left, and the one the release's own promise closes.
 
@@ -2034,7 +2049,7 @@ def test_the_default_fsm_store_needs_a_driver_and_says_so(monkeypatch):
     assert "'memory'" in found[0].hint, found[0].hint
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'FSM_STORAGE': 'memory'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'FSM_STORAGE': 'memory'})
 def test_a_memory_store_asks_for_no_driver(monkeypatch):
     """The control: the rule must not report an install that needs nothing installed.
 

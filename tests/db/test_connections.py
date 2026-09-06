@@ -76,7 +76,7 @@ def poison():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_handler_recovers_from_a_connection_that_died_while_the_process_was_idle(
     a_backend_that_can_lose_a_connection,
 ):
@@ -109,7 +109,7 @@ def test_a_handler_recovers_from_a_connection_that_died_while_the_process_was_id
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_reset_runs_on_the_thread_the_handler_queries_from(monkeypatch):
     """`thread_sensitive=True`, asserted rather than assumed.
 

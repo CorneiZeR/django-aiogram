@@ -49,7 +49,7 @@ class Command(BaseCommand):
             '--days',
             type=int,
             default=None,
-            help="delete rows older than this. Defaults to TELEGRAM_BOT['EVENT_LOG_RETENTION_DAYS'].",
+            help="delete rows older than this. Defaults to TELEGRAM_BOT_DEFAULTS['EVENT_LOG_RETENTION_DAYS'].",
         )
         parser.add_argument(
             '--chunk',

@@ -65,7 +65,7 @@ def test_a_timeout_the_driver_would_refuse_is_refused_here_by_name(broker, timeo
     # `_timeout()` rather than a method that uses it: everything else here would reach the
     # driver's import first, and the unit legs do not install it
     with (
-        override_settings(TELEGRAM_BOT=SETTINGS | {'KAFKA_TIMEOUT': timeout}),
+        override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS | {'KAFKA_TIMEOUT': timeout}),
         pytest.raises(ImproperlyConfigured) as refusal,
     ):
         broker._timeout()
@@ -76,9 +76,9 @@ def test_a_timeout_the_driver_would_refuse_is_refused_here_by_name(broker, timeo
 
 def test_a_timeout_the_driver_accepts_is_left_alone(broker):
     """The bound must not refuse what the driver would have taken, which is most of the range."""
-    with override_settings(TELEGRAM_BOT=SETTINGS | {'KAFKA_TIMEOUT': 300}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS | {'KAFKA_TIMEOUT': 300}):
         assert broker._timeout() == 300
-    with override_settings(TELEGRAM_BOT=SETTINGS | {'KAFKA_TIMEOUT': 0.01}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS | {'KAFKA_TIMEOUT': 0.01}):
         assert broker._timeout() == 0.01
 
 
@@ -117,7 +117,7 @@ class FullOnce:
 
 @pytest.fixture
 def broker():
-    with override_settings(TELEGRAM_BOT=SETTINGS):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS):
         yield KafkaBroker()
 
 

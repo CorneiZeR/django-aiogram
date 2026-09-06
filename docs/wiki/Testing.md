@@ -8,7 +8,7 @@ assert, or noise you want gone?
 
 ```python
 # settings/test.py
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'FSM_STORAGE': 'memory',  # no Redis for dialogue state
 }
 ```
@@ -129,7 +129,7 @@ Where the consumer is what a test drives — delivery, acknowledgement, reclaimi
 
 ```python
 # settings/test.py
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'FSM_STORAGE': 'memory',
     'BROKER': 'django_aiogram.testing.InMemoryBroker',
 }
@@ -141,13 +141,13 @@ one option is `MEMORY_TIMEOUT` (1.0 by default), which bounds how long a `take` 
 message that has not arrived — there is no IO here for a deadline to be about.
 
 Nothing is written down, so nothing survives the process, and each `override_settings` of
-`TELEGRAM_BOT` starts from an empty queue. `crash_safe` is `False` and says so, which is what
+`TELEGRAM_BOT_DEFAULTS` starts from an empty queue. `crash_safe` is `False` and says so, which is what
 stops it being mistaken for something to deploy.
 
 For a fixture of your own that wants the same thing without the capture,
 `django_aiogram.broker.registry.use_broker(broker)` is the seam underneath: it makes an
 instance this process's broker for the length of a block, ahead of `BROKER` rather than
-through it, so an `override_settings(TELEGRAM_BOT=...)` inside the block cannot take it away.
+through it, so an `override_settings(TELEGRAM_BOT_DEFAULTS=...)` inside the block cannot take it away.
 
 ### Reading the queue by hand
 
@@ -165,7 +165,7 @@ from django_aiogram.wire.envelope import unpack
 from django_aiogram.wire.serializers import loads
 
 
-@override_settings(TELEGRAM_BOT={'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0'})
 def test_approval_notifies_the_reviewer(monkeypatch):
     server = fakeredis.FakeRedis()
     monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', lambda: server)

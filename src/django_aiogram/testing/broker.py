@@ -10,7 +10,7 @@ takes, acknowledges, releases, reclaims and counts, so the path under test is th
 It is held to the same contract as the four that ship, in ``tests/test_broker_conformance.py``.
 
 **Its state belongs to the instance**, which is what makes it usable at all: the registry
-builds one broker per process and drops it whenever ``TELEGRAM_BOT`` changes, so each
+builds one broker per process and drops it whenever ``TELEGRAM_BOT_DEFAULTS`` changes, so each
 ``override_settings`` block starts from an empty queue rather than from whatever the last test
 left. Nothing here is written down, so nothing survives the process -- which is what
 :attr:`crash_safe` says out loud.
@@ -207,7 +207,7 @@ class InMemoryBroker(Broker):
     def close(self) -> None:
         """Keep what is queued, since there is nothing to release.
 
-        The registry closes a broker whenever ``TELEGRAM_BOT`` changes, which in a test suite
+        The registry closes a broker whenever ``TELEGRAM_BOT_DEFAULTS`` changes, which in a test suite
         is often and in the middle of things. Dropping the messages there would make a helper
         that reads them after an ``override_settings`` block return an empty list rather than
         what the block queued.

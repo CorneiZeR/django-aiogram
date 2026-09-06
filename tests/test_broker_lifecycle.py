@@ -67,7 +67,7 @@ def armed(monkeypatch):
     return calls
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_building_the_broker_arms_an_exit_hook(fresh_registry, armed, redis_server):
     """The hook is what makes `close()`'s own docstring true for a process that never closes."""
     fresh_registry.get_broker()
@@ -77,7 +77,7 @@ def test_building_the_broker_arms_an_exit_hook(fresh_registry, armed, redis_serv
     )
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_hook_is_armed_once_however_often_the_broker_is_rebuilt(fresh_registry, armed, redis_server):
     """A settings change replaces the broker, and must not stack another callback.
 

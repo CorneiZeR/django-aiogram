@@ -40,7 +40,7 @@ _broker: Broker | None = None
 #: a broker handed in rather than resolved, for the length of a test. Consulted *before*
 #: `BROKER` and never built from it, which is the whole reason it is not simply an
 #: `override_settings` in `django_aiogram.testing`: a case that overrides the setting itself --
-#: and every `@override_settings(TELEGRAM_BOT=...)` replaces the dict whole -- would otherwise
+#: and every `@override_settings(TELEGRAM_BOT_DEFAULTS=...)` replaces the dict whole -- would otherwise
 #: undo the helper it is running inside, silently, and at a moment it did not choose
 _overrides: list[tuple[object, Broker]] = []
 #: registered once per process rather than per build, so a settings change that replaces the
@@ -152,7 +152,7 @@ def use_broker(broker: Broker) -> 'Iterator[Broker]':
     means less than it says.
 
     Ahead of the setting rather than through it, which is a deliberate difference from
-    ``override_settings(TELEGRAM_BOT=...)``. Every such override replaces the dict whole, so a
+    ``override_settings(TELEGRAM_BOT_DEFAULTS=...)``. Every such override replaces the dict whole, so a
     case that carries one of its own -- a decorator on the method, applied *after* a fixture
     has already started capturing -- would silently take the helper's broker away again. The
     override is a fact about this process, and nothing in the settings can undo it.

@@ -12,7 +12,7 @@ INSTALLED_APPS = ['django_aiogram']
 
 # set, so the checks report nothing and the assertion is about imports alone; neither
 # value is ever connected to, because running the checks reaches no network
-TELEGRAM_BOT: dict[str, object] = {
+TELEGRAM_BOT_DEFAULTS: dict[str, object] = {
     'TOKEN': '1234567890:test-token-that-is-never-used-for-anything',
     'REDIS_URL': 'redis://localhost:6379/0',
 }

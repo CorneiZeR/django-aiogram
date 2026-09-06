@@ -139,7 +139,7 @@ def test_a_u_is_refused_rather_than_read_as_a_v():
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_row_is_written_with_its_short_id():
     """One place computes it, and it is the place the row is built."""
     event = an_event(function='send_message')
@@ -151,7 +151,7 @@ def test_a_row_is_written_with_its_short_id():
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_two_messages_that_share_a_code_are_both_shown():
     """The column is not unique, and this is what that buys.
 
@@ -174,7 +174,7 @@ def test_two_messages_that_share_a_code_are_both_shown():
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_the_backfill_fills_only_what_is_empty_and_can_be_stopped():
     """A row with no short id is a row still to do, which is the whole of the resume rule.
 
@@ -202,7 +202,7 @@ def test_the_backfill_fills_only_what_is_empty_and_can_be_stopped():
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_dry_run_reports_and_fills_nothing():
     """The rehearsal, on a table an operator cannot afford to guess about."""
     write_batch([an_event(function='send_message')])
@@ -216,7 +216,7 @@ def test_a_dry_run_reports_and_fills_nothing():
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_an_alias_that_is_not_configured_is_refused_by_name():
     """This runs from cron, where a Django traceback is the least useful thing to wake up to."""
     with pytest.raises(CommandError, match='no database is configured'):

@@ -58,7 +58,7 @@ import os
 
 INSTALLED_APPS = [..., 'django_aiogram']
 
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'TOKEN': os.environ.get('TELEGRAM_BOT_TOKEN', ''),
     # unset, BROKER resolves to RedisListBroker; the table above has the other three,
     # and each transport reads its own settings on top of these two

@@ -145,7 +145,7 @@ Grepping one out of `docker inspect` should land here.
 | --- | --- |
 | `the broker is unreachable: …` | The transport could not be addressed or refused the connection. Covers a missing or malformed `REDIS_URL`, an unreadable `REDIS_TIMEOUT`, and a broker that is genuinely down or has dropped the connection mid-probe. This line was `redis is unreachable` up to 3.1 — it moved when the probe stopped pinging Redis before every check, which is what lets it run at all on a transport that is not Redis. The old wording survives in one place: `--guarantee` and `--stranded` build a Redis client of their own, and when that fails they log `redis is unreachable` as `tg_reason` rather than refusing — the guarantee then reads `unknown`, and the sweep says it did not finish |
 | `… needs the '…' package, which is not installed. Install it with: pip install "django-aiogram[…]"` | `BROKER` names a transport whose driver this image does not carry. Every driver is an extra since 4.0, so an image built for one transport and pointed at another gets this — the line names the extra that fixes it. Both forms of the probe report it; neither tracebacks |
-| `TELEGRAM_BOT['…'] is not a number: …` | `HEARTBEAT_INTERVAL` or `HEALTHCHECK_MAX_QUEUE` holds something `int()` refuses. `manage.py check` reports these as `E023`/`E024`, but the container form never runs it — that is the point of it — so it says so itself |
+| `TELEGRAM_BOT_DEFAULTS['…'] is not a number: …` | `HEARTBEAT_INTERVAL` or `HEALTHCHECK_MAX_QUEUE` holds something `int()` refuses. `manage.py check` reports these as `E023`/`E024`, but the container form never runs it — that is the point of it — so it says so itself |
 | `cannot read the settings: …` | `DJANGO_SETTINGS_MODULE` is missing from the container's environment, or names a module that does not import. See the section above |
 | `no heartbeat has been written: nothing within Ns, or the consumer never started` | Redis list: the key is absent — the consumer never ran, died before its first beat, or has been silent longer than the key's TTL. If the line adds that a limit over the TTL cannot be observed, `--max-age` is set above `3 × HEARTBEAT_INTERVAL` and is doing nothing |
 | `no consumer has joined the group: nothing within Ns, or the consumer never started` | Redis Streams: the group exists and nothing has ever read from it. Nothing is written for this transport — the group's own record of when each member last spoke is the signal — so this means no worker has started, not that a key is missing |
@@ -291,7 +291,7 @@ among them, and none of those decides anything. Several things produce that:
 record an outcome: `EVENT_LOG` on, and `EVENT_LOG_KINDS` empty or keeping all four of
 `outbound.sent`, `outbound.failed`, `outbound.dropped` and `outbound.queued` —
 **[Event log](Event-log.md#what-became-of-one-message)** says what each is for. The bot
-container reads its own `TELEGRAM_BOT`, so the refusal cannot fire for *its* configuration:
+container reads its own `TELEGRAM_BOT_DEFAULTS`, so the refusal cannot fire for *its* configuration:
 that is [the event log writes nothing](#the-event-log-writes-nothing) below, item 3, and the
 half-a-story it describes is exactly this symptom seen from the reading end. Nor does the
 refusal say the writer succeeded; that is what the `log.dropped` row above is for.
@@ -497,7 +497,7 @@ settings module is `django_aiogram.config.settings`. See **[Upgrading](Upgrading
 
 In order of how often it is the answer:
 
-1. `TELEGRAM_BOT['EVENT_LOG']` is off. It is off by default, and `record()`
+1. `TELEGRAM_BOT_DEFAULTS['EVENT_LOG']` is off. It is off by default, and `record()`
    returns before it reads anything else.
 2. `migrate` has not run. The writer logs `no such table` once per batch and
    drops what it held; after five failures in a row it suspends for a minute

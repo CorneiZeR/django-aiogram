@@ -46,7 +46,7 @@ class Command(BaseCommand):
             choices=sorted(MODES),
             default=None,
             help=(
-                "how updates reach the bot for this run. Defaults to TELEGRAM_BOT['MODE'] "
+                "how updates reach the bot for this run. Defaults to TELEGRAM_BOT_DEFAULTS['MODE'] "
                 "(env: DJANGO_AIOGRAM_MODE), itself 'polling'. In webhook mode this "
                 'process consumes the queue and never calls getUpdates, because the updates '
                 'arrive over HTTP instead.'
@@ -67,7 +67,7 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.WARNING(
                     'django-aiogram is disabled '
-                    "(TELEGRAM_BOT['ENABLED'] or DJANGO_AIOGRAM_ENABLED); "
+                    "(TELEGRAM_BOT_DEFAULTS['ENABLED'] or DJANGO_AIOGRAM_ENABLED); "
                     'not starting the bot.'
                 )
             )
@@ -83,7 +83,7 @@ class Command(BaseCommand):
             # refuse the updates this process is no longer polling for
             self.stdout.write(
                 self.style.WARNING(
-                    f"--mode {mode} disagrees with TELEGRAM_BOT['MODE'] ({configured}), and it "
+                    f"--mode {mode} disagrees with TELEGRAM_BOT_DEFAULTS['MODE'] ({configured}), and it "
                     'changes this process only: '
                     + (
                         'the webhook view still refuses updates while the setting says polling'

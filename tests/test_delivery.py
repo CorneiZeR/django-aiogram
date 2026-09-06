@@ -24,7 +24,7 @@ def an_outbound(function='send_message', **kwargs):
     return Outbound(new_correlation_id(), function, kwargs or {'chat_id': 1, 'text': 'x'})
 
 
-@override_settings(TELEGRAM_BOT={})
+@override_settings(TELEGRAM_BOT_DEFAULTS={})
 def test_get_delivery_builds_what_the_default_path_names():
     """The default is a dotted path now, and it resolves to the shipped consumer."""
     assert isinstance(get_delivery(handler=lambda **kwargs: None), BlpopDelivery)
@@ -59,11 +59,11 @@ def test_get_delivery_refuses_what_it_cannot_build(value, says):
     Still a `ValueError` — `DeliveryNotConfiguredError` is one — so a project that wrote
     `except ValueError` around building a consumer in 3.x keeps working.
     """
-    with override_settings(TELEGRAM_BOT={'DELIVERY': value}), pytest.raises(ValueError, match=re.escape(says)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'DELIVERY': value}), pytest.raises(ValueError, match=re.escape(says)):
         get_delivery(handler=lambda **kwargs: None)
 
 
-@override_settings(TELEGRAM_BOT={'DELIVERY': 'tests.test_delivery.RecordingDouble'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'DELIVERY': 'tests.test_delivery.RecordingDouble'})
 def test_get_delivery_builds_a_consumer_the_project_wrote():
     """The point of the setting: a class this package never heard of, named in settings.
 
@@ -103,7 +103,7 @@ class RecordingBlpop(BlpopDelivery):
         super().__init__(handler=lambda correlation_id=None, queued_at=0.0, **kwargs: self.handled.append(kwargs))
 
 
-@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'BLPOP_TIMEOUT': 1})
 def test_blpop_delivers_queued_messages(redis_server):
     redis_server.rpush('TELEGRAM_BOT_MESSAGE', JsonSerializer().dumps({'function': 'send_message', 'chat_id': 7}))
     delivery = RecordingBlpop()
@@ -111,7 +111,7 @@ def test_blpop_delivers_queued_messages(redis_server):
     assert delivery.handled == [{'function': 'send_message', 'chat_id': 7}]
 
 
-@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'BLPOP_TIMEOUT': 1})
 def test_a_payload_cannot_overwrite_what_the_envelope_says(redis_server):
     """The queue is a trust boundary, and the envelope's own fields are the trusted half.
 
@@ -163,7 +163,7 @@ def test_a_payload_cannot_overwrite_what_the_envelope_says(redis_server):
     assert seen['chat_id'] == 7, 'the real arguments stopped arriving'
 
 
-@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'BLPOP_TIMEOUT': 1})
 def test_blpop_drains_a_backlog(redis_server):
     """A worker that was down must still find its messages waiting."""
     for index in range(3):
@@ -176,7 +176,7 @@ def test_blpop_drains_a_backlog(redis_server):
     assert [item['chat_id'] for item in delivery.handled] == [0, 1, 2]
 
 
-@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1, 'ALLOW_PICKLE': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'BLPOP_TIMEOUT': 1, 'ALLOW_PICKLE': True})
 def test_blpop_accepts_legacy_pickle(redis_server):
     redis_server.rpush('TELEGRAM_BOT_MESSAGE', PickleSerializer().dumps({'function': 'send_message', 'chat_id': 9}))
     delivery = RecordingBlpop()
@@ -184,7 +184,7 @@ def test_blpop_accepts_legacy_pickle(redis_server):
     assert delivery.handled[0]['chat_id'] == 9
 
 
-@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'BLPOP_TIMEOUT': 1})
 def test_undecodable_message_is_dropped_not_fatal(redis_server):
     redis_server.rpush('TELEGRAM_BOT_MESSAGE', b'{"__model__": "os", "data": {}}')
     redis_server.rpush('TELEGRAM_BOT_MESSAGE', JsonSerializer().dumps({'function': 'send_message', 'chat_id': 1}))
@@ -193,7 +193,7 @@ def test_undecodable_message_is_dropped_not_fatal(redis_server):
     assert [item['chat_id'] for item in delivery.handled] == [1]
 
 
-@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'BLPOP_TIMEOUT': 1})
 def test_failing_handler_does_not_kill_the_consumer(redis_server):
     calls = []
 
@@ -217,7 +217,7 @@ def test_failing_handler_does_not_kill_the_consumer(redis_server):
     assert len(calls) == 2
 
 
-@override_settings(TELEGRAM_BOT={})
+@override_settings(TELEGRAM_BOT_DEFAULTS={})
 def test_enqueue_does_not_write_an_expiry_key(redis_server):
     TelegramBot().enqueue(chat_id=1, text='hi')
     assert redis_server.llen('TELEGRAM_BOT_MESSAGE') == 1
@@ -278,7 +278,7 @@ def test_schedule_runs_inline_when_no_loop_is_running():
     instance.close()
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'RATE_LIMIT': None})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'RATE_LIMIT': None})
 def test_concurrent_send_raw_from_web_threads(monkeypatch):
     """gunicorn gthread runs several request threads; run_until_complete on a
     shared loop is not reentrant, so unsynchronised sends crash with
@@ -331,7 +331,7 @@ def test_concurrent_send_raw_from_web_threads(monkeypatch):
     instance.close()
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'FSM_STORAGE': 'memory', 'RATE_LIMIT': None})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'FSM_STORAGE': 'memory', 'RATE_LIMIT': None})
 def test_sends_that_all_see_a_stopped_loop_are_serialized():
     """The window the lock exists for.
 
@@ -394,7 +394,7 @@ def test_sends_that_all_see_a_stopped_loop_are_serialized():
     instance.close()
 
 
-@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 0})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'BLPOP_TIMEOUT': 0})
 def test_a_zero_blpop_timeout_is_clamped(redis_server, monkeypatch):
     """0 means "block for ever" to a real Redis, and stop() would never be seen.
 
@@ -440,7 +440,9 @@ def rate_limited_bot(attempts):
     return AlwaysRetryAfter()
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'FSM_STORAGE': 'memory', 'MAX_RETRIES': 2, 'RATE_LIMIT': None})
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'FSM_STORAGE': 'memory', 'MAX_RETRIES': 2, 'RATE_LIMIT': None}
+)
 def test_exhausting_the_retries_is_logged(caplog):
     """1.x gave up silently: no log, no exception, the message just vanished."""
     instance = TelegramBot()
@@ -457,7 +459,7 @@ def test_exhausting_the_retries_is_logged(caplog):
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'TOKEN': '42:x',
         'FSM_STORAGE': 'memory',
         'MAX_RETRIES': 1,
@@ -477,7 +479,7 @@ def test_exhausting_the_retries_raises_when_asked_to():
     instance.close()
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'FSM_STORAGE': 'memory'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'FSM_STORAGE': 'memory'})
 def test_concurrent_first_sends_share_one_event_loop(monkeypatch):
     """Two loops means loop_lock hands the senders locks for different loops,
     and one of the loops is leaked."""
@@ -512,7 +514,7 @@ def test_concurrent_first_sends_share_one_event_loop(monkeypatch):
         loop.close()
 
 
-@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 30, 'HEARTBEAT_INTERVAL': 4, 'REDIS_TIMEOUT': 60})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'BLPOP_TIMEOUT': 30, 'HEARTBEAT_INTERVAL': 4, 'REDIS_TIMEOUT': 60})
 def test_the_consumer_pops_for_what_the_shared_ceiling_says(redis_server, monkeypatch):
     """W004 describes a cap; this is what makes the description true.
 
@@ -544,7 +546,7 @@ def test_the_consumer_pops_for_what_the_shared_ceiling_says(redis_server, monkey
     assert asked[0] == 4, f'popped for {asked[0]}s while the ceiling says 4'
 
 
-@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1, 'WORKER_NAME': 'mine'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'BLPOP_TIMEOUT': 1, 'WORKER_NAME': 'mine'})
 def test_a_broker_subclass_can_name_its_own_in_flight_list(redis_server, monkeypatch):
     """Two consumers on one queue under different names, which is what the capability is for.
 
@@ -642,7 +644,7 @@ def test_the_page_counts_its_own_rules():
         assert f'{stated.group(1).lower()} rules' in text, f'{elsewhere.name} states a different count'
 
 
-@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'BLPOP_TIMEOUT': 1})
 def test_the_documented_consumer_delivers(redis_server):
     """Run the page's own class against a queue with a message in it.
 
@@ -675,7 +677,7 @@ def test_the_documented_consumer_delivers(redis_server):
     assert not thread.is_alive(), 'stop() did not end the documented loop'
 
 
-@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'BLPOP_TIMEOUT': 1})
 def test_the_documented_consumer_settles_a_send_that_finished_during_the_last_read(redis_server):
     """The rule the page states about the *final* `collect()`, driven rather than described.
 
@@ -731,7 +733,7 @@ def test_the_documented_consumer_settles_a_send_that_finished_during_the_last_re
     )
 
 
-@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1, 'MAX_IN_FLIGHT': 1})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'BLPOP_TIMEOUT': 1, 'MAX_IN_FLIGHT': 1})
 def test_the_documented_consumer_keeps_max_in_flight(redis_server):
     """`MAX_IN_FLIGHT` is enforced by *not taking*, so a loop that skips the gate breaks it.
 

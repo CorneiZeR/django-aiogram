@@ -54,7 +54,7 @@ def drain_budget() -> float:
         budget = float(conf['DRAIN_TIMEOUT'])
     except (ImproperlyConfigured, TypeError, ValueError):
         # `ImproperlyConfigured` too: `conf[...]` resolves the whole settings dict on a
-        # cold cache, so a non-mapping `TELEGRAM_BOT` or a non-finite value from the
+        # cold cache, so a non-mapping `TELEGRAM_BOT_DEFAULTS` or a non-finite value from the
         # environment raises here — and this function exists not to raise
         budget = float(DEFAULTS['DRAIN_TIMEOUT'])
     return budget if math.isfinite(budget) and budget >= 0 else float(DEFAULTS['DRAIN_TIMEOUT'])

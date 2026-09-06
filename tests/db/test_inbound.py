@@ -95,7 +95,7 @@ def feed(dispatcher, update):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_an_update_is_recorded_from_arrival_to_handled():
     async def handler(message):
         return None
@@ -115,7 +115,7 @@ def test_an_update_is_recorded_from_arrival_to_handled():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_handler_that_raises_is_recorded_and_still_raises():
     async def handler(message):
         msg = 'boom'
@@ -131,7 +131,7 @@ def test_a_handler_that_raises_is_recorded_and_still_raises():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_reply_inherits_the_update_it_answers():
     """The whole reason for the context variable: a project writes no plumbing
     and its reply still joins to the update that caused it."""
@@ -150,7 +150,7 @@ def test_a_reply_inherits_the_update_it_answers():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_PAYLOAD': 'summary'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'EVENT_LOG_PAYLOAD': 'summary'})
 def test_the_message_text_is_not_stored_by_default():
     async def handler(message):
         return None
@@ -164,7 +164,7 @@ def test_the_message_text_is_not_stored_by_default():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_PAYLOAD': 'full'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'EVENT_LOG_PAYLOAD': 'full'})
 def test_the_message_text_is_stored_when_asked_for():
     async def handler(message):
         return None
@@ -177,7 +177,7 @@ def test_the_message_text_is_stored_when_asked_for():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_state_change_is_recorded_where_it_happens():
     """set_state is the transition, so wrapping the storage catches the ones a
     filter or a scene makes as well as the ones a handler makes."""
@@ -194,7 +194,7 @@ def test_a_state_change_is_recorded_where_it_happens():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_the_wrapper_forwards_everything_else():
     """Built directly rather than through instrumented(), and against a spy.
 
@@ -228,7 +228,7 @@ def test_the_wrapper_forwards_everything_else():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_an_update_this_aiogram_cannot_name_is_recorded_rather_than_raised():
     """`Update.event_type` raises for a Bot API newer than the installed
     aiogram, and aiogram answers that with a warning and an unhandled update.
@@ -262,12 +262,12 @@ def test_nothing_is_installed_while_the_log_is_off():
     assert instrumented(storage) is storage
 
 
-@override_settings(TELEGRAM_BOT={'EVENT_LOG': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG': True})
 def test_the_storage_is_wrapped_when_the_log_is_on():
     assert isinstance(instrumented(MemoryStorage()), RecordingStorage)
 
 
-@override_settings(TELEGRAM_BOT={**ON, 'TOKEN': TOKEN, 'FSM_STORAGE': 'memory'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'TOKEN': TOKEN, 'FSM_STORAGE': 'memory'})
 def test_the_bot_actually_installs_what_these_tests_exercise():
     """The seams above are driven directly, so nothing in this file would
     notice `TelegramBot` quietly ceasing to use them.
@@ -286,7 +286,7 @@ def test_the_bot_actually_installs_what_these_tests_exercise():
         instance.close()
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': TOKEN, 'FSM_STORAGE': 'memory'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': TOKEN, 'FSM_STORAGE': 'memory'})
 def test_the_bot_installs_neither_while_the_log_is_off():
     """The other half of the same wiring: off is the default, and it has to
     reach the dispatcher too."""

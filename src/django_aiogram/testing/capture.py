@@ -117,7 +117,7 @@ def capture_sends() -> 'Iterator[Captured]':
     visible to the next.
 
     **Ahead of the settings rather than through them**, which is the one design decision worth
-    knowing about. Installing it with ``override_settings(TELEGRAM_BOT=...)`` looked simpler
+    knowing about. Installing it with ``override_settings(TELEGRAM_BOT_DEFAULTS=...)`` looked simpler
     and was wrong: every such override replaces the dict whole, so a case carrying its own --
     a decorator on the test method, which pytest applies *after* a fixture has already started
     capturing -- took the capture's broker away again and left the case asserting against a

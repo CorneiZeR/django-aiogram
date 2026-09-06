@@ -259,7 +259,7 @@ fresh event loop and HTTP session that nothing closes — see **[Sending message
 from django_aiogram import TelegramBot, bot, conf, __version__
 ```
 
-`conf` reads `settings.TELEGRAM_BOT` on first access, falls back to
+`conf` reads `settings.TELEGRAM_BOT_DEFAULTS` on first access, falls back to
 `DJANGO_AIOGRAM_<NAME>` for scalars, and resets itself on `override_settings`.
 
 **`get_redis` and `redis_conn` left this list in 4.0**, along with `bot.redis_conn`. They are
@@ -301,7 +301,7 @@ so a project can import the value instead of spelling the string:
 ```python
 from django_aiogram.config.enums import StorageKind, UpdateMode
 
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'FSM_STORAGE': StorageKind.REDIS,
     'MODE': UpdateMode.POLLING,
 }

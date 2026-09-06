@@ -148,7 +148,7 @@ def test_django_still_exposes_the_receiver_list(collected):
     events_recorded.connect(lambda sender, **kwargs: None, weak=False, dispatch_uid='tests.metrics')
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_receiver_gets_events_with_the_log_off(redis_server, collected):
     """The seam exists so a project can have metrics without a table.
 
@@ -164,7 +164,7 @@ def test_a_receiver_gets_events_with_the_log_off(redis_server, collected):
     assert collected[0].chat_id == 7
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_payload_is_not_summarized_for_a_receiver(redis_server, collected, monkeypatch):
     """`describe()` is the expensive half of recording and no part of counting.
 
@@ -183,7 +183,7 @@ def test_the_payload_is_not_summarized_for_a_receiver(redis_server, collected, m
     assert collected[0].detail is None
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'TOKEN': '1:x', 'MAX_RETRIES': 0})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'TOKEN': '1:x', 'MAX_RETRIES': 0})
 def test_a_send_reports_its_stages_to_a_receiver(redis_server, collected):
     """`_record_send` is one guard over `sent`, `failed`, `retried` and `dropped` —
     the entire advertised metric set. Gated on the table flag, a project connecting
@@ -215,7 +215,7 @@ def recording_middleware(dispatcher):
     return None
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_update_middleware_is_installed_for_a_receiver(collected):
     """`install_instrumentation` returns before building anything when nothing reads
     events, which is what makes the inactive cost zero — so reading the table flag
@@ -226,7 +226,7 @@ def test_the_update_middleware_is_installed_for_a_receiver(collected):
     assert recording_middleware(dispatcher) is not None, 'nothing was registered for a listening process'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_an_update_reaches_a_receiver(collected):
     """End to end through the middleware, because registration alone proves only
     that something was installed."""
@@ -258,7 +258,7 @@ def test_an_update_reaches_a_receiver(collected):
     assert collected[0].detail is None, 'the update was summarized for a receiver'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_state_change_reaches_a_receiver(collected):
     """`instrumented` hands the storage back untouched when nothing reads events, so
     a receiver watching FSM transitions needs this gate too."""
@@ -273,7 +273,7 @@ def test_a_state_change_reaches_a_receiver(collected):
     assert kinds(collected) == ['fsm.transition'], f'the receiver saw {kinds(collected)}'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_nothing_is_recorded_and_no_thread_runs_when_nobody_reads(redis_server):
     """The default deployment pays nothing: no writer thread, and `record()` returns
     on its first branch.
@@ -289,7 +289,7 @@ def test_nothing_is_recorded_and_no_thread_runs_when_nobody_reads(redis_server):
     assert {thread.name for thread in threading.enumerate()} == before, 'a writer thread started for nobody'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_KINDS': ['outbound.sent']})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG_KINDS': ['outbound.sent']})
 def test_event_log_kinds_filters_receivers_too(redis_server, collected):
     """One answer to "which events does this deployment care about", not two.
 
@@ -310,7 +310,7 @@ def test_event_log_kinds_filters_receivers_too(redis_server, collected):
     assert kinds(collected) == ['outbound.sent'], f'the receiver saw {kinds(collected)}'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_one_broken_receiver_does_not_cost_the_others_their_batch(redis_server, collected, caplog):
     """`send_robust`, so a receiver raising is that receiver's problem.
 
@@ -363,7 +363,7 @@ def test_one_writers_exit_does_not_clear_another_writers_mark(clean_counters):
     marks.clear()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_metrics_only_writer_does_not_close_a_connection_it_never_opened(redis_server, collected, monkeypatch):
     """Closing one means importing `eventlog`, and that imports `django.db`.
 
@@ -386,7 +386,7 @@ def test_a_metrics_only_writer_does_not_close_a_connection_it_never_opened(redis
     assert closed == [], 'the writer closed a database connection it never opened'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG': True})
 def test_a_writer_that_wrote_still_closes_its_connection(redis_server, collected, monkeypatch):
     """The other direction, which is what makes the check above a decision and not
     a way of never closing anything.
@@ -406,7 +406,7 @@ def test_a_writer_that_wrote_still_closes_its_connection(redis_server, collected
     assert closed == [True], 'the writer left its own connection open'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG': True})
 def test_a_receiver_cannot_change_what_was_written(redis_server, collected, monkeypatch):
     """Receivers are project code, and containing their exceptions is half a job.
 
@@ -443,7 +443,7 @@ def test_a_receiver_cannot_change_what_was_written(redis_server, collected, monk
     assert kinds(collected) == ['outbound.queued'], 'the fixture receiver saw nothing to compare against'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_receiver_cannot_take_the_batch_from_the_next_one(redis_server, collected):
     """`send_robust` hands every receiver the same argument, one after another.
 
@@ -466,7 +466,7 @@ def test_a_receiver_cannot_take_the_batch_from_the_next_one(redis_server, collec
     assert shapes == ['tuple'], f'receivers were handed a {shapes}'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_KINDS': ['outbound.sent']})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG_KINDS': ['outbound.sent']})
 def test_the_gap_row_reaches_a_receiver_even_when_the_kinds_exclude_it(redis_server, collected, monkeypatch):
     """`log.dropped` is exempt from `EVENT_LOG_KINDS`, and has to be.
 
@@ -483,7 +483,7 @@ def test_the_gap_row_reaches_a_receiver_even_when_the_kinds_exclude_it(redis_ser
     assert collected[0].detail == {'dropped': 3}
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_receiver_still_gets_the_detail_a_seam_measured_itself(redis_server, collected, monkeypatch):
     """Only the *summarized arguments* are gated on the log, not all of `detail`.
 
@@ -509,7 +509,7 @@ def test_a_receiver_still_gets_the_detail_a_seam_measured_itself(redis_server, c
     assert collected[0].error_code == 'ConnectionError'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG': True})
 def test_a_failed_write_still_reaches_a_receiver(redis_server, collected, monkeypatch, caplog):
     """The whole reason the publish is in a `finally` rather than after the write.
 
@@ -638,7 +638,7 @@ def test_the_report_time_is_read_and_written_under_the_ledgers_lock():
     assert all(seen), f'the report time was touched unguarded {seen.count(False)} of {len(seen)} times'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_last_events_before_shutdown_still_reach_a_receiver(redis_server, collected):
     """A queue the writer never drained is published by whoever calls `stop()`.
 
@@ -673,7 +673,7 @@ def test_the_last_events_before_shutdown_still_reach_a_receiver(redis_server, co
     assert WRITER_THREAD not in on_thread, 'the writer was gone, so it cannot have run there'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_SYNC': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG_SYNC': True})
 def test_the_synchronous_flag_does_nothing_for_a_receiver_only_process(redis_server, collected):
     """`EVENT_LOG_SYNC` is about *where the insert happens*, so with nothing being
     inserted it has nothing to say.
@@ -699,7 +699,7 @@ def test_the_synchronous_flag_does_nothing_for_a_receiver_only_process(redis_ser
     assert on_thread == [WRITER_THREAD], f'ran on {on_thread} rather than the writer thread'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 @pytest.mark.parametrize('nameable', [True, False], ids=['django can name it', 'django cannot'])
 def test_a_receiver_that_cannot_even_be_named_costs_nobody_their_batch(redis_server, collected, caplog, nameable):
     """The reporting path must not become the failure it reports.
@@ -759,7 +759,7 @@ def test_a_receiver_that_cannot_even_be_named_costs_nobody_their_batch(redis_ser
     assert 'receiver raised' in caplog.text or 'publishing recorded events failed' in caplog.text
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_failure_while_reporting_a_receiver_costs_nobody_their_batch(redis_server, collected, monkeypatch):
     """The reporting loop is inside the guard, not only the dispatch.
 
@@ -803,7 +803,7 @@ def test_a_failure_while_reporting_a_receiver_costs_nobody_their_batch(redis_ser
     assert recorder._drops.total() == 0, f'a broken log line was counted as {recorder._drops.total()} dropped events'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG': True})
 def test_a_gap_row_that_cannot_be_written_keeps_its_count(redis_server, monkeypatch, clean_counters):
     """The hole outlives the row that failed to describe it.
 
@@ -825,7 +825,7 @@ def test_a_gap_row_that_cannot_be_written_keeps_its_count(redis_server, monkeypa
     assert recorder._drops.total() == 7, 'the gap was forgotten with the row that could not report it'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG': True})
 def test_a_gap_row_that_lands_clears_its_count(redis_server, monkeypatch, clean_counters):
     """The control, so the fix above cannot be "never subtract"."""
     # 0 refused, which is what `write_batch` returns on a clean write: a double returning
@@ -838,7 +838,7 @@ def test_a_gap_row_that_lands_clears_its_count(redis_server, monkeypatch, clean_
     assert recorder._drops.total() == 0, 'a reported gap was reported twice'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_receiver_django_cannot_name_no_longer_costs_the_receivers_behind_it(redis_server, monkeypatch):
     """The defect this file used to pin as a limit, now fixed at the seam.
 
@@ -915,7 +915,7 @@ def test_a_receiver_that_cannot_be_named_says_so_when_it_connects(caplog):
     assert any(getattr(record, 'tg_receiver', '').endswith('Slotted') for record in caplog.records), caplog.records
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG': True})
 def test_two_overlapping_flushes_report_one_gap_between_them(redis_server, monkeypatch, clean_counters):
     """`drain_once()` runs on the caller's thread while the writer runs its own.
 
@@ -955,7 +955,7 @@ def test_two_overlapping_flushes_report_one_gap_between_them(redis_server, monke
     assert recorder._drops.total() == 0, f'the count went to {recorder._drops.total()}'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG': True})
 def test_a_gap_row_the_database_refuses_one_at_a_time_keeps_its_count(
     redis_server, monkeypatch, caplog, clean_counters
 ):
@@ -981,7 +981,7 @@ def test_a_gap_row_the_database_refuses_one_at_a_time_keeps_its_count(
     assert 'refused the gap row' in caplog.text
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_dropping_nothing_says_nothing(redis_server, caplog, clean_counters):
     """Callers pass the refused count straight through, and it is zero on every good write.
 

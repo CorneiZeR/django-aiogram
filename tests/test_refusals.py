@@ -50,7 +50,7 @@ ARGUMENTS = {
     'NonMappingPayloadError': {},
     'UnknownSerializerError': {'name': 'yaml'},
     'PickleReadRefusedError': {},
-    'PickleWriteRefusedError': {'settings_name': 'TELEGRAM_BOT'},
+    'PickleWriteRefusedError': {'settings_name': 'TELEGRAM_BOT_DEFAULTS'},
     'EventLogRefusedError': {'count': 3},
 }
 

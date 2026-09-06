@@ -78,7 +78,7 @@ def handled(monkeypatch):
         instance.close()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_an_update_reaches_the_handler(handled):
     seen, _ = handled
 
@@ -88,7 +88,7 @@ def test_an_update_reaches_the_handler(handled):
     assert seen == ['/start']
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_wrong_secret_is_refused(handled):
     seen, _ = handled
 
@@ -98,7 +98,7 @@ def test_a_wrong_secret_is_refused(handled):
     assert seen == [], 'an update with a wrong secret reached a handler'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_missing_secret_is_refused(handled):
     seen, _ = handled
 
@@ -108,7 +108,7 @@ def test_a_missing_secret_is_refused(handled):
     assert seen == []
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_secret_that_is_a_prefix_is_refused(handled):
     """compare_digest, not startswith."""
     response = post(an_update(), secret=SECRET[:-1])
@@ -116,7 +116,7 @@ def test_a_secret_that_is_a_prefix_is_refused(handled):
     assert response.status_code == 403
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://x', 'MODE': 'polling'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://x', 'MODE': 'polling'})
 def test_a_polling_deployment_is_told_it_polls_and_not_about_its_secret(handled, caplog):
     """The commonest configuration there is, and the one a guard put in the wrong bucket.
 
@@ -135,7 +135,7 @@ def test_a_polling_deployment_is_told_it_polls_and_not_about_its_secret(handled,
     assert seen == [], 'the update was dispatched before the refusal'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WEBHOOK_SECRET': ''})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WEBHOOK_SECRET': ''})
 def test_serving_without_a_secret_answers_503_rather_than_raising(handled, caplog):
     """No update is accepted either way, so the only question is what the caller gets.
 
@@ -156,7 +156,7 @@ def test_serving_without_a_secret_answers_503_rather_than_raising(handled, caplo
     assert seen == [], 'the update was dispatched before the refusal'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_get_is_not_allowed():
     request = RequestFactory().get('/tg/hook/')
 
@@ -165,7 +165,7 @@ def test_get_is_not_allowed():
     assert response.status_code == 405
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_body_that_is_not_an_update_is_rejected(handled, caplog):
     seen, _ = handled
 
@@ -181,7 +181,7 @@ def test_a_body_that_is_not_an_update_is_rejected(handled, caplog):
     assert record.exc_info is None, 'the traceback would carry unvalidated input'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_body_that_is_not_json_is_rejected(handled):
     request = RequestFactory().post(
         '/tg/hook/', data=b'{oops', content_type='application/json', **{SECRET_HEADER: SECRET}
@@ -190,7 +190,7 @@ def test_a_body_that_is_not_json_is_rejected(handled):
     assert telegram_webhook(request).status_code == 400
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_failing_handler_still_answers_200(monkeypatch, caplog):
     """A non-2xx makes Telegram redeliver, and a handler that failed once will
     fail again — that is a loop, not a retry."""
@@ -211,7 +211,7 @@ def test_a_failing_handler_still_answers_200(monkeypatch, caplog):
     assert 'webhook handler failed' in caplog.text
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'ENABLED': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'ENABLED': False})
 def test_a_disabled_process_does_not_serve(handled):
     seen, _ = handled
 
@@ -221,7 +221,7 @@ def test_a_disabled_process_does_not_serve(handled):
     assert seen == []
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_two_updates_in_a_row_are_both_handled(handled):
     """The router is attached once; attaching it twice is an aiogram error."""
     seen, _ = handled
@@ -233,7 +233,7 @@ def test_two_updates_in_a_row_are_both_handled(handled):
     assert seen == ['/one', '/two']
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_what_set_webhook_is_given():
     arguments = webhook_settings()
 
@@ -243,34 +243,34 @@ def test_what_set_webhook_is_given():
     assert arguments['drop_pending_updates'] is False
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WEBHOOK_ALLOWED_UPDATES': ('message',)})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WEBHOOK_ALLOWED_UPDATES': ('message',)})
 def test_allowed_updates_are_passed_through():
     assert webhook_settings()['allowed_updates'] == ['message']
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WEBHOOK_URL': ''})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WEBHOOK_URL': ''})
 def test_registering_without_a_url_is_refused():
     with pytest.raises(ImproperlyConfigured, match='WEBHOOK_URL'):
         webhook_settings()
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WEBHOOK_SECRET': '', 'TOKEN': '42:x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WEBHOOK_SECRET': '', 'TOKEN': '42:x'})
 def test_a_url_without_a_secret_is_a_check_error():
     assert 'django_aiogram.E027' in {message.id for message in check_settings()}
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WEBHOOK_URL': 'http://example.test/tg/'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WEBHOOK_URL': 'http://example.test/tg/'})
 def test_a_url_that_is_not_https_is_a_check_error():
     assert 'django_aiogram.E027' in {message.id for message in check_settings()}
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://x'})
 def test_no_webhook_configured_is_not_an_error():
     """Polling is still the default; the checks must not nag about it."""
     assert 'django_aiogram.E027' not in {message.id for message in check_settings()}
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_bot_is_not_a_worker_in_the_web_process(handled):
     """Sends from a handler still queue: the consumer runs elsewhere."""
     _, instance = handled
@@ -315,7 +315,7 @@ def telegram(monkeypatch):
     return api
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_command_registers_the_webhook(telegram):
     out = StringIO()
     call_command('tgbot_webhook', 'set', stdout=out)
@@ -328,14 +328,14 @@ def test_the_command_registers_the_webhook(telegram):
     assert 'webhook set' in out.getvalue()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_pending_updates_can_be_dropped(telegram):
     call_command('tgbot_webhook', 'set', '--drop-pending', stdout=StringIO())
 
     assert telegram.calls[0][1]['drop_pending_updates'] is True
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_command_deletes_the_webhook(telegram):
     out = StringIO()
     call_command('tgbot_webhook', 'delete', stdout=out)
@@ -344,7 +344,7 @@ def test_the_command_deletes_the_webhook(telegram):
     assert 'polling can start again' in out.getvalue()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_info_reports_what_telegram_knows(telegram):
     out = StringIO()
     call_command('tgbot_webhook', 'info', stdout=out)
@@ -355,7 +355,7 @@ def test_info_reports_what_telegram_knows(telegram):
     assert 'wrong response from the webhook' in printed
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'ENABLED': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'ENABLED': False})
 def test_the_command_refuses_when_disabled(telegram):
     with pytest.raises(CommandError, match='disabled'):
         call_command('tgbot_webhook', 'set', stdout=StringIO())
@@ -363,7 +363,7 @@ def test_the_command_refuses_when_disabled(telegram):
     assert telegram.calls == [], 'it talked to Telegram from a disabled process'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'MODE': 'polling'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MODE': 'polling'})
 def test_the_view_refuses_while_the_deployment_polls(handled):
     """Two sources of updates and no way to tell which handled what."""
     seen, _ = handled
@@ -374,7 +374,7 @@ def test_the_view_refuses_while_the_deployment_polls(handled):
     assert seen == []
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'MODE': 'nonsense'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MODE': 'nonsense'})
 def test_an_unknown_mode_answers_503_rather_than_raising(handled, caplog):
     """The same rule as the empty secret: a misconfiguration is ours to answer for.
 
@@ -390,12 +390,12 @@ def test_an_unknown_mode_answers_503_rather_than_raising(handled, caplog):
     assert seen == [], 'the update was dispatched before the refusal'
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://x'})
 def test_polling_is_the_default_mode():
     assert current_mode() == 'polling'
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://x'})
 def test_the_mode_can_come_from_the_environment(monkeypatch):
     """Choosing at startup must not need a code change."""
     monkeypatch.setenv('DJANGO_AIOGRAM_MODE', 'webhook')
@@ -403,20 +403,20 @@ def test_the_mode_can_come_from_the_environment(monkeypatch):
     assert current_mode() == 'webhook'
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://x', 'MODE': 'sideways'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://x', 'MODE': 'sideways'})
 def test_an_unknown_mode_is_a_check_error():
     assert 'django_aiogram.E028' in {message.id for message in check_settings()}
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://x', 'MODE': 'webhook'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://x', 'MODE': 'webhook'})
 def test_webhook_mode_without_a_url_is_a_check_error():
     """Half-configured webhook mode receives nothing, silently."""
     assert 'django_aiogram.E027' in {message.id for message in check_settings()}
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_registering_a_webhook_while_polling_warns(telegram):
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'MODE': 'polling'}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MODE': 'polling'}):
         out = StringIO()
         call_command('tgbot_webhook', 'set', stdout=out)
 
@@ -424,7 +424,7 @@ def test_registering_a_webhook_while_polling_warns(telegram):
     assert telegram.calls[0][0] == 'set_webhook', 'it refused instead of warning'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_concurrent_first_requests_share_one_dispatcher(monkeypatch):
     """Two first requests would each build one, and the router would attach to
     whichever was discarded — so half the updates would reach no handler."""
@@ -474,7 +474,7 @@ def test_concurrent_first_requests_share_one_dispatcher(monkeypatch):
         instance.close()
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'TOKEN': ''})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'TOKEN': ''})
 def test_a_missing_token_is_not_reported_as_a_bad_request(handled, caplog):
     """503 is ours to fix; 400 would blame Telegram for our configuration."""
     with caplog.at_level('ERROR', logger='django_aiogram'):
@@ -484,7 +484,7 @@ def test_a_missing_token_is_not_reported_as_a_bad_request(handled, caplog):
     assert 'cannot build the bot' in caplog.text
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_handler_sending_from_the_web_process_queues(monkeypatch):
     """The consumer runs elsewhere, so a send from a handler must go to Redis."""
     instance = TelegramBot()
@@ -507,24 +507,24 @@ def test_a_handler_sending_from_the_web_process_queues(monkeypatch):
     assert direct == [], 'it talked to Telegram from the web process'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WEBHOOK_ALLOWED_UPDATES': 'message'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WEBHOOK_ALLOWED_UPDATES': 'message'})
 def test_a_string_of_allowed_updates_is_a_check_error():
     """list('message') is nine update types Telegram has never heard of."""
     assert 'django_aiogram.E029' in {message.id for message in check_settings()}
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WEBHOOK_ALLOWED_UPDATES': ('message', 'messages')})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WEBHOOK_ALLOWED_UPDATES': ('message', 'messages')})
 def test_an_unknown_update_type_is_a_check_error():
     assert 'django_aiogram.E029' in {message.id for message in check_settings()}
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WEBHOOK_ALLOWED_UPDATES': ('message', 'poll_answer')})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WEBHOOK_ALLOWED_UPDATES': ('message', 'poll_answer')})
 def test_real_update_types_are_accepted():
     assert 'django_aiogram.E029' not in {message.id for message in check_settings()}
     assert webhook_settings()['allowed_updates'] == ['message', 'poll_answer']
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WEBHOOK_ALLOWED_UPDATES': (['message'], {'poll': 1}, 7)})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WEBHOOK_ALLOWED_UPDATES': (['message'], {'poll': 1}, 7)})
 def test_members_that_are_not_strings_are_reported_not_raised():
     """A list member is unhashable, so the membership test used to raise out of
     manage.py check instead of reporting anything."""
@@ -533,7 +533,7 @@ def test_members_that_are_not_strings_are_reported_not_raised():
     assert 'django_aiogram.E029' in reported
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_updates_in_one_process_are_handled_concurrently(monkeypatch):
     """A web process drives nothing, so every update took `run_until_complete`
     **under `loop_lock`** and they handled strictly one at a time.
@@ -587,7 +587,7 @@ def test_updates_in_one_process_are_handled_concurrently(monkeypatch):
         instance.close()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_second_request_waits_for_the_loop_to_be_running(monkeypatch):
     """Returning as soon as the *thread exists* is not the same as running.
 
@@ -643,7 +643,7 @@ def test_a_second_request_waits_for_the_loop_to_be_running(monkeypatch):
         instance.close()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_handlers_send_does_not_warn_on_the_normal_path(monkeypatch, caplog):
     """Webhook mode runs handlers on a loop this process drives, so a send from
     one is ordinary. Warning about it would put a WARNING in the log for every
@@ -667,7 +667,7 @@ def test_a_handlers_send_does_not_warn_on_the_normal_path(monkeypatch, caplog):
         instance.close()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_send_raw_stops_waiting_once_the_loop_has_a_thread():
     """The documented cost of giving the loop a thread, pinned.
 
@@ -726,7 +726,7 @@ def test_send_raw_stops_waiting_once_the_loop_has_a_thread():
     # package, and `handed_called` already says the caller did not wait
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_close_does_not_strand_a_request_waiting_on_its_update(monkeypatch, caplog):
     """`close()` stops the loop thread before its teardown, and a request thread
     is blocked on `future.result()` with no deadline.
@@ -772,7 +772,7 @@ def test_close_does_not_strand_a_request_waiting_on_its_update(monkeypatch, capl
     assert 'webhook handler failed' not in caplog.text
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_slow_loop_thread_is_not_driven_by_the_request(monkeypatch):
     """Slow to start is not the same as absent.
 
@@ -807,7 +807,7 @@ def test_a_slow_loop_thread_is_not_driven_by_the_request(monkeypatch):
         instance.close()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_an_update_is_refused_once_the_shutdown_has_started(monkeypatch):
     """A request that arrives mid-shutdown must be turned away, not queued.
 
@@ -833,7 +833,7 @@ def test_an_update_is_refused_once_the_shutdown_has_started(monkeypatch):
         instance.close()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_view_asks_telegram_to_redeliver_a_refused_update(monkeypatch):
     """A refusal and a handler failure must not answer the same way.
 
@@ -857,7 +857,7 @@ def test_the_view_asks_telegram_to_redeliver_a_refused_update(monkeypatch):
 
 
 @pytest.mark.filterwarnings('ignore::pytest.PytestUnhandledThreadExceptionWarning')
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_loop_thread_that_dies_is_replaced(monkeypatch):
     """A dead runner must not become a permanent 503.
 
@@ -914,7 +914,7 @@ def test_a_loop_thread_that_dies_is_replaced(monkeypatch):
         instance.close()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_forgetting_an_update_waits_for_the_shutdown_snapshot():
     """The set is added to and read under `loop_lock`; removal has to match.
 
@@ -955,7 +955,7 @@ def test_forgetting_an_update_waits_for_the_shutdown_snapshot():
         instance.close()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_runner_registered_during_shutdown_is_not_missed():
     """`_stop_runner` reads and clears `_runner`; `_ensure_loop_runs` writes it.
 
@@ -999,7 +999,7 @@ def test_a_runner_registered_during_shutdown_is_not_missed():
         instance.close()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_non_ascii_secret_is_refused_rather_than_raised():
     """The 403 branch used to answer 500 to anyone who sent one non-ASCII byte.
 
@@ -1012,7 +1012,7 @@ def test_a_non_ascii_secret_is_refused_rather_than_raised():
     assert response.status_code == 403
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WEBHOOK_SECRET': 'пароль'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WEBHOOK_SECRET': 'пароль'})
 def test_a_matching_non_ascii_secret_passes(handled):
     """Comparing bytes means comparing, not refusing.
 
@@ -1024,7 +1024,7 @@ def test_a_matching_non_ascii_secret_passes(handled):
     assert post(an_update(update_id=2), secret='другой').status_code == 403
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_an_update_reaching_a_closed_loop_is_refused_not_swallowed(monkeypatch):
     """A 200 here tells Telegram to stop redelivering an update nothing handled.
 
@@ -1049,7 +1049,7 @@ def test_an_update_reaching_a_closed_loop_is_refused_not_swallowed(monkeypatch):
     assert post(an_update()).status_code == 503
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_loop_thread_that_outlives_the_join_is_kept_so_close_can_retry(monkeypatch):
     """`close()` returns without closing anything when it cannot stop the loop thread.
 
@@ -1092,7 +1092,7 @@ def test_a_loop_thread_that_outlives_the_join_is_kept_so_close_can_retry(monkeyp
     assert instance._loop is None or instance._loop.is_closed(), 'the retry closed nothing'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_send_waits_for_our_own_runner_instead_of_driving_the_loop(monkeypatch):
     """`is_running()` is False for the whole window before the runner reaches `run_forever`.
 
@@ -1136,7 +1136,7 @@ def test_a_send_waits_for_our_own_runner_instead_of_driving_the_loop(monkeypatch
     assert sent == [1], 'the handed-off send was never stepped'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_no_loop_thread_is_started_on_a_closed_loop(monkeypatch):
     """Starting one raises inside the thread, where nothing catches it.
 
@@ -1154,7 +1154,7 @@ def test_no_loop_thread_is_started_on_a_closed_loop(monkeypatch):
     assert instance._runner is None, 'a thread was started on a closed loop'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'DRAIN_TIMEOUT': 0.2})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'DRAIN_TIMEOUT': 0.2})
 def test_a_close_that_gave_up_still_cancels_what_arrived_after_it(monkeypatch):
     """The half of keeping the orphan that matters to a request thread.
 

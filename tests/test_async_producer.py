@@ -39,7 +39,7 @@ MENTION = 'a synchronous send was called from a running event loop'
 SETTINGS = {'REDIS_URL': 'redis://localhost:6379/0', 'RATE_LIMIT': None}
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_loop_keeps_running_while_a_message_is_queued(redis_server, monkeypatch):
     """The whole point, and it cannot be shown by a return value.
 
@@ -78,7 +78,7 @@ def test_the_loop_keeps_running_while_a_message_is_queued(redis_server, monkeypa
     assert redis_server.llen(QUEUE) == 1
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_correlation_id_is_resolved_before_the_await(redis_server, monkeypatch):
     """A handler's replies inherit the id of the update that caused them.
 
@@ -112,7 +112,7 @@ def test_the_correlation_id_is_resolved_before_the_await(redis_server, monkeypat
     assert queued.correlation_id == given
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_both_paths_queue_the_same_shape(redis_server):
     """The consumer knows one payload shape, so the two producers must agree.
 
@@ -130,7 +130,7 @@ def test_both_paths_queue_the_same_shape(redis_server):
     assert first.correlation_id != second.correlation_id, 'two messages shared one id'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 @pytest.mark.parametrize('bulk', ['send_many', 'asend_many'])
 def test_a_chunk_is_one_round_trip_not_one_per_message(redis_server, bulk):
     """The reason this exists at all.
@@ -152,7 +152,7 @@ def test_a_chunk_is_one_round_trip_not_one_per_message(redis_server, bulk):
     assert redis_server.llen(QUEUE) == 250
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': True, 'EVENT_LOG_SYNC': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG': True, 'EVENT_LOG_SYNC': True})
 @pytest.mark.parametrize('bulk', ['send_many', 'asend_many'])
 def test_a_failed_chunk_records_its_own_messages_and_raises(redis_server, bulk, monkeypatch):
     """A variadic `RPUSH` fails for its whole chunk, and the ids go with the
@@ -181,7 +181,7 @@ def test_a_failed_chunk_records_its_own_messages_and_raises(redis_server, bulk, 
     assert {event.detail['stage'] for event in dropped} == {'queueing'}
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'mine'})
 def test_the_depths_read_the_keys_this_package_owns(redis_server):
     """An exporter should not have to reproduce the `:processing:<worker>` scheme
     by hand, which is what the Troubleshooting page used to leave it doing."""
@@ -197,7 +197,7 @@ def test_the_depths_read_the_keys_this_package_owns(redis_server):
     assert asyncio.run(bot.ainflight_depth('gone')) == 3
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 @pytest.mark.parametrize('producer', ['enqueue', 'aenqueue', 'send_many', 'asend_many'])
 def test_the_producer_writes_the_key_the_depth_reads(redis_server, monkeypatch, producer):
     """One derivation of the queue key, not one per caller.
@@ -224,7 +224,7 @@ def test_the_producer_writes_the_key_the_depth_reads(redis_server, monkeypatch, 
     assert redis_server.llen(QUEUE) == 0, 'the producer resolved the key past the helper'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 @pytest.mark.parametrize('bulk', ['send_many', 'asend_many'])
 def test_the_ids_come_back_in_the_order_the_chats_were_given(redis_server, bulk):
     """Two pages say so, so something has to fail when it stops being true.
@@ -273,7 +273,7 @@ def test_the_latch_is_taken_under_its_guard(monkeypatch):
     assert all(held), 'the latch was taken without the guard, so two threads can both take it'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_broker_that_cannot_be_resolved_does_not_spend_the_mention(caplog, monkeypatch):
     """The once-per-process line belongs to the first caller who can act on it.
 
@@ -330,7 +330,7 @@ def test_send_from_a_loop_mentions_asend_once(redis_server, caplog, monkeypatch)
     assert redis_server.llen(QUEUE) == 3, 'the send itself must be unaffected'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_send_off_a_loop_says_nothing(redis_server, caplog, monkeypatch):
     """Most callers are synchronous — Celery, a management command, a view — and
     there is nothing for them to do about a message aimed at async code."""
@@ -346,7 +346,7 @@ def test_send_off_a_loop_says_nothing(redis_server, caplog, monkeypatch):
     assert not latch.is_set(), 'a synchronous send spent the line an async caller needs'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 @pytest.mark.parametrize('producer', ['send', 'enqueue', 'send_many'])
 def test_a_refused_method_does_not_spend_the_mention(caplog, monkeypatch, producer):
     """The line is latched once per process, so whoever emits it takes it from everyone else.
@@ -386,7 +386,7 @@ def test_a_refused_method_does_not_spend_the_mention(caplog, monkeypatch, produc
     assert not latch.is_set(), 'the refusal spent the line a valid call needs'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'ENABLED': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'ENABLED': False})
 def test_a_disabled_send_from_a_loop_says_nothing(caplog, monkeypatch):
     """Nothing was written, so there is no better way to have written it.
 
@@ -416,7 +416,7 @@ def test_a_disabled_send_from_a_loop_says_nothing(caplog, monkeypatch):
     assert not latch.is_set(), 'a disabled send spent the line a real send needs'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 @pytest.mark.parametrize(
     ('producer', 'alternative'),
     # each names its *own* twin: the test used to expect `enqueue` to name `asend`,
@@ -452,7 +452,7 @@ def test_every_synchronous_route_that_writes_names_its_own_twin(
     assert mentions[0].tg_alternative == alternative, f'{producer} pointed at the wrong method'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 @pytest.mark.parametrize('bulk', ['send_many', 'asend_many'])
 @pytest.mark.parametrize('chat_ids', [[1, 2], []], ids=['with chats', 'no chats'])
 def test_the_bulk_pair_refuses_an_unknown_method_before_writing(redis_server, bulk, chat_ids, monkeypatch):
@@ -487,7 +487,7 @@ def test_the_bulk_pair_refuses_an_unknown_method_before_writing(redis_server, bu
     assert redis_server.llen(QUEUE) == 0, 'a refused method still reached the queue'
 
 
-@override_settings(TELEGRAM_BOT={'RATE_LIMIT': None, 'ENABLED': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'RATE_LIMIT': None, 'ENABLED': False})
 @pytest.mark.parametrize('bulk', ['send_many', 'asend_many'])
 def test_a_disabled_process_queues_nothing_and_still_names_the_messages(redis_server, bulk, monkeypatch):
     """`ENABLED=0` means this process sends to neither Telegram nor the broker.
@@ -521,7 +521,7 @@ def test_a_disabled_process_queues_nothing_and_still_names_the_messages(redis_se
     assert redis_server.llen(QUEUE) == 0, 'a disabled process wrote to Redis'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': True, 'EVENT_LOG_SYNC': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG': True, 'EVENT_LOG_SYNC': True})
 @pytest.mark.parametrize('bulk', ['send_many', 'asend_many'])
 def test_a_broadcast_records_one_row_per_message(redis_server, bulk, monkeypatch):
     """The event log defines `outbound.queued` as one message, and the consumer
@@ -543,7 +543,7 @@ def test_a_broadcast_records_one_row_per_message(redis_server, bulk, monkeypatch
     assert [event.correlation_id for event in queued] == identifiers, 'the rows do not carry the returned ids'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': True, 'EVENT_LOG_SYNC': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG': True, 'EVENT_LOG_SYNC': True})
 @pytest.mark.parametrize('bulk', ['send_many', 'asend_many'])
 def test_a_payload_that_cannot_be_serialized_is_recorded_as_lost(redis_server, bulk, monkeypatch):
     """A message can be lost before the write as well as by it.
@@ -618,7 +618,7 @@ def _count_writes(patch, writes, fail_on_call=None):
     wrap(fakeredis.aioredis.FakeRedis, is_async=True)
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_closing_releases_this_loops_client(redis_server):
     """Django has no hook that closes it, so a caller with a lifespan needs one.
 
@@ -650,7 +650,7 @@ def test_closing_releases_this_loops_client(redis_server):
     assert closed, 'aclose() did not reach the client'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 @pytest.mark.parametrize(
     ('accessor', 'expected'),
     [('aget_redis', 'aget_redis()'), ('aclose_redis', 'aclose_redis()')],

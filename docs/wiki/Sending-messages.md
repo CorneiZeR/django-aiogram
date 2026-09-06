@@ -333,7 +333,7 @@ The row is gone and the message is not. `TRANSACTIONAL` holds the **queue** writ
 commit, so the block above announces nothing when it rolls back:
 
 ```python
-TELEGRAM_BOT = {'TRANSACTIONAL': True}
+TELEGRAM_BOT_DEFAULTS = {'TRANSACTIONAL': True}
 ```
 
 It is off by default because it moves when a message reaches the queue.
