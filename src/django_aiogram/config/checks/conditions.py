@@ -11,14 +11,15 @@ not about it.
 
 from django.core.exceptions import ImproperlyConfigured
 
+from django_aiogram.config.bots import BotRecord
 from django_aiogram.config.enums import StorageKind, as_member
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 
 
-def _bot_is_enabled() -> bool:
-    """Whether the bot is on, coerced the way startup and sending coerce it."""
+def _bot_is_enabled(record: BotRecord) -> bool:
+    """Whether this bot is on, coerced the way startup and sending coerce it."""
     try:
-        return coerce_bool(conf['ENABLED'], f"{SETTINGS_NAME}['ENABLED']")
+        return coerce_bool(record['ENABLED'], record.label('ENABLED'))
     except ImproperlyConfigured:
         # unreadable is E001's finding; assume on, so the credential warnings show
         return True
@@ -33,7 +34,7 @@ def _the_log_is_on() -> bool:
         return False
 
 
-def _redis_is_in_use() -> bool:
+def _redis_is_in_use(record: BotRecord) -> bool:
     """Whether anything this configuration selects actually connects to Redis.
 
     ``REDIS_URL`` was a hard requirement while Redis was the only transport, and `W002` asked
@@ -57,12 +58,12 @@ def _redis_is_in_use() -> bool:
     """
     from django_aiogram.broker.registry import SHIPPED  # noqa: PLC0415 - only when the checks run
 
-    broker = str(conf.get('BROKER') or '').strip()
+    broker = str(record.get('BROKER') or '').strip()
     driver, _extra = SHIPPED.get(broker, ('', ''))
-    return driver == 'redis' or _redis_fsm_storage()
+    return driver == 'redis' or _redis_fsm_storage(record)
 
 
-def _redis_fsm_storage() -> bool:
+def _redis_fsm_storage(record: BotRecord) -> bool:
     """Whether ``FSM_STORAGE`` names the Redis store.
 
     Compared as a member first, because ``str()`` on one does not give its value:
@@ -71,10 +72,10 @@ def _redis_fsm_storage() -> bool:
     nothing, so a project passing the enum this package publishes — which `API.md` documents
     it for — had its warning suppressed and then needed ``REDIS_URL`` at runtime anyway.
     """
-    return as_member(conf.get('FSM_STORAGE'), StorageKind) is StorageKind.REDIS
+    return as_member(record.get('FSM_STORAGE'), StorageKind) is StorageKind.REDIS
 
 
-def _identity_matters() -> bool:
+def _identity_matters(record: BotRecord) -> bool:
     """Whether the configured transport keys anything on the worker's name.
 
     True when it cannot be answered, which is the safe direction: an unresolvable ``BROKER``
@@ -93,6 +94,6 @@ def _identity_matters() -> bool:
     )
 
     try:
-        return bool(_configured_broker(verify_driver=True)().needs_identity)
+        return bool(_configured_broker(record, verify_driver=True)().needs_identity)
     except (_broker_error(), ImproperlyConfigured):
         return True

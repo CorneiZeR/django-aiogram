@@ -10,6 +10,7 @@ from django.test import override_settings
 
 from django_aiogram import conf as conf_object
 from django_aiogram.config import settings as settings_module
+from django_aiogram.config.bots import defaults_record
 from django_aiogram.config.checks import _a_pop_inside_the_deadline, check_settings
 from django_aiogram.config.defaults import no_default_kwargs
 from django_aiogram.config.settings import Settings, conf
@@ -236,4 +237,5 @@ def test_the_pop_deadline_rule_falls_back_rather_than_raising():
     earlier rule refuses first, so the run never reaches this one and the whole-suite
     assertion would pass either way.
     """
-    assert _a_pop_inside_the_deadline('BLPOP_TIMEOUT') == [], 'the rule raised instead of standing down'
+    stood_down = _a_pop_inside_the_deadline('BLPOP_TIMEOUT', defaults_record())
+    assert stood_down == [], 'the rule raised instead of standing down'

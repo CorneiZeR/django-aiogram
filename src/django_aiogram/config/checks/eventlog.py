@@ -13,16 +13,17 @@ from django.conf import settings as django_settings
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 
+from django_aiogram.config.bots import BotRecord
 from django_aiogram.config.checks.conditions import _the_log_is_on
 from django_aiogram.config.checks.problems import Problem
 from django_aiogram.config.checks.shapes import _setting
-from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
+from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool
 from django_aiogram.eventlog.events import known_kinds
 
 
-def _kinds_this_version_records(key: str) -> list[Problem]:
+def _kinds_this_version_records(key: str, record: BotRecord) -> list[Problem]:
     """Warn about a kind nothing writes: a typo here silently records nothing."""
-    value = _setting(key)
+    value = _setting(key, record)
     if not value or isinstance(value, (str, bytes, Mapping)) or not isinstance(value, Collection):
         return []  # E032 owns the shape complaint, mappings included
     known = known_kinds()
@@ -37,14 +38,14 @@ def _kinds_this_version_records(key: str) -> list[Problem]:
     ]
 
 
-def _a_configured_log_database(key: str) -> list[Problem]:
+def _a_configured_log_database(key: str, record: BotRecord) -> list[Problem]:
     """Resolve the alias here: the writer runs on a thread nobody is watching.
 
     An alias missing from DATABASES raises ConnectionDoesNotExist inside the
     writer thread, where the only trace is a log line in a container nobody
     reads and a queue that quietly fills and drops.
     """
-    value = _setting(key)
+    value = _setting(key, record)
     if not isinstance(value, str):
         return []  # E040 owns the type complaint
     alias = value.strip()
@@ -64,7 +65,7 @@ def _a_configured_log_database(key: str) -> list[Problem]:
     ]
 
 
-def _somewhere_to_write_the_log(key: str) -> list[Problem]:
+def _somewhere_to_write_the_log(key: str, record: BotRecord) -> list[Problem]:
     """Warn, never error, when the log is on with no database behind it.
 
     A project may legitimately boot without one — this package's own suite does
@@ -79,7 +80,7 @@ def _somewhere_to_write_the_log(key: str) -> list[Problem]:
     # deferred for the same reason as the alias check above
     from django.db import DEFAULT_DB_ALIAS, connections  # noqa: PLC0415 - as above
 
-    alias = str(conf.get('EVENT_LOG_DATABASE') or '').strip() or DEFAULT_DB_ALIAS
+    alias = str(record.get('EVENT_LOG_DATABASE') or '').strip() or DEFAULT_DB_ALIAS
     if alias not in connections:
         return []  # E041 owns the missing alias
     # `connections.settings`, not `connections[alias]`: the second builds the wrapper, which loads
@@ -97,7 +98,7 @@ def _somewhere_to_write_the_log(key: str) -> list[Problem]:
     ]
 
 
-def _a_log_the_rename_left_behind(_key: str) -> list[Problem]:
+def _a_log_the_rename_left_behind(_key: str, _record: BotRecord) -> list[Problem]:
     """Say when 3.x's event log table is still sitting on the log's alias.
 
     Nothing is broken: the table this release writes to exists, and the rows in the old one are
@@ -144,7 +145,7 @@ def _a_log_the_rename_left_behind(_key: str) -> list[Problem]:
     ]
 
 
-def _a_routed_log_database(key: str) -> list[Problem]:
+def _a_routed_log_database(key: str, record: BotRecord) -> list[Problem]:
     """Say when the log is pointed at its own alias with nothing routing it there.
 
     ``EVENT_LOG_DATABASE`` names where the rows belong; ``TelegramEventLogRouter`` is
@@ -166,7 +167,7 @@ def _a_routed_log_database(key: str) -> list[Problem]:
     """
     if not _the_log_is_on():
         return []
-    alias = str(_setting(key) or '').strip()
+    alias = str(_setting(key, record) or '').strip()
     if not alias:
         return []  # nothing was pointed anywhere, so nothing needs routing
     from django_aiogram.eventlog.dbrouter import TelegramEventLogRouter  # noqa: PLC0415 - no django.db at import
@@ -210,7 +211,7 @@ THREE_X_PATHS = {
 }
 
 
-def _a_router_this_release_still_has(_key: str) -> list[Problem]:
+def _a_router_this_release_still_has(_key: str, _record: BotRecord) -> list[Problem]:
     """Report a `DATABASE_ROUTERS` entry that names 3.x, with the 4.0 path.
 
     The one moved path a check can reach. `DATABASE_ROUTERS` is Django's, and a project wrote our
@@ -252,12 +253,12 @@ def _a_router_this_release_still_has(_key: str) -> list[Problem]:
     return problems
 
 
-def _a_log_that_is_pruned(key: str) -> list[Problem]:
+def _a_log_that_is_pruned(key: str, record: BotRecord) -> list[Problem]:
     """Warn when nothing will ever delete a row, so the table only grows."""
     if not _the_log_is_on():
         return []
     try:
-        days = int(_setting(key))
+        days = int(_setting(key, record))
     except (TypeError, ValueError, OverflowError):
         # `OverflowError` because `int(float('inf'))` raises that and not `ValueError`: measured,
         # an infinite retention took `manage.py check` down out of this rule, which only warns
@@ -274,15 +275,15 @@ def _a_log_that_is_pruned(key: str) -> list[Problem]:
     ]
 
 
-def _a_batch_the_buffer_can_hold(key: str) -> list[Problem]:
+def _a_batch_the_buffer_can_hold(key: str, record: BotRecord) -> list[Problem]:
     """Warn when the batch can never fill, so the interval paces every write.
 
     The writer stops collecting at the buffer's size, which makes a larger batch
     not a bigger write but a partial one every flush interval.
     """
     try:
-        batch = int(_setting(key))
-        buffer = int(conf['EVENT_LOG_BUFFER_SIZE'])
+        batch = int(_setting(key, record))
+        buffer = int(record['EVENT_LOG_BUFFER_SIZE'])
     except (TypeError, ValueError, OverflowError):
         return []  # E036 and E037 own the type complaints
     if batch <= buffer:
@@ -295,7 +296,7 @@ def _a_batch_the_buffer_can_hold(key: str) -> list[Problem]:
     ]
 
 
-def _a_writer_that_does_not_block(key: str) -> list[Problem]:
+def _a_writer_that_does_not_block(key: str, record: BotRecord) -> list[Problem]:
     """Warn that synchronous recording puts a database round trip in the send.
 
     The whole design rests on recording never making a caller wait. This
@@ -308,7 +309,7 @@ def _a_writer_that_does_not_block(key: str) -> list[Problem]:
     if not _the_log_is_on():
         return []
     try:
-        if not coerce_bool(_setting(key), f"{SETTINGS_NAME}['{key}']"):
+        if not coerce_bool(_setting(key, record), record.label(key)):
             return []
     except ImproperlyConfigured:
         return []  # E042 owns the type complaint

@@ -116,6 +116,7 @@ def test_a_documented_settings_block_configures_what_it_says(name, settings):
     behaviour. Nothing here knows which settings the block sets, so a page documenting another one
     is covered on the day it is written.
     """
+    from django_aiogram.config.bots import defaults_record
     from django_aiogram.config.checks.conditions import _redis_fsm_storage
     from django_aiogram.consumer.webhook import current_mode
     from django_aiogram.wire.payloads import detail_level
@@ -124,7 +125,7 @@ def test_a_documented_settings_block_configures_what_it_says(name, settings):
     readers = {
         'MODE': lambda value: current_mode() == UpdateMode(value).value,
         'EVENT_LOG_PAYLOAD': lambda value: detail_level() is PayloadDetail(value),
-        'FSM_STORAGE': lambda value: _redis_fsm_storage() is (StorageKind(value) is StorageKind.REDIS),
+        'FSM_STORAGE': lambda value: _redis_fsm_storage(defaults_record()) is (StorageKind(value) is StorageKind.REDIS),
         # pickle is excluded below rather than here: reading it needs `ALLOW_PICKLE`, which is a
         # different rule's subject and not what this case is about
         'SERIALIZER': lambda value: get_serializer().name == SerializerKind(value).value,

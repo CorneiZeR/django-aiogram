@@ -19,7 +19,7 @@ from django_aiogram.broker.exceptions import BrokerDependencyError, BrokerNotCon
 from django_aiogram.config.settings import SETTINGS_NAME, conf
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Mapping
     from typing import Any
 
 __all__ = ('SHIPPED', 'broker_class', 'close_broker', 'get_broker', 'use_broker')
@@ -48,7 +48,7 @@ _overrides: list[tuple[object, Broker]] = []
 _exit_hook_armed = False
 
 
-def broker_class(*, verify_driver: bool = True) -> type[Broker]:
+def broker_class(settings: 'Mapping[str, Any] | None' = None, *, verify_driver: bool = True) -> type[Broker]:
     """Resolve ``BROKER`` to a class, and refuse anything that is not one.
 
     Separate from :func:`get_broker` because the checks want the class and its declared
@@ -63,7 +63,8 @@ def broker_class(*, verify_driver: bool = True) -> type[Broker]:
 
     Every shipped broker imports its driver lazily, so the import below succeeds without it.
     """
-    path = str(conf['BROKER'] or '').strip()
+    resolved = conf if settings is None else settings
+    path = str(resolved['BROKER'] or '').strip()
     if not path:
         msg = f"{SETTINGS_NAME}['BROKER'] is empty, so no transport is chosen."
         raise BrokerNotConfiguredError(msg)

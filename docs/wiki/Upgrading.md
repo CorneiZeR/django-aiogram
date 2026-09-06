@@ -4,6 +4,23 @@ What each major release changed, newest first — so an upgrade is read from the
 the lowest section that applies to the version you are on and work **up** the page, one release
 at a time: each covers a single hop and assumes the ones below it are done.
 
+# From 4.1 to 5.0
+
+**One required step: rename `TELEGRAM_BOT` to `TELEGRAM_BOT_DEFAULTS`.** Nothing reads the old
+name, so a project that keeps it runs with no token and no transport. `manage.py check` reports
+it as `E050` rather than leaving you to find out at the first send.
+
+A project running one bot is then done: the dict it renamed configures a bot called `default`,
+and every setting keeps its meaning and its default.
+
+To run more than one, add a section per bot under `TELEGRAM_BOTS` — see
+**[Settings](Settings.md)**. What a section leaves out it inherits, and the settings in
+*Which processes run the bot* and every `EVENT_LOG_*` one stay shared: they configure the
+process, not a bot, and `E053` refuses a section that names them.
+
+If you ship a `Broker` of your own that overrides `call_timeout`, it now takes the settings to
+read from — `def call_timeout(cls, settings=None)` — and passes them to `super()`.
+
 # From 4.0 to 4.1
 
 **One required step: run `migrate`.** 4.1 adds two tables, and a project that skips the

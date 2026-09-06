@@ -16,11 +16,12 @@ from typing import TYPE_CHECKING
 
 from django.core.exceptions import ImproperlyConfigured
 
+from django_aiogram.config.bots import BotRecord
 from django_aiogram.config.checks.conditions import _bot_is_enabled, _identity_matters
 from django_aiogram.config.checks.problems import Problem
 from django_aiogram.config.checks.shapes import _reads_as_a_dotted_path, _setting
 from django_aiogram.config.defaults import DEFAULTS
-from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf, take_ceiling
+from django_aiogram.config.settings import coerce_bool, take_ceiling
 
 if TYPE_CHECKING:  # the seam is a type here and nothing more: importing it at run time would
     # pull the broker package into every process that only runs the checks
@@ -44,7 +45,7 @@ _DELIVERY_HINT = (
 _EPHEMERAL_HOSTNAME = re.compile(r'[0-9a-f]{12}')
 
 
-def _the_deadline_the_broker_declares(resolved: 'type[Broker]', key: str) -> list[Problem]:
+def _the_deadline_the_broker_declares(resolved: 'type[Broker]', key: str, record: BotRecord) -> list[Problem]:
     """Report a transport that cannot answer how long one of its calls may take.
 
     Its own function so `E047` keeps one return per finding without growing past what a reader can
@@ -68,7 +69,7 @@ def _the_deadline_the_broker_declares(resolved: 'type[Broker]', key: str) -> lis
             )
         ]
     try:
-        resolved.call_timeout()
+        resolved.call_timeout(record)
     except (ImproperlyConfigured, TypeError, ValueError) as refused:
         # one rule per setting, which is the convention `W004` states from the other side: a
         # deadline sitting in the package-wide table has a rule of its own -- `REDIS_TIMEOUT` has
@@ -79,7 +80,7 @@ def _the_deadline_the_broker_declares(resolved: 'type[Broker]', key: str) -> lis
         # a setting up on the day #23 moves it out of that table and its own rule goes with it
         from django_aiogram.config.checks import CHECKS  # noqa: PLC0415 - the registry is assembled from this module
 
-        if any(check.run() for check in CHECKS if check.key == named and check.key != key):
+        if any(check.run(record) for check in CHECKS if check.key == named and check.key != key):
             return []
         return [
             Problem(
@@ -93,7 +94,7 @@ def _the_deadline_the_broker_declares(resolved: 'type[Broker]', key: str) -> lis
     return []
 
 
-def _a_usable_broker(key: str) -> list[Problem]:
+def _a_usable_broker(key: str, record: BotRecord) -> list[Problem]:
     """Refuse a transport that cannot be reached before anything tries to send through it.
 
     `BROKER` is a dotted path and nothing is inferred from what happens to be installed, which
@@ -146,30 +147,30 @@ def _a_usable_broker(key: str) -> list[Problem]:
         BrokerNotConfiguredError,
     )
 
-    enabled = _bot_is_enabled()
+    enabled = _bot_is_enabled(record)
     # the driver is verified separately below, so everything this rule can judge without one is
     # judged in every environment. Resolving *with* the check first meant the deadline findings
     # were reachable only where the extra happened to be installed -- and never at all in a
     # disabled process, which returns early on a missing driver by design
     try:
-        resolved = _configured_broker()
+        resolved = _configured_broker(record)
     except BrokerNotConfiguredError as wrong:
         return [Problem(f'is unusable: {wrong}', hint='Name a Broker subclass by dotted path.')]
-    deadline = _the_deadline_the_broker_declares(resolved, key)
+    deadline = _the_deadline_the_broker_declares(resolved, key, record)
     if deadline:
         return deadline
     try:
-        _configured_broker(verify_driver=True)
+        _configured_broker(record, verify_driver=True)
     except BrokerDependencyError as missing:
         if not enabled:
             return []
         return [
             Problem(
-                f'names {_setting(key)!r}, whose driver is not installed.',
+                f'names {_setting(key, record)!r}, whose driver is not installed.',
                 hint=f'pip install "django-aiogram[{missing.extra}]"',
             )
         ]
-    required = [option for option in resolved.required() if not str(conf.get(option) or '').strip()]
+    required = [option for option in resolved.required() if not str(record.get(option) or '').strip()]
     if required and enabled:
         return [
             Problem(
@@ -180,7 +181,7 @@ def _a_usable_broker(key: str) -> list[Problem]:
     return []
 
 
-def _a_url_pickle_can_survive(key: str) -> list[Problem]:
+def _a_url_pickle_can_survive(key: str, record: BotRecord) -> list[Problem]:
     """Refuse a decoding URL where pickle may be read: the pair cannot work at all.
 
     Decoding is otherwise supported — one REDIS_URL is often shared with a cache
@@ -194,7 +195,7 @@ def _a_url_pickle_can_survive(key: str) -> list[Problem]:
     an operator who believes the queue is dead drains it by hand.
     """
     try:
-        allowed = coerce_bool(conf.get('ALLOW_PICKLE'), f"{SETTINGS_NAME}['ALLOW_PICKLE']")
+        allowed = coerce_bool(record.get('ALLOW_PICKLE'), record.label('ALLOW_PICKLE'))
     except ImproperlyConfigured:
         # unreadable is E017's finding; this check cannot say anything about it
         return []
@@ -203,7 +204,7 @@ def _a_url_pickle_can_survive(key: str) -> list[Problem]:
     # deferred: this module is imported at every enabled boot, and redis-py is not
     from django_aiogram.redis import url_decodes_responses  # noqa: PLC0415 - as above
 
-    if not url_decodes_responses(str(_setting(key) or '')):
+    if not url_decodes_responses(str(_setting(key, record) or '')):
         return []
     return [
         Problem(
@@ -219,7 +220,7 @@ def _a_url_pickle_can_survive(key: str) -> list[Problem]:
     ]
 
 
-def _a_worker_that_keeps_its_name(key: str) -> list[Problem]:
+def _a_worker_that_keeps_its_name(key: str, record: BotRecord) -> list[Problem]:
     """Say when the name a worker's in-flight list is keyed on cannot survive a restart.
 
     Crash safety rests on a restarted worker recognizing its own list. With
@@ -240,12 +241,12 @@ def _a_worker_that_keeps_its_name(key: str) -> list[Problem]:
     dead one's work whatever it is called. Telling such a deployment to pin its
     hostname would be advice with nothing behind it.
     """
-    if not _identity_matters():
+    if not _identity_matters(record):
         return []
     # the same test `worker_identity()` makes. Stripping here would warn about a
     # hostname the worker does not use: a padded name is a poor one, but it is
     # stable, and stability is the only thing this check is about
-    if _setting(key):
+    if _setting(key, record):
         return []
     hostname = os.environ.get('HOSTNAME') or socket.gethostname()
     if not _EPHEMERAL_HOSTNAME.fullmatch(hostname):
@@ -266,7 +267,7 @@ def _a_worker_that_keeps_its_name(key: str) -> list[Problem]:
     ]
 
 
-def _known_keys(_key: str) -> list[Problem]:
+def _known_keys(_key: str, record: BotRecord) -> list[Problem]:
     """Warn about keys nothing reads: settings keeps them, so a typo is silent.
 
     The package-wide table is not the whole answer since 4.0. A transport declares settings
@@ -283,10 +284,10 @@ def _known_keys(_key: str) -> list[Problem]:
     is. They are known whichever broker is configured, and that is not the gap `REDIS_MESSAGES_KEY`
     was — a list key is read by nothing at all under Kafka.
     """
-    known = set(DEFAULTS) | _broker_options()
+    known = set(DEFAULTS) | _broker_options(record)
     # a non-string key would raise out of join and sorting mixed types raises
     # too, so everything unknown is rendered through repr's eyes first
-    unknown = sorted(repr(key) for key in set(conf) - known)
+    unknown = sorted(repr(key) for key in set(record) - known)
     if not unknown:
         return []
     return [
@@ -297,7 +298,29 @@ def _known_keys(_key: str) -> list[Problem]:
     ]
 
 
-def _configured_broker(*, verify_driver: bool = False) -> 'type[Broker]':
+def _known_section_keys(_key: str, record: BotRecord) -> list[Problem]:
+    """Warn about a key in one bot's own section that nothing reads.
+
+    `W003` asks the same question of the shared dict. Split in two because a typo in the shared
+    dict would otherwise be reported once per bot, and a reader counting findings would look for
+    twenty problems where there is one.
+
+    A process-scoped key in a section is `E053`'s finding and never reaches here: those are left
+    out of a bot's resolution rather than folded into it.
+    """
+    known = set(DEFAULTS) | _broker_options(record)
+    unknown = sorted(repr(key) for key in set(record.origins) - known)
+    if not unknown:
+        return []
+    return [
+        Problem(
+            f'contains unknown keys: {", ".join(unknown)}.',
+            hint=f'Known keys are: {", ".join(sorted(known))}.',
+        )
+    ]
+
+
+def _configured_broker(record: BotRecord, *, verify_driver: bool = False) -> 'type[Broker]':
     """Resolve `BROKER` for a rule, importing the registry only when one runs.
 
     Every caller that needed it imported the registry itself -- three rules and two helpers -- so
@@ -314,7 +337,7 @@ def _configured_broker(*, verify_driver: bool = False) -> 'type[Broker]':
     # module whose driver is an extra since 4.0
     from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
 
-    return broker_class(verify_driver=verify_driver)
+    return broker_class(record, verify_driver=verify_driver)
 
 
 def _broker_error() -> type[Exception]:
@@ -330,7 +353,7 @@ def _broker_error() -> type[Exception]:
     return BrokerError
 
 
-def _broker_options() -> set[str]:
+def _broker_options(record: BotRecord) -> set[str]:
     """Collect what the configured transport declares, or nothing if it cannot be resolved.
 
     Nothing rather than a guess: a `BROKER` that names something unusable is `E047`'s
@@ -343,12 +366,12 @@ def _broker_options() -> set[str]:
     delete them, and every rule that guards one of those settings stopped running.
     """
     try:
-        return set(_configured_broker().OPTIONS)
+        return set(_configured_broker(record).OPTIONS)
     except (_broker_error(), ImproperlyConfigured):
         return set()
 
 
-def _a_pop_inside_the_deadline(key: str) -> list[Problem]:
+def _a_pop_inside_the_deadline(key: str, record: BotRecord) -> list[Problem]:
     """Warn when BLPOP is asked to wait longer than the consumer will let it.
 
     The consumer caps the pop rather than letting it raise, so a setting above the cap
@@ -369,12 +392,12 @@ def _a_pop_inside_the_deadline(key: str) -> list[Problem]:
     its driver, which is `E047`'s business rather than this rule's.
     """
     try:
-        asked = int(_setting(key))
+        asked = int(_setting(key, record))
         # without the driver check: the cap is arithmetic over settings, and staying silent
         # because an extra is not installed would drop a settings warning on every machine that
         # has not installed it. `E047` owns the driver, with the install line
-        broker = _configured_broker()
-        ceiling = take_ceiling(broker.CALL_TIMEOUT_OPTION, broker.call_timeout())
+        broker = _configured_broker(record)
+        ceiling = take_ceiling(broker.CALL_TIMEOUT_OPTION, broker.call_timeout(record), record)
     except (ImproperlyConfigured, TypeError, ValueError, OverflowError):
         # `OverflowError` because `int(float('inf'))` raises that and neither of the other two: a
         # rule about `BLPOP_TIMEOUT` must not be what ends the run, and `E014` owns the value
@@ -386,7 +409,7 @@ def _a_pop_inside_the_deadline(key: str) -> list[Problem]:
         return []
     if asked <= ceiling.seconds:
         return []
-    named = ' and '.join(f"{SETTINGS_NAME}['{key}']" for key in ceiling.bound_by)
+    named = ' and '.join(record.label(bound) for bound in ceiling.bound_by)
     binds = 'which is what binds it' if len(ceiling.bound_by) == 1 else 'which both bind it, so both have to move'
     return [
         Problem(
@@ -396,16 +419,16 @@ def _a_pop_inside_the_deadline(key: str) -> list[Problem]:
     ]
 
 
-def worker_name_problems() -> list[Problem]:
+def worker_name_problems(record: BotRecord) -> list[Problem]:
     """Return the worker-name problems, for a caller that knows it *is* the consumer.
 
     `I001` reports this as information because a system check cannot tell which process it
     is running in. `start_tgbot` can, and warns. One rule, two audiences.
     """
-    return _a_worker_that_keeps_its_name('WORKER_NAME')
+    return _a_worker_that_keeps_its_name('WORKER_NAME', record)
 
 
-def _a_usable_delivery(key: str) -> list[Problem]:
+def _a_usable_delivery(key: str, record: BotRecord) -> list[Problem]:
     """Refuse a consumer that cannot be built, before the thread that would build it starts.
 
     ``DELIVERY`` became a dotted path in 4.0, so it can be wrong in the ways a path can be wrong
@@ -434,7 +457,7 @@ def _a_usable_delivery(key: str) -> list[Problem]:
     hint says so, because a reader who typed a plausible path deserves to know where it *will*
     be checked.
     """
-    value = _setting(key)
+    value = _setting(key, record)
     path = str(value or '').strip()
     if not path:
         # E005 owns "required and empty" for the keys that have no default; this one has one,

@@ -14,9 +14,10 @@ from typing import Any
 
 from django.core.exceptions import ImproperlyConfigured
 
+from django_aiogram.config.bots import BotRecord
 from django_aiogram.config.checks.problems import Problem
 from django_aiogram.config.defaults import DEFAULTS
-from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
+from django_aiogram.config.settings import coerce_bool
 
 
 def _reads_as_a_dotted_path(path: str) -> bool:
@@ -37,7 +38,7 @@ def _reads_as_a_dotted_path(path: str) -> bool:
     return len(segments) > 1 and all(segment.isidentifier() for segment in segments)
 
 
-def _a_readable_boolean(key: str) -> list[Problem]:
+def _a_readable_boolean(key: str, record: BotRecord) -> list[Problem]:
     """Accept whatever ``coerce_bool`` accepts, and report what it would refuse.
 
     This rule used to demand a real ``bool``, which had it backwards in both
@@ -51,18 +52,19 @@ def _a_readable_boolean(key: str) -> list[Problem]:
     and the runtime cannot disagree — and the message is the one the runtime would
     have raised, which is the sentence a reader needs.
     """
+    label = record.label(key)
     try:
-        coerce_bool(_setting(key), f"{SETTINGS_NAME}['{key}']")
+        coerce_bool(_setting(key, record), label)
     except ImproperlyConfigured as error:
         # the message already names the setting, and `Check._message` prefixes it
         # again — so hand back only the tail
-        return [Problem(str(error).replace(f"{SETTINGS_NAME}['{key}'] ", '', 1))]
+        return [Problem(str(error).replace(f'{label} ', '', 1))]
     return []
 
 
-def _an_integer(key: str, *, minimum: int | None = None) -> list[Problem]:
+def _an_integer(key: str, record: BotRecord, *, minimum: int | None = None) -> list[Problem]:
     """Require an integer, at or above ``minimum`` when one is given."""
-    value = _setting(key)
+    value = _setting(key, record)
     # bool is a subclass of int, so it has to be rejected explicitly
     if isinstance(value, bool) or not isinstance(value, int):
         return [Problem(f'must be an integer, got {type(value).__name__}.')]
@@ -71,7 +73,7 @@ def _an_integer(key: str, *, minimum: int | None = None) -> list[Problem]:
     return []
 
 
-def _a_number(key: str, *, minimum: float | None = None) -> list[Problem]:
+def _a_number(key: str, record: BotRecord, *, minimum: float | None = None) -> list[Problem]:
     """Require a finite number, at or above ``minimum`` when one is given.
 
     Wider than :func:`_an_integer` because seconds are a place a fraction is a
@@ -79,7 +81,7 @@ def _a_number(key: str, *, minimum: float | None = None) -> list[Problem]:
     it are all false, so it would slip past the bound and then make every deadline
     built from it expire immediately.
     """
-    value = _setting(key)
+    value = _setting(key, record)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return [Problem(f'must be a number, got {type(value).__name__}.')]
     if not math.isfinite(value):
@@ -89,9 +91,9 @@ def _a_number(key: str, *, minimum: float | None = None) -> list[Problem]:
     return []
 
 
-def _a_string(key: str, *, allowed: Collection[str] | None = None) -> list[Problem]:
+def _a_string(key: str, record: BotRecord, *, allowed: Collection[str] | None = None) -> list[Problem]:
     """Require a string, one of ``allowed`` when the setting is an enumeration."""
-    value = _setting(key)
+    value = _setting(key, record)
     if not isinstance(value, str):
         return [Problem(f'must be a string, got {type(value).__name__}.')]
     if allowed is not None and value not in allowed:
@@ -99,7 +101,7 @@ def _a_string(key: str, *, allowed: Collection[str] | None = None) -> list[Probl
     return []
 
 
-def _a_callable(key: str) -> list[Problem]:
+def _a_callable(key: str, record: BotRecord) -> list[Problem]:
     """Refuse a value the package will call, when calling it would be a `TypeError`.
 
     The failure this prevents is late and confusing: the setting names a hook, nothing touches it
@@ -107,28 +109,28 @@ def _a_callable(key: str) -> list[Problem]:
     than the setting's. Reported as the type that is there, since a dotted path somebody forgot to
     resolve is the common way to get here.
     """
-    value = _setting(key)
+    value = _setting(key, record)
     if callable(value):
         return []
     return [Problem(f'must be callable, got {type(value).__name__}.')]
 
 
-def _a_mapping(key: str) -> list[Problem]:
+def _a_mapping(key: str, record: BotRecord) -> list[Problem]:
     """Refuse a value the package will read keys out of, when it has none.
 
     A list of pairs and a JSON string both look close enough to a mapping to be written by
     accident, and neither answers `.get`. Reported as the type that is there, before anything asks
     it for a key it cannot have.
     """
-    value = _setting(key)
+    value = _setting(key, record)
     if isinstance(value, Mapping):
         return []
     return [Problem(f'must be a mapping, got {type(value).__name__}.')]
 
 
-def _a_collection_of_strings(key: str) -> list[Problem]:
+def _a_collection_of_strings(key: str, record: BotRecord) -> list[Problem]:
     """Require a real collection: a string would be read one character per item."""
-    value = _setting(key)
+    value = _setting(key, record)
     # before the empty check, not after: `{}` is falsy, so a mapping was refused by name and then
     # let through when it happened to be empty -- and the pages say a mapping is refused, without
     # a footnote about which ones
@@ -150,7 +152,7 @@ def _a_collection_of_strings(key: str) -> list[Problem]:
     return []
 
 
-def _setting(key: str) -> Any:  # noqa: ANN401 - a setting holds whatever the project put there
+def _setting(key: str, record: BotRecord) -> Any:  # noqa: ANN401 - a setting holds whatever the project put there
     """Resolve one setting the way its own table does, package-wide or transport-owned.
 
     `conf` folds in the package-wide table and answers `None` for anything outside it, so a rule
@@ -164,12 +166,18 @@ def _setting(key: str) -> Any:  # noqa: ANN401 - a setting holds whatever the pr
         _configured_broker,
     )
 
-    if key in DEFAULTS or key not in _broker_options():
-        return conf.get(key)
-    return _configured_broker().option(key)
+    if key in DEFAULTS or key not in _broker_options(record):
+        return record.get(key)
+    return _configured_broker(record).option(key, record)
 
 
-def _filled_in_when_enabled(key: str, *, hint: str, only_if: Callable[[], bool] | None = None) -> list[Problem]:
+def _filled_in_when_enabled(
+    key: str,
+    record: BotRecord,
+    *,
+    hint: str,
+    only_if: Callable[[BotRecord], bool] | None = None,
+) -> list[Problem]:
     """Warn, never error, when an enabled bot has nothing to connect with.
 
     A project may legitimately boot without credentials — during migrations or
@@ -195,8 +203,8 @@ def _filled_in_when_enabled(key: str, *, hint: str, only_if: Callable[[], bool] 
     # a question about this deployment, asked by a rule about a shape
     from django_aiogram.config.checks.conditions import _bot_is_enabled  # noqa: PLC0415
 
-    if only_if is not None and not only_if():
+    if only_if is not None and not only_if(record):
         return []
-    if not _bot_is_enabled() or str(_setting(key) or '').strip():
+    if not _bot_is_enabled(record) or str(_setting(key, record) or '').strip():
         return []
     return [Problem('is empty while the bot is enabled.', hint=hint)]

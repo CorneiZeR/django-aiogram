@@ -1,5 +1,32 @@
 # Changelog
 
+## 5.0.0 - unreleased
+
+### Changed
+
+- **`TELEGRAM_BOT` is now `TELEGRAM_BOT_DEFAULTS`, and every bot is a section under
+  `TELEGRAM_BOTS`.** A project running one bot renames the dict and changes nothing else; the
+  bot it configures is called `default`. What a section leaves out is inherited from the
+  defaults, by key presence rather than by a value being non-null -- so `RATE_LIMIT: None`
+  means "this bot has no limits" and not "inherit". `E050` reports the old name rather than
+  letting a project run on defaults with no token.
+
+  A bot is identified by the number in front of the colon in its token, read without asking
+  Telegram. That is what the queue, the event log and the logs will name it by: an alias is a
+  name a project may change and a token is a credential it may rotate.
+
+  Settings the process owns rather than a bot -- `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`
+  and every `EVENT_LOG_*` one -- may not be set per bot. There is one writer thread and one
+  in-flight list per process, so a per-bot value could only mean whichever bot resolved last
+  wins. `E053` reports the attempt.
+
+  New check ids: `E050`-`E054` and `W010`. `W003` now asks the shared dict only, and `W010`
+  asks each section, so one typo is one finding rather than one per bot.
+
+- **`Broker.option` and `Broker.call_timeout` take the settings to read from.** Both default
+  to the shared ones, so a transport of your own keeps working unchanged unless it *overrides*
+  `call_timeout`, which must now accept the argument and pass it to `super()`.
+
 ## 4.1.0 - 2026-09-06
 
 ### Added
