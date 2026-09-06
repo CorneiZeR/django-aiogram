@@ -25,12 +25,16 @@ from django_aiogram.config.defaults import DEFAULTS
 logger = logging.getLogger('django_aiogram')
 
 SETTINGS_NAME = 'TELEGRAM_BOT_DEFAULTS'
+#: what 4.x called the settings dict. Read by nothing; `E050` reports a project that still has it
+REMOVED_SETTINGS_NAME = 'TELEGRAM_BOT'
 ENV_PREFIX = 'DJANGO_AIOGRAM_'
 
 _TRUTHY = frozenset({'1', 'true', 'yes', 'on'})
 _FALSY = frozenset({'0', 'false', 'no', 'off'})
 
-_MISSING = object()
+#: what a lookup answers with when the environment holds nothing, so an empty string can
+#: still be a deliberate value
+MISSING = object()
 
 
 def parse_bool(value: str, source: str) -> bool:
@@ -64,19 +68,22 @@ def coerce_bool(value: object, source: str) -> bool:
     raise ImproperlyConfigured(msg)
 
 
-def _from_env(key: str, default: object) -> object:
+def from_env(key: str, default: object, prefix: str = ENV_PREFIX) -> object:
     """Read a setting from the environment, coercing it to the default's type.
 
-    Returns the ``_MISSING`` sentinel when the variable is unset, which is what
+    Returns the :data:`MISSING` sentinel when the variable is unset, which is what
     lets an empty string through as a deliberate value.
+
+    ``prefix`` is how one bot reads its own: ``django_aiogram.config.bots`` passes
+    ``DJANGO_AIOGRAM_<ALIAS>_``, and the shared settings use the package's own.
 
     Only scalars are supported: callables and containers have no sane textual
     form, so they stay settings-only.
     """
-    name = ENV_PREFIX + key
+    name = prefix + key
     raw = os.environ.get(name)
     if raw is None:
-        return _MISSING
+        return MISSING
     if isinstance(default, bool):
         return parse_bool(raw, name)
     if isinstance(default, int):
@@ -87,7 +94,7 @@ def _from_env(key: str, default: object) -> object:
             raise ImproperlyConfigured(msg) from None
     if isinstance(default, float):
         # a setting whose check accepts a number has to accept one from here too. Without
-        # this branch a float-defaulted setting fell through to `_MISSING` and the variable
+        # this branch a float-defaulted setting fell through to `MISSING` and the variable
         # was *silently ignored*, and while `DRAIN_TIMEOUT` defaulted to an int the same
         # value raised out of `apps.ready()` — so `DRAIN_TIMEOUT: 0.5` was valid in
         # settings and stopped every `manage.py` command from the environment
@@ -115,7 +122,7 @@ def _from_env(key: str, default: object) -> object:
         'ignoring an environment variable for a setting that has no textual form',
         extra={'tg_setting': key, 'tg_variable': name},
     )
-    return _MISSING
+    return MISSING
 
 
 class Settings(Mapping[str, Any]):
@@ -159,8 +166,8 @@ class Settings(Mapping[str, Any]):
             if key in overrides:
                 resolved[key] = overrides[key]
                 continue
-            value = _from_env(key, default)
-            if value is not _MISSING:
+            value = from_env(key, default)
+            if value is not MISSING:
                 resolved[key] = value
         # unknown keys are kept rather than dropped; checks.py warns about them
         for key, value in overrides.items():
@@ -201,6 +208,21 @@ class Settings(Mapping[str, Any]):
 conf = Settings()
 
 
+def setting_label(settings: Mapping[str, Any] | None, key: str) -> str:
+    """Name a setting the way the mapping it came from would name it.
+
+    A bot's resolved settings know which dict each value was read from; `conf` knows only that
+    it was one of the shared ones. Refusals raised below the checks -- a broker that cannot be
+    imported, a deadline that cannot be one -- are quoted inside a finding, so a message built
+    from the package-wide name alone sends the reader to a dict that may hold nothing.
+
+    Asked by attribute rather than by type: this module sits below
+    :mod:`django_aiogram.config.bots`, and importing it here would be a cycle.
+    """
+    label = getattr(settings, 'label', None)
+    return label(key) if callable(label) else f"{SETTINGS_NAME}['{key}']"
+
+
 @dataclass(frozen=True)
 class TakeCeiling:
     """How long a blocking take may actually wait, and which settings decided that.
@@ -217,7 +239,7 @@ class TakeCeiling:
     bound_by: tuple[str, ...]
 
 
-def take_ceiling(deadline_option: str, deadline: float) -> TakeCeiling:
+def take_ceiling(deadline_option: str, deadline: float, settings: Mapping[str, Any] | None = None) -> TakeCeiling:
     """Return the real cap on a blocking take, which is not ``BLPOP_TIMEOUT`` alone.
 
     Two bounds are weighed here and the smallest wins: the ``HEARTBEAT_INTERVAL`` — a worker that
@@ -251,8 +273,9 @@ def take_ceiling(deadline_option: str, deadline: float) -> TakeCeiling:
     # it names, that lost the smaller of the two: measured, a heartbeat of 2 against a deadline of
     # 100 capped the read at 99, so the worker waits its own heartbeat out and is reaped while
     # healthy, which is the one failure this ceiling exists to prevent
+    resolved = conf if settings is None else settings
     limits = (
-        ('HEARTBEAT_INTERVAL', max(1, int(conf['HEARTBEAT_INTERVAL']))),
+        ('HEARTBEAT_INTERVAL', max(1, int(resolved['HEARTBEAT_INTERVAL']))),
         # floored before the subtraction, so a fractional deadline cannot round *up* into a cap
         # the transport will not honour: `KAFKA_TIMEOUT = 2.5` allows one whole second inside it,
         # not two

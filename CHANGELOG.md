@@ -1,5 +1,37 @@
 # Changelog
 
+## 5.0.0 - unreleased
+
+### Changed
+
+- **`TELEGRAM_BOT` is now `TELEGRAM_BOT_DEFAULTS`, and every bot is a section under
+  `TELEGRAM_BOTS`.** A project running one bot renames the dict and changes nothing else; the
+  bot it configures is called `default`. What a section leaves out is inherited from the
+  defaults, by key presence rather than by a value being non-null -- so `RATE_LIMIT: None`
+  means "this bot has no limits" and not "inherit". `E050` reports the old name rather than
+  leaving it to be read as configuration: the dict is ignored, so whatever a project put
+  there has to move, and a project that put its token there has none.
+
+  A bot is identified by the number in front of the colon in its token, read without asking
+  Telegram. That number is the one thing about a bot that holds still: an alias is a name a
+  project may change and a token is a credential it may rotate, and a rotated token keeps the
+  same identity.
+
+  Settings the process owns rather than a bot -- `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`,
+  `EVENT_LOG` and every `EVENT_LOG_*` one -- may not be set per bot. `ENABLED` is not one of
+  them: a bot may be switched off on its own. There is one writer thread and one
+  in-flight list per process, so a per-bot value could only mean whichever bot resolved last
+  wins. `E053` reports the attempt.
+
+  New check ids: `E050`-`E054` and `W010`. `W003` now asks the shared dict only, and `W010`
+  asks each section, so one typo is one finding rather than one per bot.
+
+- **`Broker.option`, `Broker.call_timeout` and `broker_class` take the settings to read
+  from.** The argument is optional and falls back to the shared settings, so *calling* any of
+  the three is unchanged. *Overriding* `option` or `call_timeout` is not: the override has to
+  accept the argument and pass it on, or the bot's own settings are silently replaced by the
+  shared ones.
+
 ## 4.1.0 - 2026-09-06
 
 ### Added

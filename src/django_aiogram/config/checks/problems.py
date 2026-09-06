@@ -14,8 +14,8 @@ from dataclasses import dataclass
 from django.core.checks import CheckMessage, Error, Info
 from django.core.checks import Warning as CheckWarning
 
-from django_aiogram.config.defaults import DEFAULTS
-from django_aiogram.config.settings import SETTINGS_NAME
+from django_aiogram.config.bots import BotRecord
+from django_aiogram.config.defaults import DEFAULTS, PROCESS_SCOPED
 
 #: the first letter of a check id decides how loudly it reports; see :class:`Check`
 _LEVELS = {'E': Error, 'W': CheckWarning, 'I': Info}
@@ -43,7 +43,7 @@ class Problem:
     label: str | None = None
 
 
-Validator = Callable[[str], list[Problem]]
+Validator = Callable[[str, BotRecord], list[Problem]]
 
 
 @dataclass(frozen=True)
@@ -62,8 +62,16 @@ class Check:
     code: str
     key: str
     validate: Validator
+    #: run once for the process rather than once per bot. Derived from the key for a row that
+    #: guards a setting; spelled out for the rows that guard no single one
+    process: bool = False
 
-    def run(self) -> list[CheckMessage]:
+    @property
+    def per_process(self) -> bool:
+        """Whether this row is about the process rather than about one bot."""
+        return self.process or self.key in PROCESS_SCOPED
+
+    def run(self, record: BotRecord) -> list[CheckMessage]:
         """Turn everything the rule found into Django check messages.
 
         A row about a **transport's** setting runs only where that transport is configured, and
@@ -76,15 +84,19 @@ class Check:
         """
         from django_aiogram.config.checks.transport import _broker_options  # noqa: PLC0415 - the module below this one
 
-        if self.key and self.key not in DEFAULTS and self.key not in _broker_options():
+        if self.key and self.key not in DEFAULTS and self.key not in _broker_options(record):
             return []
-        return [self._message(problem) for problem in self.validate(self.key)]
+        return [self._message(problem, record) for problem in self.validate(self.key, record)]
 
-    def _message(self, problem: Problem) -> CheckMessage:
-        """Label one problem with the setting it is about and this row's id."""
+    def _message(self, problem: Problem, record: BotRecord) -> CheckMessage:
+        """Label one problem with the setting it is about and this row's id.
+
+        The bot says where its own value came from, so a finding about one of five sends the
+        reader to the section that holds it rather than to whichever place could have.
+        """
         key = self.key if problem.key is None else problem.key
         # an empty key means the check is about the settings dict as a whole, and a `label` means
         # it is about a setting of Django's rather than one of ours
-        label = problem.label or (f"{SETTINGS_NAME}['{key}']" if key else SETTINGS_NAME)
+        label = problem.label or (record.label(key) if key else record.section_label())
         report = _LEVELS.get(self.code[0], Error)
         return report(f'{label} {problem.message}', hint=problem.hint, id=f'{_ID_PREFIX}.{self.code}')

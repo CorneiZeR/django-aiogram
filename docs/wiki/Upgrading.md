@@ -4,6 +4,27 @@ What each major release changed, newest first — so an upgrade is read from the
 the lowest section that applies to the version you are on and work **up** the page, one release
 at a time: each covers a single hop and assumes the ones below it are done.
 
+# From 4.1 to 5.0
+
+**One required step: rename `TELEGRAM_BOT` to `TELEGRAM_BOT_DEFAULTS`.** Nothing reads the old
+name, so every value left in it is ignored and whatever it configured falls back to the
+environment or to this package's defaults — a project that kept its token there has none.
+`manage.py check` reports it as `E050` rather than leaving you to find out at the first send.
+
+A project running one bot is then done: the dict it renamed configures a bot called `default`,
+and every setting keeps its meaning and its default.
+
+To run more than one, add a section per bot under `TELEGRAM_BOTS` — see
+**[Settings](Settings.md)**. What a section leaves out it inherits, and `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `EVENT_LOG` and every `EVENT_LOG_*` one stay shared:
+they configure the process, not a bot, and `E053` refuses a section that names them.
+`ENABLED` is not one of them, so a single bot can still be switched off on its own.
+
+If you ship a `Broker` of your own, `option`, `call_timeout` and `broker_class` now take the
+settings to read from. Calling them is unchanged — the argument is optional and falls back to
+the shared settings. An **override** is not: `def option(cls, key, settings=None)` and
+`def call_timeout(cls, settings=None)`, each passing `settings` on to `super()`. An override
+that drops it reads the shared settings for every bot, without failing.
+
 # From 4.0 to 4.1
 
 **One required step: run `migrate`.** 4.1 adds two tables, and a project that skips the
