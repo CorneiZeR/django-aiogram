@@ -14,6 +14,7 @@ from django.test import override_settings
 import django_aiogram
 from django_aiogram.broker.registry import use_broker
 from django_aiogram.config import bots as configured
+from django_aiogram.producer.from_settings import build_storage
 from django_aiogram.runtime import groups
 from django_aiogram.runtime.profiles import profile_of
 from django_aiogram.runtime.registry import bots
@@ -180,6 +181,27 @@ def test_every_bot_talks_through_one_session_and_one_dispatcher():
         assert first.bot.session is second.bot.session, 'a second group opened its own session'
         assert first.dispatcher is second.dispatcher
         assert first.router is second.router
+
+
+def test_the_shipped_store_keeps_two_bots_states_apart():
+    """One store per process means one person has a state with each bot, not one between them.
+
+    aiogram defaults `with_bot_id` to `False`, and measured with it off both bots build
+    `fsm:5:5:state` for the same person — so each answers with the other's state. The store is
+    shared because the dispatcher is, which is what makes this the setting that carries the
+    separation.
+    """
+    from aiogram.fsm.storage.base import StorageKey
+
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'FSM_STORAGE': 'redis', 'REDIS_URL': 'redis://localhost/0'}):
+        store = build_storage()
+        # `instrumented` wraps it only where something reads events, so ask for the wrapped
+        # object where there is one and the store itself where there is not
+        builder = getattr(store, 'storage', store).key_builder
+        one = StorageKey(bot_id=123456, chat_id=5, user_id=5)
+        two = StorageKey(bot_id=654321, chat_id=5, user_id=5)
+
+        assert builder.build(one, 'state') != builder.build(two, 'state')
 
 
 def test_a_bot_is_reachable_by_the_identity_a_message_will_carry():
