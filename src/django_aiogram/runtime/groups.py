@@ -41,6 +41,10 @@ class RuntimeGroup:
         #: have done: they agree on everything a group reads, which is what put them here
         self.settings = settings
         self._broker: Broker | None = None
+        #: set when the registry lets this group go. A group is handed out and used in two
+        #: steps, so one can be retired in between -- and a transport built after that would
+        #: belong to a group nothing holds
+        self._gone = False
 
     @property
     def broker(self) -> 'Broker':
@@ -59,6 +63,12 @@ class RuntimeGroup:
         # over the choice *and* the build is what the broker registry has always done, and the
         # cost is the same: an uncontended acquisition on a path that ends in a socket
         with _lock:
+            if self._gone:
+                # asking for a group and asking it for a transport are two steps, and the
+                # registry can be cleared between them -- so a build here would open a
+                # connection in a group no shutdown can reach. The live group for these
+                # settings is the answer, and it is one step away because this one is retired
+                return group_for(self.settings).broker
             if self._broker is None:
                 resolved = broker_class(self.settings)
                 resolved.verify()
@@ -73,6 +83,7 @@ class RuntimeGroup:
         """
         with _lock:
             current, self._broker = self._broker, None
+            self._gone = True
             if current is not None:
                 current.close()
 

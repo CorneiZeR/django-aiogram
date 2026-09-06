@@ -16,7 +16,7 @@ from django_aiogram.broker.registry import use_broker
 from django_aiogram.config import bots as configured
 from django_aiogram.producer.from_settings import build_storage
 from django_aiogram.runtime import groups
-from django_aiogram.runtime.profiles import profile_of
+from django_aiogram.runtime.profiles import _hashable, profile_of
 from django_aiogram.runtime.registry import bots
 from django_aiogram.testing import InMemoryBroker
 from django_aiogram.wire.envelope import unpack
@@ -211,9 +211,36 @@ def test_a_retired_dispatcher_is_still_closed():
     # leaving the block retires it; nothing has closed it yet
     assert closed == [], 'the store was closed on a thread that may have no loop'
     assert process._retired, 'the retired dispatcher was dropped rather than kept'
+    # and a close has to know there is something to do, whether or not this bot built a loop
+    # or an aiogram `Bot` of its own — asserted because without it the case passes only while
+    # some earlier one left a loop behind
+    assert process.holding(), 'a retired store does not count as something to close'
 
     bots['default'].close()
     assert closed == [True], 'the retired store was never closed'
+
+
+def test_a_group_let_go_of_does_not_open_a_transport_nobody_holds():
+    """Asking for a group and asking it for a transport are two steps, and a clear fits between.
+
+    Measured before this was handled: a group handed out, `close_groups()` in between, and the
+    build then put a connection into a group `live_groups()` no longer lists — so no shutdown
+    could reach it. The retired group answers with the live one instead.
+    """
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'BROKER': MEMORY, 'TOKEN': TOKEN}):
+        held = groups.group_for(configured.defaults_record())
+        groups.close_groups()
+
+        transport = held.broker
+
+        assert any(group._broker is transport for group in groups.live_groups()), (
+            'the transport was opened in a group nothing holds'
+        )
+
+
+def test_a_mapping_key_that_reads_differently_is_a_different_profile():
+    """The same rule as the values, and the keys had it missing: `str(key)` made them one."""
+    assert _hashable({1: 'x'}) != _hashable({'1': 'x'})
 
 
 def test_a_value_that_reads_differently_is_a_different_profile():

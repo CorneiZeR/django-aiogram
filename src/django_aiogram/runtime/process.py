@@ -151,7 +151,10 @@ def holding() -> bool:
     aiogram `Bot` may still be the one that has to close them.
     """
     with _lock:
-        return _dispatcher is not None or _session is not None
+        # the retired ones too: they are dispatchers whose stores are still open, and a bot
+        # that built neither a loop nor an aiogram `Bot` is otherwise the one that skips the
+        # teardown and leaves them that way
+        return _dispatcher is not None or _session is not None or bool(_retired)
 
 
 async def _close_each(stores: list[Any]) -> None:

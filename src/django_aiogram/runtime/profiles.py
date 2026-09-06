@@ -61,7 +61,11 @@ def _hashable(value: object) -> object:
     is the side this errs on everywhere.
     """
     if isinstance(value, dict):
-        return ('dict', tuple(sorted((str(key), _hashable(item)) for key, item in value.items())))
+        # the key through the same normalisation as the value, so `{1: 'x'}` and `{'1': 'x'}`
+        # are two configurations -- `str(key)` made them one, and the group then kept whichever
+        # bot built it first
+        entries = ((_hashable(key), _hashable(item)) for key, item in value.items())
+        return ('dict', tuple(sorted(entries, key=repr)))
     if isinstance(value, (list, tuple)):
         return (type(value).__name__, tuple(_hashable(item) for item in value))
     if isinstance(value, (set, frozenset)):
