@@ -222,9 +222,9 @@ def _known_update_types(key: str, record: BotRecord) -> list[Problem]:
 def _a_token_with_an_identity(key: str, record: BotRecord) -> list[Problem]:
     """Refuse a token no identity can be read out of.
 
-    The number before the colon is what a queued message, an event-log row and a log line name
-    this bot by, and it is read without asking Telegram. A token that has none leaves every one
-    of those with nothing to say, in a deployment where "the bot" is not an answer.
+    The number before the colon is what identifies the bot, and it is read without asking
+    Telegram. A token that has none cannot be told from another bot's, in a deployment where
+    "the bot" is not an answer.
 
     An empty token is `W001`'s finding: a project may boot without credentials.
     """
@@ -234,7 +234,7 @@ def _a_token_with_an_identity(key: str, record: BotRecord) -> list[Problem]:
     return [
         Problem(
             "is not a bot token: one reads '<bot id>:<secret>'.",
-            hint='The number before the colon identifies the bot on the wire and in the event log.',
+            hint='The number before the colon is the identity a rotated token keeps.',
         )
     ]
 

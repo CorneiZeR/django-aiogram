@@ -5,9 +5,9 @@ A bot is a section under ``TELEGRAM_BOTS``. Anything it leaves out comes from
 and a project that names no sections at all has one bot called ``default`` resolving
 entirely from those two.
 
-Its identity is the number in front of the colon in its token. That number is what the
-wire, the feed and the logs key on, because an alias is a name a project may change and a
-token is a credential a project may rotate -- neither survives what the identity has to.
+Its identity is the number in front of the colon in its token, which is the one thing about
+a bot that holds still: an alias is a name a project may change and a token is a credential a
+project may rotate, and a rotated token keeps the same identity.
 
 Nothing here reads Django settings at import time, for the reason
 :mod:`django_aiogram.config.settings` gives.

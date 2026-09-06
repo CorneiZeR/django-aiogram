@@ -13,8 +13,9 @@
   there has to move, and a project that put its token there has none.
 
   A bot is identified by the number in front of the colon in its token, read without asking
-  Telegram. That is what the queue, the event log and the logs will name it by: an alias is a
-  name a project may change and a token is a credential it may rotate.
+  Telegram. That number is the one thing about a bot that holds still: an alias is a name a
+  project may change and a token is a credential it may rotate, and a rotated token keeps the
+  same identity.
 
   Settings the process owns rather than a bot -- `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`,
   `EVENT_LOG` and every `EVENT_LOG_*` one -- may not be set per bot. `ENABLED` is not one of

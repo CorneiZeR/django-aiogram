@@ -16,9 +16,10 @@ TELEGRAM_BOTS = {
 Scalar values can also come from `DJANGO_AIOGRAM_<NAME>`, and one bot's from
 `DJANGO_AIOGRAM_<ALIAS>_<NAME>`; Django settings take precedence over either.
 
-A bot is identified by the number in front of the colon in its token, which is what the
-queue, the event log and the logs name it by — an alias is a name a project may change and
-a token is a credential it may rotate. These belong to the process rather than to a bot — `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `EVENT_LOG` and every `EVENT_LOG_*` one — so a section naming one is refused by `E053` instead of
+A bot is identified by the number in front of the colon in its token, read without asking
+Telegram. That number is the one thing about a bot that holds still: an alias is a name a
+project may change and a token is a credential it may rotate, and a rotated token keeps the
+same identity. These belong to the process rather than to a bot — `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `EVENT_LOG` and every `EVENT_LOG_*` one — so a section naming one is refused by `E053` instead of
 deciding for every bot in the process. `ENABLED` is not among them: a bot may be switched off
 on its own.
 
@@ -389,7 +390,7 @@ entry naming a retired one is dead but harmless.
 | `E048` | `DATABASE_ROUTERS` names any `django_redis_aiogram.` path, which 4.0 renamed. The router we shipped is named against its replacement, `django_aiogram.eventlog.dbrouter.TelegramEventLogRouter`; any other path from that distribution is reported as gone, since this cannot invent a replacement for something it never had |
 | `E050` | `TELEGRAM_BOT` is still set. 5.0 split it into `TELEGRAM_BOT_DEFAULTS` and `TELEGRAM_BOTS`, and nothing reads the old name: every value left in it is ignored, and whatever it configured resolves from the shared defaults, the environment or this package's own defaults instead. A project that kept its token there has none |
 | `E051` | two aliases hold one token, which is one bot under two names: the pair would race for its updates and pace against two budgets |
-| `E052` | `TOKEN` is not a bot token. One reads `<bot id>:<secret>`, and the number before the colon is the identity every queued message and event-log row names |
+| `E052` | `TOKEN` is not a bot token. One reads `<bot id>:<secret>`, and the number before the colon is what identifies the bot — a token with none cannot be told apart from another bot's |
 | `E053` | a bot's section sets a setting the process owns — `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `EVENT_LOG` or an `EVENT_LOG_*` one. There is one writer thread and one in-flight list per process, so a per-bot value could only mean whichever bot resolved last wins |
 | `E054` | `TELEGRAM_BOTS` cannot be read: it is not a mapping, an alias is not a name, or a section is not a mapping |
 | `I001` | `WORKER_NAME` is empty **and** the hostname is one Docker generated, so a replacement container gets a different name — which strands whatever the old container was sending. Information rather than a warning because a check cannot tell a consumer from a web process, and every container without `hostname:` matches; `start_tgbot` warns for itself at startup |
