@@ -44,9 +44,9 @@ from aiogram.types import Update
 from django.core.exceptions import ImproperlyConfigured
 
 from django_aiogram.api import check_function, resolve_call
-from django_aiogram.broker.registry import close_broker, get_broker
+from django_aiogram.broker.registry import close_broker
 from django_aiogram.config.enums import EventKind
-from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
+from django_aiogram.config.settings import coerce_bool
 from django_aiogram.db import DatabaseConnectionMiddleware
 from django_aiogram.eventlog.events import short_id
 from django_aiogram.eventlog.instrumentation import install_instrumentation
@@ -70,10 +70,14 @@ if TYPE_CHECKING:
     # — `api.is_method` says why
     from aiogram.methods.base import TelegramMethod
 
+    from django_aiogram.broker.base import Broker
+    from django_aiogram.config.bots import BotRecord
+
     # `outcomes` reaches the ORM through `writer`, and this module is imported by
     # `_singleton` on the first touch of `bot` — earlier than the app registry in a process
     # that only ever queues. The two methods below import it when they are called
     from django_aiogram.eventlog.outcomes import Outcome
+    from django_aiogram.runtime.groups import RuntimeGroup
 
 logger = logging.getLogger('django_aiogram')
 
@@ -104,8 +108,13 @@ class TelegramBot(RouterShortcuts):
         self,
         max_retries: int | None = None,
         loop: AbstractEventLoop | None = None,
+        record: 'BotRecord | None' = None,
     ) -> None:
         """Record the overrides; nothing aiogram or Redis owns is built here."""
+        #: which bot this is. ``None`` means the one a project with a single bot has, resolved
+        #: on each read rather than held: a settings change has to reach it, and the registry
+        #: it comes from is what caches
+        self._record = record
         self._max_retries = max_retries
         self._loop = loop
         self._bot: Bot | None = None
@@ -131,6 +140,36 @@ class TelegramBot(RouterShortcuts):
         self._build_guard = threading.RLock()
 
     @property
+    def settings(self) -> 'BotRecord':
+        """Return this bot's settings, and the labels that say where each value came from."""
+        if self._record is not None:
+            return self._record
+        # deferred: `config.bots` reads Django settings, and this module is imported by a
+        # process that may never touch one
+        from django_aiogram.config.bots import DEFAULT_ALIAS, record  # noqa: PLC0415 - as above
+
+        return record(DEFAULT_ALIAS)
+
+    @property
+    def group(self) -> 'RuntimeGroup':
+        """The objects this bot shares with every bot configured like it."""
+        from django_aiogram.runtime.groups import group_for  # noqa: PLC0415 - as above
+
+        return group_for(self.settings)
+
+    @property
+    def broker(self) -> 'Broker':
+        """The transport this bot publishes to and reads depths from.
+
+        Through the registry rather than through :attr:`group`, and the difference is what a
+        capture rests on: an override is consulted before anything resolves `BROKER`, so a
+        suite that hands in a broker never needs a transport it is not using to be nameable.
+        """
+        from django_aiogram.broker.registry import get_broker  # noqa: PLC0415 - as above
+
+        return get_broker(self.settings)
+
+    @property
     def enabled(self) -> bool:
         """Whether this process should **send** — reach Telegram, or write to the broker.
 
@@ -139,7 +178,7 @@ class TelegramBot(RouterShortcuts):
         deep the queue is. `queue_depth` says so too, and `tests/test_enabled_flag.py` fails if either reader
         grows a gate.
         """
-        return coerce_bool(conf['ENABLED'], f"{SETTINGS_NAME}['ENABLED']")
+        return coerce_bool(self.settings['ENABLED'], self.settings.label('ENABLED'))
 
     @property
     def _raises_send_failures(self) -> bool:
@@ -150,7 +189,7 @@ class TelegramBot(RouterShortcuts):
         ``'false'``, which is truthy — used to re-raise the exception the project had asked
         to have swallowed, on a path that only runs once a send has exhausted its retries.
         """
-        return coerce_bool(conf['RAISE_EXCEPTION'], f"{SETTINGS_NAME}['RAISE_EXCEPTION']")
+        return coerce_bool(self.settings['RAISE_EXCEPTION'], self.settings.label('RAISE_EXCEPTION'))
 
     @property
     def rate_limiter(self) -> RateLimiter | None:
@@ -162,14 +201,14 @@ class TelegramBot(RouterShortcuts):
         # no instance cache: the registry already caches per token, and holding
         # a second copy here is what kept a bot on stale RATE_LIMIT settings
         # after the registry was reset
-        return get_rate_limiter(str(conf['TOKEN'] or ''))
+        return get_rate_limiter(str(self.settings['TOKEN'] or ''))
 
     @property
     def max_retries(self) -> int:
         """How many rate-limited attempts a send gets before it is given up on."""
         if self._max_retries is not None:
             return self._max_retries
-        return int(conf['MAX_RETRIES'])
+        return int(self.settings['MAX_RETRIES'])
 
     @property
     def loop(self) -> AbstractEventLoop:
@@ -187,13 +226,13 @@ class TelegramBot(RouterShortcuts):
     def bot(self) -> Bot:
         """The aiogram ``Bot``, which is the first thing that needs a token."""
         if self._bot is None:
-            token = conf['TOKEN']
+            token = self.settings['TOKEN']
             if not token:
-                msg = f"{SETTINGS_NAME}['TOKEN'] is required to talk to Telegram."
+                msg = f'{self.settings.label("TOKEN")} is required to talk to Telegram.'
                 raise ImproperlyConfigured(msg)
             with self._build_guard:
                 if self._bot is None:
-                    self._bot = Bot(token=token, default=build_default_properties())
+                    self._bot = Bot(token=token, default=build_default_properties(self.settings))
         return self._bot
 
     @property
@@ -529,9 +568,9 @@ class TelegramBot(RouterShortcuts):
             check_function(function)
             # and the broker for the same reason, one failure mode further along: `enqueue`
             # resolves it below, so a misconfigured `BROKER` used to raise *after* the latch
-            # was spent. Cheap to do twice -- the registry caches per process, so the call
-            # inside `enqueue` is a hit. `aenqueue` was fixed first and this is its twin
-            get_broker()
+            # was spent. Cheap to do twice -- the group caches it, so the call inside `enqueue`
+            # is a hit. `aenqueue` was fixed first and this is its twin
+            _ = self.broker
             mention_asend('asend')
         return self.enqueue(function, correlation_id=identifier, **kwargs)
 
@@ -782,7 +821,7 @@ class TelegramBot(RouterShortcuts):
             if self._raises_send_failures and last_error is not None:
                 raise last_error
 
-        call_kwargs = {**conf['DEFAULT_KWARGS'](function), **kwargs}
+        call_kwargs = {**self.settings['DEFAULT_KWARGS'](function), **kwargs}
         outbound = Outbound(identifier, function, call_kwargs)
         self._schedule(send(), outbound, on_complete, on_refused)
         return identifier
@@ -1158,7 +1197,7 @@ class TelegramBot(RouterShortcuts):
         # *queueing* drop — which the event log defines as a write that may still have been
         # applied, so re-sending may duplicate. Nothing was written, and the two producers
         # promise the same rows
-        broker = get_broker()
+        broker = self.broker
         # after the broker resolves, not before: the mention fires once per process, so a call
         # that is about to raise on a misconfigured `BROKER` would otherwise spend it and leave
         # the first caller who could have acted on the advice hearing nothing. Same reasoning as
@@ -1199,7 +1238,7 @@ class TelegramBot(RouterShortcuts):
             await aschedule(function, serialise(function, [(identifier, kwargs)], due_at.timestamp()), due_at)
             return identifier
 
-        broker = get_broker()
+        broker = self.broker
         write = serialise(function, [(identifier, kwargs)])
         if not self._deferred(function, [write], broker.publish):
             with publishing(function, write) as ready:
@@ -1258,7 +1297,7 @@ class TelegramBot(RouterShortcuts):
         # resolved before the first chunk, as above: a broker that cannot be resolved is not
         # a chunk that failed to write. Not resolved at all for a scheduled batch, which
         # reaches no transport today and takes whichever one is configured when it comes due
-        broker = get_broker() if writing and due_at is None else None
+        broker = self.broker if writing and due_at is None else None
         if writing:
             mention_asend('asend_many')
         # the hook is registered before the first chunk and handed the list it will read at
@@ -1310,7 +1349,7 @@ class TelegramBot(RouterShortcuts):
         # after the decision, not before: a disabled process may have no transport
         # configured at all, and resolving one would raise where the point is to do nothing.
         # A scheduled batch is the same case for a different reason -- see the twin above
-        broker = get_broker() if writing and due_at is None else None
+        broker = self.broker if writing and due_at is None else None
         # before the loop and handed an empty list, exactly as the synchronous twin does
         held: list[Queueing] = []
         waiting = broker is not None and self._deferred(function, held, broker.publish)
@@ -1401,11 +1440,11 @@ class TelegramBot(RouterShortcuts):
         Growing is not by itself a fault — producers can outpace delivery, and
         ``MAX_IN_FLIGHT`` holds intake back on purpose. See **Troubleshooting**.
         """
-        return get_broker().depth()
+        return self.broker.depth()
 
     async def aqueue_depth(self) -> int:
         """:meth:`queue_depth` without blocking the loop this coroutine runs on."""
-        return await get_broker().adepth()
+        return await self.broker.adepth()
 
     def inflight_depth(self, worker: str | None = None) -> int:
         """How many messages one worker is part-way through sending.
@@ -1415,11 +1454,11 @@ class TelegramBot(RouterShortcuts):
         those keys follow is this package's business, not an exporter's to
         reproduce.
         """
-        return get_broker().inflight_depth(worker)
+        return self.broker.inflight_depth(worker)
 
     async def ainflight_depth(self, worker: str | None = None) -> int:
         """:meth:`inflight_depth` without blocking the loop this coroutine runs on."""
-        return await get_broker().ainflight_depth(worker)
+        return await self.broker.ainflight_depth(worker)
 
     def __repr__(self) -> str:
         """Say whether the aiogram bot behind this facade has been built yet."""

@@ -33,6 +33,10 @@ src/django_aiogram/
                         (bot, transport, eventlog), shapes for what a value
                         must look like, conditions for what a rule asks first
     broker/         one transport per package, and the contract they answer
+    runtime/
+        profiles.py     what two bots must agree on before they share anything
+        groups.py       the objects a profile owns: the transport, and what drains it
+        registry.py     one TelegramBot per configured alias; `bots['support']`
     producer/
         client.py       TelegramBot: bot/dispatcher/loop, send, send_raw, shutdown
         outbound.py     what names one send in flight, and what settles it
@@ -314,6 +318,7 @@ Packaging-only work does not need the Redis suite, and vice versa.
 | --- | --- |
 | `config/` | what a project configures, and what refuses a bad value |
 | `broker/` | one transport per package; the contract they answer |
+| `runtime/` | what a bot needs while the process runs: its profile, its group, and the object a project sends through |
 | `producer/` | the send side: the bot, the producer, the pacing |
 | `consumer/` | the receive side: the queue consumer, the webhook view, router discovery |
 | `wire/` | how a message becomes bytes and comes back |

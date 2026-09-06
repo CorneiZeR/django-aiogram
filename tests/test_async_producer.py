@@ -284,11 +284,11 @@ def test_a_broker_that_cannot_be_resolved_does_not_spend_the_mention(caplog, mon
     latch = threading.Event()
     monkeypatch.setattr('django_aiogram.producer.looping._asend_mentioned', latch)
 
-    def refuse():
+    def refuse(*_settings):
         msg = 'BROKER names something that cannot be imported'
         raise ImproperlyConfigured(msg)
 
-    monkeypatch.setattr('django_aiogram.producer.client.get_broker', refuse)
+    monkeypatch.setattr('django_aiogram.broker.registry.get_broker', refuse)
     instance = TelegramBot()
 
     async def one_send():
@@ -689,11 +689,11 @@ def test_send_from_a_loop_does_not_spend_the_mention_on_a_broken_broker(caplog, 
     latch = threading.Event()
     monkeypatch.setattr('django_aiogram.producer.looping._asend_mentioned', latch)
 
-    def refuse():
+    def refuse(*_settings):
         msg = 'BROKER names something that cannot be imported'
         raise ImproperlyConfigured(msg)
 
-    monkeypatch.setattr('django_aiogram.producer.client.get_broker', refuse)
+    monkeypatch.setattr('django_aiogram.broker.registry.get_broker', refuse)
     instance = TelegramBot()
 
     async def one_send():

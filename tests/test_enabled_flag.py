@@ -40,11 +40,11 @@ def test_enqueue_is_a_noop_when_disabled(monkeypatch):
     early return were removed and the settings happened to name a broker.
     """
 
-    def refuse():
+    def refuse(*_settings):
         message = 'a disabled process reached for the broker'
         raise AssertionError(message)
 
-    monkeypatch.setattr('django_aiogram.producer.client.get_broker', refuse)
+    monkeypatch.setattr('django_aiogram.broker.registry.get_broker', refuse)
     monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', refuse)
 
     TelegramBot().enqueue(chat_id=1, text='hi')
@@ -71,7 +71,7 @@ def test_the_depth_reads_answer_even_when_disabled(monkeypatch):
         def inflight_depth(self, worker=None):
             return 3
 
-    monkeypatch.setattr('django_aiogram.producer.client.get_broker', Answering)
+    monkeypatch.setattr('django_aiogram.broker.registry.get_broker', lambda *_settings: Answering())
 
     instance = TelegramBot()
     assert instance.enabled is False

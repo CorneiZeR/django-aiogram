@@ -1,0 +1,129 @@
+"""The objects a profile owns, built once and shared by every bot that resolves to it.
+
+Twenty bots configured alike hold one connection to the broker between them, not twenty. What
+they share is what a :class:`~django_aiogram.runtime.profiles.Profile` decides; what stays
+theirs is the token, the pacing and the aiogram ``Bot`` -- which costs almost nothing once its
+HTTP session is shared.
+
+Above the process and below the bot. The dispatcher, the handler tree and the FSM store are
+one per *process* — ``config.defaults.PROCESS_SCOPED`` says why — and the token is one per
+*bot*. This is the layer in between, and the transport is what lives in it.
+"""
+
+import atexit
+import threading
+from typing import TYPE_CHECKING
+
+from django.core.signals import setting_changed
+from django.dispatch import receiver
+
+from django_aiogram.broker.registry import broker_class, overriding
+from django_aiogram.config.bots import BOTS_SETTINGS_NAME
+from django_aiogram.config.settings import SETTINGS_NAME
+from django_aiogram.runtime.profiles import Profile, profile_of
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+    from typing import Any
+
+    from django_aiogram.broker.base import Broker
+
+__all__ = ('RuntimeGroup', 'close_groups', 'group_for', 'live_groups')
+
+
+class RuntimeGroup:
+    """Everything one profile's bots have in common, built on first use."""
+
+    def __init__(self, profile: Profile, settings: 'Mapping[str, Any]') -> None:
+        """Record what this group is for; nothing is connected until something asks."""
+        self.profile = profile
+        #: the settings this group was built from. One bot's, and any bot in the group would
+        #: have done: they agree on everything a group reads, which is what put them here
+        self.settings = settings
+        self._broker: Broker | None = None
+        self._lock = threading.Lock()
+
+    @property
+    def broker(self) -> 'Broker':
+        """The one transport this group's bots publish to and consume from.
+
+        An override from :func:`~django_aiogram.broker.registry.use_broker` wins over it and is
+        never cached here: a capture is for the length of a block, and a group outlives one.
+        """
+        held = overriding()
+        if held is not None:
+            return held
+        with self._lock:
+            if self._broker is None:
+                resolved = broker_class(self.settings)
+                resolved.verify()
+                self._broker = resolved()
+            return self._broker
+
+    def close(self) -> None:
+        """Release what this group holds. Safe to call when it holds nothing."""
+        with self._lock:
+            current, self._broker = self._broker, None
+        if current is not None:
+            current.close()
+
+    def __repr__(self) -> str:
+        """Name the group by its profile, which is the only part worth printing."""
+        return f'<RuntimeGroup {self.profile.digest}>'
+
+
+_groups: dict[Profile, RuntimeGroup] = {}
+_lock = threading.Lock()
+#: armed with the first group rather than per group, so a process that builds five closes them
+#: with one callback. `close_groups` is idempotent either way
+_exit_hook_armed = False
+
+
+def group_for(settings: 'Mapping[str, Any]') -> RuntimeGroup:
+    """Return the group one bot belongs to, building it the first time it is asked for.
+
+    Keyed by the profile rather than by the bot, which is the whole point: a second bot whose
+    settings agree gets the group the first one built, and one that differs anywhere gets its
+    own.
+    """
+    global _exit_hook_armed  # noqa: PLW0603 - one hook per process, like the groups it closes
+    profile = profile_of(settings)
+    with _lock:
+        group = _groups.get(profile)
+        if group is None:
+            group = _groups[profile] = RuntimeGroup(profile, settings)
+            if not _exit_hook_armed:
+                # `Broker.close()` says it is called at shutdown, and until 4.1 nothing called it
+                # there: a Kafka consumer that disappears without leaving its group holds its
+                # partitions until the session times out, which is a restart that delivers
+                # nothing for that long. Each transport's `close` already restricts what it
+                # touches from a thread that does not own it -- this runs on the main one
+                atexit.register(close_groups)
+                _exit_hook_armed = True
+        return group
+
+
+def live_groups() -> tuple[RuntimeGroup, ...]:
+    """Every group this process has built, for a listing or a shutdown."""
+    with _lock:
+        return tuple(_groups.values())
+
+
+def close_groups() -> None:
+    """Close every group and forget them. Safe to call when there are none."""
+    with _lock:
+        current = list(_groups.values())
+        _groups.clear()
+    for group in current:
+        group.close()
+
+
+@receiver(setting_changed)
+def _forget_the_groups(**kwargs: 'Any') -> None:
+    """Rebuild on the next ask when the settings a group was built from change.
+
+    Only for this package's own two, like every other cache here: an unrelated
+    ``override_settings`` in a project's suite must not close a connection.
+    """
+    if kwargs.get('setting') in {SETTINGS_NAME, BOTS_SETTINGS_NAME}:
+        close_groups()

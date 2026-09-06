@@ -86,8 +86,9 @@ TESTING_HELPERS = ('Captured', 'InMemoryBroker', 'SendCaptureMixin', 'Sent', 'ca
 
 #: what `import django_aiogram` gives you. `redis_conn` and `get_redis` left in 4.0: one
 #: transport's client is not the package's business to export, and both are still importable
-#: from `django_aiogram.redis`, which the case below pins
-MODULE_EXPORTS = ('TelegramBot', 'bot', 'conf', '__version__')
+#: from `django_aiogram.redis`, which the case below pins. `bots` arrived in 5.0, beside the
+#: `bot` that is still what a project with one of them writes
+MODULE_EXPORTS = ('TelegramBot', 'bot', 'bots', 'conf', '__version__')
 
 #: what 4.0 took away, pinned by its absence. The tuples above are membership checks, and
 #: membership cannot fail when a name comes *back*: `hasattr` would find a restored
@@ -203,9 +204,14 @@ def test_the_pre_2_0_shape_still_works_end_to_end():
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_construction_arguments_1_x_accepted():
-    """`TelegramBot(max_retries=..., loop=...)` is how 1.x code built it."""
+    """`TelegramBot(max_retries=..., loop=...)` is how 1.x code built it.
+
+    `record` joined them in 5.0 and is asserted here rather than merely tolerated: adding to
+    this surface is allowed and removing from it is not, so the set is what says which of the
+    two happened.
+    """
     signature = inspect.signature(TelegramBot)
-    assert set(signature.parameters) == {'max_retries', 'loop'}
+    assert set(signature.parameters) == {'max_retries', 'loop', 'record'}
 
     supplied = asyncio.new_event_loop()
     instance = TelegramBot(max_retries=3, loop=supplied)
