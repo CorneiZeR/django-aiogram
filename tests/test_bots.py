@@ -105,8 +105,23 @@ def test_two_aliases_holding_one_token_are_reported():
     ):
         reported = [message for message in check_settings() if message.id == 'django_aiogram.E051']
         assert len(reported) == 1, [message.msg for message in reported]
-        assert 'a, b' in reported[0].msg
-        assert 'c' not in reported[0].msg.split(':')[-1]
+        # the dict that configures several bots, never the shared defaults: neither token is there
+        assert reported[0].msg.startswith('TELEGRAM_BOTS configures bot 123456 more than once:')
+        assert "a from TELEGRAM_BOTS['a']['TOKEN']" in reported[0].msg
+        assert "b from TELEGRAM_BOTS['b']['TOKEN']" in reported[0].msg
+        assert 'c' not in reported[0].msg.split(':', 1)[-1]
+
+
+def test_two_sections_inheriting_one_token_are_reported_against_the_defaults():
+    """The other way to configure one bot twice, and the reason the origins are per alias.
+
+    Both sections hold nothing, so the duplicate comes from the shared dict — and a message
+    that named the sections would send the reader to two places that say nothing about it.
+    """
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': TOKEN}, TELEGRAM_BOTS={'a': {}, 'b': {}}):
+        reported = [message for message in check_settings() if message.id == 'django_aiogram.E051']
+        assert len(reported) == 1, [message.msg for message in reported]
+        assert reported[0].msg.count("TELEGRAM_BOT_DEFAULTS['TOKEN']") == 2, reported[0].msg
 
 
 def test_the_dict_4_x_used_is_reported_rather_than_ignored():

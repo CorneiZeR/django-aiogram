@@ -258,22 +258,30 @@ def _one_bot_per_token(_key: str, _record: BotRecord) -> list[Problem]:
 
     Telegram meters the token and delivers each update once, so the pair would race for the same
     updates and pace against two budgets for one bot.
+
+    **Each alias is named with the place its token came from**, which is not one place: two
+    sections can hold the same string, and two sections that hold nothing can both inherit it
+    from the defaults. A single label cannot say both, so the label is the dict that configures
+    several bots -- there is no duplicate without one -- and the origins go in the message.
     """
-    seen: dict[int, list[str]] = {}
+    seen: dict[int, list[BotRecord]] = {}
     try:
         configured = records()
     except ImproperlyConfigured:
         return []  # E054 owns a dict that cannot be read at all
     for found in configured:
         if found.bot_id is not None:
-            seen.setdefault(found.bot_id, []).append(found.alias)
-    shared = sorted((bot_id, named) for bot_id, named in seen.items() if len(named) > 1)
+            seen.setdefault(found.bot_id, []).append(found)
+    shared = sorted((bot_id, found) for bot_id, found in seen.items() if len(found) > 1)
     return [
         Problem(
-            f'configures bot {bot_id} more than once: {", ".join(named)}.',
+            f'configures bot {bot_id} more than once: '
+            + ', '.join(f'{one.alias} from {one.label("TOKEN")}' for one in found)
+            + '.',
+            label=BOTS_SETTINGS_NAME,
             hint='One token is one bot. Give each alias its own, or drop the duplicates.',
         )
-        for bot_id, named in shared
+        for bot_id, found in shared
     ]
 
 
