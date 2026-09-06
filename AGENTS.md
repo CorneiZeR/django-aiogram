@@ -25,6 +25,7 @@ src/django_aiogram/
     redis.py        lazy connection
     config/
         settings.py     lazy settings with an environment fallback
+        bots.py         which bots are configured, and how each resolves its own
         defaults.py     the only place a default lives
         enums.py        the values a setting accepts
         checks/         system checks E001-E049, W001-W009, I001-I003:

@@ -1,7 +1,27 @@
 # Settings
 
-Everything lives under `TELEGRAM_BOT_DEFAULTS` in `settings.py`. Scalar values can also
-come from `DJANGO_AIOGRAM_<NAME>`; Django settings take precedence.
+Two dicts in `settings.py`. `TELEGRAM_BOT_DEFAULTS` holds what every bot inherits;
+`TELEGRAM_BOTS` holds one section per bot, keyed by an alias, and each section overrides
+what it names. A project that writes no sections has one bot called `default` resolving
+entirely from the defaults, which is what a single-bot project keeps writing.
+
+```python
+TELEGRAM_BOT_DEFAULTS = {'REDIS_URL': os.environ['REDIS_URL']}
+TELEGRAM_BOTS = {
+    'default': {'TOKEN': os.environ['TELEGRAM_TOKEN']},
+    'support': {'TOKEN': os.environ['SUPPORT_TOKEN'], 'RATE_LIMIT': {'overall_per_second': 5}},
+}
+```
+
+Scalar values can also come from `DJANGO_AIOGRAM_<NAME>`, and one bot's from
+`DJANGO_AIOGRAM_<ALIAS>_<NAME>`; Django settings take precedence over either.
+
+A bot is identified by the number in front of the colon in its token, read without asking
+Telegram. That number is the one thing about a bot that holds still: an alias is a name a
+project may change and a token is a credential it may rotate, and a rotated token keeps the
+same identity. These belong to the process rather than to a bot — `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `EVENT_LOG` and every `EVENT_LOG_*` one — so a section naming one is refused by `E053` instead of
+deciding for every bot in the process. `ENABLED` is not among them: a bot may be switched off
+on its own.
 
 All of it is validated by `manage.py check` — in processes where the bot is
 enabled **or** the event log is on. A container with `ENABLED=0` and the log
@@ -337,6 +357,7 @@ entry naming a retired one is dead but harmless.
 | -- | ------- |
 | `W001` / `W002` | `TOKEN` / `REDIS_URL` empty while the bot is enabled |
 | `W003` | `TELEGRAM_BOT_DEFAULTS` contains unknown keys |
+| `W010` | one bot's section contains unknown keys |
 | `W004` | `BLPOP_TIMEOUT` is **above** the ceiling the consumer applies — `min(HEARTBEAT_INTERVAL, floor(<the transport timeout>) - 1)`, never below 1 — so the take is silently shortened to it. Equal to the ceiling is not warned about and is not shortened. The hint names whichever of the two binds, and the transport term is the one `BROKER` names rather than always `REDIS_TIMEOUT` |
 | `E001`–`E003`, `E017`, `E049` | a boolean setting holds something that cannot be read as true or false. `ENABLED` and `AUTODISCOVER` are read while the app loads, so in practice those two refuse the boot with the same message before `check` runs at all |
 | `E004`–`E007`, `E009`–`E011` | a string setting is wrong, or not one of the allowed values |
@@ -367,6 +388,11 @@ entry naming a retired one is dead but harmless.
 | `E046` | `REQUIRE_CRASH_SAFE` cannot be read as true or false |
 | `E047` | `BROKER` is unusable. Reported whatever `ENABLED` says: it is empty; it names something that is not a broker; it names one that declares no `CALL_TIMEOUT_OPTION` — the option bounding one of its calls, which `W004` quotes and the consumer caps its reads by; or that option holds something the transport refuses, meaning anything but a positive finite number of seconds, and whatever narrower range the transport documents. That last finding stands aside where the option has a rule of its own that is already reporting the value — `REDIS_TIMEOUT` has `E030`, so one value never draws two errors. The name and the deadline are judged before the driver is looked for, so a process that has not installed the extra yet still hears about them. Gated on the bot being enabled, like `W001` and `W002`: the driver behind it is not installed — the hint carries the `pip install` line for that extra — and its own required settings are unset. A process that never reaches a transport is not asked to install a driver, while a name or a deadline is as wrong in the web tier as in the worker |
 | `E048` | `DATABASE_ROUTERS` names any `django_redis_aiogram.` path, which 4.0 renamed. The router we shipped is named against its replacement, `django_aiogram.eventlog.dbrouter.TelegramEventLogRouter`; any other path from that distribution is reported as gone, since this cannot invent a replacement for something it never had |
+| `E050` | `TELEGRAM_BOT` is still set. 5.0 split it into `TELEGRAM_BOT_DEFAULTS` and `TELEGRAM_BOTS`, and nothing reads the old name: every value left in it is ignored, and whatever it configured resolves from the shared defaults, the environment or this package's own defaults instead. A project that kept its token there has none |
+| `E051` | two aliases hold one token, which is one bot under two names: the pair would race for its updates and pace against two budgets |
+| `E052` | `TOKEN` is not a bot token. One reads `<bot id>:<secret>`, and the number before the colon is what identifies the bot — a token with none cannot be told apart from another bot's |
+| `E053` | a bot's section sets a setting the process owns — `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `EVENT_LOG` or an `EVENT_LOG_*` one. There is one writer thread and one in-flight list per process, so a per-bot value could only mean whichever bot resolved last wins |
+| `E054` | `TELEGRAM_BOTS` cannot be read: it is not a mapping, an alias is not a name, or a section is not a mapping |
 | `I001` | `WORKER_NAME` is empty **and** the hostname is one Docker generated, so a replacement container gets a different name — which strands whatever the old container was sending. Information rather than a warning because a check cannot tell a consumer from a web process, and every container without `hostname:` matches; `start_tgbot` warns for itself at startup |
 | `I003` | `django_redis_aiogram_event` — the table 3.x wrote to — is still on whichever database the log resolves to, holding rows this release does not read. Information because leaving them there is a legitimate choice and a check cannot tell it from an oversight; always on, because it is what makes `manage.py tgbot_move_events` discoverable. Asked of the log's alias rather than the default, so a project with `EVENT_LOG_DATABASE` set is not the one that hears nothing |
 | `I002` | `EVENT_LOG_DATABASE` names an alias and nothing in `DATABASE_ROUTERS` that this check can read sends this app there — a dotted path counts, and so does an instance, but a bare class does not: Django uses a non-string entry as it stands, so its `db_for_read` would be called without one. So a plain `migrate` may not create the table — `migrate --database=<alias>` still would. Information rather than a warning: a router of your own returning that alias is equally correct, and this cannot see inside one |

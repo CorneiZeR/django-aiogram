@@ -19,6 +19,7 @@ from django.utils.module_loading import import_string
 
 from django_aiogram.broker.redis_list import RedisListBroker
 from django_aiogram.broker.registry import SHIPPED
+from django_aiogram.config.bots import defaults_record
 from django_aiogram.config.checks import CHECKS, check_settings, worker_name_problems
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import StorageKind, UpdateMode
@@ -234,6 +235,10 @@ EXPECTED_IDS = (
     # neither condition is one to fail `check --fail-level WARNING` over
     | {f'W{code:03d}' for code in range(1, 10)}
     | ({'I001', 'I002'} - HOSTNAME_DEPENDENT_IDS)
+    # E052 fires on a TOKEN that is not one, which the wrong-type fixture supplies. The other
+    # 5.0 rows need a TELEGRAM_BOTS dict the fixtures here do not build, and have cases of
+    # their own below
+    | {'E052'}
 )
 
 WRONG_TYPES = {
@@ -894,7 +899,7 @@ def test_the_worker_name_rule_is_information_and_the_consumer_warns_for_itself(m
 
     assert len(reported) == 1, 'the rule stopped reporting at all'
     assert reported[0].level < WARNING, 'a check that cannot tell which process it is in warned'
-    assert worker_name_problems(), 'the command would be told nothing'
+    assert worker_name_problems(defaults_record()), 'the command would be told nothing'
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'REDIS_TIMEOUT': 1})
@@ -1492,8 +1497,8 @@ class BrokerNeedingMoreThanTheRuleAsks(RedisListBroker):
     _FLOOR = 5
 
     @classmethod
-    def call_timeout(cls) -> float:
-        timeout = super().call_timeout()
+    def call_timeout(cls, settings=None) -> float:
+        timeout = super().call_timeout(settings)
         if timeout < cls._FLOOR:
             msg = f"TELEGRAM_BOT_DEFAULTS['REDIS_TIMEOUT'] is {timeout}, and this transport needs {cls._FLOOR} or more."
             raise ImproperlyConfigured(msg)

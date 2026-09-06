@@ -23,17 +23,24 @@ from functools import partial
 from typing import Any
 
 from django.core.checks import CheckMessage
+from django.core.exceptions import ImproperlyConfigured
 
+from django_aiogram.config.bots import defaults_record, records
 from django_aiogram.config.checks.bot import (
     MODE_CHOICES,
     PAYLOAD_CHOICES,
     SERIALIZER_CHOICES,
+    _a_readable_bots_dict,
+    _a_token_with_an_identity,
     _importable_storage,
     _known_bot_properties,
     _known_update_types,
+    _one_bot_per_token,
     _readable_serializer,
     _sane_rate_limits,
     _serviceable_webhook,
+    _settings_one_process_decides,
+    _the_dict_5_0_replaced,
 )
 from django_aiogram.config.checks.conditions import _redis_is_in_use
 from django_aiogram.config.checks.eventlog import (
@@ -67,6 +74,7 @@ from django_aiogram.config.checks.transport import (
     _a_usable_delivery,
     _a_worker_that_keeps_its_name,
     _known_keys,
+    _known_section_keys,
     worker_name_problems,
 )
 
@@ -88,6 +96,7 @@ CHECKS: tuple[Check, ...] = (
     Check('E017', 'ALLOW_PICKLE', _a_readable_boolean),
     Check('E049', 'TRANSACTIONAL', _a_readable_boolean),
     Check('E004', 'TOKEN', _a_string),
+    Check('E052', 'TOKEN', _a_token_with_an_identity),
     Check('E005', 'REDIS_URL', _a_string),
     Check('E006', 'MODULE_NAME', _a_string),
     Check('E007', 'REDIS_MESSAGES_KEY', _a_string),
@@ -133,7 +142,7 @@ CHECKS: tuple[Check, ...] = (
     Check('I002', 'EVENT_LOG_DATABASE', _a_routed_log_database),
     # keyed on nothing, because the condition is a table rather than a setting: it is true or
     # false whatever `TELEGRAM_BOT_DEFAULTS` says, and the message names the alias it asked
-    Check('I003', '', _a_log_the_rename_left_behind),
+    Check('I003', '', _a_log_the_rename_left_behind, process=True),
     Check('E047', 'BROKER', _a_usable_broker),
     Check('E042', 'EVENT_LOG_SYNC', _a_readable_boolean),
     Check('E043', 'REDIS_URL', _a_url_pickle_can_survive),
@@ -150,8 +159,14 @@ CHECKS: tuple[Check, ...] = (
     # in processes that own no in-flight list. `start_tgbot` warns for itself, where being
     # the consumer is known
     Check('I001', 'WORKER_NAME', _a_worker_that_keeps_its_name),
-    Check('W003', '', _known_keys),
-    Check('E048', '', _a_router_this_release_still_has),
+    Check('W003', '', _known_keys, process=True),
+    Check('W010', '', _known_section_keys),
+    Check('E048', '', _a_router_this_release_still_has, process=True),
+    # the three rows about the set of bots rather than about any one of them
+    Check('E050', '', _the_dict_5_0_replaced, process=True),
+    Check('E051', '', _one_bot_per_token, process=True),
+    Check('E054', '', _a_readable_bots_dict, process=True),
+    Check('E053', '', _settings_one_process_decides, process=True),
     Check(
         'W001',
         'TOKEN',
@@ -176,5 +191,20 @@ CHECKS: tuple[Check, ...] = (
 
 
 def check_settings(**kwargs: Any) -> list[CheckMessage]:
-    """Run every registered check and return everything it reported."""
-    return [message for check in CHECKS for message in check.run()]
+    """Run every registered check: once for the process, then once for each configured bot.
+
+    Two passes because a rule guards one of two kinds of setting. A process-scoped one is decided
+    once whatever the deployment runs -- the event log's writer, router discovery -- and reporting
+    it per bot would print the same finding five times. Everything else belongs to a bot, and its
+    finding names the section that holds the value.
+    """
+    process = defaults_record()
+    messages = [message for check in CHECKS if check.per_process for message in check.run(process)]
+    try:
+        configured = records()
+    except ImproperlyConfigured:
+        # `E054` has already reported it, and there are no bots to judge
+        return messages
+    for record in configured:
+        messages += [message for check in CHECKS if not check.per_process for message in check.run(record)]
+    return messages

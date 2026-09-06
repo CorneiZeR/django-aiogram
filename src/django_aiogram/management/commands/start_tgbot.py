@@ -254,9 +254,10 @@ class Command(BaseCommand):
         This process is the consumer. The same rule, reused rather than restated, so the
         two cannot drift.
         """
-        from django_aiogram.config.checks import worker_name_problems  # noqa: PLC0415 - no aiogram at import
+        from django_aiogram.config.bots import defaults_record  # noqa: PLC0415 - no aiogram at import
+        from django_aiogram.config.checks import worker_name_problems  # noqa: PLC0415 - as above
 
-        for problem in worker_name_problems():
+        for problem in worker_name_problems(defaults_record()):
             logger.warning(
                 'the worker name will not survive a replacement container',
                 extra={'tg_worker': worker_identity()},

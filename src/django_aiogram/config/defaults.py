@@ -111,3 +111,13 @@ DEFAULTS: dict[str, Any] = {
     # write on the calling thread instead of the writer's: tests only
     'EVENT_LOG_SYNC': False,
 }
+
+
+#: settings a bot may not have of its own, because the thing they configure is one per
+#: process rather than one per bot: the event log's writer thread, the name this worker's
+#: in-flight list is keyed on, and the router discovery that runs once at startup. A section
+#: naming one of these is refused by `E053` rather than honoured for whichever bot resolved
+#: last.
+PROCESS_SCOPED: frozenset[str] = frozenset(
+    {'AUTODISCOVER', 'MODULE_NAME', 'WORKER_NAME'} | {key for key in DEFAULTS if key.startswith('EVENT_LOG')},
+)

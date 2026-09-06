@@ -32,7 +32,7 @@ from django_aiogram.broker.kafka.client import (
 )
 from django_aiogram.broker.kafka.exceptions import ProduceRefusedError
 from django_aiogram.broker.models import Taken
-from django_aiogram.config.settings import SETTINGS_NAME
+from django_aiogram.config.settings import setting_label
 
 if TYPE_CHECKING:
     from confluent_kafka import Consumer, Producer
@@ -121,7 +121,7 @@ class KafkaBroker(Broker):
         return str(self.option('KAFKA_BOOTSTRAP'))
 
     @classmethod
-    def call_timeout(cls) -> float:
+    def call_timeout(cls, settings: Mapping[str, Any] | None = None) -> float:
         """How long any single call may take before the broker is unreachable.
 
         Refused outside what librdkafka accepts for ``socket.timeout.ms``: this number becomes
@@ -138,11 +138,11 @@ class KafkaBroker(Broker):
         """
         # through the base, which owns reading the number and refusing one that cannot be a
         # deadline at all; this narrows the range to what the driver takes
-        timeout = super().call_timeout()
+        timeout = super().call_timeout(settings)
         if not _SOCKET_FLOOR <= timeout <= _SOCKET_CEILING:
             msg = (
-                f"{SETTINGS_NAME}['KAFKA_TIMEOUT'] is {timeout}, which librdkafka will not "
-                f'take: it becomes `socket.timeout.ms`, and that accepts {_SOCKET_FLOOR} to '
+                f'{setting_label(settings, "KAFKA_TIMEOUT")} is {timeout}, which librdkafka will '
+                f'not take: it becomes `socket.timeout.ms`, and that accepts {_SOCKET_FLOOR} to '
                 f'{_SOCKET_CEILING} seconds.'
             )
             raise ImproperlyConfigured(msg)
