@@ -90,18 +90,18 @@ def test_the_profile_is_the_resolved_value_and_not_the_writing_of_it():
 
 
 def test_a_mapping_written_in_another_order_is_the_same_profile():
-    """Two dicts with the same pairs are one configuration, whatever order they were typed in."""
+    """Two dicts with the same pairs are one configuration, whatever order they were typed in.
+
+    Asserted on the normalisation rather than through a setting, because the mapping-valued
+    settings this package has are a bot's own and never reach a profile — so a case routed
+    through one passes whether or not the ordering is normalised at all, which is what the
+    first draft of this did.
+    """
     first = {'overall_per_second': 30, 'per_chat_per_second': 1}
-    with override_settings(
-        TELEGRAM_BOT_DEFAULTS={'BROKER': MEMORY, 'DEFAULT_BOT_PROPERTIES': first},
-        TELEGRAM_BOTS={
-            'a': {'TOKEN': TOKEN},
-            'b': {'TOKEN': OTHER, 'DEFAULT_BOT_PROPERTIES': dict(reversed(list(first.items())))},
-        },
-    ):
-        # not in the profile at all, so it cannot split them either way — asserted on the
-        # normalisation itself, which is what a profile-deciding mapping would go through
-        assert profile_of(configured.record('a')) == profile_of(configured.record('b'))
+    reordered = dict(reversed(list(first.items())))
+
+    assert list(first) != list(reordered), 'the case needs them written differently'
+    assert _hashable(first) == _hashable(reordered)
 
 
 def test_grouping_changes_what_is_held_open_and_nothing_else():
@@ -241,6 +241,62 @@ def test_a_group_let_go_of_does_not_open_a_transport_nobody_holds():
 def test_a_mapping_key_that_reads_differently_is_a_different_profile():
     """The same rule as the values, and the keys had it missing: `str(key)` made them one."""
     assert _hashable({1: 'x'}) != _hashable({'1': 'x'})
+
+
+def test_a_bot_held_across_a_settings_change_answers_from_the_new_ones():
+    """A caller keeps `bots['support']` and the settings move under it.
+
+    Measured before this was handled: the held object went on resolving the record it was built
+    with, so a send would have gone out with the token of a block that had ended — the same
+    defect as a stale aiogram `Bot`, one level up, and the registry evicting its entry does not
+    reach an object somebody already has.
+    """
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'BROKER': MEMORY}, TELEGRAM_BOTS={'support': {'TOKEN': TOKEN}}):
+        held = bots['support']
+        assert held.settings['TOKEN'] == TOKEN
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'BROKER': MEMORY}, TELEGRAM_BOTS={'support': {'TOKEN': OTHER}}):
+        assert held.settings['TOKEN'] == OTHER, 'the held bot answered from a block that ended'
+
+
+def test_closing_a_group_by_hand_does_not_leave_it_answering_itself():
+    """`close()` is public, so a caller can retire a group the registry still holds.
+
+    Measured before this was handled: a retired group answers by asking the registry, the
+    registry handed the same group back, and it asked itself until `RecursionError`. Introduced
+    by the fix for the transport opened in a group nothing holds, which is where a round of
+    fixes usually puts one.
+    """
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'BROKER': MEMORY}, TELEGRAM_BOTS={'support': {'TOKEN': TOKEN}}):
+        group = bots['support'].group
+        group.close()
+
+        assert group.broker is not None
+        assert bots['support'].group is not group, 'the registry kept the closed group'
+
+
+def test_one_transport_refusing_to_close_does_not_strand_the_others():
+    """They are out of the registry by then, so a close that stops part-way strands the rest."""
+
+    class Stubborn(InMemoryBroker):
+        def close(self):
+            msg = 'this transport will not be released'
+            raise RuntimeError(msg)
+
+    released = []
+
+    class Counting(InMemoryBroker):
+        def close(self):
+            released.append(True)
+
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'BROKER': MEMORY}, TELEGRAM_BOTS=two_bots(MEMORY_TIMEOUT=9.0)):
+        first, second = bots['a'].group, bots['b'].group
+        assert first is not second, 'the case needs two groups to say anything'
+        first._broker, second._broker = Stubborn(), Counting()
+
+        with pytest.raises(RuntimeError, match='will not be released'):
+            groups.close_groups()
+
+    assert released == [True], 'the second transport was left open by the first one refusing'
 
 
 def test_a_value_that_reads_differently_is_a_different_profile():

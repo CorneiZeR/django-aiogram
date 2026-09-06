@@ -69,7 +69,9 @@ def _hashable(value: object) -> object:
     if isinstance(value, (list, tuple)):
         return (type(value).__name__, tuple(_hashable(item) for item in value))
     if isinstance(value, (set, frozenset)):
-        return (type(value).__name__, tuple(sorted(repr(_hashable(item)) for item in value)))
+        # sorted *by* repr and keeping the value: two unequal items can render the same, and a
+        # profile built from the rendering would call two configurations one
+        return (type(value).__name__, tuple(sorted((_hashable(item) for item in value), key=repr)))
     try:
         hash(value)
     except TypeError:

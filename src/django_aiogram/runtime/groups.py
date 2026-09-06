@@ -112,6 +112,11 @@ def group_for(settings: 'Mapping[str, Any]') -> RuntimeGroup:
     profile = profile_of(settings)
     with _lock:
         group = _groups.get(profile)
+        # replaced rather than handed back when it has been closed: `close()` is public, so a
+        # caller can retire a group the registry still holds -- and a retired group answers by
+        # asking here, which without this would be the same group answering itself for ever
+        if group is not None and group._gone:  # noqa: SLF001 - the registry owns this flag
+            group = None
         if group is None:
             group = _groups[profile] = RuntimeGroup(profile, settings)
             if not _exit_hook_armed:
@@ -136,8 +141,17 @@ def close_groups() -> None:
     with _lock:
         current = list(_groups.values())
         _groups.clear()
+        # every one of them, whatever the first says: they are already out of the registry, so
+        # a close that raised part-way through would leave the rest open with nothing able to
+        # reach them again. The first failure is the one raised, once the others are shut
+        refused: Exception | None = None
         for group in current:
-            group.close()
+            try:
+                group.close()
+            except Exception as error:  # noqa: BLE001, PERF203 - a transport may refuse in any way it likes
+                refused = refused or error
+    if refused is not None:
+        raise refused
 
 
 @receiver(setting_changed, dispatch_uid='django_aiogram.runtime.groups')

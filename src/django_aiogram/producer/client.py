@@ -110,9 +110,13 @@ class TelegramBot(RouterShortcuts):
         record: 'BotRecord | None' = None,
     ) -> None:
         """Record the overrides; nothing aiogram or Redis owns is built here."""
-        #: which bot this is. ``None`` means the one a project with a single bot has, resolved
-        #: on each read rather than held: a settings change has to reach it, and the registry
-        #: it comes from is what caches
+        #: which bot this is, by the name it is configured under. The *record* is not held:
+        #: a settings change moves what it says, and a caller keeping this object across one --
+        #: `bots['support']` in a test suite, say -- would otherwise send with the token from a
+        #: block that had ended
+        self._alias = record.alias if record is not None else None
+        #: the record it was built from, and only for an alias that stops resolving: a bot
+        #: handed a record of its own has no other answer once its section is gone
         self._record = record
         self._max_retries = max_retries
         self._loop = loop
@@ -142,13 +146,19 @@ class TelegramBot(RouterShortcuts):
     @property
     def settings(self) -> 'BotRecord':
         """Return this bot's settings, and the labels that say where each value came from."""
-        if self._record is not None:
-            return self._record
         # deferred: `config.bots` reads Django settings, and this module is imported by a
         # process that may never touch one
         from django_aiogram.config.bots import DEFAULT_ALIAS, record  # noqa: PLC0415 - as above
 
-        return record(DEFAULT_ALIAS)
+        try:
+            return record(self._alias or DEFAULT_ALIAS)
+        except ImproperlyConfigured:
+            # an alias that no longer resolves, which is a section a settings change took away.
+            # A bot built from a record of its own still has that; the default has nothing to
+            # fall back to, and its refusal is the one a project needs to hear
+            if self._record is None:
+                raise
+            return self._record
 
     @property
     def group(self) -> 'RuntimeGroup':

@@ -25,7 +25,7 @@
 
 - **Bots configured alike share one transport.** What two bots have to agree on before they
   may share anything is computed from their resolved settings -- the transport and its own
-  options, the serializer, the consumer's numbers -- so twenty bots on one configuration hold
+  options, the consumer named in `DELIVERY`, the serializer, the consumer's numbers -- so twenty bots on one configuration hold
   one connection between them and one configured differently gets its own. It is computed
   rather than named: a setting choosing the group would be a second source of truth, and two
   sections written differently that resolve the same are one configuration.
