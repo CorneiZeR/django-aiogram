@@ -800,3 +800,34 @@ def test_the_documentation_url_is_declared():
     declared = f'Documentation = "{SITE_URL}"'
 
     assert declared in PYPROJECT.read_text(encoding='utf-8')
+
+
+#: the release that renamed the settings dict. A section about an upgrade that ends before it
+#: describes a version that read the old name, and has to say so
+RENAMED_IN = (5, 0)
+
+UPGRADE_SECTION = re.compile(r'^# From .+ to ([0-9]+)\.([0-9x]+)', re.MULTILINE)
+
+
+def test_a_historical_upgrade_section_keeps_the_name_of_its_own_time():
+    """A blanket rename writes today's name into a section documenting yesterday's release.
+
+    `TELEGRAM_BOT_DEFAULTS` is what 5.0 calls the dict; every release below it reads
+    `TELEGRAM_BOT` and ignores the new name. So a reader upgrading 4.0 to 4.1 from a page
+    carrying the new spelling configures a key that version never reads — measured on the
+    rename itself, which reached five snippets across three historical sections before this
+    case existed. `CHANGELOG.md` was excluded from that rename by hand for the same reason;
+    this page was not, and nothing noticed.
+    """
+    text = (WIKI / 'Upgrading.md').read_text(encoding='utf-8')
+    bounds = [(match.start(), match.group(1, 2)) for match in UPGRADE_SECTION.finditer(text)]
+    assert bounds, 'no upgrade sections were found, so this case proves nothing'
+
+    offending = []
+    for index, (start, (major, minor)) in enumerate(bounds):
+        end = bounds[index + 1][0] if index + 1 < len(bounds) else len(text)
+        target = (int(major), 0 if minor == 'x' else int(minor))
+        if target < RENAMED_IN and 'TELEGRAM_BOT_DEFAULTS' in text[start:end]:
+            offending.append(text[start:end].splitlines()[0])
+
+    assert not offending, f'sections about releases that read TELEGRAM_BOT use the new name: {offending}'
