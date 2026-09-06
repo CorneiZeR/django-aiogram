@@ -161,6 +161,27 @@ def test_the_default_bot_is_the_one_the_package_exports():
         assert bots['support'] is bots['support'], 'a second lookup built a second bot'
 
 
+def test_every_bot_talks_through_one_session_and_one_dispatcher():
+    """Both are the process's, and for different reasons that both matter.
+
+    The session, because a connector each is what makes a `Bot` expensive rather than cheap —
+    which is the trade that lets a bot stay per token while everything around it is shared.
+    The dispatcher, because a `Router` cannot be attached to two of them, so a dispatcher each
+    would be a handler tree each: whether a project's handlers served a bot would depend on
+    whether its transport settings happened to match another's.
+    """
+    with override_settings(
+        TELEGRAM_BOT_DEFAULTS={'BROKER': MEMORY, 'FSM_STORAGE': 'memory'},
+        TELEGRAM_BOTS=two_bots(MEMORY_TIMEOUT=9.0),
+    ):
+        first, second = bots['a'], bots['b']
+
+        assert first.group is not second.group, 'the case needs two groups to say anything'
+        assert first.bot.session is second.bot.session, 'a second group opened its own session'
+        assert first.dispatcher is second.dispatcher
+        assert first.router is second.router
+
+
 def test_a_bot_is_reachable_by_the_identity_a_message_will_carry():
     """An alias is what a settings file writes; the identity is what the wire names."""
     with override_settings(TELEGRAM_BOTS={'default': {'TOKEN': TOKEN}, 'support': {'TOKEN': OTHER}}):

@@ -34,6 +34,8 @@ src/django_aiogram/
                         must look like, conditions for what a rule asks first
     broker/         one transport per package, and the contract they answer
     runtime/
+        process.py      what every bot shares whatever its settings say: the dispatcher,
+                        the handler tree and the HTTP session
         profiles.py     what two bots must agree on before they share anything
         groups.py       the objects a profile owns: the transport, and what drains it
         registry.py     one TelegramBot per configured alias; `bots['support']`

@@ -109,9 +109,19 @@ def test_routing_through_a_dispatcher():
 
 
 def test_a_catch_all_registered_earlier_swallows_the_update():
-    """The ordering caveat on the page — tests/fake_app holds a catch-all."""
+    """The ordering caveat on the page: aiogram stops at the first handler that matches.
+
+    The catch-all is registered here rather than borrowed from `tests/fake_app`, which is
+    where it used to come from. The router is one per process since 5.0, so a fixture app
+    holding an unfiltered handler sits in front of every case in the suite — it is filtered
+    now, and a case about ordering should build the ordering it is about anyway.
+    """
     seen = []
     before = list(bot.router.observers['message'].handlers)
+
+    @bot.message()
+    async def catch_all(message):  # pragma: no cover - it is what takes the update
+        ...
 
     @bot.message(F.text == '/late')
     async def late(message):  # pragma: no cover - the point is that it is not called
@@ -136,7 +146,8 @@ def test_a_catch_all_registered_earlier_swallows_the_update():
         # bot.router is the shared singleton. A handler left registered would
         # answer updates in every test after this one, and a router left
         # attached makes the next include_router() raise
-        observers[:] = [handler for handler in observers if handler.callback is not late]
+        taken = {late, catch_all}
+        observers[:] = [handler for handler in observers if handler.callback not in taken]
         bot.router._parent_router = parent
 
     assert observers == before, 'the recipe left the shared router changed'

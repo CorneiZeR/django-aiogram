@@ -47,14 +47,12 @@ from django_aiogram.api import check_function, resolve_call
 from django_aiogram.broker.registry import close_broker
 from django_aiogram.config.enums import EventKind
 from django_aiogram.config.settings import coerce_bool
-from django_aiogram.db import DatabaseConnectionMiddleware
 from django_aiogram.eventlog.events import short_id
-from django_aiogram.eventlog.instrumentation import install_instrumentation
 from django_aiogram.eventlog.recorder import recorder
 from django_aiogram.eventlog.records import Event, as_identifier
 from django_aiogram.exceptions import LoopThreadNotStartedError, ShuttingDownError
 from django_aiogram.producer.committing import defer
-from django_aiogram.producer.from_settings import build_default_properties, build_storage
+from django_aiogram.producer.from_settings import build_default_properties
 from django_aiogram.producer.looping import LOOP_THREAD, RUNNER_TIMEOUT, drain_budget, loop_lock, mention_asend
 from django_aiogram.producer.outbound import TASK_PREFIX, Outbound, completion, resolve_correlation_id, settle
 from django_aiogram.producer.queueing import Queueing, chunks, publishing, serialise
@@ -62,6 +60,7 @@ from django_aiogram.producer.routing import RouterShortcuts
 from django_aiogram.producer.scheduling import aschedule, cancel, due_moment, schedule
 from django_aiogram.producer.throttling import RateLimiter, get_rate_limiter
 from django_aiogram.redis import aclose_redis
+from django_aiogram.runtime import process
 
 if TYPE_CHECKING:
     # the type the queued producers accept beside a method *name*: a caller who wants their
@@ -118,8 +117,8 @@ class TelegramBot(RouterShortcuts):
         self._max_retries = max_retries
         self._loop = loop
         self._bot: Bot | None = None
-        self._dispatcher: Dispatcher | None = None
-        self._router = Router()
+        #: what the decorators register on, and the same object for every bot in this process
+        self._router = process.router()
         #: sends this bot scheduled, so shutdown drains its own work only
         # the call behind each task, so shutdown can say what it canceled
         self._sends: dict[asyncio.Task[None], Outbound] = {}
@@ -136,7 +135,6 @@ class TelegramBot(RouterShortcuts):
         # only true while close() is flushing the loop, so the refusal below can tell
         # a hand-off queued before shutdown from one queued during it
         self._draining = False
-        # reentrant: _attach_router holds it while reading self.dispatcher
         self._build_guard = threading.RLock()
 
     @property
@@ -232,58 +230,46 @@ class TelegramBot(RouterShortcuts):
                 raise ImproperlyConfigured(msg)
             with self._build_guard:
                 if self._bot is None:
-                    self._bot = Bot(token=token, default=build_default_properties(self.settings))
+                    # the session is the process's: nothing here configures it, and a connector
+                    # each is what would make a bot expensive
+                    self._bot = Bot(
+                        token=token,
+                        default=build_default_properties(self.settings),
+                        session=process.session(),
+                    )
         return self._bot
 
     @property
     def dispatcher(self) -> Dispatcher:
-        """The aiogram ``Dispatcher``: the FSM storage, the connection reset, the event log.
+        """The one dispatcher this process has, with its store and its middleware.
 
-        Built here and only here, so polling and webhook get the same middleware chain -- one
-        update middleware sees every update exactly once, whichever way updates arrive.
-
-        The order of the two registrations is the contract, not a detail.
-        :class:`~django_aiogram.db.DatabaseConnectionMiddleware` goes on first and so runs
-        outermost, which is what makes the connection reset the first thing that happens to an
-        update and the last: a recording middleware that wrote its row through a dead connection
-        would be the same outage one frame further in.
-
-        And it is unconditional, where `install_instrumentation` returns before building anything
-        if nothing reads events. The event log is optional; a live database connection is not.
+        One per process rather than one per bot, and `runtime.process` says why: a ``Router``
+        cannot be attached to two dispatchers, so a dispatcher each would be a handler tree
+        each -- and whether a project's handlers served a bot would depend on whether its
+        transport settings matched another's.
         """
-        if self._dispatcher is None:
-            # two concurrent first requests would otherwise build one each, and
-            # the router would attach to whichever was discarded
-            with self._build_guard:
-                if self._dispatcher is None:
-                    self._dispatcher = Dispatcher(storage=build_storage())
-                    self._dispatcher.update.outer_middleware.register(DatabaseConnectionMiddleware())
-                    install_instrumentation(self._dispatcher)
-        return self._dispatcher
+        return process.dispatcher()
 
     @property
     def router(self) -> Router:
-        """Router holding every handler registered through the decorators."""
-        return self._router
+        """The router every handler in this process is registered on.
+
+        Shared for the reason above, and the same object for every bot: handlers belong to the
+        project. A handler that should answer for one bot alone reads the ``bot`` aiogram
+        injects into it.
+        """
+        return process.router()
 
     @property
     def is_worker(self) -> bool:
         """True only inside the process that runs the bot itself."""
         return self._polling
 
-    def _attach_router(self) -> None:
-        """Attach the router once; aiogram refuses a second attachment.
-
-        Under the build lock: two concurrent first requests would both see no
-        parent and the second would raise.
-        """
-        with self._build_guard:
-            if self._router.parent_router is None:
-                self.dispatcher.include_router(self._router)
-
     def start_polling(self) -> None:
         """Attach the router and block on Telegram long polling."""
-        self._attach_router()
+        # touching it is what attaches the shared router: the dispatcher includes it as it is
+        # built, so every bot in the process gets the same handlers
+        _ = self.dispatcher
 
         async def poll() -> None:
             """Long-poll Telegram, with ``_polling`` true only while this is running.
@@ -310,7 +296,9 @@ class TelegramBot(RouterShortcuts):
         scheduling: the response must not be sent before the handlers have run,
         or a failure would go unreported and the request would look successful.
         """
-        self._attach_router()
+        # touching it is what attaches the shared router: the dispatcher includes it as it is
+        # built, so every bot in the process gets the same handlers
+        _ = self.dispatcher
         owned = self._ensure_loop_runs()
 
         coroutine = self.dispatcher.feed_update(self.bot, update)
@@ -644,7 +632,7 @@ class TelegramBot(RouterShortcuts):
             # because close() refuses on a running loop, so a process that gave the loop a
             # thread could otherwise never close its bot
             self._stop_runner(drain_timeout)
-            if self._loop is not None or self._bot is not None or self._dispatcher is not None:
+            if self._loop is not None or self._bot is not None or process.holding():
                 loop = self.loop
                 if loop.is_running():
                     # run_until_complete and loop.close() both raise on a running
@@ -655,13 +643,17 @@ class TelegramBot(RouterShortcuts):
                 # keeps the teardown from interleaving with it
                 with loop_lock(loop):
                     self._drain(drain_timeout)
-                    # RedisStorage owns a second, async Redis client nothing else closes
-                    if self._dispatcher is not None:
-                        loop.run_until_complete(self._dispatcher.storage.close())
-                        self._dispatcher = None
-                    if self._bot is not None:
-                        loop.run_until_complete(self._bot.session.close())
-                        self._bot = None
+                    # RedisStorage owns a second, async Redis client nothing else closes, and
+                    # the session is shared -- both belong to the process, so both are closed
+                    # here and rebuilt by whatever asks next. Closing is a shutdown, and a
+                    # process that closes one of its bots is one on its way out
+                    closing = process.close_storage()
+                    if closing is not None:
+                        loop.run_until_complete(closing)
+                    self._bot = None
+                    ending = process.close_session()
+                    if ending is not None:
+                        loop.run_until_complete(ending)
                     if not loop.is_closed():
                         loop.close()
             self._loop = None

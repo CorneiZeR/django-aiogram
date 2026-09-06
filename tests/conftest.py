@@ -83,3 +83,27 @@ def redis_server(monkeypatch):
         lambda server=server: fakeredis.aioredis.FakeRedis(server=server),
     )
     return client
+
+
+@pytest.fixture(autouse=True)
+def _handlers_stay_in_their_own_case():
+    """Undo whatever a case registered on the shared router.
+
+    The router is one per process since 5.0, and for the reason `runtime.process` gives: a
+    `Router` cannot be attached to two dispatchers, so a tree per bot would make whether a
+    project's handlers serve a bot depend on its transport settings. The cost lands here —
+    a handler registered by one case is registered for the rest of the session, and aiogram
+    stops at the first that matches, so an early catch-all silently swallows every later
+    case's updates.
+
+    Truncated rather than replaced: `django.setup()` registers the fake app's handlers on this
+    router before any case runs, and a fresh one would lose them — which is what
+    `test_autodiscover` is about.
+    """
+    from django_aiogram.runtime import process
+
+    router = process.router()
+    before = {name: len(observer.handlers) for name, observer in router.observers.items()}
+    yield
+    for name, observer in router.observers.items():
+        del observer.handlers[before.get(name, 0) :]
