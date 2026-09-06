@@ -3,12 +3,16 @@ name: Pages
 # The documentation site, published to GitHub Pages from `master`.
 #
 # **Versioned by `mike`**, which keeps one directory per release series on the `gh-pages`
-# branch and a `versions.json` the theme's selector reads. The rule is one line: a push to
-# `master` deploys the series `__version__` names — 4.0 today — and moves the `latest` alias
-# onto it. Nothing else deploys. So `/latest/` is always what `master` says, which is what
-# every link in the README promises, and a series freezes by itself the day `__version__`
-# moves past it: 5.0 starts publishing into `/5.0/`, and `/4.0/` keeps the last thing 4.x
-# said, for as long as anyone is still running it.
+# branch and a `versions.json` the theme's selector reads. A push to `master` deploys the
+# series `__version__` names, and nothing else deploys. A series freezes by itself the day
+# `__version__` moves past it: 5.0 starts publishing into `/5.0/`, and `/4.0/` keeps the last
+# thing 4.x said, for as long as anyone is still running it.
+#
+# **`latest` moves only for a released version.** It is the URL the README and PyPI point at,
+# so a `.dev` version publishing into it tells everyone running the *released* package about
+# settings it does not have — measured against 4.1, whose unreleased pages were `/latest/` for
+# the length of its development. A development series is published under its own number and
+# is reachable from the version selector; `latest` stays where the last release put it.
 #
 # Pages must be served from the **`gh-pages` branch**, not from "GitHub Actions". With the
 # wrong source this workflow goes green, `mike` pushes, and the site never changes — no error
@@ -67,16 +71,22 @@ jobs:
           version=$(python -c "import re, pathlib; print(re.search(r\"__version__ = '(.+?)'\", pathlib.Path('src/django_aiogram/__init__.py').read_text()).group(1))")
           series=$(python -c "import sys; print('.'.join(sys.argv[1].split('.')[:2]))" "$version")
           echo "series=$series" >> "$GITHUB_OUTPUT"
-          echo "publishing $version as $series, aliased latest"
+          case "$version" in
+            *dev*) alias='' ;;
+            *) alias='latest' ;;
+          esac
+          echo "alias=$alias" >> "$GITHUB_OUTPUT"
+          echo "publishing $version as $series${alias:+, aliased $alias}"
 
       - name: Deploy
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
-          mike deploy --push --update-aliases '${{ steps.series.outputs.series }}' latest
+          mike deploy --push --update-aliases '${{ steps.series.outputs.series }}' ${{ steps.series.outputs.alias }}
           # the redirect at the site root. Without it `/django-aiogram/` is a 404 — and that
-          # is the URL `project.urls.Documentation` points PyPI at
+          # is the URL `project.urls.Documentation` points PyPI at. Set whatever this push
+          # published, because `latest` is where the last release left it
           mike set-default --push latest
 
       # Pages serves the branch asynchronously, so this waits rather than asserting once. It
