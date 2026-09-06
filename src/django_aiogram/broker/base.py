@@ -22,7 +22,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django_aiogram.broker.exceptions import BrokerDependencyError
 from django_aiogram.broker.models import Liveness, Taken
 from django_aiogram.config.defaults import DEFAULTS
-from django_aiogram.config.settings import SETTINGS_NAME, conf
+from django_aiogram.config.settings import conf, setting_label
 
 __all__ = ('REQUIRED', 'Broker')
 
@@ -97,8 +97,8 @@ class Broker(ABC):
         """
         raw = cls.option(cls.CALL_TIMEOUT_OPTION, settings)
         refused = (
-            f"{SETTINGS_NAME}['{cls.CALL_TIMEOUT_OPTION}'] is {raw!r}, and a call deadline has to "
-            f'be a positive, finite number of seconds.'
+            f'{setting_label(settings, cls.CALL_TIMEOUT_OPTION)} is {raw!r}, and a call deadline '
+            f'has to be a positive, finite number of seconds.'
         )
         try:
             timeout = float(str(raw))
@@ -174,7 +174,7 @@ class Broker(ABC):
         value = resolved.get(key, None if default is REQUIRED else default)
         if default is REQUIRED and (value is None or (isinstance(value, str) and not value.strip())):
             msg = (
-                f"{cls.__name__} needs {SETTINGS_NAME}['{key}'], which is not set. "
+                f'{cls.__name__} needs {setting_label(settings, key)}, which is not set. '
                 'It has no default: this transport cannot say where to put a message without it.'
             )
             raise ImproperlyConfigured(msg)

@@ -16,7 +16,7 @@ from django.utils.module_loading import import_string
 
 from django_aiogram.broker.base import Broker
 from django_aiogram.broker.exceptions import BrokerDependencyError, BrokerNotConfiguredError
-from django_aiogram.config.settings import SETTINGS_NAME, conf
+from django_aiogram.config.settings import SETTINGS_NAME, conf, setting_label
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
@@ -64,9 +64,10 @@ def broker_class(settings: 'Mapping[str, Any] | None' = None, *, verify_driver: 
     Every shipped broker imports its driver lazily, so the import below succeeds without it.
     """
     resolved = conf if settings is None else settings
+    named = setting_label(settings, 'BROKER')
     path = str(resolved['BROKER'] or '').strip()
     if not path:
-        msg = f"{SETTINGS_NAME}['BROKER'] is empty, so no transport is chosen."
+        msg = f'{named} is empty, so no transport is chosen.'
         raise BrokerNotConfiguredError(msg)
     if path in SHIPPED and verify_driver:
         # verified before the import, which is belt to `verify`'s braces. Every shipped
@@ -82,10 +83,10 @@ def broker_class(settings: 'Mapping[str, Any] | None' = None, *, verify_driver: 
     # than `ImportError` -- see `producer.from_settings.build_storage` for the same catch and the
     # same reason
     except (ImportError, ValueError) as error:
-        msg = f"{SETTINGS_NAME}['BROKER'] is {path!r}, which cannot be imported: {error}"
+        msg = f'{named} is {path!r}, which cannot be imported: {error}'
         raise BrokerNotConfiguredError(msg) from error
     if not (isinstance(resolved, type) and issubclass(resolved, Broker)):
-        msg = f"{SETTINGS_NAME}['BROKER'] is {path!r}, which is not a Broker subclass."
+        msg = f'{named} is {path!r}, which is not a Broker subclass.'
         raise BrokerNotConfiguredError(msg)
     return resolved
 

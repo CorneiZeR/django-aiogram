@@ -6,10 +6,13 @@ wrong value or the wrong origin, every finding, every queue and every event-log 
 the wrong bot.
 """
 
+from typing import ClassVar
+
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 
+from django_aiogram.broker.base import Broker
 from django_aiogram.config import bots
 from django_aiogram.config.bots import env_prefix
 from django_aiogram.config.checks import check_settings
@@ -237,6 +240,43 @@ def test_a_reset_is_taken_under_the_lock_records_are_built_under(monkeypatch):
     monkeypatch.setattr(bots._registry, '_lock', Watched())
     bots.reset()
     assert taken, 'reset() runs outside the lock the records are built under'
+
+
+class BrokerWithADeadline(Broker):
+    """A transport that declares a deadline and nothing else, for the message below."""
+
+    CALL_TIMEOUT_OPTION: ClassVar[str] = 'CUSTOM_TIMEOUT'
+    OPTIONS: ClassVar[dict] = {'CUSTOM_TIMEOUT': 10}
+
+
+def test_a_refusal_raised_below_the_checks_names_the_dict_it_came_from():
+    """`E047` quotes the transport's own refusal, and that text is built where no label is.
+
+    The outer finding was labelled from the bot and the sentence inside it still said
+    `TELEGRAM_BOT_DEFAULTS` — measured, on a section that holds the `BROKER` and a shared dict
+    that holds nothing. So a reader was told to look in a dict that has no such key.
+    """
+    with override_settings(
+        TELEGRAM_BOT_DEFAULTS={},
+        TELEGRAM_BOTS={'support': {'TOKEN': TOKEN, 'BROKER': 'no.such.Broker'}},
+    ):
+        reported = [message for message in check_settings() if message.id == 'django_aiogram.E047']
+        assert len(reported) == 1, [message.msg for message in reported]
+        assert 'TELEGRAM_BOT_DEFAULTS' not in reported[0].msg, reported[0].msg
+        assert reported[0].msg.count("TELEGRAM_BOTS['support']['BROKER']") == 2, reported[0].msg
+
+
+def test_a_transport_refusing_its_deadline_names_the_dict_it_came_from():
+    """The same seam from the other call site: a deadline is read and refused in the broker.
+
+    Two sites rather than one because each builds its own sentence, and the first of them was
+    right while the second was wrong.
+    """
+    with override_settings(TELEGRAM_BOTS={'support': {'TOKEN': TOKEN, 'CUSTOM_TIMEOUT': 0}}):
+        support = bots.record('support')
+        with pytest.raises(ImproperlyConfigured) as refused:
+            BrokerWithADeadline.call_timeout(support)
+        assert str(refused.value).startswith("TELEGRAM_BOTS['support']['CUSTOM_TIMEOUT'] is")
 
 
 def test_a_record_does_not_print_its_token():

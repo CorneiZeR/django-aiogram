@@ -208,6 +208,21 @@ class Settings(Mapping[str, Any]):
 conf = Settings()
 
 
+def setting_label(settings: Mapping[str, Any] | None, key: str) -> str:
+    """Name a setting the way the mapping it came from would name it.
+
+    A bot's resolved settings know which dict each value was read from; `conf` knows only that
+    it was one of the shared ones. Refusals raised below the checks -- a broker that cannot be
+    imported, a deadline that cannot be one -- are quoted inside a finding, so a message built
+    from the package-wide name alone sends the reader to a dict that may hold nothing.
+
+    Asked by attribute rather than by type: this module sits below
+    :mod:`django_aiogram.config.bots`, and importing it here would be a cycle.
+    """
+    label = getattr(settings, 'label', None)
+    return label(key) if callable(label) else f"{SETTINGS_NAME}['{key}']"
+
+
 @dataclass(frozen=True)
 class TakeCeiling:
     """How long a blocking take may actually wait, and which settings decided that.
