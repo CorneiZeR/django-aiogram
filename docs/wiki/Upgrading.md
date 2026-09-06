@@ -14,12 +14,15 @@ A project running one bot is then done: the dict it renamed configures a bot cal
 and every setting keeps its meaning and its default.
 
 To run more than one, add a section per bot under `TELEGRAM_BOTS` — see
-**[Settings](Settings.md)**. What a section leaves out it inherits, and the settings in
-*Which processes run the bot* and every `EVENT_LOG_*` one stay shared: they configure the
-process, not a bot, and `E053` refuses a section that names them.
+**[Settings](Settings.md)**. What a section leaves out it inherits, and `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `EVENT_LOG` and every `EVENT_LOG_*` one stay shared:
+they configure the process, not a bot, and `E053` refuses a section that names them.
+`ENABLED` is not one of them, so a single bot can still be switched off on its own.
 
-If you ship a `Broker` of your own that overrides `call_timeout`, it now takes the settings to
-read from — `def call_timeout(cls, settings=None)` — and passes them to `super()`.
+If you ship a `Broker` of your own, `option`, `call_timeout` and `broker_class` now take the
+settings to read from. Calling them is unchanged — the argument is optional and falls back to
+the shared settings. An **override** is not: `def option(cls, key, settings=None)` and
+`def call_timeout(cls, settings=None)`, each passing `settings` on to `super()`. An override
+that drops it reads the shared settings for every bot, without failing.
 
 # From 4.0 to 4.1
 

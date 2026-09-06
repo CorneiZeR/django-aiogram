@@ -32,9 +32,10 @@ BOTS_SETTINGS_NAME = 'TELEGRAM_BOTS'
 #: resolves to
 DEFAULT_ALIAS = 'default'
 
-#: an alias is uppercased into an environment variable and will name a queue, so it is held to
-#: what both can carry
-_ALIAS = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]*$')
+#: an alias is uppercased into an environment variable, so the set it is drawn from has to
+#: survive that: `foo` and `FOO` are one variable, and so are `foo-bar` and `foo_bar`. Held to
+#: what uppercasing cannot merge, which is lower case and underscores
+_ALIAS = re.compile(r'^[a-z0-9][a-z0-9_]*$')
 
 #: enough of a token to read the identity out of it and to refuse a string that is not one.
 #: Deliberately not the exact shape Telegram issues: the secret half has changed length before
@@ -48,8 +49,12 @@ def parse_bot_id(token: object) -> int | None:
 
 
 def env_prefix(alias: str) -> str:
-    """Return the environment prefix one bot's settings are read under."""
-    return f'{ENV_PREFIX}{alias.upper().replace("-", "_")}_'
+    """Return the environment prefix one bot's settings are read under.
+
+    Injective over the aliases :data:`_ALIAS` allows, which is the whole reason that pattern is
+    as narrow as it is: two aliases sharing a prefix would have one variable configure both.
+    """
+    return f'{ENV_PREFIX}{alias.upper()}_'
 
 
 @dataclass(frozen=True)
@@ -112,7 +117,12 @@ def sections() -> Mapping[str, Any]:
         raise ImproperlyConfigured(msg)
     for alias, section in raw.items():
         if not isinstance(alias, str) or not _ALIAS.match(alias):
-            msg = f'{BOTS_SETTINGS_NAME} has an alias that is not a name: {alias!r}.'
+            msg = (
+                f'{BOTS_SETTINGS_NAME} has an alias that is not a name: {alias!r}. '
+                'An alias is lower case letters, digits and underscores, starting with a letter '
+                'or a digit: it is uppercased into an environment variable, and anything wider '
+                'would let two bots share one.'
+            )
             raise ImproperlyConfigured(msg)
         if not isinstance(section, Mapping):
             msg = f'{BOTS_SETTINGS_NAME} has a section that is not a mapping: {alias!r} holds {type(section).__name__}.'

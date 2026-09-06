@@ -15,17 +15,20 @@
   Telegram. That is what the queue, the event log and the logs will name it by: an alias is a
   name a project may change and a token is a credential it may rotate.
 
-  Settings the process owns rather than a bot -- `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`
-  and every `EVENT_LOG_*` one -- may not be set per bot. There is one writer thread and one
+  Settings the process owns rather than a bot -- `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`,
+  `EVENT_LOG` and every `EVENT_LOG_*` one -- may not be set per bot. `ENABLED` is not one of
+  them: a bot may be switched off on its own. There is one writer thread and one
   in-flight list per process, so a per-bot value could only mean whichever bot resolved last
   wins. `E053` reports the attempt.
 
   New check ids: `E050`-`E054` and `W010`. `W003` now asks the shared dict only, and `W010`
   asks each section, so one typo is one finding rather than one per bot.
 
-- **`Broker.option` and `Broker.call_timeout` take the settings to read from.** Both default
-  to the shared ones, so a transport of your own keeps working unchanged unless it *overrides*
-  `call_timeout`, which must now accept the argument and pass it to `super()`.
+- **`Broker.option`, `Broker.call_timeout` and `broker_class` take the settings to read
+  from.** The argument is optional and falls back to the shared settings, so *calling* any of
+  the three is unchanged. *Overriding* `option` or `call_timeout` is not: the override has to
+  accept the argument and pass it on, or the bot's own settings are silently replaced by the
+  shared ones.
 
 ## 4.1.0 - 2026-09-06
 

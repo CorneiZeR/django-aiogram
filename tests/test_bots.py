@@ -11,7 +11,9 @@ from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 
 from django_aiogram.config import bots
+from django_aiogram.config.bots import env_prefix
 from django_aiogram.config.checks import check_settings
+from django_aiogram.config.settings import ENV_PREFIX
 
 TOKEN = '123456:AAHfixture-token-for-tests-0000000'
 OTHER = '654321:BBHfixture-token-for-tests-0000000'
@@ -150,8 +152,25 @@ def test_an_unreadable_bots_dict_is_a_finding_and_not_a_traceback():
     ],
 )
 def test_a_section_that_could_not_be_one_refuses(configured):
-    """An alias is uppercased into a variable and will name a queue, so it is held to both."""
+    """A key that could not be an alias, and a section that could not be settings."""
     with override_settings(TELEGRAM_BOTS=configured), pytest.raises(ImproperlyConfigured):
+        bots.records()
+
+
+@pytest.mark.parametrize('pair', [('foo', 'FOO'), ('foo_bar', 'foo-bar')])
+def test_two_aliases_cannot_share_one_environment_prefix(pair):
+    """The prefix is the alias uppercased, and uppercasing merges names that differ.
+
+    Left alone, `DJANGO_AIOGRAM_FOO_TOKEN` would configure both `foo` and `FOO` — one variable
+    quietly deciding for two bots. The refusal is on the alias rather than on the collision,
+    because a pair that collides today is one a project can write either half of tomorrow.
+    """
+    legal, refused = pair
+    assert bots._ALIAS.match(legal), f'{legal!r} is meant to be a usable alias'
+    assert not bots._ALIAS.match(refused), f'{refused!r} is meant to be refused'
+    # what the refusal buys: under a wider pattern these two are one variable
+    assert env_prefix(legal) == f'{ENV_PREFIX}{refused.upper().replace("-", "_")}_'
+    with override_settings(TELEGRAM_BOTS={refused: {'TOKEN': TOKEN}}), pytest.raises(ImproperlyConfigured):
         bots.records()
 
 
