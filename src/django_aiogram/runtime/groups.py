@@ -41,7 +41,6 @@ class RuntimeGroup:
         #: have done: they agree on everything a group reads, which is what put them here
         self.settings = settings
         self._broker: Broker | None = None
-        self._lock = threading.Lock()
 
     @property
     def broker(self) -> 'Broker':
@@ -53,7 +52,13 @@ class RuntimeGroup:
         held = overriding()
         if held is not None:
             return held
-        with self._lock:
+        # the registry's lock rather than one of this group's own, and that is what closes a
+        # window rather than tidiness: `group_for` hands a group out and `close_groups` clears
+        # the registry, so a build guarded only by this instance can put a transport into a
+        # group nothing holds any more -- a connection no later shutdown can reach. One lock
+        # over the choice *and* the build is what the broker registry has always done, and the
+        # cost is the same: an uncontended acquisition on a path that ends in a socket
+        with _lock:
             if self._broker is None:
                 resolved = broker_class(self.settings)
                 resolved.verify()
@@ -61,11 +66,15 @@ class RuntimeGroup:
             return self._broker
 
     def close(self) -> None:
-        """Release what this group holds. Safe to call when it holds nothing."""
-        with self._lock:
+        """Release what this group holds. Safe to call when it holds nothing.
+
+        Under the registry's lock, so a build cannot be part-way through: the transport this
+        clears is the one that was there, and a build waiting behind it starts from nothing.
+        """
+        with _lock:
             current, self._broker = self._broker, None
-        if current is not None:
-            current.close()
+            if current is not None:
+                current.close()
 
     def __repr__(self) -> str:
         """Name the group by its profile, which is the only part worth printing."""
@@ -73,7 +82,9 @@ class RuntimeGroup:
 
 
 _groups: dict[Profile, RuntimeGroup] = {}
-_lock = threading.Lock()
+#: one lock over choosing a group, building its transport and closing it. Reentrant because
+#: `close_groups` holds it while a group's `close` reaches back through it
+_lock = threading.RLock()
 #: armed with the first group rather than per group, so a process that builds five closes them
 #: with one callback. `close_groups` is idempotent either way
 _exit_hook_armed = False
@@ -114,11 +125,11 @@ def close_groups() -> None:
     with _lock:
         current = list(_groups.values())
         _groups.clear()
-    for group in current:
-        group.close()
+        for group in current:
+            group.close()
 
 
-@receiver(setting_changed)
+@receiver(setting_changed, dispatch_uid='django_aiogram.runtime.groups')
 def _forget_the_groups(**kwargs: 'Any') -> None:
     """Rebuild on the next ask when the settings a group was built from change.
 

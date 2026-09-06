@@ -119,6 +119,8 @@ class TelegramBot(RouterShortcuts):
         self._bot: Bot | None = None
         #: what the decorators register on, and the same object for every bot in this process
         self._router = process.router()
+        #: the process generation the aiogram `Bot` above was built at, if it has been
+        self._built_at: int | None = None
         #: sends this bot scheduled, so shutdown drains its own work only
         # the call behind each task, so shutdown can say what it canceled
         self._sends: dict[asyncio.Task[None], Outbound] = {}
@@ -223,6 +225,15 @@ class TelegramBot(RouterShortcuts):
     @property
     def bot(self) -> Bot:
         """The aiogram ``Bot``, which is the first thing that needs a token."""
+        # a cached `Bot` holds a token and a session, and both can go stale under it: a
+        # settings change moves the token, and closing the process's session leaves this one
+        # holding a closed socket. The generation says when either happened.
+        #
+        # Only one this class built, which `_built_at` is what says: a caller that planted a
+        # bot of its own -- every double in the suite does -- keeps it, since nothing here
+        # knows what it was built from or how to build another
+        if self._bot is not None and self._built_at is not None and self._built_at != process.generation():
+            self._bot = None
         if self._bot is None:
             token = self.settings['TOKEN']
             if not token:
@@ -232,6 +243,7 @@ class TelegramBot(RouterShortcuts):
                 if self._bot is None:
                     # the session is the process's: nothing here configures it, and a connector
                     # each is what would make a bot expensive
+                    self._built_at = process.generation()
                     self._bot = Bot(
                         token=token,
                         default=build_default_properties(self.settings),

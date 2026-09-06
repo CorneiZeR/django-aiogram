@@ -100,7 +100,7 @@ class Bots(Mapping[str, 'TelegramBot']):
 bots = Bots()
 
 
-@receiver(setting_changed)
+@receiver(setting_changed, dispatch_uid='django_aiogram.runtime.registry')
 def _forget_the_bots(**kwargs: Any) -> None:
     """Rebuild on the next ask when either dict a bot is configured in changes."""
     if kwargs.get('setting') in {SETTINGS_NAME, BOTS_SETTINGS_NAME}:

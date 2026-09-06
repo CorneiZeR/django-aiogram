@@ -52,13 +52,20 @@ def _hashable(value: object) -> object:
     where the container is ordered and sorted where it is not, so two mappings written in
     different orders are one profile -- they resolve to the same configuration, and the whole
     point of computing this is that equal values group together.
+
+    **The type travels with the value**, which is not decoration: `True == 1` and
+    `hash(True) == hash(1)` in Python, so without it two settings that read differently would
+    key the same group -- and the group keeps the settings of whichever bot built it, so the
+    other bot's would be the ones nothing read. The same for a list against a tuple of the
+    same items. Where the two really are the same configuration this costs a connection, which
+    is the side this errs on everywhere.
     """
     if isinstance(value, dict):
-        return tuple(sorted((str(key), _hashable(item)) for key, item in value.items()))
+        return ('dict', tuple(sorted((str(key), _hashable(item)) for key, item in value.items())))
     if isinstance(value, (list, tuple)):
-        return tuple(_hashable(item) for item in value)
+        return (type(value).__name__, tuple(_hashable(item) for item in value))
     if isinstance(value, (set, frozenset)):
-        return tuple(sorted(repr(_hashable(item)) for item in value))
+        return (type(value).__name__, tuple(sorted(repr(_hashable(item)) for item in value)))
     try:
         hash(value)
     except TypeError:
@@ -66,7 +73,7 @@ def _hashable(value: object) -> object:
         # setting it may not even read. Identity is the honest answer: the same object groups
         # with itself and nothing else
         return f'<unhashable {type(value).__name__} {id(value)}>'
-    return value
+    return (type(value).__name__, value)
 
 
 @dataclass(frozen=True)

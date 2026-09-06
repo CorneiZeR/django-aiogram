@@ -17,6 +17,8 @@ kilobytes and one that costs a pool.
 Everything is built on first use and rebuilt after a close, so nothing here runs at import.
 """
 
+import asyncio
+import logging
 import threading
 from typing import TYPE_CHECKING, Any
 
@@ -35,12 +37,36 @@ if TYPE_CHECKING:
     #: what the two closers hand back: the work, for a caller that owns a loop to run it on
     Closing = Coroutine[Any, Any, None] | None
 
+logger = logging.getLogger('django_aiogram')
+
 __all__ = ('close_session', 'close_storage', 'dispatcher', 'router', 'session')
 
 _lock = threading.RLock()
 _router: Router | None = None
 _dispatcher: Dispatcher | None = None
 _session: 'AiohttpSession | None' = None
+#: dispatchers a settings change retired, kept until something with a loop can close their
+#: stores. Dropping one without closing it leaks whatever its store holds -- a `RedisStorage`
+#: owns an async client nothing else releases
+_retired: list[Dispatcher] = []
+#: bumped whenever what a bot was built from moves: the settings changed, or the session it
+#: holds was closed. A `TelegramBot` compares it against the one it built its aiogram `Bot` at
+#: and rebuilds when they differ, which is what keeps a cached `Bot` from outliving its token
+#: or its session
+_generation = 0
+
+
+def generation() -> int:
+    """Return the number that changes whenever a cached aiogram ``Bot`` has gone stale."""
+    with _lock:
+        return _generation
+
+
+def _moved_on() -> None:
+    """Say that anything built from the process's objects or its settings is now stale."""
+    global _generation  # noqa: PLW0603 - one counter per process, like what it describes
+    with _lock:
+        _generation += 1
 
 
 def router() -> Router:
@@ -128,39 +154,71 @@ def holding() -> bool:
         return _dispatcher is not None or _session is not None
 
 
-def close_storage() -> 'Closing':
-    """Return the coroutine that closes the store, and forget the dispatcher, or ``None``.
+async def _close_each(stores: list[Any]) -> None:
+    """Close every store handed over, and let none of them stop the rest.
 
-    A coroutine rather than the closing itself: the store is async and the caller owns the
-    loop it has to be closed on. Handing the work back is what keeps this module free of one.
+    A shutdown reaches this once, so a store that raises on the way out must not take the
+    others with it -- the one that raised is the one nobody hears about otherwise.
     """
-    global _dispatcher
+    # gathered rather than closed in turn, and `return_exceptions` is the point of it: a
+    # shutdown reaches this once, so a store that raises must not take the rest with it --
+    # the one that raised is then the one nobody hears about
+    outcomes = await asyncio.gather(*(store.close() for store in stores), return_exceptions=True)
+    for outcome in outcomes:
+        if isinstance(outcome, BaseException):
+            logger.error('a storage refused to close', exc_info=outcome)
+
+
+def close_storage() -> 'Closing':
+    """Return the coroutine that closes every store this process built, or ``None``.
+
+    A coroutine rather than the closing itself: a store is async and the caller owns the loop
+    it has to be closed on. Handing the work back is what keeps this module free of one.
+
+    Every store, not only the current one: a settings change retires a dispatcher without
+    closing it -- closing needs a loop, and the change may land on a thread that has none --
+    so the retired ones wait here until something that has one comes through.
+    """
+    global _dispatcher  # noqa: PLW0603 - one dispatcher per process, which is the subject here
     with _lock:
-        current, _dispatcher = _dispatcher, None
-    return None if current is None else current.storage.close()
+        held = [*_retired, _dispatcher] if _dispatcher is not None else list(_retired)
+        stores = [dispatcher.storage for dispatcher in held]
+        _retired.clear()
+        _dispatcher = None
+    _moved_on()
+    return _close_each(stores) if stores else None
 
 
 def close_session() -> 'Closing':
-    """Return the coroutine that closes the session, and forget it, or ``None``."""
+    """Return the coroutine that closes the session, and forget it, or ``None``.
+
+    Every bot in the process holds this session, so closing it retires each of their aiogram
+    ``Bot`` objects too -- which is what the generation says, and what makes a sibling bot
+    build a working one rather than reach for a closed socket.
+    """
     global _session
     with _lock:
         current, _session = _session, None
+    _moved_on()
     return None if current is None else current.close()
 
 
-@receiver(setting_changed)
+@receiver(setting_changed, dispatch_uid='django_aiogram.runtime.process')
 def _forget_the_dispatcher(**kwargs: Any) -> None:
     """Drop the dispatcher when the settings its store was built from change.
 
     The router is kept: it holds the handlers a project registered at startup, and dropping it
     would leave a suite that changes one setting with a bot that answers nothing.
 
-    Not closed, only forgotten. Closing needs a loop, and this runs wherever
+    Not closed here, only retired. Closing needs a loop, and this runs wherever
     ``override_settings`` was entered -- which may be a request thread with no loop of its own.
-    A store dropped here is one nothing is reading; the process's own shutdown closes what it
-    still holds.
+    So it is kept for :func:`close_storage`, which is reached by something that has one: a
+    dispatcher dropped and forgotten takes its store's connections with it.
     """
     global _dispatcher  # noqa: PLW0603 - as above
     if kwargs.get('setting') in {SETTINGS_NAME, BOTS_SETTINGS_NAME}:
         with _lock:
+            if _dispatcher is not None:
+                _retired.append(_dispatcher)
             _dispatcher = None
+        _moved_on()

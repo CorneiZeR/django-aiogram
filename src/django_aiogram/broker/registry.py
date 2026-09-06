@@ -170,7 +170,7 @@ def close_broker() -> None:
     close_groups()
 
 
-@receiver(setting_changed)
+@receiver(setting_changed, dispatch_uid='django_aiogram.broker.registry')
 def _forget_the_broker(**kwargs: 'Any') -> None:
     """Rebuild on the next ask when the settings change, as the client does.
 

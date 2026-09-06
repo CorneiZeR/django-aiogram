@@ -154,6 +154,82 @@ def test_changing_the_settings_drops_the_groups():
     assert groups.live_groups() == (), 'leaving the block left a transport open'
 
 
+def test_closing_one_bot_leaves_a_sibling_with_a_working_one():
+    """The session and the store are the process's, so closing them retires every cached bot.
+
+    Measured before this was handled: two bots share one session, one closes it, and the other
+    keeps a `Bot` holding a socket nothing can send through — a failure at the next send, in a
+    bot nobody touched.
+    """
+    with override_settings(
+        TELEGRAM_BOT_DEFAULTS={'BROKER': MEMORY, 'FSM_STORAGE': 'memory'},
+        TELEGRAM_BOTS={'default': {'TOKEN': TOKEN}, 'support': {'TOKEN': OTHER}},
+    ):
+        first, second = bots['default'], bots['support']
+        closed = first.bot.session
+        assert second.bot.session is closed, 'the case needs them sharing one to say anything'
+
+        first.close()
+
+        assert second.bot.session is not closed, 'a sibling kept the closed session'
+        assert second.bot.token == OTHER, 'and it has to be the same bot, rebuilt'
+
+
+def test_a_settings_change_rebuilds_the_bot_it_configured():
+    """A cached aiogram `Bot` holds the token it was built with, and settings move under it.
+
+    Measured before this was handled: the default bot answered with the token from the block
+    that had already ended — so a send went out as the wrong bot, which is the failure this
+    whole milestone exists to make impossible.
+    """
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'BROKER': MEMORY, 'TOKEN': TOKEN}):
+        assert bots['default'].bot.token == TOKEN
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'BROKER': MEMORY, 'TOKEN': OTHER}):
+        assert bots['default'].bot.token == OTHER, 'the bot kept the token of a block that ended'
+
+
+def test_a_retired_dispatcher_is_still_closed():
+    """A settings change drops a dispatcher, and its store owns connections nothing else frees.
+
+    It cannot be closed where the change lands — that may be a request thread with no loop —
+    so it is kept until something with one comes through, which is what `close()` is.
+    """
+    from django_aiogram.runtime import process
+
+    closed = []
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'BROKER': MEMORY, 'FSM_STORAGE': 'memory'}):
+        store = bots['default'].dispatcher.storage
+        original = store.close
+
+        async def tracking():
+            closed.append(True)
+            await original()
+
+        store.close = tracking
+        assert process._dispatcher is not None
+
+    # leaving the block retires it; nothing has closed it yet
+    assert closed == [], 'the store was closed on a thread that may have no loop'
+    assert process._retired, 'the retired dispatcher was dropped rather than kept'
+
+    bots['default'].close()
+    assert closed == [True], 'the retired store was never closed'
+
+
+def test_a_value_that_reads_differently_is_a_different_profile():
+    """`True` and `1` are equal in Python and are not the same thing written down.
+
+    The group keeps the settings of whichever bot built it, so two configurations sharing one
+    means the second bot's values are the ones nothing reads. Splitting where they may be the
+    same costs a connection, which is the side this errs on everywhere.
+    """
+    with override_settings(
+        TELEGRAM_BOT_DEFAULTS={'BROKER': MEMORY},
+        TELEGRAM_BOTS={'a': {'TOKEN': TOKEN, 'ALLOW_PICKLE': True}, 'b': {'TOKEN': OTHER, 'ALLOW_PICKLE': 1}},
+    ):
+        assert profile_of(configured.record('a')) != profile_of(configured.record('b'))
+
+
 def test_the_default_bot_is_the_one_the_package_exports():
     """`django_aiogram.bot` is where a project's handlers are registered and what shutdown closes."""
     with override_settings(TELEGRAM_BOTS={'default': {'TOKEN': TOKEN}, 'support': {'TOKEN': OTHER}}):
