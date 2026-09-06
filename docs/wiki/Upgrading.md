@@ -7,8 +7,9 @@ at a time: each covers a single hop and assumes the ones below it are done.
 # From 4.1 to 5.0
 
 **One required step: rename `TELEGRAM_BOT` to `TELEGRAM_BOT_DEFAULTS`.** Nothing reads the old
-name, so a project that keeps it runs with no token and no transport. `manage.py check` reports
-it as `E050` rather than leaving you to find out at the first send.
+name, so every value left in it is ignored and whatever it configured falls back to the
+environment or to this package's defaults — a project that kept its token there has none.
+`manage.py check` reports it as `E050` rather than leaving you to find out at the first send.
 
 A project running one bot is then done: the dict it renamed configures a bot called `default`,
 and every setting keeps its meaning and its default.

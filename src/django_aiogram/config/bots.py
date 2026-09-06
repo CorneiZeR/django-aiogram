@@ -185,8 +185,14 @@ class _Registry:
         return cache
 
     def reset(self) -> None:
-        """Drop the cache, so the next read picks up changed settings."""
-        self._cache = None
+        """Drop the cache, so the next read picks up changed settings.
+
+        Under the same lock `all()` resolves beneath. Without it a reset landing between the
+        read of the settings and the assignment is lost: the records built from the settings
+        that have just changed are stored anyway, and every later read is served from them.
+        """
+        with self._lock:
+            self._cache = None
 
 
 _registry = _Registry()

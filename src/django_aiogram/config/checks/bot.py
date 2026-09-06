@@ -313,9 +313,10 @@ def _settings_one_process_decides(_key: str, _record: BotRecord) -> list[Problem
 def _the_dict_5_0_replaced(_key: str, _record: BotRecord) -> list[Problem]:
     """Name the setting 5.0 split in two, where a project still holds the old one.
 
-    Kept as a rule rather than as silence: the old dict configured the bot, so a project that
-    upgrades without renaming it would run entirely on defaults -- no token, no transport -- and
-    nothing else would say why.
+    Kept as a rule rather than as silence: the old dict configured the bot, so every value left
+    in it is now ignored and whatever it configured falls back to the environment or to this
+    package's defaults. Reported whether or not the new dicts are also present, because a value
+    sitting in a dict nothing reads is a value the project believes is in effect.
     """
     if getattr(django_settings, REMOVED_SETTINGS_NAME, None) is None:
         return []

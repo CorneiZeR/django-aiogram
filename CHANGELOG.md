@@ -9,7 +9,8 @@
   bot it configures is called `default`. What a section leaves out is inherited from the
   defaults, by key presence rather than by a value being non-null -- so `RATE_LIMIT: None`
   means "this bot has no limits" and not "inherit". `E050` reports the old name rather than
-  letting a project run on defaults with no token.
+  leaving it to be read as configuration: the dict is ignored, so whatever a project put
+  there has to move, and a project that put its token there has none.
 
   A bot is identified by the number in front of the colon in its token, read without asking
   Telegram. That is what the queue, the event log and the logs will name it by: an alias is a

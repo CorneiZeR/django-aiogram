@@ -125,7 +125,11 @@ def test_two_sections_inheriting_one_token_are_reported_against_the_defaults():
 
 
 def test_the_dict_4_x_used_is_reported_rather_than_ignored():
-    """A project that kept `TELEGRAM_BOT` would run on defaults alone, and nothing else would say why."""
+    """Every value left in the old dict is ignored, and nothing else would say so.
+
+    Reported even here, where the new dict carries a working token: the finding is about a
+    dict nothing reads, not about the configuration being unusable.
+    """
     with override_settings(TELEGRAM_BOT={'TOKEN': TOKEN}, TELEGRAM_BOT_DEFAULTS={'TOKEN': TOKEN}):
         reported = [message for message in check_settings() if message.id == 'django_aiogram.E050']
         assert len(reported) == 1
@@ -203,6 +207,36 @@ def test_changing_the_settings_resolves_the_bots_again():
         assert bots.aliases() == ('a',)
     with override_settings(TELEGRAM_BOTS={'b': {'TOKEN': TOKEN}}):
         assert bots.aliases() == ('b',)
+
+
+def test_a_reset_is_taken_under_the_lock_records_are_built_under(monkeypatch):
+    """A reset landing mid-resolution must wait, not be overwritten by what was already read.
+
+    `all()` reads the settings and stores what it built from them under one lock. A `reset()`
+    outside that lock can land between the two and be lost: the records built from the settings
+    that have just changed are stored anyway, and every later read is served from them until
+    something else resets.
+
+    Asserted on the lock rather than by racing two threads. The race is real and its window is
+    one assignment wide, so a threaded case passes whether or not the fix is there — measured:
+    written that way first, it passed with the lock taken out.
+    """
+    taken = []
+    real = bots._registry._lock
+
+    class Watched:
+        """Stand in for the lock, recording that it was entered."""
+
+        def __enter__(self):
+            taken.append(True)
+            return real.__enter__()
+
+        def __exit__(self, *unused):
+            return real.__exit__(*unused)
+
+    monkeypatch.setattr(bots._registry, '_lock', Watched())
+    bots.reset()
+    assert taken, 'reset() runs outside the lock the records are built under'
 
 
 def test_a_record_does_not_print_its_token():
