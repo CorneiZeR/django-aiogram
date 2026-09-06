@@ -2,7 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    # the integration branch a major is assembled on and the maintenance branch of the
+    # previous series, not only the default one: a merge landing on either produces a state
+    # nothing has run the suite against, since `pull_request` covers the parts and not the
+    # whole
+    # a branch filter is a glob and not a regular expression, so the series branches are
+    # matched by shape: `v4`, `v5`
+    branches: [master, 'release/**', 'v[0-9]*']
   pull_request:
 
 permissions:
