@@ -54,7 +54,7 @@ def decoded_server(monkeypatch):
     return server
 
 
-@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'BLPOP_TIMEOUT': 1})
 def test_blpop_handles_str_payloads(decoded_server):
     decoded_server.rpush(
         'TELEGRAM_BOT_MESSAGE',
@@ -74,7 +74,7 @@ def test_blpop_handles_str_payloads(decoded_server):
     assert handled == [{'chat_id': 4}]
 
 
-@override_settings(TELEGRAM_BOT={'WORKER_NAME': 'tests'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'WORKER_NAME': 'tests'})
 def test_draining_handles_str_payloads(decoded_server):
     decoded_server.rpush(
         'TELEGRAM_BOT_MESSAGE',
@@ -87,7 +87,7 @@ def test_draining_handles_str_payloads(decoded_server):
     assert handled == [{'chat_id': 6}]
 
 
-@override_settings(TELEGRAM_BOT={'WORKER_NAME': 'tests'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'WORKER_NAME': 'tests'})
 def test_draining_pops_atomically(redis_server):
     """Two workers draining the same list must share the messages, not
     duplicate them: every id arrives exactly once across both.
@@ -128,7 +128,7 @@ def test_draining_pops_atomically(redis_server):
     assert redis_server.llen('TELEGRAM_BOT_MESSAGE') == 0
 
 
-@override_settings(TELEGRAM_BOT={})
+@override_settings(TELEGRAM_BOT_DEFAULTS={})
 def test_enqueue_round_trips_through_a_decoded_connection(decoded_server):
     TelegramBot().enqueue(chat_id=1, text='hi')
 
@@ -160,7 +160,7 @@ def test_the_connection_is_built_once_and_reused(monkeypatch):
     monkeypatch.setattr(Redis, 'from_url', classmethod(from_url))
     reset_redis()
 
-    with override_settings(TELEGRAM_BOT={'REDIS_URL': 'redis://localhost:6379/7'}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/7'}):
         first = get_redis()
         assert get_redis() is first, 'a second call built another client'
         assert built == ['redis://localhost:6379/7'], built
@@ -207,7 +207,7 @@ def test_get_reads_the_slot_exactly_once_on_the_fast_path():
     assert holder.get() is sentinel, 'get() re-read the slot and met the reset'
 
 
-@override_settings(TELEGRAM_BOT={'REDIS_URL': 'redis://localhost:6379/0', 'REDIS_TIMEOUT': 7})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0', 'REDIS_TIMEOUT': 7})
 def test_the_shared_client_is_bounded_in_time(monkeypatch):
     """redis-py only started defaulting to a read deadline in 8.0; on the 5.0
     floor a server that stops answering blocks the caller until it is killed."""
@@ -226,7 +226,7 @@ def test_the_shared_client_is_bounded_in_time(monkeypatch):
     assert seen['socket_connect_timeout'] == 7
 
 
-@override_settings(TELEGRAM_BOT={'REDIS_TIMEOUT': 'seven'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_TIMEOUT': 'seven'})
 def test_an_unreadable_deadline_does_not_reach_the_socket():
     """E030 reports it; until then the call must not build a broken client."""
     with pytest.raises((TypeError, ValueError)):
@@ -246,18 +246,18 @@ def test_the_pop_never_outlasts_the_read_deadline(blpop, deadline, expected):
     """A pop asked to wait longer than the socket will wait for an answer turns
     an idle round into an exception, once per round, for ever."""
     settings = {'BLPOP_TIMEOUT': blpop, 'REDIS_TIMEOUT': deadline, 'HEARTBEAT_INTERVAL': 3600}
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         interval = max(1, int(conf['HEARTBEAT_INTERVAL']))
         assert max(1, min(int(conf['BLPOP_TIMEOUT']), interval, read_timeout() - 1)) == expected
 
 
-@override_settings(TELEGRAM_BOT={'REDIS_URL': 'redis://localhost:6379/0', 'REDIS_TIMEOUT': 7})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0', 'REDIS_TIMEOUT': 7})
 def test_the_shared_client_carries_the_read_deadline():
     """`connection_kwargs` is the one place the deadlines are decided."""
     assert connection_kwargs() == {'socket_connect_timeout': 7, 'socket_timeout': 7}
 
 
-@override_settings(TELEGRAM_BOT={'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0'})
 def test_the_shared_client_does_not_retry_commands():
     """Pinned because it is a decision, not an accident.
 
@@ -300,7 +300,7 @@ def test_url_decodes_responses(url, expected):
     assert url_decodes_responses(url) is expected
 
 
-@override_settings(TELEGRAM_BOT={'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0'})
 def test_each_loop_gets_its_own_async_client(redis_server):
     """`redis.asyncio` connections belong to the loop that created them.
 
@@ -328,7 +328,7 @@ def test_each_loop_gets_its_own_async_client(redis_server):
         second.close()
 
 
-@override_settings(TELEGRAM_BOT={'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0'})
 def test_the_registry_does_not_grow_with_every_loop_a_process_runs(redis_server):
     """A weak key does not bound this registry, which is not what it looks like.
 
@@ -382,7 +382,7 @@ def test_the_registry_does_not_grow_with_every_loop_a_process_runs(redis_server)
         survivor.close()
 
 
-@override_settings(TELEGRAM_BOT={'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0'})
 def test_a_setting_change_replaces_the_async_client_on_its_own_loop(redis_server):
     """Invalidation cannot close: `setting_changed` is synchronous, `aclose()` is
     a coroutine, and closing a client that belongs to another loop from another
@@ -399,7 +399,7 @@ def test_a_setting_change_replaces_the_async_client_on_its_own_loop(redis_server
             return await original(*args, **kwargs)
 
         first.aclose = recording
-        with override_settings(TELEGRAM_BOT={'REDIS_URL': 'redis://localhost:6379/1'}):
+        with override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/1'}):
             second = await aget_redis()
         assert second is not first, 'the stale client was handed out again'
         assert closed == [first], 'the stale client was dropped without being closed'
@@ -408,7 +408,7 @@ def test_a_setting_change_replaces_the_async_client_on_its_own_loop(redis_server
     asyncio.run(before_and_after())
 
 
-@override_settings(TELEGRAM_BOT={'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0'})
 def test_asking_for_the_async_client_off_a_loop_says_what_to_call(redis_server):
     """The refusal names the alternative, because a client built off a loop could
     not be used from one.

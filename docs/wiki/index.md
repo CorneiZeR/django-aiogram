@@ -78,7 +78,7 @@ defaults to aiogram's Redis one, and `FSM_STORAGE: 'memory'` is what drops it.
 
     ---
 
-    Every key under `TELEGRAM_BOT`, with its default and the check id that guards it.
+    Every key under `TELEGRAM_BOT_DEFAULTS`, with its default and the check id that guards it.
 
 -   **[Handlers](Handlers.md)**
 

@@ -1,6 +1,6 @@
 """Resolve the package's settings, lazily, from three sources.
 
-A project configures the package through one ``TELEGRAM_BOT`` dict in its Django
+A project configures the package through one ``TELEGRAM_BOT_DEFAULTS`` dict in its Django
 settings. Anything it leaves out is looked for in the environment, and anything
 the environment leaves out comes from :mod:`django_aiogram.config.defaults`.
 
@@ -24,7 +24,7 @@ from django_aiogram.config.defaults import DEFAULTS
 
 logger = logging.getLogger('django_aiogram')
 
-SETTINGS_NAME = 'TELEGRAM_BOT'
+SETTINGS_NAME = 'TELEGRAM_BOT_DEFAULTS'
 ENV_PREFIX = 'DJANGO_AIOGRAM_'
 
 _TRUTHY = frozenset({'1', 'true', 'yes', 'on'})
@@ -138,7 +138,7 @@ class Settings(Mapping[str, Any]):
         resolved at different moments.
 
         The mapping check earns its place: ``key in overrides`` is a membership test, and
-        against a ``TELEGRAM_BOT`` that is a list it answers False for every key — so
+        against a ``TELEGRAM_BOT_DEFAULTS`` that is a list it answers False for every key — so
         without it the whole setting would be *silently* ignored and every value taken
         from the environment or the defaults, including the token. A misconfiguration that
         loudly refuses is worth more than one that runs as though unconfigured.

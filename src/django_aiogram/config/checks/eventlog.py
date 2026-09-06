@@ -132,7 +132,7 @@ def _a_log_the_rename_left_behind(_key: str) -> list[Problem]:
             f'is still on the {alias!r} database, holding rows this release does not read.',
             key='',
             # the subject is a table, not a setting: without this the line renders as
-            # `TELEGRAM_BOT django_redis_aiogram_event is still on …`, which reads as a typo and
+            # `TELEGRAM_BOT_DEFAULTS django_redis_aiogram_event is still on …`, which reads as a typo and
             # sends a reader looking for a setting by that name
             label=OLD_TABLE,
             hint=(

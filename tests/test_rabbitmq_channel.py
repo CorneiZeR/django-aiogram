@@ -41,7 +41,7 @@ def recorded(monkeypatch):
 @pytest.mark.parametrize('timeout', [0.5, 3, 20])
 def test_the_channel_is_built_with_the_deadline_the_ceiling_reports(recorded, timeout):
     """One number, asked for twice: what pika is handed and what the cap is computed from."""
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'RABBITMQ_TIMEOUT': timeout}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'RABBITMQ_TIMEOUT': timeout}):
         instance = rabbitmq.RabbitMQBroker()
         instance._channel()
 
@@ -60,7 +60,7 @@ def test_a_deadline_or_would_read_as_unset_reaches_nobody(recorded, timeout):
     wrote — so this asks for the refusal instead: one reader means the channel cannot be built
     with a deadline `call_ceiling` would not report, and zero is not a deadline.
     """
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'RABBITMQ_TIMEOUT': timeout}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'RABBITMQ_TIMEOUT': timeout}):
         instance = rabbitmq.RabbitMQBroker()
         with pytest.raises(ImproperlyConfigured, match='RABBITMQ_TIMEOUT'):
             instance._channel()

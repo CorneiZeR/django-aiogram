@@ -34,7 +34,7 @@ def an_event(kind=EventKind.OUTBOUND_SENT.value, **kwargs):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_recorded_event_reaches_the_table(paused_writer):
     recorder = EventRecorder()
     recorder.record(an_event(function='send_message', chat_id=7))
@@ -44,7 +44,7 @@ def test_a_recorded_event_reaches_the_table(paused_writer):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_BUFFER_SIZE': 1})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'EVENT_LOG_BUFFER_SIZE': 1})
 def test_a_full_buffer_drops_instead_of_blocking(paused_writer, caplog):
     """A send must never wait on the database. Swapping put_nowait for put
     would make this hang rather than fail, which is the point of the bound."""
@@ -58,7 +58,7 @@ def test_a_full_buffer_drops_instead_of_blocking(paused_writer, caplog):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_the_gap_is_recorded_in_the_feed_not_only_in_the_log(paused_writer):
     """An append-only feed has to be honest about its own holes: a silent gap
     reads as 'nothing happened'."""
@@ -72,7 +72,7 @@ def test_the_gap_is_recorded_in_the_feed_not_only_in_the_log(paused_writer):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_poison_row_costs_only_itself(paused_writer):
     """One value the database refuses must not take the rest of the batch with
     it, which is what the per-row fallback and its savepoint are for."""
@@ -101,7 +101,7 @@ def test_a_poison_row_costs_only_itself(paused_writer):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_the_writer_thread_writes_and_stops():
     recorder = EventRecorder()
     recorder.record(an_event(chat_id=11))
@@ -119,7 +119,7 @@ def test_the_writer_thread_writes_and_stops():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_SYNC': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'EVENT_LOG_SYNC': True})
 def test_sync_mode_writes_on_the_calling_thread():
     """Tests that assert on rows inside a transaction need the write to happen
     on their own connection; the writer thread's would not be rolled back."""
@@ -131,7 +131,7 @@ def test_sync_mode_writes_on_the_calling_thread():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_KINDS': (EventKind.OUTBOUND_FAILED.value,)})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'EVENT_LOG_KINDS': (EventKind.OUTBOUND_FAILED.value,)})
 def test_only_the_named_kinds_are_kept(paused_writer):
     recorder = EventRecorder()
     recorder.record(an_event(EventKind.OUTBOUND_SENT.value))
@@ -143,7 +143,7 @@ def test_only_the_named_kinds_are_kept(paused_writer):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_the_producer_stamps_the_time_not_the_writer(paused_writer):
     """The buffer writes later than the event happened, so auto_now_add would
     record the flush instead."""
@@ -156,7 +156,7 @@ def test_the_producer_stamps_the_time_not_the_writer(paused_writer):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_BUFFER_SIZE': 1})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'EVENT_LOG_BUFFER_SIZE': 1})
 def test_the_very_first_drop_is_reported(paused_writer, caplog):
     """`_reported_at` starting at 0.0 would swallow it wherever `monotonic()`
     is still below the report interval — which on Linux is time since boot, so
@@ -174,7 +174,7 @@ def test_the_very_first_drop_is_reported(paused_writer, caplog):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_writer_that_cannot_start_counts_the_event_it_loses(caplog):
     """Otherwise a later, working writer records no gap for the events that
     were dropped while it could not be created."""
@@ -193,7 +193,7 @@ def test_a_writer_that_cannot_start_counts_the_event_it_loses(caplog):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_flush_waits_for_the_write_not_for_the_queue():
     """The queue empties when the batch is taken, which is before it is written.
     Polling it would return while the insert was still in flight."""
@@ -222,7 +222,7 @@ def test_flush_waits_for_the_write_not_for_the_queue():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_BATCH_SIZE': 2})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'EVENT_LOG_BATCH_SIZE': 2})
 def test_the_batch_size_is_what_one_insert_carries(paused_writer):
     """Otherwise a batch of one is indistinguishable from a batch of hundreds,
     and the setting is a number nobody has ever exercised.
@@ -241,7 +241,7 @@ def test_the_batch_size_is_what_one_insert_carries(paused_writer):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_batch_the_database_refuses_repeatedly_suspends_rather_than_hammers(paused_writer, caplog):
     """Draining and discarding keeps producers from filling up while the
     database is down, and stops the writer retrying a dead server every second."""
@@ -264,7 +264,7 @@ def test_a_batch_the_database_refuses_repeatedly_suspends_rather_than_hammers(pa
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_dropped_connection_is_retried_once_on_a_fresh_one(paused_writer):
     """A management command sees none of the request signals that recycle a
     connection, so the first write after a database restart hits a dead handle."""
@@ -290,7 +290,7 @@ def test_a_dropped_connection_is_retried_once_on_a_fresh_one(paused_writer):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**ON, 'WORKER_NAME': 'web-3'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'WORKER_NAME': 'web-3'})
 def test_every_row_says_which_process_recorded_it(paused_writer):
     """The column is documented as "which container recorded it", and before
     this only the consumer filled it — so the rows that say a message actually
@@ -303,7 +303,7 @@ def test_every_row_says_which_process_recorded_it(paused_writer):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**ON, 'WORKER_NAME': 'web-3'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'WORKER_NAME': 'web-3'})
 def test_a_producer_that_names_itself_keeps_its_name(paused_writer):
     """The consumer records on behalf of the worker it is, so a name already on
     the event is the answer, not something to overwrite."""
@@ -315,7 +315,7 @@ def test_a_producer_that_names_itself_keeps_its_name(paused_writer):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_poison_row_on_the_retry_still_costs_only_itself(paused_writer):
     """The retry needs the same net as the first attempt.
 
@@ -350,7 +350,7 @@ def test_a_poison_row_on_the_retry_still_costs_only_itself(paused_writer):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_SYNC': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'EVENT_LOG_SYNC': True})
 def test_the_batch_insert_takes_a_savepoint_inside_the_caller_transaction():
     """Synchronous recording runs on the caller's thread, inside whatever
     atomic() block the caller opened. A statement that fails there marks the
@@ -373,7 +373,7 @@ def test_the_batch_insert_takes_a_savepoint_inside_the_caller_transaction():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_SYNC': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'EVENT_LOG_SYNC': True})
 def test_sync_mode_falls_back_to_the_writer_inside_a_loop():
     """The ORM is @async_unsafe on a running loop, so writing on the calling
     thread there raises SynchronousOnlyOperation instead of recording anything.
@@ -395,7 +395,7 @@ def test_sync_mode_falls_back_to_the_writer_inside_a_loop():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_fork_leaves_the_child_a_queue_of_its_own(paused_writer):
     """Under `gunicorn --preload` the master builds the queue and every worker
     inherits the object — but not the thread that drains it.
@@ -418,7 +418,7 @@ def test_a_fork_leaves_the_child_a_queue_of_its_own(paused_writer):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_batch_too_big_to_save_one_by_one_is_bisected(paused_writer):
     """A refused batch of two hundred must not become two hundred statements.
 
@@ -446,7 +446,7 @@ def test_a_batch_too_big_to_save_one_by_one_is_bisected(paused_writer):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_stopping_the_writer_does_not_leave_the_stopper_marked():
     """`stop()` drains the queue it just detached, on whoever called it.
 
@@ -472,7 +472,7 @@ def test_stopping_the_writer_does_not_leave_the_stopper_marked():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_FLUSH_INTERVAL': 1})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'EVENT_LOG_FLUSH_INTERVAL': 1})
 def test_a_receiver_that_stops_the_log_does_not_strand_the_writer(monkeypatch):
     """Receivers run on the writer's thread, and one of them may turn the log off.
 
@@ -529,7 +529,7 @@ def test_a_receiver_that_stops_the_log_does_not_strand_the_writer(monkeypatch):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_FLUSH_INTERVAL': 1})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'EVENT_LOG_FLUSH_INTERVAL': 1})
 def test_a_replacement_writer_does_not_strand_the_one_it_replaced():
     """`_stopping` is shared, so a replacement can clear the signal meant for its elder.
 
@@ -574,7 +574,7 @@ def test_a_replacement_writer_does_not_strand_the_one_it_replaced():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_SYNC': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'EVENT_LOG_SYNC': True})
 def test_a_caller_that_wrote_does_not_stay_marked():
     """Only the writer's exit closes connections, so only the writer's mark is read.
 
@@ -594,7 +594,7 @@ def test_a_caller_that_wrote_does_not_stay_marked():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_SYNC': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'EVENT_LOG_SYNC': True})
 def test_recording_does_not_doom_the_transaction_it_runs_inside(monkeypatch, observed_closes):
     """The one bug here that destroyed the caller's own data.
 
@@ -634,7 +634,7 @@ def test_recording_does_not_doom_the_transaction_it_runs_inside(monkeypatch, obs
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_batch_the_database_refuses_entirely_is_reported(monkeypatch):
     """The ladder caught `DatabaseError` at every rung and returned normally.
 
@@ -656,7 +656,7 @@ def test_a_batch_the_database_refuses_entirely_is_reported(monkeypatch):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_the_redaction_constants_are_resolved_once_for_a_whole_batch(monkeypatch):
     """`to_row` resolves both itself when they are not handed down.
 
@@ -686,7 +686,7 @@ def test_the_redaction_constants_are_resolved_once_for_a_whole_batch(monkeypatch
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_partly_refused_batch_is_not_reported(monkeypatch):
     """Only a wholesale refusal is a failed flush. One poison row is not."""
     refused = []
@@ -717,7 +717,7 @@ def test_a_partly_refused_batch_is_not_reported(monkeypatch):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_the_writer_suspends_itself_after_repeated_refusals(paused_writer, monkeypatch):
     """What the changelog and Troubleshooting both promise, and what could not
     happen while `write_batch` returned normally on a total failure."""
@@ -747,7 +747,7 @@ def test_the_writer_suspends_itself_after_repeated_refusals(paused_writer, monke
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_events_left_by_a_dying_writer_are_written_not_lost(monkeypatch):
     """A thread target that raises used to clear the slot and walk away, and
     everything still queued went with it — no row, no counter, no gap marker.
@@ -777,7 +777,7 @@ def test_events_left_by_a_dying_writer_are_written_not_lost(monkeypatch):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_events_racing_stop_are_still_written(paused_writer):
     """stop() detaches the queue under the guard, but a record() that already
     read it puts into the detached one, which nothing else will ever look at."""
@@ -794,7 +794,7 @@ def test_events_racing_stop_are_still_written(paused_writer):
 
 
 @pytest.mark.django_db(transaction=True, databases=['default', 'logs'])
-@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_DATABASE': 'logs'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'EVENT_LOG_DATABASE': 'logs'})
 def test_recording_to_another_alias_leaves_the_callers_connection_alone(monkeypatch, observed_closes):
     """The guard has to be about the connection actually being closed.
 
@@ -821,7 +821,7 @@ def test_recording_to_another_alias_leaves_the_callers_connection_alone(monkeypa
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         **ON,
         'EVENT_LOG_BUFFER_SIZE': 'not a number',
         'EVENT_LOG_BATCH_SIZE': None,
@@ -850,7 +850,7 @@ def test_unreadable_writer_dials_fall_back_to_their_defaults():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_gap_reported_keeps_what_was_dropped_while_it_was_reported(paused_writer):
     """`_record_gap` used to assign zero, so anything dropped during the write it
     was reporting disappeared with it — and no later flush ever mentioned it."""
@@ -863,7 +863,7 @@ def test_a_gap_reported_keeps_what_was_dropped_while_it_was_reported(paused_writ
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_an_event_put_into_a_detached_queue_is_moved_to_the_live_one(paused_writer, monkeypatch):
     """stop() detaches the queue under the guard; a record() that already read it
     puts into the detached one, and nothing else will ever look at that queue.
@@ -890,7 +890,7 @@ def test_an_event_put_into_a_detached_queue_is_moved_to_the_live_one(paused_writ
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_SYNC': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'EVENT_LOG_SYNC': True})
 def test_recording_does_not_close_a_connection_whose_autocommit_is_off(monkeypatch, observed_closes):
     """`in_atomic_block` is half of what an open transaction means, and the worse half.
 
@@ -925,7 +925,7 @@ def test_recording_does_not_close_a_connection_whose_autocommit_is_off(monkeypat
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_SYNC': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'EVENT_LOG_SYNC': True})
 def test_an_obsolete_connection_is_still_recycled(monkeypatch, observed_closes):
     """The control: the guard must not have turned into "never recycle".
 
@@ -951,7 +951,7 @@ def test_an_obsolete_connection_is_still_recycled(monkeypatch, observed_closes):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_SYNC': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'EVENT_LOG_SYNC': True})
 def test_a_close_outside_an_atomic_block_does_not_mark_a_rollback(monkeypatch, observed_closes):
     """Why the autocommit case is silent, which is what makes it dangerous.
 
@@ -979,7 +979,7 @@ def test_a_close_outside_an_atomic_block_does_not_mark_a_rollback(monkeypatch, o
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_rows_the_database_refuses_one_at_a_time_are_counted(paused_writer, caplog):
     """A partial refusal was indistinguishable from a clean write.
 
@@ -1021,7 +1021,7 @@ def test_rows_the_database_refuses_one_at_a_time_are_counted(paused_writer, capl
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**ON, 'EVENT_LOG_SYNC': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**ON, 'EVENT_LOG_SYNC': True})
 def test_a_row_refused_on_the_callers_thread_is_counted(monkeypatch):
     """`EVENT_LOG_SYNC` writes on the caller's thread, and the loss was not counted.
 
@@ -1049,7 +1049,7 @@ def test_a_row_refused_on_the_callers_thread_is_counted(monkeypatch):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_rows_a_stopping_writer_leaves_that_are_refused_are_counted(monkeypatch):
     """The other site the same question found.
 

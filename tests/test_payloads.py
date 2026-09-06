@@ -141,31 +141,31 @@ def test_a_structure_at_the_cap_is_not_marked():
     assert '__omitted__' not in kept
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_configured_token_is_removed():
     assert TOKEN not in redact_text(f'POST /bot{TOKEN}/sendMessage')
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_webhook_secret_is_removed():
     assert 'hunter2' not in redact_text('header said hunter2')
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_token_shaped_string_is_removed_even_if_it_is_not_ours():
     other = '987654321:BBSomeOtherBotsTokenEntirelyDifferent'
 
     assert other not in redact_text(f'refused for {other}')
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_redaction_keeps_the_part_worth_reading():
     cleaned = redact_text(f'ClientError: POST https://api.telegram.org/bot{TOKEN}/sendMessage failed')
 
     assert 'sendMessage failed' in cleaned
 
 
-@override_settings(TELEGRAM_BOT={'EVENT_LOG_REDACT_KEYS': ('mine',)})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG_REDACT_KEYS': ('mine',)})
 def test_the_key_list_is_configurable():
     """Naming your own keys replaces the defaults rather than adding to them,
     which is what the setting means and what the docs say."""
@@ -175,7 +175,7 @@ def test_the_key_list_is_configurable():
     assert redact_values({'mine': 'x', 'token': 'y'}, keys) == {'mine': '***', 'token': 'y'}
 
 
-@override_settings(TELEGRAM_BOT={'EVENT_LOG_REDACT_KEYS': 'token'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG_REDACT_KEYS': 'token'})
 def test_a_string_key_list_is_refused_rather_than_read_per_character():
     """'token' as a string would otherwise redact keys named t, o, k, e and n."""
     assert redact_keys() == frozenset()
@@ -188,12 +188,12 @@ def test_redaction_reaches_every_depth():
     assert redact_values(payload, keys) == {'a': [{'secret': '***'}], 'b': {'c': {'secret': '***'}}}
 
 
-@override_settings(TELEGRAM_BOT={'EVENT_LOG_MAX_PAYLOAD_BYTES': 0})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG_MAX_PAYLOAD_BYTES': 0})
 def test_a_zero_cap_stores_no_payload_at_all():
     assert bounded({'text': 'anything'}) == {}
 
 
-@override_settings(TELEGRAM_BOT={'EVENT_LOG_MAX_PAYLOAD_BYTES': 60})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG_MAX_PAYLOAD_BYTES': 60})
 def test_an_oversized_payload_becomes_a_preview_not_half_a_document():
     """Half a JSON document is not JSON, and Oracle and SQLite validate the
     column, so the overflow has to be a string rather than a truncated object."""
@@ -209,13 +209,13 @@ def test_the_overflow_marker_obeys_the_cap_it_reports(cap):
     """The marker is not free: its own keys, the size and JSON's quoting cost
     bytes, and a preview counted in characters can cost four each. A cap the
     overflow ignores is a column the operator sized wrong."""
-    with override_settings(TELEGRAM_BOT={'EVENT_LOG_MAX_PAYLOAD_BYTES': cap}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG_MAX_PAYLOAD_BYTES': cap}):
         capped = bounded({'text': 'ю' * 4000})
 
     assert len(json.dumps(capped, ensure_ascii=False).encode('utf-8')) <= cap
 
 
-@override_settings(TELEGRAM_BOT={'EVENT_LOG_MAX_PAYLOAD_BYTES': 8192})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG_MAX_PAYLOAD_BYTES': 8192})
 def test_a_payload_that_cannot_be_serialized_says_so():
     """The net under everything else.
 
@@ -229,7 +229,7 @@ def test_a_payload_that_cannot_be_serialized_says_so():
     assert bounded(circular) == {'__omitted__': 'unserializable'}
 
 
-@override_settings(TELEGRAM_BOT={'EVENT_LOG_MAX_PAYLOAD_BYTES': 8192})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG_MAX_PAYLOAD_BYTES': 8192})
 def test_an_unknown_object_never_reaches_the_serializer_through_describe():
     """summarize renders it by class name first, so a row holds a readable
     marker rather than an object's repr with a memory address in it."""
@@ -238,12 +238,12 @@ def test_an_unknown_object_never_reaches_the_serializer_through_describe():
     assert described == {'value': {'__omitted__': 'NotSerializable'}}
 
 
-@override_settings(TELEGRAM_BOT={'EVENT_LOG_PAYLOAD': 'none'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG_PAYLOAD': 'none'})
 def test_the_none_level_stores_nothing():
     assert describe({'chat_id': 1, 'text': 'hello'}) == {}
 
 
-@override_settings(TELEGRAM_BOT={'EVENT_LOG_PAYLOAD': 'full', 'TOKEN': TOKEN})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG_PAYLOAD': 'full', 'TOKEN': TOKEN})
 def test_describe_summarizes_then_redacts_then_caps():
     """The order is load-bearing: redaction runs over the summarized structure
     so it never walks an aiogram model, and before the cap so a truncated
@@ -254,7 +254,7 @@ def test_describe_summarizes_then_redacts_then_caps():
     assert described['token'] == '***'
 
 
-@override_settings(TELEGRAM_BOT={'EVENT_LOG_PAYLOAD': 'nonsense'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG_PAYLOAD': 'nonsense'})
 def test_an_unreadable_level_falls_back_to_the_safe_one():
     """E033 reports it at boot; at runtime the quiet answer must not be the one
     that starts storing message bodies."""
@@ -282,11 +282,13 @@ def test_describe_never_raises(monkeypatch):
 
 @pytest.mark.parametrize('level', ['none', 'summary', 'full'])
 def test_every_documented_level_is_accepted(level):
-    with override_settings(TELEGRAM_BOT={'EVENT_LOG_PAYLOAD': level}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG_PAYLOAD': level}):
         assert isinstance(describe({'chat_id': 1}), dict)
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '424242:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'WEBHOOK_SECRET': 'hunter2'})
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={'TOKEN': '424242:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'WEBHOOK_SECRET': 'hunter2'}
+)
 @pytest.mark.parametrize(
     'text',
     [
@@ -311,7 +313,7 @@ def test_the_colon_prefilter_never_lets_a_credential_through(text):
     assert 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' not in cleaned
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '424242:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '424242:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'})
 def test_the_settings_are_read_once_for_a_whole_payload(monkeypatch):
     """They were read for every string, at every depth, of every event."""
     from django_aiogram.wire import payloads
@@ -331,7 +333,7 @@ def test_the_settings_are_read_once_for_a_whole_payload(monkeypatch):
     assert reads.count('TOKEN') == 1, reads
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '424242:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '424242:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'})
 def test_a_string_without_a_colon_never_reaches_the_token_regex(monkeypatch):
     """The prefilter is the optimisation; the test above is only its safety net.
 
@@ -379,7 +381,7 @@ def test_the_detail_level_reads_a_member_as_well_as_a_string(value, expected):
     The last case is the fallback itself, which is still right for a value nobody can read.
     """
     settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG_PAYLOAD': value}
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         assert detail_level() is expected
 
 
@@ -395,6 +397,6 @@ def test_an_unreadable_cap_costs_an_empty_payload_and_not_a_traceback(cap):
     reached a caller, it reached the logger.
     """
     settings = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', 'EVENT_LOG_MAX_PAYLOAD_BYTES': cap}
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         assert bounded({'chat_id': 1}) == {}
         assert describe({'chat_id': 1}) == {}

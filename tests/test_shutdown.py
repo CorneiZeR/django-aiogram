@@ -75,7 +75,7 @@ def running_loop(instance):
         runner.join(timeout=5)
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'MODE': 'webhook', 'RATE_LIMIT': None, 'REDIS_TIMEOUT': 2})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MODE': 'webhook', 'RATE_LIMIT': None, 'REDIS_TIMEOUT': 2})
 def test_the_join_bound_is_read_before_the_threads_it_bounds(monkeypatch):
     """A setting read inside `finally` takes the whole teardown with it when it refuses.
 
@@ -147,7 +147,7 @@ def test_the_join_bound_is_read_before_the_threads_it_bounds(monkeypatch):
     assert collected == ['collected'], 'the teardown did not reach collect()'
 
 
-@override_settings(TELEGRAM_BOT={'ENABLED': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'ENABLED': False})
 def test_idle_blocks_until_interrupted(monkeypatch):
     """A clean exit is a restart loop under `restart: always`, hence --idle."""
     out = StringIO()
@@ -173,7 +173,7 @@ def test_idle_blocks_until_interrupted(monkeypatch):
     assert not worker.is_alive()
 
 
-@override_settings(TELEGRAM_BOT={'ENABLED': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'ENABLED': False})
 def test_without_idle_the_command_returns_immediately():
     out = StringIO()
     finished = threading.Event()
@@ -187,7 +187,7 @@ def test_without_idle_the_command_returns_immediately():
     assert 'Idling' not in out.getvalue()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_sigterm_unwinds_polling(monkeypatch):
     """`docker stop` sends SIGTERM; it has to reach the shutdown path."""
     events = []
@@ -228,7 +228,7 @@ def test_sigterm_unwinds_polling(monkeypatch):
     assert events == ['polling', 'stopped', 'closed', 'collected']
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_close_releases_the_fsm_storage():
     """RedisStorage owns a second async client that nothing else closes."""
     instance = TelegramBot()
@@ -248,13 +248,13 @@ def test_close_releases_the_fsm_storage():
     assert instance._bot is None
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_close_is_safe_when_nothing_was_built():
     TelegramBot().close()
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'TOKEN': '42:x',
         'FSM_STORAGE': 'memory',
         'RATE_LIMIT': {'overall_per_second': 1, 'per_chat_per_second': 0, 'group_per_minute': 0},
@@ -280,7 +280,7 @@ def test_shutdown_waits_for_sends_blocked_in_the_rate_limiter():
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'TOKEN': '42:x',
         'FSM_STORAGE': 'memory',
         # one message every 100s: the second send cannot finish within the drain
@@ -310,7 +310,7 @@ def test_shutdown_cancels_a_send_that_outlasts_the_drain(caplog):
     assert len(sent) == 1, 'the canceled send should not have gone out'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_shutdown_leaves_tasks_it_does_not_own_alone():
     """aiogram keeps its own tasks on this loop; canceling them is not ours."""
     instance = TelegramBot()
@@ -339,7 +339,7 @@ def test_shutdown_leaves_tasks_it_does_not_own_alone():
     assert not task.cancelled()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_send_started_during_shutdown_is_refused_loudly(caplog):
     """Scheduling onto a loop that is being torn down loses the message."""
     instance = TelegramBot()
@@ -353,7 +353,7 @@ def test_a_send_started_during_shutdown_is_refused_loudly(caplog):
     assert not instance._sends, 'the send was scheduled anyway'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_handoff_queued_before_shutdown_is_dropped_loudly(caplog):
     """close() can start after call_soon_threadsafe and before the callback."""
     instance = TelegramBot()
@@ -372,7 +372,7 @@ def test_a_handoff_queued_before_shutdown_is_dropped_loudly(caplog):
     assert sent == []
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_close_waits_for_a_send_driving_the_same_loop():
     """Tearing the loop down under run_until_complete corrupts both."""
     instance = TelegramBot()
@@ -389,7 +389,7 @@ def test_close_waits_for_a_send_driving_the_same_loop():
     assert finished.wait(5), 'close never finished after the loop was released'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_send_waiting_on_the_lock_finds_the_loop_closed(caplog):
     """close() holds the same lock, so it can finish while a send waits for it."""
     instance = TelegramBot()
@@ -420,7 +420,7 @@ def test_a_send_waiting_on_the_lock_finds_the_loop_closed(caplog):
     assert 'send refused: the event loop was closed' in caplog.text
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_close_refuses_to_tear_down_a_running_loop(caplog):
     """run_until_complete and loop.close() both raise on a running loop."""
     instance = TelegramBot()
@@ -439,7 +439,7 @@ def test_close_refuses_to_tear_down_a_running_loop(caplog):
     assert instance._bot is None
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG': True})
 def test_the_recorder_is_stopped_even_when_close_raises(monkeypatch, redis_server):
     """A close() that raises must not also lose the rows the shutdown produced."""
     from django_aiogram.eventlog.recorder import recorder
@@ -466,7 +466,7 @@ def test_the_recorder_is_stopped_even_when_close_raises(monkeypatch, redis_serve
     assert stopped, 'the recorder was not stopped when close() raised'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_handoff_the_loop_never_stepped_is_drained_not_destroyed():
     """The one `_register`'s docstring says shutdown must not lose.
 
@@ -507,7 +507,7 @@ def test_a_handoff_the_loop_never_stepped_is_drained_not_destroyed():
     assert [call['chat_id'] for call in sent] == [1]
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'DRAIN_TIMEOUT': 9})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'DRAIN_TIMEOUT': 9})
 def test_close_takes_its_drain_budget_from_the_setting():
     """`start_tgbot` calls `bot.close()` bare, so the hardcoded five seconds was
     the only budget a deployment could ever get — however long its
@@ -522,7 +522,7 @@ def test_close_takes_its_drain_budget_from_the_setting():
     assert seen == [9.0]
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'DRAIN_TIMEOUT': 'soon'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'DRAIN_TIMEOUT': 'soon'})
 def test_an_unreadable_drain_budget_does_not_break_shutdown():
     """E044 reports it at boot. Here the safe answer is the default: the drain sits
     between stopping the consumer and flushing the event log, so raising costs the
@@ -537,7 +537,7 @@ def test_an_unreadable_drain_budget_does_not_break_shutdown():
     assert seen == [float(DEFAULTS['DRAIN_TIMEOUT'])]
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_send_cancelled_at_shutdown_is_not_acknowledged():
     """Cancellation is not completion.
 
@@ -564,7 +564,7 @@ def test_a_send_cancelled_at_shutdown_is_not_acknowledged():
     assert acknowledged == [], 'a canceled send was acknowledged'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_finished_send_is_acknowledged_once():
     """Sent, refused or given up on — all three are finished, and redelivering
     any of them would only repeat itself."""
@@ -584,7 +584,7 @@ def test_a_finished_send_is_acknowledged_once():
     assert acknowledged == [True]
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_close_publishes_the_drain_before_it_publishes_the_shutdown(monkeypatch):
     """`start()` refuses on `_closing and not _draining`, so the order is the guard.
 
@@ -611,7 +611,7 @@ def test_close_publishes_the_drain_before_it_publishes_the_shutdown(monkeypatch)
     assert written[:2] == ['_draining', '_closing'], f'the shutdown was published first: {written}'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_runner_that_will_not_stop_still_leaves_the_bot_usable(monkeypatch):
     """`_stop_runner` joins a thread, and `Thread.join` raises on its own thread.
 

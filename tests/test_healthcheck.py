@@ -50,7 +50,7 @@ def healthcheck(**options):
     return out.getvalue()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_consumer_writes_a_heartbeat(redis_server):
     delivery = BlpopDelivery(handler=lambda **kwargs: None)
 
@@ -60,7 +60,7 @@ def test_the_consumer_writes_a_heartbeat(redis_server):
     assert redis_server.ttl(HEARTBEAT) > 0, 'the heartbeat must expire on its own'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'HEARTBEAT_INTERVAL': 30})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'HEARTBEAT_INTERVAL': 30})
 def test_the_heartbeat_is_paced(redis_server):
     """Refreshing per message would be a write per message."""
     delivery = BlpopDelivery(handler=lambda **kwargs: None)
@@ -74,7 +74,7 @@ def test_the_heartbeat_is_paced(redis_server):
     assert redis_server.get(HEARTBEAT) is None, 'it wrote again inside the interval'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_redis_that_refuses_the_write_does_not_stop_the_loop(redis_server, caplog):
     class Refuses:
         def set(self, *args, **kwargs):
@@ -91,25 +91,25 @@ def test_a_redis_that_refuses_the_write_does_not_stop_the_loop(redis_server, cap
     assert 'could not write the heartbeat' in caplog.text
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'worker-b'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'worker-b'})
 def test_the_key_is_per_worker(redis_server):
     assert BlpopDelivery(handler=lambda **kwargs: None).heartbeat_key.endswith(':worker-b')
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_healthy_when_the_heartbeat_is_fresh(redis_server):
     redis_server.set(HEARTBEAT, str(int(time.time())))
 
     assert 'healthy' in healthcheck()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_unhealthy_when_there_is_no_heartbeat(redis_server):
     with pytest.raises(CommandError, match='no heartbeat'):
         healthcheck()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_unhealthy_when_the_heartbeat_is_stale(redis_server):
     """The failure this command exists for: the thread died, the process lives."""
     redis_server.set(HEARTBEAT, str(int(time.time()) - 300))
@@ -118,7 +118,7 @@ def test_unhealthy_when_the_heartbeat_is_stale(redis_server):
         healthcheck()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_unhealthy_when_the_transport_cannot_be_reached(monkeypatch):
     """The probe pings nothing now, so the first broker call is what finds a transport that
     is down -- and it has to report it rather than raise.
@@ -147,7 +147,7 @@ def test_unhealthy_when_the_transport_cannot_be_reached(monkeypatch):
         healthcheck()
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'HEALTHCHECK_MAX_QUEUE': 2})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'HEALTHCHECK_MAX_QUEUE': 2})
 def test_unhealthy_when_the_queue_is_over_the_limit(redis_server):
     redis_server.set(HEARTBEAT, str(int(time.time())))
     for _ in range(3):
@@ -157,7 +157,7 @@ def test_unhealthy_when_the_queue_is_over_the_limit(redis_server):
         healthcheck()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_queue_check_is_off_by_default(redis_server):
     redis_server.set(HEARTBEAT, str(int(time.time())))
     for _ in range(50):
@@ -166,7 +166,7 @@ def test_the_queue_check_is_off_by_default(redis_server):
     assert 'healthy' in healthcheck()
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'HEALTHCHECK_MAX_QUEUE': 100})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'HEALTHCHECK_MAX_QUEUE': 100})
 def test_the_limits_can_be_given_on_the_command_line(redis_server):
     redis_server.set(HEARTBEAT, str(int(time.time())))
     for _ in range(3):
@@ -176,13 +176,13 @@ def test_the_limits_can_be_given_on_the_command_line(redis_server):
         healthcheck(max_queue=2)
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'ENABLED': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'ENABLED': False})
 def test_a_disabled_process_is_not_unhealthy():
     """Nothing is meant to be running there, so nothing is wrong."""
     assert 'disabled' in healthcheck()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_heartbeat_that_is_not_a_timestamp_is_reported(redis_server):
     redis_server.set(HEARTBEAT, b'soon')
 
@@ -190,7 +190,7 @@ def test_a_heartbeat_that_is_not_a_timestamp_is_reported(redis_server):
         healthcheck()
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'BLPOP_TIMEOUT': 300, 'HEARTBEAT_INTERVAL': 5})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'BLPOP_TIMEOUT': 300, 'HEARTBEAT_INTERVAL': 5})
 def test_a_long_blocking_read_cannot_outlast_the_heartbeat(redis_server, monkeypatch):
     """The loop beats between reads, so a read longer than the interval would
     let the key expire under a consumer that is doing fine."""
@@ -219,7 +219,7 @@ def test_a_long_blocking_read_cannot_outlast_the_heartbeat(redis_server, monkeyp
     assert max(seen) <= 5, f'it blocked for {max(seen)}s with a 5s heartbeat interval'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_heartbeat_read_that_fails_is_reported(redis_server, monkeypatch):
     """A transport that answers one command and not the next must not surface as a traceback.
 
@@ -249,7 +249,7 @@ def test_a_heartbeat_read_that_fails_is_reported(redis_server, monkeypatch):
         healthcheck()
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'HEALTHCHECK_MAX_QUEUE': 5})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'HEALTHCHECK_MAX_QUEUE': 5})
 def test_a_queue_read_that_fails_is_reported(redis_server, monkeypatch):
     """The heartbeat read got through and the count did not, which is its own line."""
 
@@ -275,7 +275,7 @@ def test_a_queue_read_that_fails_is_reported(redis_server, monkeypatch):
         healthcheck()
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'HEALTHCHECK_MAX_QUEUE': 5})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'HEALTHCHECK_MAX_QUEUE': 5})
 def test_a_queue_read_on_a_dropped_connection_reads_as_unreachable(redis_server, monkeypatch):
     """The depth read splits the same way the liveness read does, and both halves are pinned.
 
@@ -304,7 +304,7 @@ def test_a_queue_read_on_a_dropped_connection_reads_as_unreachable(redis_server,
         healthcheck()
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'HEALTHCHECK_MAX_QUEUE': 3})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'HEALTHCHECK_MAX_QUEUE': 3})
 def test_the_queue_limit_is_inclusive(redis_server):
     """Exactly at the limit is still healthy; the docs say so."""
     redis_server.set(HEARTBEAT, str(int(time.time())))
@@ -318,7 +318,7 @@ def test_the_queue_limit_is_inclusive(redis_server):
         healthcheck()
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'mine'})
 def test_the_probe_says_which_guarantee_is_in_force(redis_server):
     """A probe that only says "healthy" cannot tell at-least-once from
     at-most-once, and the difference is whether a kill loses a message."""
@@ -330,7 +330,7 @@ def test_the_probe_says_which_guarantee_is_in_force(redis_server):
     assert 'at-least-once' in out.getvalue()
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'mine'})
 def test_messages_stranded_under_another_worker_are_reported(redis_server):
     """A stranded list is invisible otherwise: nothing reads it and nothing
     counts it, which is how it stays stranded."""
@@ -345,7 +345,7 @@ def test_messages_stranded_under_another_worker_are_reported(redis_server):
     assert 'tgbot_reclaim' in reported
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'mine'})
 def test_an_old_server_is_not_reported_as_crash_safe(redis_server, monkeypatch):
     """This command builds its own `Delivery`, and a fresh one says it is crash
     safe until something proves otherwise — the consumer learns that from
@@ -368,7 +368,7 @@ def test_an_old_server_is_not_reported_as_crash_safe(redis_server, monkeypatch):
     assert 'at-least-once' not in reported, reported
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'mine'})
 def test_the_stranded_sweep_is_bounded_and_says_when_it_stopped_early(redis_server):
     """`MATCH` filters on the server, but `SCAN` walks the whole keyspace.
 
@@ -391,7 +391,7 @@ def test_the_stranded_sweep_is_bounded_and_says_when_it_stopped_early(redis_serv
     assert 'at least' in reported, reported
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'mine'})
 def test_a_scan_that_fails_does_not_make_the_container_unhealthy(redis_server, monkeypatch):
     """The probe answers about this worker. A scan it could not finish is not a
     reason to restart a container that is doing its job."""
@@ -412,7 +412,7 @@ def test_a_scan_that_fails_does_not_make_the_container_unhealthy(redis_server, m
     assert 'in flight' not in out.getvalue(), out.getvalue()
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'mine'})
 def test_a_sweep_that_stops_partway_reports_what_it_did_see(redis_server, monkeypatch):
     """A count found before the failure is worth having, said as a floor.
 
@@ -442,7 +442,7 @@ def test_a_sweep_that_stops_partway_reports_what_it_did_see(redis_server, monkey
     assert 'at least 2 message(s) are in flight' in printed, printed
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': 'localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': 'localhost:6379/0'})
 def test_a_url_with_no_scheme_reads_as_an_unreachable_broker():
     """The other half of the empty-URL case, and the one the narrowing missed.
 
@@ -460,7 +460,7 @@ def test_a_url_with_no_scheme_reads_as_an_unreachable_broker():
         healthcheck()
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_TIMEOUT': 'soon'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_TIMEOUT': 'soon'})
 def test_an_unreadable_timeout_reads_as_an_unreachable_broker():
     """`read_timeout()` coerces the setting while the client is being built."""
     report = check()
@@ -469,7 +469,7 @@ def test_an_unreadable_timeout_reads_as_an_unreachable_broker():
     assert report.message.startswith('the broker is unreachable: '), report.message
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_heartbeat_that_cannot_be_decoded_is_reported(redis_server, monkeypatch):
     """`decode_responses` in a shared URL makes redis-py decode this key for us.
 
@@ -497,7 +497,7 @@ def test_a_heartbeat_that_cannot_be_decoded_is_reported(redis_server, monkeypatc
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         **SETTINGS,
         'BROKER': 'django_aiogram.broker.redis_streams.RedisStreamsBroker',
         'REDIS_STREAM_KEY': 'TELEGRAM_BOT_STREAM',
@@ -532,7 +532,7 @@ def test_probing_a_stream_creates_nothing(redis_server, monkeypatch):
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         **SETTINGS,
         'BROKER': 'django_aiogram.broker.redis_streams.RedisStreamsBroker',
         'REDIS_STREAM_KEY': 'TELEGRAM_BOT_STREAM',
@@ -568,7 +568,7 @@ def test_probing_a_working_stream_writes_nothing_either(redis_server, monkeypatc
     assert 'queued' in report.message, report.message
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_fractional_age_over_the_limit_is_refused(redis_server, monkeypatch):
     """5.9 seconds is over a 5-second limit, and truncating hid that.
 
@@ -587,7 +587,7 @@ def test_a_fractional_age_over_the_limit_is_refused(redis_server, monkeypatch):
     assert 'over the 5s limit' in report.message, report.message
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_transport_that_cannot_answer_liveness_is_not_called_dead(redis_server, monkeypatch):
     """`reported=False` is "nobody outside can see this", and that is not a failure.
 
@@ -614,7 +614,7 @@ def test_a_transport_that_cannot_answer_liveness_is_not_called_dead(redis_server
     assert 'not observable from outside' in report.message, report.message
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_liveness_that_is_too_old_still_refuses(redis_server, monkeypatch):
     """The other half of the same branch: an age *is* judged, whoever measured it.
 
@@ -633,7 +633,7 @@ def test_a_liveness_that_is_too_old_still_refuses(redis_server, monkeypatch):
     assert 'over the' in report.message, report.message
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_container_form_neither_scans_nor_writes(redis_server, monkeypatch):
     """The one place the two entry points differ, and the reason the split exists.
 
@@ -678,7 +678,7 @@ def test_the_container_form_neither_scans_nor_writes(redis_server, monkeypatch):
     assert report.warnings == (), report.warnings
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_management_command_still_scans_and_reports_the_guarantee(redis_server, monkeypatch):
     """The other half: the command's output must not change for anyone using it.
 
@@ -710,7 +710,7 @@ def test_the_management_command_still_scans_and_reports_the_guarantee(redis_serv
     assert 'lmove' in calls, f'the command stopped probing the guarantee: {calls}'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': ''})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': ''})
 def test_a_missing_redis_url_reads_as_an_unreachable_broker():
     """A client that cannot be built is a transport this probe cannot reach.
 
@@ -735,7 +735,7 @@ def test_a_missing_redis_url_reads_as_an_unreachable_broker():
         healthcheck()
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'ENABLED': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'ENABLED': False})
 def test_a_disabled_process_is_not_unhealthy_and_is_not_reported_as_healthy():
     """Documented on the Deployment page and, until now, tested nowhere.
 
@@ -760,7 +760,7 @@ def test_a_disabled_process_is_not_unhealthy_and_is_not_reported_as_healthy():
     assert '\x1b[' not in out.getvalue(), 'the disabled line was colored as a success'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_healthy_process_is_reported_in_success_green(redis_server):
     """The other half of the distinction `Report.checked` exists to carry.
 
@@ -778,7 +778,7 @@ def test_a_healthy_process_is_reported_in_success_green(redis_server):
     assert '\x1b[' in out.getvalue(), 'the healthy line lost its success colour'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'HEARTBEAT_INTERVAL': 10})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'HEARTBEAT_INTERVAL': 10})
 def test_the_missing_heartbeat_message_names_the_limit_it_judged_by(redis_server):
     """`--max-age 600` and a message saying "within 30s" send an operator to the wrong
     number — and the one it named was a default the flag had already overridden."""
@@ -801,7 +801,7 @@ def test_a_probe_with_no_settings_module_says_so_instead_of_raising(monkeypatch,
 
     def unreadable(*args, **kwargs):
         message = (
-            'Requested setting TELEGRAM_BOT, but settings are not configured. You must '
+            'Requested setting TELEGRAM_BOT_DEFAULTS, but settings are not configured. You must '
             'either define the environment variable DJANGO_SETTINGS_MODULE or call '
             'settings.configure() before accessing settings.'
         )
@@ -897,7 +897,7 @@ def test_a_settings_module_whose_parent_package_is_missing_is_still_ours(monkeyp
     assert capsys.readouterr().err == "cannot read the settings: No module named 'coree'\n"
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_every_way_the_guarantee_reads_unknown_says_why(redis_server, monkeypatch, caplog):
     """`unknown` in the probe's line raises exactly one question, and the log has to answer it.
 
@@ -936,7 +936,7 @@ def test_every_way_the_guarantee_reads_unknown_says_why(redis_server, monkeypatc
     assert RESET in str(reasons[1]), reasons[1]
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'mine'})
 def test_a_key_that_cannot_be_decoded_does_not_abort_the_sweep(redis_server, caplog):
     """The sweep is the one part that must never fail the container over what it found.
 
@@ -958,7 +958,7 @@ def test_a_key_that_cannot_be_decoded_does_not_abort_the_sweep(redis_server, cap
     assert any(getattr(record, 'tg_reason', None) for record in caplog.records), caplog.records
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'mine'})
 def test_the_verdict_is_flushed_before_anything_qualifies_it(redis_server, monkeypatch):
     """`docker inspect` merges the two streams, and stdout is the buffered one.
 
@@ -990,7 +990,7 @@ def test_the_verdict_is_flushed_before_anything_qualifies_it(redis_server, monke
     assert events.index(('out', 'flush')) < events.index(('err', 'write')), events
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'HEARTBEAT_INTERVAL': 'abc'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'HEARTBEAT_INTERVAL': 'abc'})
 def test_an_unreadable_interval_is_refused_in_a_line():
     """This entry point is the one where `manage.py check` never ran.
 
@@ -1002,10 +1002,10 @@ def test_an_unreadable_interval_is_refused_in_a_line():
     report = check()
 
     assert not report.ok
-    assert report.message == "TELEGRAM_BOT['HEARTBEAT_INTERVAL'] is not a number: 'abc'", report.message
+    assert report.message == "TELEGRAM_BOT_DEFAULTS['HEARTBEAT_INTERVAL'] is not a number: 'abc'", report.message
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'HEALTHCHECK_MAX_QUEUE': 'lots'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'HEALTHCHECK_MAX_QUEUE': 'lots'})
 def test_an_unreadable_queue_limit_is_refused_in_a_line():
     """The other one read before Redis is touched. A flag still overrides it."""
     report = check()
@@ -1014,7 +1014,7 @@ def test_an_unreadable_queue_limit_is_refused_in_a_line():
     assert 'HEALTHCHECK_MAX_QUEUE' in report.message, report.message
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'HEARTBEAT_INTERVAL': 10})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'HEARTBEAT_INTERVAL': 10})
 def test_a_limit_over_the_keys_ttl_says_it_cannot_be_observed(redis_server):
     """`--max-age 60` against a key that expires at 30s can never see a stale heartbeat.
 
@@ -1028,11 +1028,11 @@ def test_a_limit_over_the_keys_ttl_says_it_cannot_be_observed(redis_server):
     assert not over.ok, over.message
     assert not within.ok, within.message
     assert 'cannot be observed anyway' in over.message, over.message
-    assert "raise TELEGRAM_BOT['HEARTBEAT_INTERVAL'] instead" in over.message, over.message
+    assert "raise TELEGRAM_BOT_DEFAULTS['HEARTBEAT_INTERVAL'] instead" in over.message, over.message
     assert 'cannot be observed' not in within.message, within.message
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'mine'})
 def test_the_sweep_matches_the_keys_workers_actually_write(redis_server):
     """Derived from `processing_key`, not spelled out a second time.
 
@@ -1052,7 +1052,7 @@ def test_the_sweep_matches_the_keys_workers_actually_write(redis_server):
     assert '1 message(s) are in flight' in report.warnings[0], report.warnings
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'mine'})
 def test_a_sweep_that_could_not_run_says_so_rather_than_reporting_a_clean_zero(redis_server, monkeypatch):
     """A sweep that never happened must not read like one that found nothing.
 
@@ -1083,7 +1083,7 @@ def test_a_sweep_that_could_not_run_says_so_rather_than_reporting_a_clean_zero(r
     assert 'REDIS_URL is empty' in report.warnings[0], report.warnings
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'mine'})
 def test_a_sweep_that_finished_adds_no_second_warning(redis_server):
     """The control, and it is the one that keeps the case above from being free.
 
@@ -1146,7 +1146,7 @@ def test_a_queue_key_with_glob_characters_is_still_swept(redis_server, key, deco
     pattern collects it and the count says so — a queue reporting another queue's
     messages as its own in flight.
     """
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'mine', 'REDIS_MESSAGES_KEY': key}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'mine', 'REDIS_MESSAGES_KEY': key}):
         from django_aiogram.healthcheck import _stranded
         from django_aiogram.redis import processing_key
 
@@ -1171,7 +1171,7 @@ def test_a_setting_that_is_not_a_number_is_reported_not_raised(value):
     there, which was already caught, and the case is here so the widened clause cannot quietly
     become "catch everything and hope".
     """
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'HEARTBEAT_INTERVAL': value}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'HEARTBEAT_INTERVAL': value}):
         report = check(max_age=None, max_queue=None, guarantee=False, stranded=False)
 
     assert report.ok is False, report

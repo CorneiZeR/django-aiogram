@@ -10,7 +10,7 @@ than sending too fast and being refused.
 | Same group or channel | 20 messages/minute | `group_per_minute` |
 
 ```python
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'RATE_LIMIT': {
         'overall_per_second': 30,
         'per_chat_per_second': 1,

@@ -33,7 +33,7 @@ class Problem:
 
     ``label`` is for a setting that is not ours: 4.0 moved two module paths a project writes into
     *Django's* settings, and a rule about `DATABASE_ROUTERS` that introduced itself as
-    ``TELEGRAM_BOT['...']`` would send the reader to the wrong file. Everything else keeps the
+    ``TELEGRAM_BOT_DEFAULTS['...']`` would send the reader to the wrong file. Everything else keeps the
     prefix, since almost every rule here is about one of our own keys.
     """
 

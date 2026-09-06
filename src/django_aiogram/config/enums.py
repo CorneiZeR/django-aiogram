@@ -2,7 +2,7 @@
 
 Every value here is frozen: queued payloads carry serialization tags and user
 settings carry delivery, serializer, storage and mode names, so changing a value
-would break in-flight messages and every deployment's ``TELEGRAM_BOT`` block.
+would break in-flight messages and every deployment's ``TELEGRAM_BOT_DEFAULTS`` block.
 The classes subclass ``str`` so that a member is interchangeable with the string
 it names, which is what keeps existing settings and payloads readable as-is.
 """

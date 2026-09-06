@@ -49,7 +49,7 @@ class SendCaptureMixin:
         """Leave the context, through `addCleanup` so a failing setup still restores settings.
 
         ``tearDown`` would not: it does not run when ``setUp`` raises, and this one has already
-        replaced ``TELEGRAM_BOT`` by then -- leaving an override installed for the rest of the
+        replaced ``TELEGRAM_BOT_DEFAULTS`` by then -- leaving an override installed for the rest of the
         suite, which is the kind of failure that looks like an unrelated test being broken.
         """
         self._capture.__exit__(None, None, None)

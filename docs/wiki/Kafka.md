@@ -5,7 +5,7 @@ page before deploying will save you a surprise. An offset is not an acknowledgem
 message; it is a claim about everything below it.
 
 ```python
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'BROKER': 'django_aiogram.broker.kafka.KafkaBroker',
     'KAFKA_BOOTSTRAP': 'localhost:9092',
     'KAFKA_TOPIC': 'telegram-bot',

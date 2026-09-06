@@ -57,7 +57,7 @@ class RecordingDelivery:
         self.events.append('collected')
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})
 def test_consumer_starts_only_after_the_loop_is_running(monkeypatch):
     events = []
     monkeypatch.setattr(
@@ -81,7 +81,7 @@ def test_consumer_starts_only_after_the_loop_is_running(monkeypatch):
     assert 'stopped' in events
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})
 def test_shutdown_is_safe_when_the_consumer_never_started(monkeypatch):
     """Polling can fail before the loop runs the deferred start."""
     events = []
@@ -104,7 +104,7 @@ def test_shutdown_is_safe_when_the_consumer_never_started(monkeypatch):
     assert events == ['stopped', 'closed', 'collected']
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})
 def test_the_previous_sigterm_handler_is_restored(monkeypatch):
     """The command may run in-process; a left-behind handler turns a later
     SIGTERM into a stray KeyboardInterrupt somewhere else entirely."""
@@ -181,7 +181,7 @@ def test_webhook_mode_consumes_without_calling_telegram(monkeypatch, mode):
 
     def run():
         try:
-            with override_settings(TELEGRAM_BOT=settings):
+            with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
                 call_command('start_tgbot', stdout=out)
         except Exception as error:  # reported below, where the assertion can name it
             failure.append(error)
@@ -204,7 +204,7 @@ def test_webhook_mode_consumes_without_calling_telegram(monkeypatch, mode):
     assert 'Consuming the queue' in out.getvalue()
 
 
-@override_settings(TELEGRAM_BOT={'ENABLED': False, 'EVENT_LOG': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'ENABLED': False, 'EVENT_LOG': True})
 def test_a_disabled_container_idling_still_unwinds_like_the_enabled_path(monkeypatch):
     """`--idle` keeps a switched-off container alive; it must still exit cleanly.
 
@@ -252,7 +252,7 @@ def test_a_disabled_container_idling_still_unwinds_like_the_enabled_path(monkeyp
     assert 'Idling' in out.getvalue()
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'MODE': 'webhook'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'MODE': 'webhook'})
 def test_an_ephemeral_worker_name_is_warned_about_where_the_process_is_known(monkeypatch, caplog):
     """The check can only inform; here, being the consumer is known, so it warns.
 
@@ -315,7 +315,7 @@ def run_start_command(**options):
     return out.getvalue(), events
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'MODE': 'polling'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'MODE': 'polling'})
 def test_asking_for_webhook_mode_against_a_polling_setting_warns():
     """The view reads the setting, so this process would consume updates nobody
     is serving."""
@@ -328,7 +328,7 @@ def test_asking_for_webhook_mode_against_a_polling_setting_warns():
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost:6379/0',
         'MODE': 'webhook',
@@ -345,7 +345,7 @@ def test_asking_for_polling_against_a_webhook_setting_warns():
     assert 'polled' in events, 'it did not poll despite being asked to'
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'MODE': 'polling'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'MODE': 'polling'})
 def test_no_warning_when_the_flag_agrees_with_the_setting():
     printed, events = run_start_command(mode='polling')
 
@@ -354,7 +354,7 @@ def test_no_warning_when_the_flag_agrees_with_the_setting():
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost:6379/0',
         'REDIS_TIMEOUT': 10,
@@ -393,7 +393,7 @@ def test_the_consumer_join_is_derived_from_the_transports_own_deadline(monkeypat
     assert joined == [38], f'joined with {joined}, expected the transport ceiling of 37 plus one'
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})
 def test_a_consumer_that_outlives_its_join_is_reported(monkeypatch, caplog):
     """Silence there reads as a clean shutdown, and it is the opposite."""
 
@@ -420,7 +420,7 @@ def test_a_consumer_that_outlives_its_join_is_reported(monkeypatch, caplog):
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost:6379/0',
         'REQUIRE_CRASH_SAFE': True,
@@ -454,7 +454,7 @@ def test_a_server_without_lmove_is_refused_when_crash_safety_is_required(monkeyp
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost:6379/0',
         'REQUIRE_CRASH_SAFE': True,
@@ -494,7 +494,7 @@ def test_an_unreachable_redis_does_not_read_as_an_old_server(monkeypatch, caplog
     assert 'could not verify crash-safe delivery' in caplog.text
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'MODE': 'webhook'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'MODE': 'webhook'})
 def test_the_consumer_is_not_started_by_the_shutdown_itself(monkeypatch, caplog):
     """The consumer start is deferred onto the loop, and `close()` runs one turn.
 

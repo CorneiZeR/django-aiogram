@@ -46,7 +46,7 @@ def test_every_referenced_handler_is_defined(name, source):
         assert not missing, f'{name}: logger {logger!r} references undefined handlers {missing}'
 
 
-SETTINGS_BLOCK = re.compile(r'^TELEGRAM_BOT = (\{.*?^\})', re.DOTALL | re.MULTILINE)
+SETTINGS_BLOCK = re.compile(r'^TELEGRAM_BOT_DEFAULTS = (\{.*?^\})', re.DOTALL | re.MULTILINE)
 
 #: the enums the pages tell a project to import, and the readers that turn each setting into
 #: behaviour. A documented spelling that one of these cannot read is a page that does not work
@@ -70,7 +70,7 @@ def resolve(node):
 
 
 def documented_settings():
-    """Every `TELEGRAM_BOT = {...}` in the docs that names one of the published enums."""
+    """Every `TELEGRAM_BOT_DEFAULTS = {...}` in the docs that names one of the published enums."""
     for path in DOCS:
         if not path.is_file():
             continue
@@ -96,7 +96,7 @@ def test_there_is_a_documented_settings_block_to_check():
     documented spelling works, and a regex that stopped matching would take that assertion with it
     without failing anything.
     """
-    assert SETTINGS_EXAMPLES, 'no TELEGRAM_BOT example naming a published enum was found in the docs'
+    assert SETTINGS_EXAMPLES, 'no TELEGRAM_BOT_DEFAULTS example naming a published enum was found in the docs'
 
 
 @pytest.mark.parametrize(
@@ -134,6 +134,6 @@ def test_a_documented_settings_block_configures_what_it_says(name, settings):
     # a block naming an enum on a key nothing here drives would otherwise skip every assertion and
     # pass -- a case that cannot fail, about a page that promises behaviour
     assert driven, f'{name} names an enum but sets nothing this drives; add the setting to `readers`'
-    with override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', **settings}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', **settings}):
         for key in driven:
             assert readers[key](settings[key]), f'{name}: {key}'

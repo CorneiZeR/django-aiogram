@@ -1,6 +1,6 @@
 # Settings
 
-Everything lives under `TELEGRAM_BOT` in `settings.py`. Scalar values can also
+Everything lives under `TELEGRAM_BOT_DEFAULTS` in `settings.py`. Scalar values can also
 come from `DJANGO_AIOGRAM_<NAME>`; Django settings take precedence.
 
 All of it is validated by `manage.py check` — in processes where the bot is
@@ -63,7 +63,7 @@ row it announced rolled back. With it on, the write waits for the commit on the 
 connection and a rolled-back block queues nothing at all.
 
 ```python
-TELEGRAM_BOT = {'TRANSACTIONAL': True}
+TELEGRAM_BOT_DEFAULTS = {'TRANSACTIONAL': True}
 ```
 
 What it does not change, and what to expect:
@@ -118,7 +118,7 @@ What it does not change, and what to expect:
 `show_caption_above_media`. A misspelling fails at `manage.py check`.
 
 ```python
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'DEFAULT_BOT_PROPERTIES': {
         'parse_mode': 'HTML',
         'link_preview_is_disabled': True,
@@ -284,7 +284,7 @@ consumer as not observable from outside.
 | `RATE_LIMIT` | see below | Proactive pacing, or `None` to disable |
 
 ```python
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'RATE_LIMIT': {
         'overall_per_second': 30,
         'per_chat_per_second': 1,
@@ -336,7 +336,7 @@ entry naming a retired one is dead but harmless.
 | Id | Meaning |
 | -- | ------- |
 | `W001` / `W002` | `TOKEN` / `REDIS_URL` empty while the bot is enabled |
-| `W003` | `TELEGRAM_BOT` contains unknown keys |
+| `W003` | `TELEGRAM_BOT_DEFAULTS` contains unknown keys |
 | `W004` | `BLPOP_TIMEOUT` is **above** the ceiling the consumer applies — `min(HEARTBEAT_INTERVAL, floor(<the transport timeout>) - 1)`, never below 1 — so the take is silently shortened to it. Equal to the ceiling is not warned about and is not shortened. The hint names whichever of the two binds, and the transport term is the one `BROKER` names rather than always `REDIS_TIMEOUT` |
 | `E001`–`E003`, `E017`, `E049` | a boolean setting holds something that cannot be read as true or false. `ENABLED` and `AUTODISCOVER` are read while the app loads, so in practice those two refuse the boot with the same message before `check` runs at all |
 | `E004`–`E007`, `E009`–`E011` | a string setting is wrong, or not one of the allowed values |

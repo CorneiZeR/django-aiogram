@@ -56,7 +56,7 @@ class Recording(BlpopDelivery):
         super().__init__(handler=handler or (lambda **kwargs: self.handled.append(kwargs)))
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_delivered_message_is_acknowledged(redis_server):
     redis_server.rpush(QUEUE, payload(1))
     delivery = Recording()
@@ -69,7 +69,7 @@ def test_delivered_message_is_acknowledged(redis_server):
 
 
 @pytest.mark.filterwarnings('ignore::pytest.PytestUnhandledThreadExceptionWarning')
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_message_survives_a_worker_killed_mid_send(redis_server):
     redis_server.rpush(QUEUE, payload(7))
 
@@ -92,7 +92,7 @@ def test_message_survives_a_worker_killed_mid_send(redis_server):
     assert redis_server.llen(PROCESSING) == 0
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_reclaim_preserves_the_original_order(redis_server):
     for chat_id in (1, 2):
         redis_server.rpush(PROCESSING, payload(chat_id))
@@ -104,7 +104,7 @@ def test_reclaim_preserves_the_original_order(redis_server):
     assert [item['chat_id'] for item in survivor.handled] == [1, 2, 3]
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_failing_handler_is_not_redelivered_forever(redis_server):
     """Handler errors are logged and acknowledged — only a crash redelivers."""
     calls = []
@@ -156,7 +156,7 @@ def old_redis_server(redis_server, monkeypatch):
     return redis_server
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_falls_back_to_plain_pops_on_an_old_server(old_redis_server):
     old_redis_server.rpush(QUEUE, payload(5))
 
@@ -167,7 +167,7 @@ def test_falls_back_to_plain_pops_on_an_old_server(old_redis_server):
     assert delivery.crash_safe is False
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_draining_acknowledges_too(redis_server):
     """consume_pending is the no-thread drain the Testing page documents; it
     has to clear the processing list the same way the blocking loop does."""
@@ -181,7 +181,7 @@ def test_draining_acknowledges_too(redis_server):
     assert redis_server.llen(PROCESSING) == 0
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_draining_clears_a_backlog_left_while_the_worker_was_down(redis_server):
     for chat_id in (1, 2):
         redis_server.rpush(QUEUE, payload(chat_id))
@@ -203,21 +203,21 @@ def test_only_telegram_api_methods_may_be_named():
             check_function(forbidden)
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'RATE_LIMIT': None})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'RATE_LIMIT': None})
 def test_send_raw_refuses_a_non_api_method():
     destination = '/tmp/y'
     with pytest.raises(ValueError, match='not a Telegram API method'):
         TelegramBot().send_raw('download_file', file_path='x', destination=destination)
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x'})
 def test_enqueue_refuses_a_non_api_method(redis_server):
     with pytest.raises(ValueError, match='not a Telegram API method'):
         TelegramBot().enqueue('download_file', file_path='x')
     assert redis_server.llen('TELEGRAM_BOT_MESSAGE') == 0
 
 
-@override_settings(TELEGRAM_BOT={'BLPOP_TIMEOUT': 1})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'BLPOP_TIMEOUT': 1})
 def test_a_queued_non_api_method_is_dropped_not_executed(redis_server):
     """A payload written by something malicious must not kill the worker either."""
     redis_server.rpush(QUEUE, JsonSerializer().dumps({'function': 'download_file', 'file_path': 'x'}))
@@ -232,7 +232,7 @@ def test_a_queued_non_api_method_is_dropped_not_executed(redis_server):
     assert redis_server.llen(PROCESSING) == 0
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_reclaim_survives_a_redis_that_is_not_up_yet(redis_server, monkeypatch):
     """run() is the thread target: anything escaping reclaim ends the consumer."""
 
@@ -252,12 +252,12 @@ def test_reclaim_survives_a_redis_that_is_not_up_yet(redis_server, monkeypatch):
     assert delivery.crash_safe is True, 'a connection error is not a missing LMOVE'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'worker-a'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'worker-a'})
 def test_a_starting_worker_does_not_steal_another_workers_message(redis_server):
     """A shared processing list would let a restart pull a message back out
     from under the worker that is still sending it."""
     other = Recording()
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'worker-b'}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'worker-b'}):
         in_flight = other.processing_key
         redis_server.rpush(in_flight, payload(1))
 
@@ -269,7 +269,7 @@ def test_a_starting_worker_does_not_steal_another_workers_message(redis_server):
     assert redis_server.llen(QUEUE) == 0
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_reclaim_is_retried_when_redis_was_down_at_startup(redis_server):
     """One attempt would strand those messages until the next restart."""
     redis_server.rpush(PROCESSING, payload(1))
@@ -296,7 +296,7 @@ def test_reclaim_is_retried_when_redis_was_down_at_startup(redis_server):
     assert redis_server.llen(PROCESSING) == 0
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_response_error_that_is_not_a_missing_lmove_keeps_crash_safety(redis_server, caplog):
     """WRONGTYPE says nothing about LMOVE support; downgrading on it would give
     up the processing list for the life of the container."""
@@ -319,7 +319,7 @@ def test_a_response_error_that_is_not_a_missing_lmove_keeps_crash_safety(redis_s
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         **SETTINGS,
         'TOKEN': '42:x',
         'FSM_STORAGE': 'memory',
@@ -365,7 +365,7 @@ def test_raise_exception_does_not_leave_a_message_in_flight(redis_server):
     instance.close()
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'ALLOW_PICKLE': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'ALLOW_PICKLE': False})
 def test_a_refused_pickle_message_stays_in_flight(redis_server, caplog):
     """A missing setting must not destroy a 1.x queue: the payload is valid and
     the refusal is the operator's to fix, so it waits for a reclaim."""
@@ -382,7 +382,7 @@ def test_a_refused_pickle_message_stays_in_flight(redis_server, caplog):
     assert 'set ALLOW_PICKLE to deliver it' in caplog.text
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'ALLOW_PICKLE': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'ALLOW_PICKLE': True})
 def test_the_refused_message_is_delivered_once_the_operator_relents(redis_server):
     """The other half: reclaim plus the setting turns refusal into delivery."""
     redis_server.rpush(PROCESSING, PickleSerializer().dumps({'function': 'send_message', 'chat_id': 7}))
@@ -421,7 +421,7 @@ def test_the_deny_list_only_removes_methods_that_exist():
     assert discovered & public >= DENIED_METHODS, 'the deny list names something aiogram lacks'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_draining_by_hand_downgrades_on_an_old_server(old_redis_server):
     """`consume_pending` is documented as the drain that needs no thread.
 
@@ -473,7 +473,7 @@ class Refusing(BlpopDelivery):
             on_refused()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_message_stays_in_flight_until_its_send_finishes(redis_server):
     """The whole at-least-once promise.
 
@@ -492,7 +492,7 @@ def test_a_message_stays_in_flight_until_its_send_finishes(redis_server):
     assert redis_server.llen(QUEUE) == 0
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_finished_send_leaves_the_in_flight_list(redis_server):
     """And the other half: once the send says it is done, the message goes."""
     redis_server.rpush(QUEUE, payload(2))
@@ -521,7 +521,7 @@ def test_a_finished_send_leaves_the_in_flight_list(redis_server):
     assert redis_server.llen(QUEUE) == 0
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'MAX_IN_FLIGHT': 'two'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT': 'two'})
 def test_an_unreadable_in_flight_limit_refuses_at_construction(redis_server):
     """A value the consumer cannot read has to stop the container, not the delivery thread.
 
@@ -536,7 +536,7 @@ def test_an_unreadable_in_flight_limit_refuses_at_construction(redis_server):
         Deferring()
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'MAX_IN_FLIGHT': 2})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT': 2})
 def test_the_consumer_stops_taking_messages_at_the_limit(redis_server):
     """Acknowledging is an LREM, which scans the in-flight list — so letting a
     backlog accumulate there turns draining it into quadratic work."""
@@ -558,7 +558,7 @@ def test_the_consumer_stops_taking_messages_at_the_limit(redis_server):
     assert redis_server.llen(QUEUE) == 4
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_handler_that_cannot_defer_keeps_the_old_semantics(redis_server):
     """Every documented recipe takes `**kwargs` and nothing else, and each one
     has to go on being acknowledged the moment it returns."""
@@ -584,7 +584,7 @@ def test_the_real_send_path_is_the_one_that_defers():
     assert defers_completion(lambda function=None, **kwargs: None) is False
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'gone'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'gone'})
 def test_reclaim_requeues_a_dead_workers_messages(redis_server):
     """A container with no fixed name gets a fresh one when it is replaced, so its
     in-flight list is stranded where nothing will look for it again. This is the
@@ -592,7 +592,7 @@ def test_reclaim_requeues_a_dead_workers_messages(redis_server):
     redis_server.rpush(f'{QUEUE}:processing:gone', payload(1), payload(2))
     out = StringIO()
 
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'alive'}):
         call_command('tgbot_reclaim', worker='gone', stdout=out)
 
     assert redis_server.llen(f'{QUEUE}:processing:gone') == 0
@@ -600,7 +600,7 @@ def test_reclaim_requeues_a_dead_workers_messages(redis_server):
     assert 'Requeued 2' in out.getvalue()
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'alive'})
 def test_a_bounded_reclaim_takes_the_newest_in_flight_first(redis_server):
     """`--limit` has a direction, and the help text said the opposite of it.
 
@@ -620,7 +620,7 @@ def test_a_bounded_reclaim_takes_the_newest_in_flight_first(redis_server):
     assert front['chat_id'] == 3, f'a bounded run took {front["chat_id"]}, not the newest'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'alive'})
 def test_reclaim_does_not_stop_on_a_message_that_happens_to_be_empty(redis_server):
     """The walk stopped on any falsy element, and only nil means the list is empty.
 
@@ -640,7 +640,7 @@ def test_reclaim_does_not_stop_on_a_message_that_happens_to_be_empty(redis_serve
     assert 'Requeued 3' in out.getvalue(), out.getvalue()
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'alive'})
 def test_reclaim_by_hand_preserves_the_original_order(redis_server):
     """`Delivery.reclaim` has this test; its manual twin had counts only.
 
@@ -662,7 +662,7 @@ def test_reclaim_by_hand_preserves_the_original_order(redis_server):
     assert [item['chat_id'] for item in survivor.handled] == [1, 2, 3]
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'alive'})
 def test_reclaim_refuses_this_processs_own_worker(redis_server):
     """A running consumer reclaims its own list when it starts. Taking messages
     from underneath one that is mid-send is how you deliver them twice."""
@@ -674,7 +674,7 @@ def test_reclaim_refuses_this_processs_own_worker(redis_server):
     assert redis_server.llen(f'{QUEUE}:processing:alive') == 1
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'alive'})
 def test_reclaim_dry_run_moves_nothing(redis_server):
     redis_server.rpush(f'{QUEUE}:processing:gone', payload(1))
     out = StringIO()
@@ -686,7 +686,7 @@ def test_reclaim_dry_run_moves_nothing(redis_server):
     assert 'would requeue' in out.getvalue()
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'alive'})
 def test_reclaim_dry_run_counts_through_the_limit(redis_server):
     """A rehearsal has to promise what the real run does.
 
@@ -706,7 +706,7 @@ def test_reclaim_dry_run_counts_through_the_limit(redis_server):
     assert redis_server.llen(f'{QUEUE}:processing:gone') == 2
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'alive'})
 def test_reclaim_stops_at_the_limit(redis_server):
     """`--limit` is what bounds one run's blast radius."""
     redis_server.rpush(f'{QUEUE}:processing:gone', payload(1), payload(2))
@@ -717,7 +717,7 @@ def test_reclaim_stops_at_the_limit(redis_server):
     assert redis_server.llen(QUEUE) == 1
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'alive'})
 def test_reclaim_refuses_a_negative_limit(redis_server):
     """`max(0, ...)` read a negative limit as "no limit", which is the opposite
     of what someone typing a limit is asking for."""
@@ -735,7 +735,7 @@ def test_reclaim_refuses_a_negative_limit(redis_server):
     assert redis_server.llen(f'{QUEUE}:processing:gone') == 2
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'MAX_IN_FLIGHT': 1, 'HEARTBEAT_INTERVAL': 1})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT': 1, 'HEARTBEAT_INTERVAL': 1})
 def test_the_heartbeat_survives_a_consumer_held_at_the_limit(redis_server):
     """A worker at its in-flight limit is busy, not dead, and has to say so.
 
@@ -775,7 +775,7 @@ def test_the_heartbeat_survives_a_consumer_held_at_the_limit(redis_server):
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         **SETTINGS,
         'TOKEN': '42:x',
         'FSM_STORAGE': 'memory',
@@ -815,7 +815,7 @@ def test_a_cancelled_send_is_not_acknowledged_on_the_synchronous_path():
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         **SETTINGS,
         'TOKEN': '42:x',
         'FSM_STORAGE': 'memory',
@@ -892,7 +892,7 @@ def test_a_positional_only_callback_is_not_mistaken_for_acceptance():
     assert defers_completion(lambda on_complete=None, **kwargs: None) is True
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'MAX_IN_FLIGHT': 2})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT': 2})
 def test_a_callback_called_twice_counts_once(redis_server):
     """A second report is not harmless: it takes another message's place in the
     in-flight count, and a count that has drifted below zero admits more
@@ -917,7 +917,7 @@ def test_a_callback_called_twice_counts_once(redis_server):
     assert delivery._in_flight == 0, f'the in-flight count drifted to {delivery._in_flight}'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'ENABLED': False, 'MAX_IN_FLIGHT': 2})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'ENABLED': False, 'MAX_IN_FLIGHT': 2})
 def test_a_disabled_bot_gives_the_slot_back_too(redis_server):
     """`ENABLED` is read live, so a consumer can reach that branch mid-run.
 
@@ -947,7 +947,7 @@ def test_a_disabled_bot_gives_the_slot_back_too(redis_server):
     assert delivery._in_flight == 0, f'the in-flight count drifted to {delivery._in_flight}'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'MAX_IN_FLIGHT': 2})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT': 2})
 def test_a_refused_send_gives_its_slot_back(redis_server):
     """A refusal is not a completion, and it is not a leak either.
 
@@ -970,7 +970,7 @@ def test_a_refused_send_gives_its_slot_back(redis_server):
     assert redis_server.llen(PROCESSING) == 4, 'a refused send was acknowledged'
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'MAX_IN_FLIGHT': 1})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT': 1})
 def test_the_hand_drain_respects_the_in_flight_bound(redis_server):
     """`consume_pending` is the documented drain that needs no thread, and it
     schedules the same deferred sends the loop does. Without the bound it hands
@@ -988,7 +988,7 @@ def test_the_hand_drain_respects_the_in_flight_bound(redis_server):
     assert redis_server.llen(QUEUE) == 2
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_queued_on_complete_key_cannot_spend_the_callback(redis_server):
     """The queue is a trust boundary: `send()` forwards whatever it was given.
 
@@ -1007,7 +1007,7 @@ def test_a_queued_on_complete_key_cannot_spend_the_callback(redis_server):
     assert redis_server.llen(PROCESSING) == 1, 'acknowledged without sending'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_cancelled_send_does_not_end_the_consumer(redis_server, caplog):
     """`dispatch` catches Exception, and CancelledError is not one.
 
@@ -1035,7 +1035,7 @@ def test_a_cancelled_send_does_not_end_the_consumer(redis_server, caplog):
     assert redis_server.llen(PROCESSING) == 1, 'the canceled message was acknowledged'
 
 
-@override_settings(TELEGRAM_BOT={})
+@override_settings(TELEGRAM_BOT_DEFAULTS={})
 def test_an_unconfigured_project_gets_the_old_behavior():
     """Both settings are new, and both default to what 3.0 already did.
 
@@ -1057,7 +1057,7 @@ def test_an_unconfigured_project_gets_the_old_behavior():
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         **SETTINGS,
         'TOKEN': '42:x',
         'MODE': 'webhook',
@@ -1125,7 +1125,7 @@ def test_a_send_the_drain_finishes_is_acknowledged_before_the_command_returns(re
     assert redis_server.llen(QUEUE) == 0
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'WORKER_NAME': 'alive'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WORKER_NAME': 'alive'})
 def test_reclaim_works_on_a_server_older_than_lmove(redis_server, monkeypatch):
     """The one path that can still recover a list stranded on a pre-6.2 server.
 

@@ -39,7 +39,7 @@ def settings_for(bootstrap, topic):
 
 @pytest.fixture
 def broker(kafka_bootstrap, kafka_topic):
-    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
         yield KafkaBroker()
 
 
@@ -50,7 +50,7 @@ def test_a_message_a_killed_worker_held_comes_back(broker, kafka_bootstrap, kafk
     in-flight list, no worker name, no reclaim. Closing the client is what dying does — the
     member stops heartbeating and the group gives its partition away.
     """
-    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
         broker.publish([payload(7)])
         taken = broker.take_nowait()
         assert taken is not None, 'the message was not delivered in the first place'
@@ -68,7 +68,7 @@ def test_a_message_a_killed_worker_held_comes_back(broker, kafka_bootstrap, kafk
 
 def test_an_acknowledged_message_does_not_come_back(broker, kafka_bootstrap, kafka_topic):
     """The other half, and on Kafka it is a commit rather than a removal."""
-    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
         broker.publish([payload(8)])
         taken = broker.take_nowait()
         assert taken is not None
@@ -90,7 +90,7 @@ def test_settling_out_of_order_commits_only_what_is_contiguous(broker, kafka_boo
     evidence: the first message, because nothing above it could be committed while it was
     outstanding.
     """
-    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
         broker.publish([payload(1), payload(2), payload(3)])
         held = [broker.take_nowait() for _ in range(3)]
         assert all(item is not None for item in held), f'expected three messages, got {held}'
@@ -110,7 +110,7 @@ def test_settling_the_gap_commits_both(broker, kafka_bootstrap, kafka_topic):
 
     Without this the case above would be satisfied by a broker that never commits anything.
     """
-    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
         broker.publish([payload(1), payload(2)])
         first, second = (broker.take_nowait() for _ in range(2))
         assert first is not None, 'the first message was not delivered'
@@ -131,7 +131,7 @@ def test_a_release_rewinds_and_says_so(broker, kafka_bootstrap, kafka_topic):
     insists on idempotency more loudly than the others. Asserted rather than described: the
     message after the released one comes back as well.
     """
-    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
         broker.publish([payload(1), payload(2)])
         first, second = (broker.take_nowait() for _ in range(2))
         assert first is not None, 'the first message was not delivered'
@@ -156,7 +156,7 @@ def test_depth_answers_a_process_that_consumes_nothing(broker, kafka_bootstrap, 
     assignment would report an empty queue to every process that only publishes, which is most
     of them.
     """
-    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
         broker.publish([payload(1), payload(2), payload(3)])
 
         # a broker that has never consumed, exactly like a view or a Celery task
@@ -178,7 +178,7 @@ def test_producing_to_a_topic_that_cannot_be_created_is_refused(kafka_bootstrap)
     empty. Measured, librdkafka reports `TOPIC_EXCEPTION … Broker: Invalid topic`.
     """
     bad = 'this is not a valid topic name'
-    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, bad)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, bad)):
         with pytest.raises(ProduceRefusedError) as refused:
             KafkaBroker().publish([payload(1)])
 
@@ -206,7 +206,7 @@ def test_asking_the_depth_does_not_join_the_group(broker, kafka_bootstrap, kafka
 
     admin = AdminClient({'bootstrap.servers': kafka_bootstrap})
 
-    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
         publisher = KafkaBroker()
         publisher.publish([payload(1)])
 
@@ -245,7 +245,7 @@ def test_the_awaited_halves_work_off_the_loop(broker, kafka_bootstrap, kafka_top
         measuring.append(threading.get_ident())
         return measured(self)
 
-    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
 
         async def on_a_loop():
             await broker.apublish([])
@@ -271,7 +271,7 @@ def test_the_awaited_halves_work_off_the_loop(broker, kafka_bootstrap, kafka_top
 
 def test_a_handle_from_another_broker_is_refused(broker, kafka_bootstrap, kafka_topic):
     """A position is a pair, so anything else came from a different transport."""
-    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
         with pytest.raises(TypeError, match='partition, offset, epoch'):
             broker.ack(b'a redis payload')
 
@@ -370,7 +370,7 @@ def test_messages_stranded_in_the_producer_are_reported(kafka_bootstrap, caplog)
     """
     from django_aiogram.broker.kafka import client
 
-    with override_settings(TELEGRAM_BOT=settings_for('127.0.0.1:1', 'unreachable')):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for('127.0.0.1:1', 'unreachable')):
         producer = client.shared_producer('127.0.0.1:1')
         for _ in range(3):
             producer.produce('unreachable', b'{}')
@@ -394,7 +394,7 @@ def test_a_stale_ack_after_a_rewind_cannot_commit_past_it(broker, kafka_bootstra
     So the handle carries the partition's rewind count and a stale one settles nothing. What
     proves it is what comes back afterwards: both messages, in order.
     """
-    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
         broker.publish([payload(1), payload(2)])
         first, second = (broker.take_nowait() for _ in range(2))
         assert first is not None, 'the first message was not delivered'
@@ -429,7 +429,7 @@ def test_a_settle_from_another_thread_fails_rather_than_corrupting_the_offsets(b
     """
     from confluent_kafka import KafkaException
 
-    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
         broker.publish([payload(1)])
         taken = broker.take_nowait()
         assert taken is not None, 'the message was not delivered'
@@ -470,7 +470,7 @@ def test_a_handle_this_broker_is_not_holding_settles_nothing(broker, kafka_boots
     broker never took does not rewind the partition — the next message is the one after, not the
     one the forged handle named.
     """
-    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
         broker.publish([payload(1), payload(2)])
         first = broker.take_nowait()
         assert first is not None, 'the first message was not delivered'
@@ -503,7 +503,7 @@ def test_a_release_does_not_strand_the_messages_taken_before_it(broker, kafka_bo
 
     Step 3 has to work. The proof is a restart: what comes back is the released message alone.
     """
-    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
         broker.publish([payload(1), payload(2)])
         first, second = (broker.take_nowait() for _ in range(2))
         assert first is not None, 'the first message was not delivered'
@@ -544,7 +544,7 @@ def test_a_produced_record_survives_the_broker_going_away(
     def answering():
         return kafka_topic in AdminClient({'bootstrap.servers': kafka_bootstrap}).list_topics(timeout=5).topics
 
-    with override_settings(TELEGRAM_BOT=settings_for(kafka_bootstrap, kafka_topic)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
         KafkaBroker().publish([payload(12)])
         close_clients()
 

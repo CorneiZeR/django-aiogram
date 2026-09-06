@@ -30,7 +30,7 @@ body:
   - type: textarea
     id: settings
     attributes:
-      label: Your TELEGRAM_BOT settings
+      label: Your TELEGRAM_BOT_DEFAULTS settings
       description: >-
         Redact TOKEN and any password in REDIS_URL. If a secret has already been
         exposed somewhere, report it privately instead — see SECURITY.md.

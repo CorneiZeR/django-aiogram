@@ -132,7 +132,7 @@ CHECKS: tuple[Check, ...] = (
     # reader can act on, not a condition worth failing `check --fail-level WARNING`
     Check('I002', 'EVENT_LOG_DATABASE', _a_routed_log_database),
     # keyed on nothing, because the condition is a table rather than a setting: it is true or
-    # false whatever `TELEGRAM_BOT` says, and the message names the alias it asked
+    # false whatever `TELEGRAM_BOT_DEFAULTS` says, and the message names the alias it asked
     Check('I003', '', _a_log_the_rename_left_behind),
     Check('E047', 'BROKER', _a_usable_broker),
     Check('E042', 'EVENT_LOG_SYNC', _a_readable_boolean),

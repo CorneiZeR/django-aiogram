@@ -43,7 +43,7 @@ def test_a_missing_router_module_is_not_an_error():
     autodiscover_tg_routers()
 
 
-@override_settings(TELEGRAM_BOT={'MODULE_NAME': 'definitely_not_here'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'MODULE_NAME': 'definitely_not_here'})
 def test_unknown_module_name_finds_nothing(monkeypatch):
     """Watch the import seam, so this cannot pass by never looking at all."""
     requested = []
@@ -64,7 +64,7 @@ def test_unknown_module_name_finds_nothing(monkeypatch):
     assert after == before
 
 
-@override_settings(TELEGRAM_BOT={'MODULE_NAME': 'broken_router'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'MODULE_NAME': 'broken_router'})
 def test_a_broken_router_surfaces_instead_of_being_swallowed():
     """1.x caught bare ImportError, so a typo inside a router silently
     disabled the whole file."""

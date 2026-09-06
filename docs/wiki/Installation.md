@@ -59,7 +59,7 @@ pip install 'django-aiogram[kafka,redis]'   # Kafka for the queue, redis for the
 or keep one extra and say the state lives in the process:
 
 ```python
-TELEGRAM_BOT = {'FSM_STORAGE': 'memory', ...}   # per process, lost on restart
+TELEGRAM_BOT_DEFAULTS = {'FSM_STORAGE': 'memory', ...}   # per process, lost on restart
 ```
 
 `manage.py check` reports **`E019`** for exactly one configuration — `FSM_STORAGE` naming
@@ -80,7 +80,7 @@ happens to be installed, so the two have to agree; when they do not, `manage.py 
 says so with the install line for the one you named:
 
 ```text
-?: (django_aiogram.E047) TELEGRAM_BOT['BROKER'] names
+?: (django_aiogram.E047) TELEGRAM_BOT_DEFAULTS['BROKER'] names
    'django_aiogram.broker.redis_list.RedisListBroker', whose driver is not installed.
 	HINT: pip install "django-aiogram[redis]"
 ```
@@ -122,7 +122,7 @@ INSTALLED_APPS = [
     'django_aiogram',
 ]
 
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'TOKEN': os.environ.get('TELEGRAM_BOT_TOKEN', ''),
     'REDIS_URL': os.environ.get('REDIS_URL', ''),
 }

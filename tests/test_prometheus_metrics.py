@@ -107,7 +107,7 @@ def test_the_exporter_cannot_break_the_batch_it_is_counting(registry, caplog):
     assert 'could not record an event' in caplog.text
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_failing_exporter_does_not_cost_the_receivers_after_it(registry):
     """The `__qualname__` fix in `eventlog/signals.py`, exercised by the shape it was written for.
 

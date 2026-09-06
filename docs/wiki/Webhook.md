@@ -7,7 +7,7 @@ Both are supported the same way, and one setting says which one this deployment
 uses:
 
 ```python
-TELEGRAM_BOT = {'MODE': 'webhook'}  # or 'polling', the default
+TELEGRAM_BOT_DEFAULTS = {'MODE': 'webhook'}  # or 'polling', the default
 ```
 
 Scalars can come from the environment, so the choice can be made at startup
@@ -69,7 +69,7 @@ mode that worker no longer polls.
 # settings.py
 import os
 
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'TOKEN': os.environ['TELEGRAM_BOT_TOKEN'],
     'REDIS_URL': os.environ['REDIS_URL'],
     'MODE': 'webhook',

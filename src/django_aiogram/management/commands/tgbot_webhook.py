@@ -32,7 +32,10 @@ class Command(BaseCommand):
     def handle(self, *args: Any, **options: Any) -> None:
         """Run the chosen action, and close the bot whichever way it ends."""
         if not bot.enabled:
-            msg = "the bot is disabled here (TELEGRAM_BOT['ENABLED'] or DJANGO_AIOGRAM_ENABLED); nothing was changed"
+            msg = (
+                "the bot is disabled here (TELEGRAM_BOT_DEFAULTS['ENABLED'] or "
+                'DJANGO_AIOGRAM_ENABLED); nothing was changed'
+            )
             raise CommandError(msg)
 
         action = options['action']
@@ -51,7 +54,7 @@ class Command(BaseCommand):
         if current_mode() != UpdateMode.WEBHOOK:
             self.stdout.write(
                 self.style.WARNING(
-                    f"TELEGRAM_BOT['MODE'] is '{current_mode()}': registering this webhook "
+                    f"TELEGRAM_BOT_DEFAULTS['MODE'] is '{current_mode()}': registering this webhook "
                     'stops getUpdates from working, so polling will fail until it is deleted'
                 )
             )

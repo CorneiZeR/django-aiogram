@@ -67,7 +67,7 @@ def _registered():
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_the_changelist_renders(client):
     an_event()
     client.force_login(a_reader('viewer', 'view_telegramevent'))
@@ -76,7 +76,7 @@ def test_the_changelist_renders(client):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_the_changelist_never_counts_past_the_cap(client):
     """Django's changelist runs COUNT(*) to build the page list. On a table
     sized by traffic that is a sequential scan on every page load, which is
@@ -98,7 +98,7 @@ def test_the_changelist_never_counts_past_the_cap(client):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_count_that_stopped_at_the_cap_says_so(client, monkeypatch):
     """A page reporting exactly the cap reads as the whole answer.
 
@@ -119,7 +119,7 @@ def test_a_count_that_stopped_at_the_cap_says_so(client, monkeypatch):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_count_inside_the_cap_says_nothing(client, monkeypatch):
     """The other half: a warning on every page is a warning nobody reads."""
     monkeypatch.setattr(admin_module, 'COUNT_LIMIT', 5)
@@ -132,7 +132,7 @@ def test_a_count_inside_the_cap_says_nothing(client, monkeypatch):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_reader_without_the_payload_permission_sees_no_bodies(client):
     """The split that makes the two permissions worth having: support can see
     that a message went out without reading what it said."""
@@ -151,7 +151,7 @@ def test_a_reader_without_the_payload_permission_sees_no_bodies(client):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_reader_with_the_payload_permission_sees_them(client):
     event = an_event(detail={'text': 'a secret plan'}, error='a stack trace')
     client.force_login(a_reader('operator', 'view_telegramevent', 'view_telegramevent_payload'))
@@ -163,7 +163,7 @@ def test_a_reader_with_the_payload_permission_sees_them(client):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_the_detail_is_escaped_not_marked_safe(client):
     """A detail holds whatever came off the wire, so mark_safe here would be
     stored XSS against everyone with admin access."""
@@ -177,7 +177,7 @@ def test_the_detail_is_escaped_not_marked_safe(client):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_adding_is_refused(client):
     client.force_login(a_reader('adder', 'view_telegramevent'))
 
@@ -185,7 +185,7 @@ def test_adding_is_refused(client):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT={'EVENT_LOG': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG': False})
 def test_the_admin_is_hidden_while_the_log_is_off(client):
     an_event()
     client.force_login(a_reader('hidden', 'view_telegramevent'))
@@ -194,7 +194,7 @@ def test_the_admin_is_hidden_while_the_log_is_off(client):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_the_stages_of_one_message_are_shown_together(client):
     """The point of the correlation id, seen from the admin."""
     identifier = new_correlation_id()
@@ -211,7 +211,7 @@ def test_the_stages_of_one_message_are_shown_together(client):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_search_the_columns_cannot_hold_is_refused_before_the_query(client):
     """Typed equality raises while the query is built — `ValidationError` for
     the uuid column, `ValueError` for the integer one, on every backend — so a
@@ -233,7 +233,7 @@ def test_a_search_the_columns_cannot_hold_is_refused_before_the_query(client):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_search_by_correlation_id_finds_the_row(client):
     identifier = new_correlation_id()
     row = an_event(correlation_id=identifier)
@@ -249,7 +249,7 @@ def test_a_search_by_correlation_id_finds_the_row(client):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_chain_longer_than_the_cap_says_it_was_cut(client):
     """A page that stops at exactly 200 rows without saying so reads as the
     whole history of the message, which is the wrong thing to believe about a
@@ -267,7 +267,7 @@ def test_a_chain_longer_than_the_cap_says_it_was_cut(client):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_search_asks_the_column_and_not_a_function_of_it(client):
     """The regression that made the search a sequential scan.
 
@@ -294,7 +294,7 @@ def test_a_search_asks_the_column_and_not_a_function_of_it(client):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_search_by_short_id_finds_the_whole_thread(client):
     """What the column now shows is what the search takes.
 
@@ -318,7 +318,7 @@ def test_a_search_by_short_id_finds_the_whole_thread(client):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_the_column_shows_the_code_it_searches_by(client):
     """Copying what is on screen has to be enough — a support reader has no other route in."""
     identifier = new_correlation_id()
@@ -331,7 +331,7 @@ def test_the_column_shows_the_code_it_searches_by(client):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_row_from_before_the_backfill_says_so(client):
     """The column is filled going forward and by a command going back, so both states are on the
     page at once until an operator finishes the walk. An empty cell would read as a missing thread
@@ -345,7 +345,7 @@ def test_a_row_from_before_the_backfill_says_so(client):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_chat_id_too_large_for_the_column_is_refused(client):
     """int() accepts any number of digits and BIGINT does not; asking anyway is
     an error from the backend rather than an empty page."""
@@ -358,7 +358,7 @@ def test_a_chat_id_too_large_for_the_column_is_refused(client):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_search_by_chat_id_finds_the_rows(client):
     """The other half of what the help text promises, and the half a support
     reader actually types."""
@@ -374,7 +374,7 @@ def test_a_search_by_chat_id_finds_the_rows(client):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_term_that_could_be_either_is_read_as_a_chat_id(client):
     """Twelve digits are a legal code and a plausible chat id, and only one of those is common.
 
@@ -442,7 +442,7 @@ def test_the_permissions_are_refusals_not_opinions():
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_the_changelist_does_not_fetch_the_payload_columns(client):
     """`error` and `detail` are most of what a row weighs, and the list renders
     neither — about 1.4 MB per fifty-row page fetched to be discarded, including
@@ -459,7 +459,7 @@ def test_the_changelist_does_not_fetch_the_payload_columns(client):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_reader_without_the_payload_permission_never_fetches_them(client):
     """`get_fields` keeps them off the page. Fetching them anyway would still put
     message bodies and exception text on the wire and into the query log for
@@ -477,7 +477,7 @@ def test_a_reader_without_the_payload_permission_never_fetches_them(client):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_the_detail_page_still_fetches_them_in_one_query(client):
     """Deferring on the changelist routes the detail page through the same
     queryset, so without lifting it each column would cost its own extra query
@@ -496,7 +496,7 @@ def test_the_detail_page_still_fetches_them_in_one_query(client):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_only_indexed_columns_are_sortable():
     """One click on an unindexed header sorts a table sized by traffic.
 
@@ -510,7 +510,7 @@ def test_only_indexed_columns_are_sortable():
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_a_kind_filtered_changelist_needs_no_sort(client, query_plan):
     """The index was `(kind, -created_at)` while `ordering` is `-id`.
 
@@ -539,7 +539,7 @@ def test_a_kind_filtered_changelist_needs_no_sort(client, query_plan):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 @pytest.mark.parametrize('order', ['created_at', '-created_at'])
 def test_the_created_at_headers_sort_at_most_a_tie(order, query_plan):
     """Django appends `-pk` to make the changelist's order deterministic, and a
@@ -569,7 +569,7 @@ def test_the_created_at_headers_sort_at_most_a_tie(order, query_plan):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 # both directions: the filter strips the sign before deciding, so a regression that
 # dropped `2` and kept `-2` would restore descending sorts on an unindexed column
 @pytest.mark.parametrize(
@@ -611,7 +611,7 @@ def test_an_o_param_for_an_unindexed_column_does_not_sort(client, index, column)
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT=ON)
+@override_settings(TELEGRAM_BOT_DEFAULTS=ON)
 def test_the_outcome_filters_count_is_served_by_the_index(client, query_plan):
     """`BoundedPaginator` promised "one query the index can serve" and the failure
     filter was the one place it was not.

@@ -5,7 +5,7 @@ choice here. An unacknowledged message returns to the queue when the channel hol
 and a dying worker drops its channel by dying.
 
 ```python
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'BROKER': 'django_aiogram.broker.rabbitmq.RabbitMQBroker',
     'RABBITMQ_URL': 'amqp://user:pass@localhost:5672/',
     'RABBITMQ_QUEUE': 'telegram-bot',

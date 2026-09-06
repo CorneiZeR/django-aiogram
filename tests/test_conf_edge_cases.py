@@ -15,13 +15,13 @@ from django_aiogram.config.defaults import no_default_kwargs
 from django_aiogram.config.settings import Settings, conf
 
 
-@override_settings(TELEGRAM_BOT=['not', 'a', 'mapping'])
+@override_settings(TELEGRAM_BOT_DEFAULTS=['not', 'a', 'mapping'])
 def test_non_mapping_settings_are_reported_clearly():
     with pytest.raises(ImproperlyConfigured, match='must be a mapping'):
         _ = conf['TOKEN']
 
 
-@override_settings(TELEGRAM_BOT='TOKEN=abc')
+@override_settings(TELEGRAM_BOT_DEFAULTS='TOKEN=abc')
 def test_string_settings_are_reported_clearly():
     with pytest.raises(ImproperlyConfigured, match='must be a mapping'):
         _ = conf['TOKEN']
@@ -32,12 +32,12 @@ def test_an_empty_non_mapping_is_reported_too(value):
     """The two tests above pick non-empty values, which is how this went unnoticed.
 
     `_resolve` used to fold every falsy setting into `{}` before the mapping check, so
-    `TELEGRAM_BOT = []` reached none of it: the token and every other value came from the
+    `TELEGRAM_BOT_DEFAULTS = []` reached none of it: the token and every other value came from the
     environment or the defaults, silently, and a project that had configured the bot ran
     as though it had not. An empty mistaken assignment is the likelier one, and it was the
     only shape that got through.
     """
-    with override_settings(TELEGRAM_BOT=value), pytest.raises(ImproperlyConfigured, match='must be a mapping'):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=value), pytest.raises(ImproperlyConfigured, match='must be a mapping'):
         _ = conf['TOKEN']
 
 
@@ -45,11 +45,11 @@ def test_an_empty_non_mapping_is_reported_too(value):
 def test_an_absent_setting_is_still_absent_rather_than_wrong(value):
     """The other side of that fix: not configured is not the same as misconfigured.
 
-    `TELEGRAM_BOT = None` and an unset one both mean *take everything from the environment
+    `TELEGRAM_BOT_DEFAULTS = None` and an unset one both mean *take everything from the environment
     and the defaults*, which is what the lazy-boot tests and `tests/bare_settings.py` rely
     on. An empty dict is a mapping and means the same.
     """
-    with override_settings(TELEGRAM_BOT=value):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=value):
         assert conf['TOKEN'] == ''
 
 
@@ -77,7 +77,7 @@ def test_settings_module_is_not_shadowed_by_the_conf_object():
 
 
 def test_settings_survive_an_empty_override():
-    with override_settings(TELEGRAM_BOT=None):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=None):
         assert isinstance(Settings()['MAX_RETRIES'], int)
 
 
@@ -143,11 +143,11 @@ def test_the_flush_interval_is_read_the_way_its_check_demands():
     """
     from django_aiogram.eventlog.pacing import flush_interval
 
-    with override_settings(TELEGRAM_BOT={'EVENT_LOG_FLUSH_INTERVAL': 0.5}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG_FLUSH_INTERVAL': 0.5}):
         assert 'django_aiogram.E038' in {str(m.id) for m in check_settings()}
         assert flush_interval() == 1, 'the writer honoured an interval the check refuses'
 
-    with override_settings(TELEGRAM_BOT={'EVENT_LOG_FLUSH_INTERVAL': 3}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG_FLUSH_INTERVAL': 3}):
         assert flush_interval() == 3
 
 
@@ -164,7 +164,7 @@ def test_a_writer_dial_that_cannot_be_read_falls_back_instead_of_ending_the_thre
     from django_aiogram.config.defaults import DEFAULTS
     from django_aiogram.eventlog.pacing import flush_interval
 
-    with override_settings(TELEGRAM_BOT={'EVENT_LOG_FLUSH_INTERVAL': value}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG_FLUSH_INTERVAL': value}):
         assert flush_interval() == DEFAULTS['EVENT_LOG_FLUSH_INTERVAL']
 
 
@@ -191,7 +191,7 @@ def test_the_writer_waits_the_interval_its_reader_returns():
             raise queue.Empty
 
     buffer = RecordingBuffer()
-    with override_settings(TELEGRAM_BOT={'EVENT_LOG_FLUSH_INTERVAL': 0.5}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG_FLUSH_INTERVAL': 0.5}):
         batch, wakes = EventRecorder()._collect(buffer)  # type: ignore[arg-type]  # a stand-in for the queue
 
     assert (batch, wakes) == ([], [])
@@ -222,13 +222,13 @@ def test_an_environment_variable_for_a_settings_only_key_says_it_is_ignored(monk
     assert reported[0].tg_variable == f'DJANGO_AIOGRAM_{key}'
 
 
-@override_settings(TELEGRAM_BOT=['not', 'a', 'mapping'])
+@override_settings(TELEGRAM_BOT_DEFAULTS=['not', 'a', 'mapping'])
 def test_the_pop_deadline_rule_falls_back_rather_than_raising():
     """`W004` reads three settings now, and caught only the failures one of them makes.
 
     `blpop_ceiling()` weighs `HEARTBEAT_INTERVAL` and `REDIS_TIMEOUT` against the rule's
     own key, and each of those reads resolves the whole settings dict on a cold cache —
-    so an unresolvable `TELEGRAM_BOT` raises `ImproperlyConfigured` from inside a `try`
+    so an unresolvable `TELEGRAM_BOT_DEFAULTS` raises `ImproperlyConfigured` from inside a `try`
     that named only `TypeError` and `ValueError`. Its neighbours in this module catch it;
     this one had grown past its own guard.
 

@@ -98,33 +98,33 @@ def test_defaults_are_readable():
     assert conf['DELIVERY'] == 'django_aiogram.consumer.delivery.BlpopDelivery'
 
 
-@override_settings(TELEGRAM_BOT={'MAX_RETRIES': 3})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'MAX_RETRIES': 3})
 def test_override_settings_is_picked_up():
     assert conf['MAX_RETRIES'] == 3
 
 
 def test_settings_win_over_environment(monkeypatch):
     monkeypatch.setenv('DJANGO_AIOGRAM_MAX_RETRIES', '7')
-    with override_settings(TELEGRAM_BOT={'MAX_RETRIES': 3}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'MAX_RETRIES': 3}):
         assert conf['MAX_RETRIES'] == 3
 
 
 def test_environment_fills_unset_keys(monkeypatch):
     monkeypatch.setenv('DJANGO_AIOGRAM_MAX_RETRIES', '7')
     monkeypatch.setenv('DJANGO_AIOGRAM_TOKEN', '42:from-env')
-    with override_settings(TELEGRAM_BOT={}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={}):
         assert conf['MAX_RETRIES'] == 7
         assert conf['TOKEN'] == '42:from-env'
 
 
 def test_environment_ignores_non_scalar_settings(monkeypatch):
     monkeypatch.setenv('DJANGO_AIOGRAM_DEFAULT_KWARGS', 'nonsense')
-    with override_settings(TELEGRAM_BOT={}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={}):
         assert callable(conf['DEFAULT_KWARGS'])
 
 
 def test_unknown_settings_are_preserved():
-    with override_settings(TELEGRAM_BOT={'CUSTOM': 'kept'}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'CUSTOM': 'kept'}):
         assert conf['CUSTOM'] == 'kept'
 
 
@@ -145,7 +145,7 @@ def test_parse_bool_rejects_ambiguous():
 
 def test_invalid_integer_in_environment_is_reported(monkeypatch):
     monkeypatch.setenv('DJANGO_AIOGRAM_MAX_RETRIES', 'ten')
-    with override_settings(TELEGRAM_BOT={}), pytest.raises(ImproperlyConfigured, match='integer'):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={}), pytest.raises(ImproperlyConfigured, match='integer'):
         _ = conf['MAX_RETRIES']
 
 
@@ -238,7 +238,7 @@ def test_running_the_system_checks_does_not_import_aiogram():
 
         # the positive control: our rules reached this run through Django's registry
         try:
-            with override_settings(TELEGRAM_BOT={'TOKEN': 42}):
+            with override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': 42}):
                 call_command('check')
         except SystemCheckError as refused:
             assert 'django_aiogram.E004' in str(refused), f'someone else refused it: {refused}'

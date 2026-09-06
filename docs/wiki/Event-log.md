@@ -10,7 +10,7 @@ second a database is the wrong tool and a log shipper is the right one. Below
 that, a table you can query and join against your own models is worth the write.
 
 ```python
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'EVENT_LOG': True,
     # part of turning it on, not an afterthought: nothing on the write path deletes
     # anything, so `W006` warns while this is 0, which is also the default — and a project running
@@ -167,7 +167,7 @@ an explicit `correlation_id` per send where you need the states apart.
 got there yet; or the writer dropped the event under pressure, which the section below
 explains and a `log.dropped` row marks; or `EVENT_LOG_RETENTION_DAYS` has pruned it; or —
 the one that looks least like a misconfiguration — **the process that sent the message does
-not record outcomes.** The bot container reads its own `TELEGRAM_BOT`, so one with the log
+not record outcomes.** The bot container reads its own `TELEGRAM_BOT_DEFAULTS`, so one with the log
 off or with a narrower `EVENT_LOG_KINDS` writes no row for a message it delivered perfectly
 well, and the refusal below cannot fire for a configuration this process cannot see.
 
@@ -666,7 +666,7 @@ for you.
 ## A separate database
 
 ```python
-TELEGRAM_BOT = {'EVENT_LOG_DATABASE': 'logs'}
+TELEGRAM_BOT_DEFAULTS = {'EVENT_LOG_DATABASE': 'logs'}
 DATABASE_ROUTERS = ['django_aiogram.eventlog.dbrouter.TelegramEventLogRouter', ...]
 ```
 

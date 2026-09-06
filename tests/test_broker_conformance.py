@@ -90,7 +90,7 @@ def broker(request):
     """
     path = request.param
     if 'testing' in path:
-        with override_settings(TELEGRAM_BOT=SETTINGS):
+        with override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS):
             broker = import_string(path)()
             broker.conformance_path = path
             yield broker
@@ -128,7 +128,7 @@ def _against_redis(request, path):
 
     if not REDIS_URL:
         request.getfixturevalue('redis_server')
-        with override_settings(TELEGRAM_BOT=SETTINGS):
+        with override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS):
             broker = import_string(path)()
             broker.conformance_path = path
             yield broker
@@ -144,7 +144,7 @@ def _against_redis(request, path):
     client.flushdb()
     reset_redis()
     try:
-        with override_settings(TELEGRAM_BOT=SETTINGS):
+        with override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS):
             broker = import_string(path)()
             broker.conformance_path = path
             yield broker
@@ -192,7 +192,7 @@ def _against_kafka(path):
 
     unique = f'conformance-{uuid.uuid4().hex[:12]}'
     # written into the shared mapping, not into a copy of it. Each case carries its own
-    # `override_settings(TELEGRAM_BOT=SETTINGS)`, and that replaces the whole dict when the
+    # `override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)`, and that replaces the whole dict when the
     # case starts — after this fixture has run — so a per-case value has to be *in* the
     # mapping the decorator reads, or the body gets the module-level topic instead. The same
     # shape of mistake as the AMQP settings, from the other side
@@ -203,7 +203,7 @@ def _against_kafka(path):
     # A transport's contract is that the topic exists; making it is the operator's job, or the
     # broker's `auto.create.topics.enable`, and here it is the fixture's
     _make_kafka_topic(unique)
-    with override_settings(TELEGRAM_BOT=SETTINGS):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS):
         broker = import_string(path)()
         broker.conformance_path = path
         try:
@@ -244,7 +244,7 @@ def _against_rabbitmq(path):
 
     scrub = pika.BlockingConnection(pika.URLParameters(AMQP_URL)).channel()
     scrub.queue_delete(queue=AMQP_QUEUE)
-    with override_settings(TELEGRAM_BOT=SETTINGS):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS):
         broker = import_string(path)()
         broker.conformance_path = path
         try:
@@ -268,7 +268,7 @@ def countable(broker):
     return broker
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_published_message_can_be_taken(broker: Broker):
     """Publish then take, which is the whole of what a transport is for."""
     broker.publish([payload(7)])
@@ -279,7 +279,7 @@ def test_a_published_message_can_be_taken(broker: Broker):
     assert taken.payload == payload(7)
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_publishing_nothing_queues_nothing_and_raises_nothing(broker: Broker):
     """The transports disagree by nature, so the contract has to decide.
 
@@ -299,7 +299,7 @@ def test_publishing_nothing_queues_nothing_and_raises_nothing(broker: Broker):
     assert broker.depth() == before, 'publishing nothing changed the queue'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_awaiting_half_publishes_and_counts_the_same(countable: Broker):
     """Every `a*` method is a second implementation, and a second place to regress.
 
@@ -323,13 +323,13 @@ def test_the_awaiting_half_publishes_and_counts_the_same(countable: Broker):
     assert inflight == 0, 'nothing was taken, so nothing is in flight'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_an_empty_queue_answers_none_rather_than_blocking(broker: Broker):
     """`take_nowait` on nothing is `None`, not an exception and not a wait."""
     assert broker.take_nowait() is None
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_an_acknowledged_message_does_not_come_back(broker: Broker):
     """What `ack` means, stated as the only thing that can be checked from outside."""
     broker.publish([payload(1)])
@@ -342,7 +342,7 @@ def test_an_acknowledged_message_does_not_come_back(broker: Broker):
     assert broker.reclaim() in (0, None), 'a settled message was reclaimed'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_released_message_comes_back(broker: Broker):
     """The difference between refused and delivered, which is why `release` exists.
 
@@ -362,7 +362,7 @@ def test_a_released_message_comes_back(broker: Broker):
     assert again.payload == payload(2)
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_depth_counts_what_is_waiting(countable: Broker):
     """Two published, two waiting; one taken, one waiting."""
     countable.publish([payload(3), payload(4)])
@@ -373,7 +373,7 @@ def test_depth_counts_what_is_waiting(countable: Broker):
     assert countable.depth() == 1
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_what_is_taken_and_unsettled_is_in_flight(broker: Broker):
     """The count `MAX_IN_FLIGHT` is compared against, from the transport's own books."""
     broker.publish([payload(5)])
@@ -385,7 +385,7 @@ def test_what_is_taken_and_unsettled_is_in_flight(broker: Broker):
     assert broker.inflight_depth() == 1, 'a taken message is not counted as in flight'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_handle_is_opaque_and_round_trips(broker: Broker):
     """`Delivery` passes a handle back unread, so the broker must accept its own.
 
@@ -402,19 +402,19 @@ def test_the_handle_is_opaque_and_round_trips(broker: Broker):
     assert broker.take_nowait() is None, 'the message survived being settled by its handle'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_broker_says_whether_a_kill_loses_a_message(broker: Broker):
     """Whatever the answer, there has to be one — a deployment refuses on it."""
     assert isinstance(broker.crash_safe, bool)
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_broker_says_whether_it_needs_a_worker_name(broker: Broker):
     """True only where the transport cannot say which consumer holds a message."""
     assert isinstance(broker.needs_identity, bool)
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_liveness_answers_without_a_consumer_running(broker: Broker):
     """A probe asks this of a process that may never have consumed anything."""
     liveness = broker.liveness()
@@ -489,10 +489,10 @@ def test_the_ceiling_follows_the_setting_the_broker_names(path):
     # every required option of every transport, so one `override_settings` serves all four
     required = {'REDIS_STREAM_KEY': 'tg', 'KAFKA_TOPIC': 'tg', 'RABBITMQ_QUEUE': 'tg'}
     base = {**SETTINGS, 'BROKER': path, **required}
-    with override_settings(TELEGRAM_BOT={**base, named: 37}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**base, named: 37}):
         assert broker.call_timeout() == 37, f'{path} does not read {named}'
     for other in others:
-        with override_settings(TELEGRAM_BOT={**base, named: 37, other: 3}):
+        with override_settings(TELEGRAM_BOT_DEFAULTS={**base, named: 37, other: 3}):
             assert broker.call_timeout() == 37, f'{path} reads {other} as well as {named}'
 
 
@@ -513,7 +513,7 @@ def test_a_deadline_that_cannot_be_one_is_refused_by_name(path, value):
     required = {'REDIS_STREAM_KEY': 'tg', 'KAFKA_TOPIC': 'tg', 'RABBITMQ_QUEUE': 'tg'}
     settings = {**SETTINGS, 'BROKER': path, **required, broker.CALL_TIMEOUT_OPTION: value}
 
-    with override_settings(TELEGRAM_BOT=settings), pytest.raises(ImproperlyConfigured) as refused:
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings), pytest.raises(ImproperlyConfigured) as refused:
         broker.call_timeout()
 
     assert broker.CALL_TIMEOUT_OPTION in str(refused.value), (
