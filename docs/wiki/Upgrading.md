@@ -35,13 +35,23 @@ fits, take the migration. If it does not, or you cannot hold writes at all, appl
 up to the index, skip that one, and build it yourself:
 
 ```shell
-python manage.py migrate django_aiogram 0006      # the tables and the columns
-python manage.py migrate django_aiogram 0007 --fake  # the index, and only the index
+python manage.py migrate django_aiogram 0006   # the tables and the columns
 ```
 
 ```sql
 CREATE INDEX CONCURRENTLY dja_event_bot ON django_aiogram_event (bot_id, id DESC);
 ```
+
+**In that order, and only then tell Django it is done:**
+
+```shell
+python manage.py migrate django_aiogram 0007 --fake   # the index, and only the index
+```
+
+Faking first is the mistake to avoid: `--fake` records the migration as applied without
+running it, so a `CREATE INDEX CONCURRENTLY` that then fails leaves the index missing with
+Django believing it exists, and nothing will build it again. A concurrent build that fails
+also leaves an invalid index behind — `DROP INDEX dja_event_bot` and start over.
 
 The name has to match, or the next `makemigrations` will offer to create it again. **Do not
 fake `0006`** to get at this: it carries the four tables and the `bot_id` columns, and a

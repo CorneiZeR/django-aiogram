@@ -21,6 +21,13 @@
   index treats two NULLs as distinct on every database this package supports -- so a nullable
   one would let two runs claim one failure and send the message twice.
 
+  **The token column stores the token as given.** Nothing encrypts it yet: what protects it is
+  the database's own access control and the `view_telegrambot_token` permission the model
+  declares, which is why that permission exists. `TOKEN_STORAGE` -- a seam, with an optional
+  implementation behind an extra rather than `cryptography` as a dependency for everyone -- is
+  what a project needing encryption at rest will reach for, and until it lands a dump of this
+  table is a dump of every bot's credential.
+
   Nothing reads any of it until a supervisor or the admin is configured, and a project running
   one bot from `settings.py` writes no row at all. **Run `manage.py migrate`.** The index on
   the event log is a migration of its own so that a large feed can have it built by hand:

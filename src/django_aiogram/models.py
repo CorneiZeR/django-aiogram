@@ -347,8 +347,14 @@ class TelegramBot(models.Model):
     bot_id = models.BigIntegerField(unique=True)
     #: what a person calls it: the client's name, the product's, whatever the admin shows
     label = models.CharField(max_length=128, blank=True)
-    #: the credential. Behind `TOKEN_STORAGE` from #122, which is why nothing here reads it
-    #: directly, and behind `view_telegrambot_token` in the admin -- the permission below
+    #: the credential, **stored as it is given**. Nothing here encrypts it, and saying so is
+    #: the point: what protects it today is the database's own access control and the
+    #: permission below, which is why that permission exists at all.
+    #:
+    #: A project that needs it encrypted at rest gets `TOKEN_STORAGE` -- a seam with an
+    #: optional implementation behind an extra, rather than a hard dependency on
+    #: `cryptography` for everyone -- and until that lands this column is plain text. Treat a
+    #: dump of this table as a dump of every bot's credential.
     token = models.TextField(blank=True)
     #: where its settings come from. ``None`` means the shared defaults and nothing else
     profile = models.ForeignKey(
