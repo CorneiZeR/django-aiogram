@@ -41,6 +41,11 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_mode` | `polling` or `webhook` |
 | `tg_update` | the update id being handled |
 | `tg_correlation_id` | the id every event about one message carries |
+| `tg_attempts` | how many times a bot has failed to start, which is what makes its quarantine wait grow |
+| `tg_control` | a notice on the queue this version does not know, by the word it carried |
+| `tg_reason` | why a bot stopped being served: no longer configured, or reconfigured under it |
+| `tg_bot` | which bot a line is about, by the alias it is configured under — the section's name, or the identity written out for a bot that came from the database |
+| `tg_other` | the second bot in a line about two of them: the one a conflict was resolved against |
 | `tg_bot_id` | which bot a message names, by the number in its token. Present where a message is for a bot this process does not serve, which it leaves in flight rather than acknowledging |
 | `tg_short_id` | that id as the admin shows it: twelve characters to paste into the log's search box |
 | `tg_alternative` | the awaitable method a synchronous send from a loop should move to |

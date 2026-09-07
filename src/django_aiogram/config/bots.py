@@ -130,36 +130,51 @@ def sections() -> Mapping[str, Any]:
     return raw
 
 
-def _resolve(alias: str, section: Mapping[str, Any], *, declared: bool) -> BotRecord:
-    """Resolve one bot: its section, then its own environment, then the shared settings.
+def resolve(alias: str, *layers: tuple[str, Mapping[str, Any]], declared: bool = True) -> BotRecord:
+    """Resolve one bot from the shared settings, its own environment, and the layers over them.
 
-    A setting in :data:`~django_aiogram.config.defaults.PROCESS_SCOPED` is skipped here
-    whatever the section says. Those belong to the process — the event log's writer is one
-    per process, and router discovery happens once — so honouring a per-bot value would mean
-    the last bot resolved decided for everybody. `E053` reports the attempt.
+    A layer is ``(where, mapping)``: what to call it in a finding, and what it says. Later
+    layers win, so the settings section is one layer and a profile row plus a bot row are two --
+    which is what lets `runtime.providers` build a record for a bot that lives in the database
+    without a second copy of this arithmetic.
+
+    Precedence is defaults, then this bot's environment, then the layers in order. The
+    environment sits *below* them deliberately: a layer is configuration somebody wrote for
+    this bot, and a variable is the fallback for what nobody did.
+
+    A setting in :data:`~django_aiogram.config.defaults.PROCESS_SCOPED` is skipped whatever a
+    layer says. Those belong to the process -- the event log's writer is one per process, and
+    router discovery happens once -- so honouring a per-bot value would mean the last bot
+    resolved decided for everybody. `E053` reports the attempt.
     """
     resolved = dict(conf.resolved)
     origins: dict[str, str] = {}
     prefix = env_prefix(alias)
+    # what the layers already decide, so the environment is not read for it at all. Not an
+    # optimisation: `from_env` refuses a variable it cannot coerce, and a value nothing would
+    # have used must not be what takes a bot down
+    spoken_for = {key for _, said in layers for key in said}
     for key, default in DEFAULTS.items():
-        if key in PROCESS_SCOPED:
-            continue
-        if key in section:
-            resolved[key] = section[key]
-            origins[key] = f"{BOTS_SETTINGS_NAME}['{alias}']['{key}']"
+        if key in PROCESS_SCOPED or key in spoken_for:
             continue
         value = from_env(key, default, prefix=prefix)
         if value is not MISSING:
             resolved[key] = value
             origins[key] = f'{prefix}{key}'
-    # a transport's own options are not in the package-wide table; kept rather than dropped, so
-    # `W003` can call an unknown one a typo
-    for key, value in section.items():
-        if key in PROCESS_SCOPED or key in DEFAULTS:
-            continue
-        resolved[key] = value
-        origins[key] = f"{BOTS_SETTINGS_NAME}['{alias}']['{key}']"
+    for where, said in layers:
+        for key, value in said.items():
+            # a transport's own options are not in the package-wide table, and they are kept
+            # rather than dropped so `W010` can call an unknown one a typo
+            if key in PROCESS_SCOPED:
+                continue
+            resolved[key] = value
+            origins[key] = f"{where}['{key}']"
     return BotRecord(alias=alias, resolved=resolved, origins=origins, declared=declared)
+
+
+def _from_settings(alias: str, section: Mapping[str, Any], *, declared: bool) -> BotRecord:
+    """Resolve one bot the way a ``TELEGRAM_BOTS`` section describes it."""
+    return resolve(alias, (f"{BOTS_SETTINGS_NAME}['{alias}']", section), declared=declared)
 
 
 class _Registry:
@@ -180,7 +195,7 @@ class _Registry:
                 if not declared:
                     declared_sections = {DEFAULT_ALIAS: {}}
                 cache = self._cache = tuple(
-                    _resolve(alias, section, declared=declared) for alias, section in declared_sections.items()
+                    _from_settings(alias, section, declared=declared) for alias, section in declared_sections.items()
                 )
         return cache
 

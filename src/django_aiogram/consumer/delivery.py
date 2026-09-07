@@ -54,6 +54,7 @@ from django_aiogram.redis import (
     processing_key,
     queue_key,
 )
+from django_aiogram.runtime.control import apply_control, is_control
 from django_aiogram.wire.envelope import Envelope, UnknownEnvelopeVersionError, unpack
 from django_aiogram.wire.serializers import PickleReadRefusedError, SerializationError, loads
 
@@ -365,15 +366,17 @@ class Delivery(ABC):
                 extra={'tg_key': self.processing_key},
             )
 
-    def _read(self, raw: bytes) -> tuple['Envelope | None', bool]:
-        """Turn one message off the queue into an envelope, or into a verdict.
+    def _decoded(self, raw: bytes) -> tuple[object, bool]:
+        """Turn the bytes into whatever they hold, or into a verdict about them.
 
-        Everything here is untrusted input, so no failure may escape: what comes
-        back is either the envelope or `None` plus whether to acknowledge the
-        message that never became one.
+        The three ways decoding fails, and they do not get the same answer. A pickle the
+        configuration refuses is left in flight, because a setting is what stands between it
+        and delivery. The other two are acknowledged: nothing will ever make sense of them, and
+        this reader is on the far side of a trust boundary where an escaping exception would
+        end the consumer for the life of the container.
         """
         try:
-            payload = loads(raw)
+            return loads(raw), True
         except PickleReadRefusedError:
             logger.exception(
                 'leaving a refused pickle message in flight; set ALLOW_PICKLE to deliver it',
@@ -388,6 +391,19 @@ class Delivery(ABC):
             self._record_undecodable(raw, 'unknown')
             logger.exception('dropping queued message that failed to decode')
             return None, True
+
+    def _read(self, raw: bytes) -> tuple['Envelope | None', bool]:
+        """Turn one message off the queue into an envelope, or into a verdict.
+
+        Everything here is untrusted input, so no failure may escape: what comes
+        back is either the envelope or `None` plus whether to acknowledge the
+        message that never became one.
+        """
+        payload, readable = self._decoded(raw)
+        if payload is None:
+            return None, readable
+        if is_control(payload):
+            return None, self._acted_on(payload)
         try:
             return unpack(payload), True
         except UnknownEnvelopeVersionError:
@@ -404,6 +420,16 @@ class Delivery(ABC):
             self._record_undecodable(raw, 'envelope')
             logger.exception('dropping a queued message whose envelope cannot be read')
             return None, True
+
+    @staticmethod
+    def _acted_on(payload: object) -> bool:
+        """Act on a notice sharing the queue with the calls, and acknowledge it.
+
+        Acknowledged rather than left in flight: it is not a message anybody is waiting for,
+        and keeping it would have every restart reconcile from a payload nothing needs twice.
+        """
+        apply_control(payload)
+        return True
 
     def dispatch(self, raw: bytes, handle: object | None = None) -> bool:
         """Decode one message and hand it to the handler.
