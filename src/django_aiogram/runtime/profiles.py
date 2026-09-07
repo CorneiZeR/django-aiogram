@@ -34,7 +34,9 @@ __all__ = ('Profile', 'profile_of')
 SHARED = (
     'BROKER',
     # the queue itself: two bots on different queues must not share a broker, or each would
-    # read the other's messages off the queue it is addressed to
+    # read the other's messages off the queue it is addressed to. Read through
+    # `queues.named` below rather than raw, because everything that *uses* it strips the
+    # name -- so ' vip ' and 'vip' address one queue and must not build two groups for it
     'QUEUE',
     'DELIVERY',
     'SERIALIZER',
@@ -113,4 +115,19 @@ def profile_of(settings: 'Mapping[str, Any]') -> Profile:
     """
     options = broker_class(settings, verify_driver=False).OPTIONS
     named = sorted({*SHARED, *options})
-    return Profile(settings=tuple((key, _hashable(settings.get(key))) for key in named))
+    return Profile(settings=tuple((key, _value_of(key, settings)) for key in named))
+
+
+def _value_of(key: str, settings: 'Mapping[str, Any]') -> object:
+    """Return what this key contributes to a profile, as whoever reads it will read it.
+
+    ``QUEUE`` is the one that needs saying: `Broker.queue` and `queues.named` both strip it, so
+    ' vip ' and 'vip' address one queue -- and hashed raw they would build a runtime group and
+    a transport each for it, each consuming the other's messages.
+    """
+    if key == 'QUEUE':
+        # deferred: `runtime.queues` reaches the ORM in the functions this does not call
+        from django_aiogram.runtime.queues import named  # noqa: PLC0415 - as above
+
+        return _hashable(named(settings))
+    return _hashable(settings.get(key))

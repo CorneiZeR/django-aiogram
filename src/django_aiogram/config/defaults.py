@@ -158,6 +158,7 @@ PROCESS_SCOPED: frozenset[str] = frozenset(
         'BOT_REFRESH_INTERVAL',
         'MAX_BOTS_PER_WORKER',
         'BOT_LEASE_SECONDS',
+        'QUEUES',
     }
     | {key for key in DEFAULTS if key.startswith('EVENT_LOG')},
 )

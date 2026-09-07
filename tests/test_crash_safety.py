@@ -1169,3 +1169,22 @@ def test_reclaim_works_on_a_server_older_than_lmove(redis_server, monkeypatch):
     # oldest first, the same order LMOVE RIGHT->LEFT produces
     queued = [JsonSerializer().loads(raw)['chat_id'] for raw in redis_server.lrange(QUEUE, 0, -1)]
     assert queued == [1, 2], f'the order was reversed: {queued}'
+
+
+def test_two_queues_on_one_redis_do_not_share_one_heartbeat(redis_server):
+    """One process, one worker name, two queues: the heartbeats have to be two keys.
+
+    Keyed on the worker alone, the consumer of the busy queue keeps the key warm and a
+    stopped consumer of the quiet one reads as healthy off it — which is the one question a
+    healthcheck exists to answer, answered wrongly.
+    """
+    from django_aiogram.broker.redis_list import RedisListBroker
+
+    shared = {'REDIS_URL': 'redis://localhost:6379/0', 'REDIS_TIMEOUT': 10, 'WORKER_NAME': 'one'}
+    busy = RedisListBroker.configured({**shared, 'QUEUES': ('vip', 'bulk'), 'QUEUE': 'vip'})
+    quiet = RedisListBroker.configured({**shared, 'QUEUES': ('vip', 'bulk'), 'QUEUE': 'bulk'})
+
+    busy.alive()
+
+    assert busy.liveness().age is not None
+    assert quiet.liveness().age is None, 'a stopped consumer read the other queue as its own'

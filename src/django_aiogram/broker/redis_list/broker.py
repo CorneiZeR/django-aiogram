@@ -241,11 +241,11 @@ class RedisListBroker(Broker):
 
     def alive(self) -> None:
         """Write the key the healthcheck reads, with a TTL a stalled loop cannot renew."""
-        self._redis().set(heartbeat_key(), str(int(time.time())), ex=heartbeat_ttl())
+        self._redis().set(heartbeat_key(queue=self._queue()), str(int(time.time())), ex=heartbeat_ttl())
 
     def liveness(self) -> Liveness:
         """How old the heartbeat is, or that there is none."""
-        raw = self._redis().get(heartbeat_key())
+        raw = self._redis().get(heartbeat_key(queue=self._queue()))
         if raw is None:
             return Liveness(reported=True, age=None, detail='no heartbeat has been written')
         try:

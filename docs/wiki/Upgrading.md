@@ -80,7 +80,7 @@ A project running one bot is then done: the dict it renamed configures a bot cal
 and every setting keeps its meaning and its default.
 
 To run more than one, add a section per bot under `TELEGRAM_BOTS` — see
-**[Settings](Settings.md)**. What a section leaves out it inherits, and `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `FSM_STORAGE`, `BOT_PROVIDERS`, `BOT_REFRESH_INTERVAL`, `MAX_BOTS_PER_WORKER`, `BOT_LEASE_SECONDS`, `EVENT_LOG` and every `EVENT_LOG_*` one stay shared:
+**[Settings](Settings.md)**. What a section leaves out it inherits, and `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `FSM_STORAGE`, `BOT_PROVIDERS`, `BOT_REFRESH_INTERVAL`, `MAX_BOTS_PER_WORKER`, `BOT_LEASE_SECONDS`, `QUEUES`, `EVENT_LOG` and every `EVENT_LOG_*` one stay shared:
 they configure the process, not a bot, and `E053` refuses a section that names them.
 `ENABLED` is not one of them, so a single bot can still be switched off on its own.
 

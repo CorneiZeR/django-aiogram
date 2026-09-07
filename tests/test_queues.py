@@ -164,3 +164,33 @@ def test_a_redis_transport_talks_to_the_server_its_own_settings_name(broker, mon
     redis_module.reset_redis()
 
     assert built['async'] == ['redis://mine:6379/0', 'redis://theirs:6379/0']
+
+
+def test_a_queue_named_with_stray_space_is_the_same_queue():
+    """Everything that reads the name strips it, so the profile has to strip it too.
+
+    Hashed raw, `' vip '` and `'vip'` are two profiles: two runtime groups, two transports,
+    both addressed at `vip` — and each consuming the messages the other's bot sent.
+    """
+    from django_aiogram.runtime.profiles import profile_of
+
+    settings = {**MEMORY, 'QUEUES': ('vip',)}
+
+    assert profile_of({**settings, 'QUEUE': ' vip '}) == profile_of({**settings, 'QUEUE': 'vip'})
+    assert profile_of({**settings, 'QUEUE': 'vip'}) != profile_of({**settings, 'QUEUE': 'bulk'})
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**MEMORY, 'QUEUES': ('vip',)})
+def test_a_section_may_not_declare_the_deployment_queues():
+    """`QUEUES` is read off the process's settings, so a section setting it declares nothing.
+
+    Silently, and worse than silently: the bot would name a queue its own section declares,
+    `in_settings()` would not see it, and the send would be refused as a typo.
+    """
+    from django_aiogram.config.checks import check_settings
+
+    with override_settings(TELEGRAM_BOTS={'a': {'TOKEN': '123456:AAaa', 'QUEUES': ('mine',), 'QUEUE': 'mine'}}):
+        reported = [message for message in check_settings() if str(message.id).endswith('E053')]
+
+    assert reported, 'a section declaring the deployment queues was accepted'
+    assert 'QUEUES' in reported[0].msg

@@ -133,9 +133,15 @@ def _escaped(literal: str) -> str:
     return ''.join(f'\\{character}' if character in '*?[]^\\' else character for character in literal)
 
 
-def heartbeat_key(worker: str | None = None) -> str:
-    """Where one worker says it is still turning. Per worker, like the list above."""
-    return f'{queue_key()}:heartbeat:{worker or worker_identity()}'
+def heartbeat_key(worker: str | None = None, queue: str | None = None) -> str:
+    """Where one worker says it is still turning. Per worker *and* per queue.
+
+    Both, because one process can serve two queues on one Redis under one name: keyed on the
+    worker alone, the consumer of the busy queue would keep the key warm and the stopped
+    consumer of the quiet one would read as healthy off it. ``queue`` defaults to the
+    process's, which is what a deployment with one queue has.
+    """
+    return f'{queue or queue_key()}:heartbeat:{worker or worker_identity()}'
 
 
 def heartbeat_interval() -> int:
