@@ -5,12 +5,10 @@ lease -- plus a column on each of the three tables that already had rows. The co
 nullable or defaulted, nothing reads them until a supervisor or an admin is configured, and a
 project running one bot from ``settings.py`` never writes a row here at all.
 
-**One operation is not free: the index on the feed.** That is the only table here whose size
-is set by traffic, and Django builds an index without ``CONCURRENTLY`` -- so on PostgreSQL this
-holds writes to it for as long as the build lasts. Nothing sending is affected, because the
-recorder drops rather than making a send wait; what it costs is log rows for the duration.
-``Upgrading.md`` carries the ``--fake`` and the hand-built index for a feed large enough to
-care, and names the index so a later ``makemigrations`` does not offer to create it twice.
+**The index on the feed is not here**, and that is the whole reason ``0007`` exists. It is the
+one operation on a table whose size is set by traffic, and an operator who needs to build it by
+hand has to be able to skip *it* without skipping this -- faking this migration would leave the
+column absent and every event insert refused.
 
 **The one change with a shape to it is the replay claim.** Its uniqueness moves from the
 correlation id to the pair with the bot, because with more than one bot a single id can name a
@@ -125,10 +123,6 @@ class Migration(migrations.Migration):
             model_name='telegramreplayclaim',
             name='correlation_id',
             field=models.UUIDField(),
-        ),
-        migrations.AddIndex(
-            model_name='telegramevent',
-            index=models.Index(fields=['bot_id', '-id'], name='dja_event_bot'),
         ),
         migrations.AddConstraint(
             model_name='telegramreplayclaim',

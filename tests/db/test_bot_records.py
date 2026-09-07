@@ -134,3 +134,49 @@ def test_a_bot_does_not_print_its_token():
 
     assert TOKEN not in str(bot)
     assert '123456' in str(bot)
+
+
+def test_two_bots_replaying_one_correlation_id_each_get_a_claim_from_the_command():
+    """The constraint is per bot, and the command that files claims has to say which one.
+
+    The pair constraint is the change; the only caller filing a claim is `tgbot_replay`, and it
+    was creating rows without the identity — so every claim landed under `0` and the second
+    bot's replay was refused as already handled. The constraint would have been correct and
+    dead.
+    """
+    from django_aiogram.management.commands.tgbot_replay import Command
+
+    command = Command()
+    correlation = uuid.uuid4()
+    rows = [
+        TelegramEvent.objects.create(
+            kind='outbound.failed', correlation_id=correlation, function='send_message', bot_id=identity
+        )
+        for identity in (123456, 654321)
+    ]
+
+    claims = [command._claim(row)[0] for row in rows]
+
+    assert all(claim is not None for claim in claims), 'a bot was refused a claim another bot held'
+    assert {claim.bot_id for claim in claims} == {123456, 654321}
+
+
+def test_a_failure_without_an_identity_is_claimed_once():
+    """The other half: `0` collides with itself, which is what a nullable column would not."""
+    from django_aiogram.management.commands.tgbot_replay import Command
+
+    command = Command()
+    # what `handle()` would have set, and only what the claim path reads: a lease of zero is
+    # `--claim-lease 0`, which trusts a claim for ever and is what makes this about the
+    # constraint rather than about a takeover
+    command._claim_lease = 0
+    command._started = timezone.now()
+    row = TelegramEvent.objects.create(kind='outbound.failed', correlation_id=uuid.uuid4(), function='send_message')
+
+    first, _ = command._claim(row)
+    second, held = command._claim(row)
+
+    assert first is not None
+    assert first.bot_id == 0
+    assert second is None, 'a second run claimed a failure the first already held'
+    assert held is not None, 'and it has to be told which claim holds it'

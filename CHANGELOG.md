@@ -22,9 +22,9 @@
   one would let two runs claim one failure and send the message twice.
 
   Nothing reads any of it until a supervisor or the admin is configured, and a project running
-  one bot from `settings.py` writes no row at all. **Run `manage.py migrate`** -- and read the
-  upgrading page first if your event log is large, because one of the operations is an index on
-  it and Django builds one without `CONCURRENTLY`.
+  one bot from `settings.py` writes no row at all. **Run `manage.py migrate`.** The index on
+  the event log is a migration of its own so that a large feed can have it built by hand:
+  Django builds an index without `CONCURRENTLY`, and the upgrading page has the two commands.
 
 ### Changed
 

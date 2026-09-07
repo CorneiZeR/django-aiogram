@@ -14,26 +14,35 @@ that already had rows. A project that configures its bots in `settings.py` never
 of the four, so they stay empty. The replay claim's uniqueness moves from the correlation id
 to the pair with the bot; any claim rows you have are for failures already replayed.
 
-**One step is not free, and it is the event log's.** The migration adds an index on
+**One step is not free, and it is the event log's.** `0007` adds an index on
 `django_aiogram_event`, which is the one table here whose size is set by your traffic. Django
 builds an index without `CONCURRENTLY`, so on PostgreSQL that takes a lock which holds writes
 to the table for as long as the build lasts — minutes on a large feed. Nothing sending is
 affected: the recorder buffers and then drops rather than making a send wait, so the cost is
-log rows for the duration, not messages. On a feed big enough to care, build it by hand
-instead:
+log rows for the duration, not messages.
 
-```shell
-python manage.py migrate django_aiogram 0006 --fake
+**How large is large is a question about the table, not about the setting.** Turning
+`EVENT_LOG` off stops new rows and removes none of the old ones, so ask the database:
+
+```sql
+SELECT count(*) FROM django_aiogram_event;
 ```
 
-then create the index yourself, without holding the table:
+At a few hundred thousand rows the build is seconds and there is nothing to arrange. Where it
+is not, apply everything up to the index, skip that one, and build it yourself:
+
+```shell
+python manage.py migrate django_aiogram 0006      # the tables and the columns
+python manage.py migrate django_aiogram 0007 --fake  # the index, and only the index
+```
 
 ```sql
 CREATE INDEX CONCURRENTLY dja_event_bot ON django_aiogram_event (bot_id, id DESC);
 ```
 
-The name has to match, or the next `makemigrations` will offer to create it again. If you
-prune the log aggressively, or turned it off, none of this applies — take the migration.
+The name has to match, or the next `makemigrations` will offer to create it again. **Do not
+fake `0006`** to get at this: it carries the four tables and the `bot_id` columns, and a
+deployment that skipped it would refuse every event insert.
 
 **The rename.** Nothing reads the old
 name, so every value left in it is ignored and whatever it configured falls back to the
