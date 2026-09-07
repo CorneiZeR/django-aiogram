@@ -19,6 +19,13 @@ import pytest
 import yaml
 from markdown.extensions.toc import slugify, unique
 
+from django_aiogram.config.defaults import PROCESS_SCOPED
+
+#: what marks a sentence as one of the lists of the process-owned settings: the two keys
+#: every one of them opens with. The settings table and the release history name each key
+#: without ever putting these two side by side
+MARKER = '`AUTODISCOVER`, `MODULE_NAME`'
+
 ROOT = Path(__file__).resolve().parent.parent
 WIKI = ROOT / 'docs' / 'wiki'
 MKDOCS = ROOT / 'mkdocs.yml'
@@ -831,3 +838,35 @@ def test_a_historical_upgrade_section_keeps_the_name_of_its_own_time():
             offending.append(text[start:end].splitlines()[0])
 
     assert not offending, f'sections about releases that read TELEGRAM_BOT use the new name: {offending}'
+
+
+@pytest.mark.parametrize('path', [WIKI / 'Settings.md', WIKI / 'Upgrading.md', ROOT / 'CHANGELOG.md'])
+def test_every_process_owned_setting_is_named_where_the_set_is_listed(path):
+    """A sentence that lists the set has to list all of it, and `PROCESS_SCOPED` is the set.
+
+    Four of these enumerations exist because each answers a different question -- what a
+    section may hold, what `E053` reports, what an upgrade keeps shared, what the release
+    changed -- and a key added to the frozenset reaches none of them on its own. Measured: 5.0
+    added `BOT_PROVIDERS` and `BOT_REFRESH_INTERVAL` to the set and to no sentence about it,
+    and `MAX_BOTS_PER_WORKER` was on its way to being the third.
+
+    Per sentence rather than per page, which is the difference that makes this bite: every one
+    of these pages names each key *somewhere*, so a page-wide search passes with the list in
+    one of its sentences left short. A sentence is one of these lists when it opens the
+    enumeration -- `AUTODISCOVER` followed by `MODULE_NAME` -- which the settings table and
+    the release history mention each key without doing.
+
+    The `EVENT_LOG_*` ones are covered by the wildcard each of these sentences uses, which is
+    why they are excluded rather than each looked for.
+    """
+    wanted = sorted(key for key in PROCESS_SCOPED if not key.startswith('EVENT_LOG_'))
+    listing = [
+        ' '.join(paragraph.split())
+        for paragraph in path.read_text(encoding='utf-8').split('\n\n')
+        if MARKER in ' '.join(paragraph.split())
+    ]
+
+    assert listing, f'{path.name} no longer lists the process-owned settings at all'
+    for sentence in listing:
+        missing = [key for key in wanted if f'`{key}`' not in sentence]
+        assert not missing, f'{path.name} lists them without {", ".join(missing)}: {sentence[:120]}...'

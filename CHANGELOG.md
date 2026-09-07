@@ -112,7 +112,8 @@
   same identity.
 
   Settings the process owns rather than a bot -- `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`,
-  `FSM_STORAGE`, `EVENT_LOG` and every `EVENT_LOG_*` one -- may not be set per bot. `ENABLED` is not one of
+  `FSM_STORAGE`, `BOT_PROVIDERS`, `BOT_REFRESH_INTERVAL`, `MAX_BOTS_PER_WORKER`,
+  `BOT_LEASE_SECONDS`, `EVENT_LOG` and every `EVENT_LOG_*` one -- may not be set per bot. `ENABLED` is not one of
   them: a bot may be switched off on its own. There is one writer thread and one
   in-flight list per process, so a per-bot value could only mean whichever bot resolved last
   wins. `E053` reports the attempt.

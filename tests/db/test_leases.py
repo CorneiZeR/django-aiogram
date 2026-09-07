@@ -205,3 +205,63 @@ def test_a_claim_names_the_process_that_asked():
     row = TelegramBotLease.objects.get(bot_id=123456)
     assert row.holder == 'one'
     assert row.expires_at > timezone.now()
+
+
+def test_a_lease_is_dated_from_when_it_was_taken_rather_than_from_the_start_of_the_pass(monkeypatch):
+    """A pass over many bots takes time, and a moment captured once goes stale inside it.
+
+    Written as the pathological version of that: every clock reading is a minute later than
+    the last, so a moment taken at the top of the pass would have the first bot's lease
+    already expired by the time the second one is written — and the comparison that decides
+    whether a lapsed lease may be taken would be made against a moment that had passed.
+    """
+    rows(TOKENS[0], TOKENS[1])
+    ticking = iter(timezone.now() + datetime.timedelta(minutes=step) for step in range(20))
+    monkeypatch.setattr('django_aiogram.runtime.leases.timezone', _Clock(ticking))
+
+    with container('one', BOT_LEASE_SECONDS=30):
+        held = claim([123456, 654321])
+
+    assert held == (123456, 654321)
+    taken = list(TelegramBotLease.objects.order_by('claimed_at').values_list('bot_id', 'claimed_at', 'expires_at'))
+    assert [bot_id for bot_id, _, _ in taken] == [123456, 654321]
+    assert taken[0][1] < taken[1][1], 'both leases were dated from one moment at the top of the pass'
+    for _, claimed_at, expires_at in taken:
+        assert (expires_at - claimed_at).total_seconds() == 30, 'a lease was not a lease long'
+
+
+def test_a_lease_that_lapses_during_the_pass_is_taken_by_it(monkeypatch):
+    """The other half of a stale moment: what may be taken is decided against it.
+
+    The second bot's lease expires half a minute in, and this pass reaches it a minute later.
+    Compared against a moment read at the top of the pass, it is a lease somebody still holds,
+    and the bot is left unserved until some later pass happens to read a fresh clock.
+    """
+    rows(TOKENS[0], TOKENS[1])
+    start = timezone.now()
+    TelegramBotLease.objects.create(
+        bot_id=654321,
+        holder='two',
+        claimed_at=start,
+        expires_at=start + datetime.timedelta(seconds=30),
+    )
+    ticking = iter(start + datetime.timedelta(minutes=step) for step in range(20))
+    monkeypatch.setattr('django_aiogram.runtime.leases.timezone', _Clock(ticking))
+
+    with container('one'):
+        held = claim([123456, 654321])
+
+    assert held == (123456, 654321), 'a lease that had lapsed by the time it was reached was left alone'
+    assert TelegramBotLease.objects.get(bot_id=654321).holder == 'one'
+
+
+class _Clock:
+    """A `timezone` whose `now` moves on every reading, standing in for a slow pass."""
+
+    def __init__(self, moments):
+        """Hand out the moments given, in order."""
+        self._moments = moments
+
+    def now(self):
+        """Answer with the next moment, which is always later than the last."""
+        return next(self._moments)

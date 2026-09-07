@@ -365,7 +365,10 @@ manage.py shell -c "from django_aiogram.models import TelegramBotLease as L; pri
 ```
 
 - **A bot nobody holds** while containers are running means every one of them is at
-  `MAX_BOTS_PER_WORKER`. Raise it, or add a container.
+  `MAX_BOTS_PER_WORKER` — or none of them could read the leases at all. A container
+  that cannot reach them keeps only the bots it is already serving, and takes nothing
+  new, which is the same rule a provider that could not look gets; the log says
+  `could not read the bot leases`. Read that before changing the capacity.
 - **A bot that keeps changing holder** means the lease lapses between renewals:
   `BOT_LEASE_SECONDS` is not comfortably longer than `BOT_REFRESH_INTERVAL`, which
   `manage.py check` reports as `W011`. Each trade is a 409 for whoever was polling.

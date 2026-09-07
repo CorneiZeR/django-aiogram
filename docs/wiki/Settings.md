@@ -19,7 +19,7 @@ Scalar values can also come from `DJANGO_AIOGRAM_<NAME>`, and one bot's from
 A bot is identified by the number in front of the colon in its token, read without asking
 Telegram. That number is the one thing about a bot that holds still: an alias is a name a
 project may change and a token is a credential it may rotate, and a rotated token keeps the
-same identity. These belong to the process rather than to a bot — `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `FSM_STORAGE`, `EVENT_LOG` and every `EVENT_LOG_*` one — so a section naming one is refused by `E053` instead of
+same identity. These belong to the process rather than to a bot — `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `FSM_STORAGE`, `BOT_PROVIDERS`, `BOT_REFRESH_INTERVAL`, `MAX_BOTS_PER_WORKER`, `BOT_LEASE_SECONDS`, `EVENT_LOG` and every `EVENT_LOG_*` one — so a section naming one is refused by `E053` instead of
 deciding for every bot in the process. `ENABLED` is not among them: a bot may be switched off
 on its own.
 
@@ -396,7 +396,7 @@ entry naming a retired one is dead but harmless.
 | `E050` | `TELEGRAM_BOT` is still set. 5.0 split it into `TELEGRAM_BOT_DEFAULTS` and `TELEGRAM_BOTS`, and nothing reads the old name: every value left in it is ignored, and whatever it configured resolves from the shared defaults, the environment or this package's own defaults instead. A project that kept its token there has none |
 | `E051` | two aliases hold one token, which is one bot under two names: the pair would race for its updates and pace against two budgets |
 | `E052` | `TOKEN` is not a bot token. One reads `<bot id>:<secret>`, and the number before the colon is what identifies the bot — a token with none cannot be told apart from another bot's |
-| `E053` | a bot's section sets a setting the process owns — `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `FSM_STORAGE`, `EVENT_LOG` or an `EVENT_LOG_*` one. There is one writer thread, one in-flight list and one handler tree per process, so a per-bot value could only mean whichever bot resolved last wins |
+| `E053` | a bot's section sets a setting the process owns — `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `FSM_STORAGE`, `BOT_PROVIDERS`, `BOT_REFRESH_INTERVAL`, `MAX_BOTS_PER_WORKER`, `BOT_LEASE_SECONDS`, `EVENT_LOG` or an `EVENT_LOG_*` one. There is one writer thread, one in-flight list and one handler tree per process, so a per-bot value could only mean whichever bot resolved last wins |
 | `E054` | `TELEGRAM_BOTS` cannot be read: it is not a mapping, an alias is not a name, or a section is not a mapping |
 | `E055` | `MAX_BOTS_PER_WORKER` is not an integer, or is negative. `0` is not: it means as many bots as this process is given |
 | `E056` | `BOT_LEASE_SECONDS` is not a finite number, or is below 1 |

@@ -79,15 +79,18 @@ def claim(bot_ids: 'Iterable[int]') -> tuple[int, ...]:
     """
     from django_aiogram.models import TelegramBotLease  # noqa: PLC0415 - the ORM, deferred
 
-    moment = timezone.now()
     me = holder()
-    until = moment + datetime.timedelta(seconds=_seconds())
+    lease = _seconds()
     ceiling = _ceiling()
     held: list[int] = []
     for bot_id in bot_ids:
         if ceiling and len(held) >= ceiling:
             break
-        if _take(TelegramBotLease, bot_id, me=me, moment=moment, until=until):
+        # read per bot rather than once for the pass: a pass over many bots takes time, and a
+        # moment captured at the top of it would write leases already in the past and would
+        # fail to match a lease that lapsed while the pass was running
+        moment = timezone.now()
+        if _take(TelegramBotLease, bot_id, me=me, moment=moment, until=moment + datetime.timedelta(seconds=lease)):
             held.append(bot_id)
     return tuple(held)
 
