@@ -73,7 +73,10 @@
   The reason and the moment to try again are written on the bot's row, so an admin page
   answers "why did this client's bot stop" without reading a container's log, and
   `bot_quarantined` / `bot_recovered` are the signals a project connects to reach the person
-  whose bot it was. A new token clears any of it on the next pass, `revoked` included: the
+  whose bot it was. A state write a database refused is retried by the next pass rather than
+  lost, because neither end of it is written again otherwise: a bot that recovered is running
+  and unchanged, and a revoked one is held with no clock. A new token clears any of it on the
+  next pass, `revoked` included: the
   identity is the number in front of the colon, so a rotated token is the same bot with a
   changed configuration and its queue, its feed history and its pending sends stay.
 

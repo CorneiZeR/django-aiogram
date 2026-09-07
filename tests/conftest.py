@@ -73,12 +73,19 @@ def _providers_read_afresh():
     is the one that bites: a case whose provider reads nothing after a case whose provider read
     a bot is exactly the shape the empty-answer guard holds back, so it would be handed the
     other case's bot.
-    """
-    from django_aiogram.runtime import providers
 
-    providers.forget()
+    The unwritten states go with them: a case whose database refused a write leaves one held,
+    and the next pass anywhere in the suite would write it to whatever row now has that id.
+    """
+    from django_aiogram.runtime import lifecycle, providers
+
+    def afresh():
+        providers.forget()
+        lifecycle._unwritten.clear()
+
+    afresh()
     yield
-    providers.forget()
+    afresh()
 
 
 @pytest.fixture

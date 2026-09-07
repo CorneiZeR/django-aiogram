@@ -10,6 +10,7 @@ import uuid
 import pytest
 from aiogram.exceptions import TelegramUnauthorizedError
 from aiogram.methods import GetMe
+from django.db.models import QuerySet
 from django.test import override_settings
 from django.utils import timezone
 
@@ -151,3 +152,78 @@ def test_a_rotated_token_keeps_the_bot_history_and_its_pending_sends():
 
     assert TelegramEvent.objects.filter(bot_id=123456).count() == 1
     assert TelegramScheduledSend.objects.filter(bot_id=123456).count() == 1
+
+
+def test_a_state_a_database_refused_is_written_by_the_next_pass(monkeypatch):
+    """The pass that follows does not write it again, so something has to.
+
+    Both ends of this are steady states: a bot that started working is running and unchanged,
+    and a revoked token is held with no clock, so no later pass touches either. A write lost
+    there would leave the admin saying the opposite of the truth for as long as the container
+    runs -- a client's bot reading as quarantined while it answers.
+    """
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa')
+    refused = {123456: TelegramUnauthorizedError(method=GetMe(), message='Unauthorized')}
+
+    def start(record):
+        if record.bot_id in refused:
+            raise refused[record.bot_id]
+
+    supervisor = Supervisor(start=start, stop=lambda identity: None)
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'BOT_PROVIDERS': FROM_DB}):
+        supervisor.reconcile()
+        assert TelegramBot.objects.get(bot_id=123456).quarantine_reason.startswith('revoked')
+
+        refused.clear()
+        rotated = TelegramBot.objects.get(bot_id=123456)
+        rotated.token = '123456:AArotated'
+        rotated.save()
+
+        # `update` alone, and that precision is the case: breaking the manager would break
+        # the provider's read too, and the quarantine would then be kept by the rule about a
+        # failed read rather than by anything this is about
+        monkeypatch.setattr(QuerySet, 'update', _refusing)
+        supervisor.reconcile()
+        monkeypatch.undo()
+        assert supervisor.running == {123456: supervisor.running[123456]}, 'the case needs the bot started'
+        assert TelegramBot.objects.get(bot_id=123456).quarantine_reason.startswith('revoked'), (
+            'the case needs the write to have failed'
+        )
+
+        supervisor.reconcile()
+
+    assert TelegramBot.objects.get(bot_id=123456).quarantine_reason == '', 'the refused write was never retried'
+
+
+def _refusing(*args, **kwargs):
+    """Stand in for a write whose database is not there."""
+    msg = 'the database is not reachable'
+    raise RuntimeError(msg)
+
+
+def test_a_fresh_process_tries_a_revoked_bot_once_rather_than_never():
+    """A quarantine is a process's, and a restart deliberately does not inherit one.
+
+    The row cannot say whether the token in it is still the one that was refused, so a
+    hydrated quarantine would outlive a token corrected while the container was down -- until
+    somebody edited the row a second time to move its watermark. One refused request per bot
+    per process start is the cheaper end of that trade, and *once* is the part that matters.
+    """
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa')
+    tried = []
+
+    def start(record):
+        tried.append(record.bot_id)
+        raise TelegramUnauthorizedError(method=GetMe(), message='Unauthorized')
+
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'BOT_PROVIDERS': FROM_DB}):
+        first = Supervisor(start=start, stop=lambda identity: None)
+        first.reconcile()
+        first.reconcile()
+        assert tried == [123456], 'a revoked token was tried again inside one process'
+
+        second = Supervisor(start=start, stop=lambda identity: None)
+        second.reconcile()
+        second.reconcile()
+
+    assert tried == [123456, 123456], 'a restart either inherited the quarantine or retried on a timer'

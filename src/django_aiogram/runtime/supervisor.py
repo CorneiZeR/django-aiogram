@@ -39,7 +39,7 @@ from django.utils import timezone
 
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.settings import conf
-from django_aiogram.runtime.lifecycle import Fate, classify, forget, remember, waits
+from django_aiogram.runtime.lifecycle import Fate, classify, flush, forget, remember, waits
 from django_aiogram.runtime.providers import desired
 
 if TYPE_CHECKING:
@@ -116,6 +116,9 @@ class Supervisor:
         The order is deliberate: stop what is gone before starting what is new, so a bot whose
         token was rotated is torn down and rebuilt rather than briefly served twice.
         """
+        # first, and before anything can return early: a state write a database refused is
+        # not written again by the work below, because both ends of it are steady states
+        flush()
         try:
             wanted = {record.bot_id: record for record in desired() if record.bot_id is not None}
         except Exception:

@@ -15,6 +15,7 @@ was, most likely -- is not something a reconciliation pass should be waiting on.
 """
 
 import logging
+import threading
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -23,7 +24,7 @@ from django.dispatch import Signal
 if TYPE_CHECKING:
     from datetime import datetime
 
-__all__ = ('Fate', 'bot_quarantined', 'bot_recovered', 'classify', 'forget', 'remember', 'waits')
+__all__ = ('Fate', 'bot_quarantined', 'bot_recovered', 'classify', 'flush', 'forget', 'remember', 'waits')
 
 logger = logging.getLogger('django_aiogram')
 
@@ -57,6 +58,10 @@ class Fate(str, Enum):
 bot_quarantined = Signal()
 #: sent when a bot that was quarantined is being served again, with ``bot_id``
 bot_recovered = Signal()
+
+_lock = threading.Lock()
+#: the state writes a database refused, by identity, newest only. Retried by :func:`flush`
+_unwritten: 'dict[int, dict[str, object]]' = {}
 
 
 def classify(failure: BaseException) -> Fate:
@@ -103,8 +108,17 @@ def remember(bot_id: int, fate: Fate, reason: str, until: 'datetime | None') -> 
 
     Best effort, and deliberately: this is called from a reconciliation pass, and a database
     that cannot take the row must not be the reason the other nineteen bots stop being
-    reconciled. The pass has already logged the failure itself -- what is lost here is the
-    admin page's copy of it, which the next pass writes.
+    reconciled. What a failed write costs is the admin page's copy of the reason, and it is
+    kept for :func:`flush` rather than dropped -- see there for why the next pass cannot be
+    relied on to write it again.
+
+    **A quarantine is a process's, not a deployment's.** The row is a copy for a person to
+    read; a container that starts fresh has an empty quarantine and tries every configured
+    bot once, revoked tokens included. That is deliberate: the alternative is hydrating the
+    quarantine from the row, and a row cannot say whether the token in it is still the one
+    that was refused -- so a token corrected while the container was down would stay
+    quarantined until somebody edited the row a second time. One refused request per bot per
+    process start is the cheaper end of that trade.
 
     A bot configured in ``settings.py`` has no row to write, and that is not a failure
     either: nothing is created, because a row created here would be a bot the table claims
@@ -126,8 +140,30 @@ def forget(bot_id: int) -> None:
     bot_recovered.send_robust(sender=None, bot_id=bot_id)
 
 
+def flush() -> None:
+    """Retry the state writes a database refused, and let nothing about them reach the caller.
+
+    Called at the top of every reconciliation pass, and free when there is nothing held.
+
+    It exists because *the next pass does not write the state again*. A pass writes when
+    something changes, and both ends of this are steady states: a bot that started working is
+    then running and unchanged, so no later pass touches it, and a revoked token is held with
+    no clock, so no later pass tries it. A write lost in either place would leave the admin
+    saying the opposite of the truth for as long as the container runs -- a client's bot
+    reading as quarantined while it is answering, or as healthy while nothing is serving it.
+
+    The signals are not resent from here. A signal is this process telling the project what
+    happened, and it happened once; the row is a copy of it, and this is what makes the copy
+    catch up.
+    """
+    with _lock:
+        held = dict(_unwritten)
+    for bot_id, fields in held.items():
+        _write(fields, bot_id)
+
+
 def _write(fields: 'dict[str, object]', bot_id: int) -> None:
-    """Update one bot's row, if it has one, and let nothing about it reach the caller."""
+    """Update one bot's row, if it has one, and keep what a database refused for `flush`."""
     try:
         # deferred: importing models reaches the app registry, and a supervisor runs in
         # processes that have no database configured at all
@@ -135,7 +171,15 @@ def _write(fields: 'dict[str, object]', bot_id: int) -> None:
 
         TelegramBot.objects.filter(bot_id=bot_id).update(**fields)
     except Exception:
+        with _lock:
+            # the latest state, not a queue of them: a row holds one, and replaying an
+            # earlier quarantine over a bot that has since recovered is the failure this
+            # would otherwise introduce
+            _unwritten[bot_id] = fields
         logger.exception(
-            "could not record a bot's state; the admin will be a pass behind",
+            "could not record a bot's state; it will be retried on the next pass",
             extra={'tg_bot_id': bot_id},
         )
+        return
+    with _lock:
+        _unwritten.pop(bot_id, None)

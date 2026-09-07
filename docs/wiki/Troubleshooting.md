@@ -394,6 +394,12 @@ bot_quarantined.connect(tell_them, dispatch_uid='billing.bot_quarantined')
 
 `bot_recovered` is sent with `bot_id` when a quarantined bot is being served again.
 
+A quarantine belongs to the process that earned it, so a restarted container tries
+every configured bot once — a revoked token included. The row cannot say whether the
+token in it is still the one Telegram refused, so inheriting the quarantine would
+outlive a token corrected while the container was down; one refused request per bot
+per start is the cheaper end of that.
+
 **Edit those rows through a saved instance, not `QuerySet.update()`.** The notice
 that wakes a container is a `post_save` receiver and the poll compares
 `updated_at`; `update()` fires no signal and moves no `auto_now` column, so a
