@@ -74,6 +74,12 @@
   set by the group -- rather than merely chosen by them and left reading the shared defaults.
   A transport a project writes needs no change: the constructor still takes nothing.
 
+  `REDIS_URL` follows it: the Redis clients are cached per server rather than per process, so a
+  bot on its own Redis reaches its own — cached for the process, its queue key was right and
+  its data was somewhere else, with nothing reporting it. `get_redis()` and `aget_redis()` take
+  the settings a client is for; both keep working with no argument, which is what every caller
+  outside a transport passes. **A test double that replaces either has to accept it.**
+
   **Naming a queue means declaring it.** `QUEUES` in the settings, rows in `TelegramQueue`, or
   both; a name in neither is refused where the transport for it is built and reported at boot
   as `E059`, because the alternative has no symptom -- a message published to a queue nothing

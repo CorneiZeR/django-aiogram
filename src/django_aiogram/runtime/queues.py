@@ -32,7 +32,7 @@ from django_aiogram.config.settings import SETTINGS_NAME, conf
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-__all__ = ('declared', 'named', 'readable', 'refuse_undeclared')
+__all__ = ('declaration', 'declared', 'named', 'refuse_undeclared')
 
 logger = logging.getLogger('django_aiogram')
 
@@ -78,14 +78,21 @@ def in_table() -> 'tuple[str, ...] | None':
         return ()
 
 
-def readable() -> bool:
-    """Whether the queue table could be read, which decides whether silence means anything."""
-    return in_table() is not None
+def declaration() -> 'tuple[frozenset[str], bool]':
+    """Return every declared queue and whether the table was readable, from **one** read.
+
+    Both answers together, because asking for them separately is two reads of the table and
+    two chances to disagree: the first failing and the second succeeding leaves a caller with
+    the settings alone and a table it believes it read, which reports a queue that exists as a
+    typo. One read cannot say two things.
+    """
+    rows = in_table()
+    return frozenset(in_settings()) | frozenset(rows or ()), rows is not None
 
 
 def declared() -> frozenset[str]:
     """Return every queue name this deployment has declared, from both places."""
-    return frozenset(in_settings()) | frozenset(in_table() or ())
+    return declaration()[0]
 
 
 def refuse_undeclared(settings: 'Mapping[str, object] | None' = None) -> None:
@@ -98,12 +105,11 @@ def refuse_undeclared(settings: 'Mapping[str, object] | None' = None) -> None:
     wanted = named(settings)
     if not wanted:
         return
-    rows = in_table()
-    if rows is None:
+    known, readable = declaration()
+    if not readable:
         # nothing was declared *or* denied: see `in_table`. A queue this deployment has always
         # served must not stop being served because the row naming it is unreachable
         return
-    known = frozenset(in_settings()) | frozenset(rows)
     if wanted in known:
         return
     msg = (

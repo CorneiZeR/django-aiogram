@@ -19,7 +19,7 @@ answered here rather than argued with:
 import logging
 from collections.abc import Mapping
 from collections.abc import Sequence as Seq
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from django_aiogram.broker.base import REQUIRED, Broker
 from django_aiogram.broker.models import Liveness, Taken
@@ -30,6 +30,10 @@ from django_aiogram.broker.redis_streams.exceptions import (
 from django_aiogram.redis import aget_redis, as_bytes, as_command_argument, get_redis, heartbeat_ttl
 
 __all__ = ('RedisStreamsBroker',)
+
+if TYPE_CHECKING:
+    from redis import Redis
+    from redis.asyncio import Redis as AsyncRedis
 
 logger = logging.getLogger('django_aiogram')
 
@@ -138,7 +142,7 @@ class RedisStreamsBroker(Broker):
         """
         if self._ready:
             return
-        connection = get_redis()
+        connection = self._redis()
         try:
             connection.xgroup_create(self._key(), self._group(), id='0', mkstream=True)
         except Exception as error:
@@ -161,7 +165,7 @@ class RedisStreamsBroker(Broker):
         """
         if self._ready:
             return
-        client = await aget_redis()
+        client = await self._aredis()
         try:
             await client.xgroup_create(self._key(), self._group(), id='0', mkstream=True)
         except Exception as error:
@@ -187,6 +191,25 @@ class RedisStreamsBroker(Broker):
 
     # ------------------------------------------------------------------ producer
 
+    def _redis(self) -> 'Redis':
+        """Return this instance's client, for the server its own settings name.
+
+        Through here rather than `get_redis()` at each call site: ``REDIS_URL`` is a bot's
+        setting, and a client asked for without them is the process's -- so a bot on its own
+        Redis would address its own queue key on everybody else's server.
+        """
+        # the zero-argument call where this instance has no settings of its own, so a project
+        # that swaps the accessor -- and every case in this suite that does -- keeps working:
+        # `None` already means "the process's client", and asking for it by name is the same
+        # question with one more argument
+        return get_redis() if self.settings is None else get_redis(self.settings)
+
+    async def _aredis(self) -> 'AsyncRedis':
+        """Return the same client for a caller already on a loop, for the same reason."""
+        if self.settings is None:
+            return await aget_redis()
+        return await aget_redis(self.settings)
+
     def publish(self, payloads: Seq[bytes]) -> None:
         """One ``XADD`` per payload, pipelined so a chunk is one round trip.
 
@@ -198,7 +221,7 @@ class RedisStreamsBroker(Broker):
             return
         self._ensure()
         key = self._key()
-        pipe = get_redis().pipeline(transaction=False)
+        pipe = self._redis().pipeline(transaction=False)
         for payload in payloads:
             pipe.xadd(key, {_FIELD: payload})
         pipe.execute()
@@ -209,7 +232,7 @@ class RedisStreamsBroker(Broker):
             return
         await self._aensure()
         key = self._key()
-        client = await aget_redis()
+        client = await self._aredis()
         pipe = client.pipeline(transaction=False)
         for payload in payloads:
             pipe.xadd(key, {_FIELD: payload})
@@ -231,7 +254,7 @@ class RedisStreamsBroker(Broker):
         shutdown between takes.
         """
         self._ensure()
-        connection = get_redis()
+        connection = self._redis()
         recovered = self._recovered(connection)
         if recovered is not None:
             return recovered
@@ -243,7 +266,7 @@ class RedisStreamsBroker(Broker):
     def take_nowait(self) -> Taken | None:
         """Read the same two phases without waiting, for a drain with no thread to block."""
         self._ensure()
-        connection = get_redis()
+        connection = self._redis()
         recovered = self._recovered(connection)
         if recovered is not None:
             return recovered
@@ -383,7 +406,7 @@ class RedisStreamsBroker(Broker):
 
     def ack(self, handle: object) -> None:
         """``XACK`` the entry this handle names, which drops it from the pending list."""
-        get_redis().xack(self._key(), self._group(), self._an_entry_id(handle))
+        self._redis().xack(self._key(), self._group(), self._an_entry_id(handle))
         self._unsettled.discard(handle)
 
     def release(self, handle: object) -> None:
@@ -405,7 +428,7 @@ class RedisStreamsBroker(Broker):
         idle *equals* ``min_idle_time`` is claimed, one a millisecond short is not. Idle only
         grows from there, so a release is reclaimable from the moment it happens.
         """
-        get_redis().xclaim(
+        self._redis().xclaim(
             self._key(),
             self._group(),
             self._consumer(),
@@ -432,7 +455,7 @@ class RedisStreamsBroker(Broker):
         undo it, so the only useful thing is to say so with the count.
         """
         self._ensure()
-        connection = get_redis()
+        connection = self._redis()
         key, group, consumer = self._key(), self._group(), self._consumer()
         idle = heartbeat_ttl() * 1000
         # '0' to start at the beginning; '0-0' is what XAUTOCLAIM answers when it is done,
@@ -474,7 +497,7 @@ class RedisStreamsBroker(Broker):
         tail, which would drop messages never delivered.
         """
         self._ensure()
-        connection = get_redis()
+        connection = self._redis()
         pending = connection.xpending(self._key(), self._group())
         oldest = pending.get('min') if isinstance(pending, dict) else None
         if not oldest:
@@ -492,7 +515,7 @@ class RedisStreamsBroker(Broker):
         # on a read-only replica, and on an ACL user allowed to run XINFO and nothing else.
         # Nothing there yet is nothing waiting
         try:
-            return self._lag(get_redis().xinfo_groups(self._key()))
+            return self._lag(self._redis().xinfo_groups(self._key()))
         except Exception as error:
             if self._absent(error):
                 return 0
@@ -516,7 +539,7 @@ class RedisStreamsBroker(Broker):
         answer for a name that never held any.
         """
         try:
-            summary = get_redis().xpending(self._key(), self._group())
+            summary = self._redis().xpending(self._key(), self._group())
         except Exception as error:
             # as `depth`: an observation, so nothing is created to make it answerable
             if self._absent(error):
@@ -526,7 +549,7 @@ class RedisStreamsBroker(Broker):
 
     async def adepth(self) -> int:
         """Read the same count on the client belonging to the loop the caller is on."""
-        client = await aget_redis()
+        client = await self._aredis()
         try:
             return self._lag(await client.xinfo_groups(self._key()))
         except Exception as error:
@@ -536,7 +559,7 @@ class RedisStreamsBroker(Broker):
 
     async def ainflight_depth(self, worker: str | None = None) -> int:
         """Count the group's pending entries, or one consumer's, without blocking the loop."""
-        client = await aget_redis()
+        client = await self._aredis()
         try:
             summary = await client.xpending(self._key(), self._group())
         except Exception as error:
@@ -656,7 +679,7 @@ class RedisStreamsBroker(Broker):
         honest analogue of the list's "no heartbeat has been written".
         """
         try:
-            idles = self._idles(get_redis().xinfo_consumers(self._key(), self._group()))
+            idles = self._idles(self._redis().xinfo_consumers(self._key(), self._group()))
         except Exception as error:
             # the group has not been created, which is what a probe run before any worker
             # started sees. Reported rather than created: see `depth`

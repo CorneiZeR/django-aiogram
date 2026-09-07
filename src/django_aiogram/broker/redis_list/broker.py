@@ -10,12 +10,16 @@ import logging
 import math
 import time
 from collections.abc import Mapping, Sequence
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from django_aiogram.broker.base import Broker
 from django_aiogram.broker.models import Liveness, Taken
 from django_aiogram.eventlog.events import worker_identity
 from django_aiogram.redis import aget_redis, as_bytes, as_command_argument, get_redis, heartbeat_key, heartbeat_ttl
+
+if TYPE_CHECKING:
+    from redis import Redis
+    from redis.asyncio import Redis as AsyncRedis
 
 logger = logging.getLogger('django_aiogram')
 
@@ -73,6 +77,25 @@ class RedisListBroker(Broker):
 
     # ------------------------------------------------------------------ producer
 
+    def _redis(self) -> 'Redis':
+        """Return this instance's client, for the server its own settings name.
+
+        Through here rather than `get_redis()` at each call site: ``REDIS_URL`` is a bot's
+        setting, and a client asked for without them is the process's -- so a bot on its own
+        Redis would address its own queue key on everybody else's server.
+        """
+        # the zero-argument call where this instance has no settings of its own, so a project
+        # that swaps the accessor -- and every case in this suite that does -- keeps working:
+        # `None` already means "the process's client", and asking for it by name is the same
+        # question with one more argument
+        return get_redis() if self.settings is None else get_redis(self.settings)
+
+    async def _aredis(self) -> 'AsyncRedis':
+        """Return the same client for a caller already on a loop, for the same reason."""
+        if self.settings is None:
+            return await aget_redis()
+        return await aget_redis(self.settings)
+
     def publish(self, payloads: Sequence[bytes]) -> None:
         """One variadic ``RPUSH``, so a chunk is one round trip.
 
@@ -82,13 +105,13 @@ class RedisListBroker(Broker):
         """
         if not payloads:
             return
-        get_redis().rpush(self._queue(), *payloads)
+        self._redis().rpush(self._queue(), *payloads)
 
     async def apublish(self, payloads: Sequence[bytes]) -> None:
         """Queue the same write, on the loop the caller is already on."""
         if not payloads:
             return
-        client = await aget_redis()
+        client = await self._aredis()
         await client.rpush(self._queue(), *payloads)
 
     # ------------------------------------------------------------------ consumer
@@ -101,7 +124,7 @@ class RedisListBroker(Broker):
         `stop()` and let the liveness marker expire under a consumer that is fine.
         """
         waiting = max(1, math.ceil(timeout))
-        connection = get_redis()
+        connection = self._redis()
         if self._reliable:
             try:
                 raw = connection.blmove(self._queue(), self._inflight(), waiting, 'LEFT', 'RIGHT')
@@ -121,7 +144,7 @@ class RedisListBroker(Broker):
 
     def take_nowait(self) -> Taken | None:
         """Move the same way without waiting, for a drain that has no thread to block."""
-        connection = get_redis()
+        connection = self._redis()
         raw: bytes | str | None
         if self._reliable:
             try:
@@ -153,7 +176,7 @@ class RedisListBroker(Broker):
             # took the message off the queue and the in-flight list stayed empty
             return
         try:
-            get_redis().lrem(self._inflight(), 1, as_command_argument(handle))
+            self._redis().lrem(self._inflight(), 1, as_command_argument(handle))
         except Exception:
             # worst case the message is redelivered on the next start
             logger.exception('failed to acknowledge a delivered message', extra={'tg_key': self._inflight()})
@@ -179,7 +202,7 @@ class RedisListBroker(Broker):
         Raises so the caller can retry — a Redis that was unreachable at startup left
         messages stranded, and reporting zero would look like a settled list.
         """
-        connection = get_redis()
+        connection = self._redis()
         count = 0
         try:
             # RIGHT->LEFT keeps the original order at the front of the queue
@@ -194,7 +217,7 @@ class RedisListBroker(Broker):
 
     def depth(self) -> int:
         """One ``LLEN`` on the queue."""
-        return int(get_redis().llen(self._queue()) or 0)
+        return int(self._redis().llen(self._queue()) or 0)
 
     def inflight_depth(self, worker: str | None = None) -> int:
         """One ``LLEN`` on an in-flight list -- this worker's, or the one named.
@@ -204,25 +227,25 @@ class RedisListBroker(Broker):
         back was holding is asking a question the key can answer. `tgbot_reclaim` addresses the
         same key by the same name.
         """
-        return int(get_redis().llen(self._inflight(worker)) or 0)
+        return int(self._redis().llen(self._inflight(worker)) or 0)
 
     async def adepth(self) -> int:
         """Count the same way, on the client belonging to the loop the caller is on."""
-        client = await aget_redis()
+        client = await self._aredis()
         return int(await client.llen(self._queue()) or 0)
 
     async def ainflight_depth(self, worker: str | None = None) -> int:
         """Count the same way, for this worker's in-flight list or the one named."""
-        client = await aget_redis()
+        client = await self._aredis()
         return int(await client.llen(self._inflight(worker)) or 0)
 
     def alive(self) -> None:
         """Write the key the healthcheck reads, with a TTL a stalled loop cannot renew."""
-        get_redis().set(heartbeat_key(), str(int(time.time())), ex=heartbeat_ttl())
+        self._redis().set(heartbeat_key(), str(int(time.time())), ex=heartbeat_ttl())
 
     def liveness(self) -> Liveness:
         """How old the heartbeat is, or that there is none."""
-        raw = get_redis().get(heartbeat_key())
+        raw = self._redis().get(heartbeat_key())
         if raw is None:
             return Liveness(reported=True, age=None, detail='no heartbeat has been written')
         try:

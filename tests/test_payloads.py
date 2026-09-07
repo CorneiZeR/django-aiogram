@@ -347,6 +347,9 @@ def test_a_string_without_a_colon_never_reaches_the_token_regex(monkeypatch):
     real = payloads._TOKEN_RE
 
     class Spy:
+        def __init__(self, *args, **kwargs):
+            """Take what the accessor takes: it is handed the settings a client is for."""
+
         def sub(self, replacement, text):
             scanned.append(text)
             return real.sub(replacement, text)

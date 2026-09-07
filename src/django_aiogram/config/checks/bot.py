@@ -28,7 +28,7 @@ from django_aiogram.config.enums import (
     choices,
 )
 from django_aiogram.config.settings import REMOVED_SETTINGS_NAME, SETTINGS_NAME, coerce_bool
-from django_aiogram.runtime.queues import declared, readable
+from django_aiogram.runtime.queues import declaration
 
 MODE_CHOICES = choices(UpdateMode)
 
@@ -363,8 +363,10 @@ def _a_declared_queue(key: str, record: BotRecord) -> list[Problem]:
     wanted = str(_setting(key, record) or '').strip()
     if not wanted:
         return []
-    known = declared()
-    if wanted in known or not readable():
+    # one read for both answers: two would let the first fail and the second succeed, and
+    # `E059` would then report a queue the table declares as one nothing does
+    known, readable = declaration()
+    if wanted in known or not readable:
         return []
     return [
         Problem(

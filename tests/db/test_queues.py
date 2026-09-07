@@ -103,3 +103,31 @@ def test_no_table_at_all_is_not_an_outage_and_still_refuses(monkeypatch, caplog)
     assert not [record for record in caplog.records if 'could not read' in record.getMessage()], (
         'a process with no database reported an outage'
     )
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**MEMORY, 'QUEUE': 'client-42'})
+def test_a_table_read_that_fails_once_does_not_report_a_queue_that_exists(monkeypatch):
+    """Two reads let the first fail and the second succeed, and the finding is then a lie.
+
+    `E059` had asked twice: once for the declarations, once for whether the table could be
+    read. A single blip between them left the settings as the whole declaration *and* the
+    table believed readable — so a queue with a row was reported as a typo, and `check` can
+    block a boot.
+    """
+    TelegramQueue.objects.create(name='client-42')
+    reads = {'count': 0}
+    original = TelegramQueue.objects.values_list
+
+    def flaky(*args, **kwargs):
+        reads['count'] += 1
+        if reads['count'] == 1:
+            msg = 'the database blinked'
+            raise OperationalError(msg)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(TelegramQueue.objects, 'values_list', flaky)
+
+    reported = [message for message in check_settings() if str(message.id).endswith('E059')]
+
+    assert reads['count'] == 1, f'the table was read {reads["count"]} times for one finding'
+    assert reported == [], 'a queue the table declares was reported as undeclared'

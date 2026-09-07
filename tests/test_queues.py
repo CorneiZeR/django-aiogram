@@ -112,3 +112,55 @@ def test_two_bots_on_different_queues_do_not_share_a_transport():
         assert vip.broker is not bulk.broker
     finally:
         groups.close_groups()
+
+
+@pytest.mark.parametrize('broker', [RedisListBroker, RedisStreamsBroker], ids=lambda value: value.__name__)
+def test_a_redis_transport_talks_to_the_server_its_own_settings_name(broker, monkeypatch):
+    """The queue key was already this bot's; the server it lives on has to be too.
+
+    Cached for the process, a client hands one bot's key to another bot's Redis — the key is
+    right, the data is somewhere else, and nothing reports it. Both halves are asserted, the
+    synchronous and the async, because the two caches are separate and only one of them was
+    keyed by anything at all.
+    """
+    import asyncio
+
+    from django_aiogram import redis as redis_module
+
+    built = {}
+
+    class Closes:
+        """A client that answers the one call a reset makes on it."""
+
+        def close(self):
+            """Do nothing, loudly enough to be closed."""
+
+        async def aclose(self):
+            """The async half of the same."""
+
+    def sync_client(settings=None):
+        built.setdefault('sync', []).append(redis_module.url_for(settings))
+        return Closes()
+
+    def async_client(settings=None):
+        built.setdefault('async', []).append(redis_module.url_for(settings))
+        return Closes()
+
+    monkeypatch.setattr(redis_module, 'build_client', sync_client)
+    monkeypatch.setattr(redis_module, 'build_async_client', async_client)
+    redis_module.reset_redis()
+
+    mine = broker.configured({'REDIS_URL': 'redis://mine:6379/0', 'REDIS_TIMEOUT': 5})
+    theirs = broker.configured({'REDIS_URL': 'redis://theirs:6379/0', 'REDIS_TIMEOUT': 5})
+
+    assert mine._redis() is not theirs._redis(), 'two servers were served by one client'
+    assert built['sync'] == ['redis://mine:6379/0', 'redis://theirs:6379/0']
+
+    async def both():
+        await mine._aredis()
+        await theirs._aredis()
+
+    asyncio.run(both())
+    redis_module.reset_redis()
+
+    assert built['async'] == ['redis://mine:6379/0', 'redis://theirs:6379/0']

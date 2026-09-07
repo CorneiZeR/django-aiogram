@@ -152,7 +152,7 @@ def old_redis_server(redis_server, monkeypatch):
         'django_aiogram.redis.get_redis',
         'django_aiogram.broker.redis_list.broker.get_redis',
     ):
-        monkeypatch.setattr(target, lambda wrapped=wrapped: wrapped)
+        monkeypatch.setattr(target, lambda *args, wrapped=wrapped, **kwargs: wrapped)
     return redis_server
 
 
@@ -237,6 +237,9 @@ def test_reclaim_survives_a_redis_that_is_not_up_yet(redis_server, monkeypatch):
     """run() is the thread target: anything escaping reclaim ends the consumer."""
 
     class Unreachable:
+        def __init__(self, *args, **kwargs):
+            """Take what the accessor takes: it is handed the settings a client is for."""
+
         def lmove(self, *args, **kwargs):
             msg = 'Connection refused'
             raise RedisConnectionError(msg)
@@ -276,6 +279,9 @@ def test_reclaim_is_retried_when_redis_was_down_at_startup(redis_server):
     failures = []
 
     class FlakyOnce:
+        def __init__(self, *args, **kwargs):
+            """Take what the accessor takes: it is handed the settings a client is for."""
+
         def lmove(self, *args, **kwargs):
             if not failures:
                 failures.append(True)
@@ -302,6 +308,9 @@ def test_a_response_error_that_is_not_a_missing_lmove_keeps_crash_safety(redis_s
     up the processing list for the life of the container."""
 
     class WrongType:
+        def __init__(self, *args, **kwargs):
+            """Take what the accessor takes: it is handed the settings a client is for."""
+
         def lmove(self, *args, **kwargs):
             msg = 'WRONGTYPE Operation against a key holding the wrong kind'
             raise ResponseError(msg)

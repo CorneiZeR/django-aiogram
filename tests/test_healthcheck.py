@@ -77,6 +77,9 @@ def test_the_heartbeat_is_paced(redis_server):
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_redis_that_refuses_the_write_does_not_stop_the_loop(redis_server, caplog):
     class Refuses:
+        def __init__(self, *args, **kwargs):
+            """Take what the accessor takes: it is handed the settings a client is for."""
+
         def set(self, *args, **kwargs):
             raise RedisConnectionError(REFUSED)
 
@@ -134,6 +137,9 @@ def test_unhealthy_when_the_transport_cannot_be_reached(monkeypatch):
     """
 
     class Down:
+        def __init__(self, *args, **kwargs):
+            """Take what the accessor takes: it is handed the settings a client is for."""
+
         def get(self, *args, **kwargs):
             raise RedisConnectionError(REFUSED)
 
@@ -197,6 +203,9 @@ def test_a_long_blocking_read_cannot_outlast_the_heartbeat(redis_server, monkeyp
     seen = []
 
     class Spy:
+        def __init__(self, *args, **kwargs):
+            """Take what the accessor takes: it is handed the settings a client is for."""
+
         def blmove(self, source, destination, timeout, *args, **kwargs):
             seen.append(timeout)
             raise RedisConnectionError(STOP_AFTER_ONE_READ)  # one read is enough to observe
@@ -230,6 +239,9 @@ def test_a_heartbeat_read_that_fails_is_reported(redis_server, monkeypatch):
     """
 
     class FailsTheRead:
+        def __init__(self, *args, **kwargs):
+            """Take what the accessor takes: it is handed the settings a client is for."""
+
         def ping(self):
             return True
 
@@ -254,6 +266,9 @@ def test_a_queue_read_that_fails_is_reported(redis_server, monkeypatch):
     """The heartbeat read got through and the count did not, which is its own line."""
 
     class FailsTheCount:
+        def __init__(self, *args, **kwargs):
+            """Take what the accessor takes: it is handed the settings a client is for."""
+
         def ping(self):
             return True
 
@@ -285,6 +300,9 @@ def test_a_queue_read_on_a_dropped_connection_reads_as_unreachable(redis_server,
     """
 
     class DropsTheCount:
+        def __init__(self, *args, **kwargs):
+            """Take what the accessor takes: it is handed the settings a client is for."""
+
         def ping(self):
             return True
 
@@ -480,6 +498,9 @@ def test_a_heartbeat_that_cannot_be_decoded_is_reported(redis_server, monkeypatc
     """
 
     class CannotDecode:
+        def __init__(self, *args, **kwargs):
+            """Take what the accessor takes: it is handed the settings a client is for."""
+
         def ping(self):
             return True
 
