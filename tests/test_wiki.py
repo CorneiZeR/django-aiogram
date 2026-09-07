@@ -25,6 +25,9 @@ from django_aiogram.config.defaults import PROCESS_SCOPED
 #: every one of them opens with. The settings table and the release history name each key
 #: without ever putting these two side by side
 MARKER = '`AUTODISCOVER`, `MODULE_NAME`'
+#: where one sentence ends and the next begins, so a list left short is not covered by a
+#: neighbouring sentence naming what it dropped
+SENTENCE = re.compile(r'(?<=[.!?])\s+')
 
 ROOT = Path(__file__).resolve().parent.parent
 WIKI = ROOT / 'docs' / 'wiki'
@@ -850,9 +853,10 @@ def test_every_process_owned_setting_is_named_where_the_set_is_listed(path):
     added `BOT_PROVIDERS` and `BOT_REFRESH_INTERVAL` to the set and to no sentence about it,
     and `MAX_BOTS_PER_WORKER` was on its way to being the third.
 
-    Per sentence rather than per page, which is the difference that makes this bite: every one
-    of these pages names each key *somewhere*, so a page-wide search passes with the list in
-    one of its sentences left short. A sentence is one of these lists when it opens the
+    Per sentence rather than per page or per paragraph, which is the difference that makes
+    this bite: every one of these pages names each key *somewhere*, and the paragraph holding
+    a list usually goes on to mention several of them again -- so both of the wider searches
+    pass with the enumeration itself left short. A sentence is one of these lists when it opens the
     enumeration -- `AUTODISCOVER` followed by `MODULE_NAME` -- which the settings table and
     the release history mention each key without doing.
 
@@ -860,11 +864,8 @@ def test_every_process_owned_setting_is_named_where_the_set_is_listed(path):
     why they are excluded rather than each looked for.
     """
     wanted = sorted(key for key in PROCESS_SCOPED if not key.startswith('EVENT_LOG_'))
-    listing = [
-        ' '.join(paragraph.split())
-        for paragraph in path.read_text(encoding='utf-8').split('\n\n')
-        if MARKER in ' '.join(paragraph.split())
-    ]
+    flattened = ' '.join(path.read_text(encoding='utf-8').split())
+    listing = [sentence for sentence in SENTENCE.split(flattened) if MARKER in sentence]
 
     assert listing, f'{path.name} no longer lists the process-owned settings at all'
     for sentence in listing:
