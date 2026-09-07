@@ -63,6 +63,24 @@
   them out of order cannot leave a process serving the wrong bots. A queue that cannot be
   reached costs the second, never the save.
 
+- **A queue is a bot's setting, and one word for all four transports.** `QUEUE` is the name a
+  bot publishes to and reads from — a Redis list key, a stream, an AMQP queue, a Kafka topic —
+  so isolating a client onto their own queue is said once rather than per transport. Left
+  empty, the transport's own option decides, which is what every 4.x deployment already has.
+
+  Two bots naming different queues resolve to different profiles, so they get a transport
+  each: sharing one, each would take the other's messages off the queue it was addressed to.
+  That works because a broker is now built **with** the settings it is for -- `Broker.settings`,
+  set by the group -- rather than merely chosen by them and left reading the shared defaults.
+  A transport a project writes needs no change: the constructor still takes nothing.
+
+  **Naming a queue means declaring it.** `QUEUES` in the settings, rows in `TelegramQueue`, or
+  both; a name in neither is refused where the transport for it is built and reported at boot
+  as `E059`, because the alternative has no symptom -- a message published to a queue nothing
+  consumes is a send that succeeds and arrives nowhere. A table that could not be *read* --
+  down, or not migrated here -- declares nothing and refuses nothing; no table at all is a
+  different state, where the settings are the whole declaration.
+
 - **Two containers over one set of bots split them, and neither polls the other's.**
   `getUpdates` is exclusive -- two processes calling it for one token get a 409 and half the
   updates each -- and with bots arriving at run time there is no deploy-time list to divide

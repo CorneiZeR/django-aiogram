@@ -38,6 +38,7 @@ class RedisListBroker(Broker):
     """``RPUSH`` to publish, ``BLMOVE`` to take, ``LREM`` to settle."""
 
     #: this broker's own keys, which stopped being everyone's in 4.0
+    QUEUE_OPTION: ClassVar[str] = 'REDIS_MESSAGES_KEY'
     CALL_TIMEOUT_OPTION: ClassVar[str] = 'REDIS_TIMEOUT'
 
     OPTIONS: ClassVar[Mapping[str, Any]] = {
@@ -53,7 +54,7 @@ class RedisListBroker(Broker):
         to this transport: a stream has a name and a group, a topic has partitions, and none
         of them is a Redis list key. Each broker declares what it needs and reads it here.
         """
-        return str(self.option('REDIS_MESSAGES_KEY'))
+        return self.addressed()
 
     def _inflight(self, worker: str | None = None) -> str:
         """Where one worker keeps what it is sending, derived from the queue's own name.
@@ -237,7 +238,7 @@ class RedisListBroker(Broker):
         The socket deadline rather than ``BLPOP_TIMEOUT``: the pop is asked to wait for less
         than this on purpose, so the longest a call can take is the deadline, not the wait.
         """
-        return type(self).call_timeout()
+        return self.deadline()
 
     @property
     def crash_safe(self) -> bool:

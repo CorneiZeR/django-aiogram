@@ -21,6 +21,7 @@ from django_aiogram.broker.registry import broker_class, overriding
 from django_aiogram.config.bots import BOTS_SETTINGS_NAME
 from django_aiogram.config.settings import SETTINGS_NAME
 from django_aiogram.runtime.profiles import Profile, profile_of
+from django_aiogram.runtime.queues import refuse_undeclared
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -72,7 +73,14 @@ class RuntimeGroup:
             if self._broker is None:
                 resolved = broker_class(self.settings)
                 resolved.verify()
-                self._broker = resolved()
+                # before the connection, and by name: a queue nothing declares is one nothing
+                # consumes, so publishing to it is a send that succeeds and arrives nowhere
+                refuse_undeclared(self.settings)
+                # built *with* this group's settings, not merely chosen by them: an instance
+                # reading `conf` would take its queue, its URL and its deadline from the
+                # shared defaults, so a bot configured differently would be served by a
+                # transport configured as everything else
+                self._broker = resolved.configured(self.settings)
             return self._broker
 
     def close(self) -> None:

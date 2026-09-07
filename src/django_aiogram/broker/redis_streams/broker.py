@@ -55,6 +55,7 @@ class RedisStreamsBroker(Broker):
     #: this transport's own settings. `REDIS_STREAM_KEY` has no default on purpose: see
     #: `_key`. The two timeouts are the package-wide ones, declared here because this
     #: broker reads them and `option` refuses a default that disagrees with that table
+    QUEUE_OPTION: ClassVar[str] = 'REDIS_STREAM_KEY'
     CALL_TIMEOUT_OPTION: ClassVar[str] = 'REDIS_TIMEOUT'
 
     OPTIONS: ClassVar[Mapping[str, Any]] = {
@@ -95,7 +96,7 @@ class RedisStreamsBroker(Broker):
         transports impossible to point at each other's data by accident, and `E047` asks for
         it before anything runs.
         """
-        return str(self.option('REDIS_STREAM_KEY'))
+        return self.addressed()
 
     def _group(self) -> str:
         """Name the consumer group every worker joins.
@@ -104,7 +105,7 @@ class RedisStreamsBroker(Broker):
         list gave for free and a stream does not. Defaulted, because unlike the key there is
         nothing another transport could collide with.
         """
-        return str(self.option('REDIS_STREAM_GROUP'))
+        return str(self.opt('REDIS_STREAM_GROUP'))
 
     def _consumer(self) -> str:
         """Name this process inside the group.
@@ -669,7 +670,7 @@ class RedisStreamsBroker(Broker):
     @property
     def call_ceiling(self) -> float:
         """``REDIS_TIMEOUT``, as on the list: the same server and the same socket deadline."""
-        return type(self).call_timeout()
+        return self.deadline()
 
     @property
     def crash_safe(self) -> bool:

@@ -78,7 +78,7 @@ def queue_key() -> str:
     """
     from django_aiogram.broker.redis_list import RedisListBroker  # noqa: PLC0415 - it imports this module
 
-    return str(RedisListBroker.option('REDIS_MESSAGES_KEY'))
+    return RedisListBroker.queue()
 
 
 def processing_key(worker: str | None = None) -> str:

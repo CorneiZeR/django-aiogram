@@ -33,6 +33,9 @@ __all__ = ('Profile', 'profile_of')
 #: these, read off whichever class ``BROKER`` names
 SHARED = (
     'BROKER',
+    # the queue itself: two bots on different queues must not share a broker, or each would
+    # read the other's messages off the queue it is addressed to
+    'QUEUE',
     'DELIVERY',
     'SERIALIZER',
     'ALLOW_PICKLE',

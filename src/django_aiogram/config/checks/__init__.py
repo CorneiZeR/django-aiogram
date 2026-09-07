@@ -30,6 +30,7 @@ from django_aiogram.config.checks.bot import (
     MODE_CHOICES,
     PAYLOAD_CHOICES,
     SERIALIZER_CHOICES,
+    _a_declared_queue,
     _a_lease_a_pass_can_renew,
     _a_readable_bots_dict,
     _a_token_with_an_identity,
@@ -169,6 +170,10 @@ CHECKS: tuple[Check, ...] = (
     Check('E054', '', _a_readable_bots_dict, process=True),
     Check('E053', '', _settings_one_process_decides, process=True),
     # the leases a polling container takes: how many, and for how long
+    # the queue a bot publishes to: a name, and one this deployment has declared
+    Check('E057', 'QUEUE', _a_string),
+    Check('E058', 'QUEUES', _a_collection_of_strings, process=True),
+    Check('E059', 'QUEUE', _a_declared_queue),
     Check('E055', 'MAX_BOTS_PER_WORKER', partial(_an_integer, minimum=0), process=True),
     Check('E056', 'BOT_LEASE_SECONDS', partial(_a_number, minimum=1), process=True),
     Check('W011', 'BOT_LEASE_SECONDS', _a_lease_a_pass_can_renew, process=True),

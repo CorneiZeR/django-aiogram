@@ -72,6 +72,7 @@ class KafkaBroker(Broker):
 
     #: this transport's own settings. The servers and the topic are required for the same
     #: reason the AMQP url and queue are: neither has a default worth baking in
+    QUEUE_OPTION: ClassVar[str] = 'KAFKA_TOPIC'
     CALL_TIMEOUT_OPTION: ClassVar[str] = 'KAFKA_TIMEOUT'
 
     OPTIONS: ClassVar[Mapping[str, Any]] = {
@@ -114,11 +115,11 @@ class KafkaBroker(Broker):
 
     def _topic(self) -> str:
         """Name the topic this broker produces to and consumes from."""
-        return str(self.option('KAFKA_TOPIC'))
+        return self.addressed()
 
     def _bootstrap(self) -> str:
         """Name the servers to reach, as librdkafka spells them."""
-        return str(self.option('KAFKA_BOOTSTRAP'))
+        return str(self.opt('KAFKA_BOOTSTRAP'))
 
     @classmethod
     def call_timeout(cls, settings: Mapping[str, Any] | None = None) -> float:
@@ -150,11 +151,11 @@ class KafkaBroker(Broker):
 
     def _timeout(self) -> float:
         """Return the same number, for the callers inside this class that read it per call."""
-        return type(self).call_timeout()
+        return self.deadline()
 
     def _consumer(self) -> 'Consumer':
         """Reach this thread's consumer, subscribed on first use."""
-        return consumer_for_thread(self._bootstrap(), self._topic(), str(self.option('KAFKA_GROUP')), self._timeout())
+        return consumer_for_thread(self._bootstrap(), self._topic(), str(self.opt('KAFKA_GROUP')), self._timeout())
 
     # ------------------------------------------------------------------ producer
 
@@ -492,7 +493,7 @@ class KafkaBroker(Broker):
         # given partitions it never polls, and on a single-partition topic the real worker
         # then gets nothing until that member's session times out. A healthcheck could starve
         # the consumer it was checking on
-        consumer = metadata_client(self._bootstrap(), str(self.option('KAFKA_GROUP')), self._timeout())
+        consumer = metadata_client(self._bootstrap(), str(self.opt('KAFKA_GROUP')), self._timeout())
         topic = self._topic()
         deadline = time.monotonic() + self._timeout()
         described = consumer.list_topics(topic, timeout=_left(deadline)).topics.get(topic)
@@ -543,7 +544,7 @@ class KafkaBroker(Broker):
         is reported here as well — a ceiling read from a setting nobody can use is a number
         the join deadline would then be derived from.
         """
-        return type(self).call_timeout()
+        return self.deadline()
 
     @property
     def crash_safe(self) -> bool:

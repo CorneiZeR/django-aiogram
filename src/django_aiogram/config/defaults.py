@@ -113,6 +113,14 @@ DEFAULTS: dict[str, Any] = {
     # where the bots come from, by dotted path and in order. The shipped one reads
     # `TELEGRAM_BOTS`; a project whose clients bring their own bot adds the one that reads the
     # table, or writes its own. Process-scoped: which sources exist is not a bot's decision
+    # which queue a bot's messages go to, whatever the transport calls one. Empty means the
+    # transport's own option decides, which is what every 4.x deployment has set. A bot's
+    # setting rather than the process's: two bots on different queues get a broker each
+    'QUEUE': '',
+    # the queues this deployment has: a name in `QUEUE` that is not one of these, or a row in
+    # `TelegramQueue`, is refused where it was written. Naming a queue means declaring it,
+    # because the alternative is a typo creating a queue nobody reads
+    'QUEUES': (),
     'BOT_PROVIDERS': ('django_aiogram.runtime.providers.from_settings',),
     # how often a supervisor re-reads them. The push through the transport is what makes a
     # change arrive in a second; this is the poll that makes it arrive at all
