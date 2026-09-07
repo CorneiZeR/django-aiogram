@@ -14,6 +14,7 @@ from django.test import override_settings
 
 from django_aiogram.broker.base import Broker
 from django_aiogram.config import bots
+from django_aiogram.config import bots as configured
 from django_aiogram.config.bots import env_prefix
 from django_aiogram.config.checks import check_settings
 from django_aiogram.config.settings import ENV_PREFIX
@@ -68,6 +69,37 @@ def test_one_bot_reads_its_own_environment(monkeypatch):
         assert bots.record('support')['MAX_RETRIES'] == 9
         assert bots.record('support').label('MAX_RETRIES') == 'DJANGO_AIOGRAM_SUPPORT_MAX_RETRIES'
         assert bots.record('other')['MAX_RETRIES'] == 2, 'another bot keeps the shared variable'
+
+
+def test_a_variable_nothing_would_have_used_cannot_take_a_bot_down(monkeypatch):
+    """A layer that names the key means the environment is not read for it at all.
+
+    `from_env` refuses a variable it cannot coerce, so reading one that a section overrides
+    would turn a value nobody uses into a bot that will not resolve. Resolution reads three
+    levels now rather than one section, and it was the generalisation that made this reachable.
+    """
+    monkeypatch.setenv('DJANGO_AIOGRAM_SUPPORT_MAX_RETRIES', 'not-a-number')
+
+    with override_settings(TELEGRAM_BOTS={'support': {'TOKEN': TOKEN, 'MAX_RETRIES': 3}}):
+        assert bots.record('support')['MAX_RETRIES'] == 3
+
+    with override_settings(TELEGRAM_BOTS={'support': {'TOKEN': TOKEN}}), pytest.raises(ImproperlyConfigured):
+        # and the refusal still arrives where the variable *is* what would be used
+        bots.record('support')['MAX_RETRIES']
+
+
+def test_layers_are_applied_in_order_and_each_says_where_it_came_from():
+    """Three levels as layers: a profile under a bot, and a finding names the one that decided."""
+    resolved = configured.resolve(
+        'support',
+        ('TelegramBotProfile(vip).overrides', {'MAX_IN_FLIGHT': 4, 'MAX_RETRIES': 2}),
+        ('TelegramBot(123456).overrides', {'MAX_RETRIES': 7}),
+    )
+
+    assert resolved['MAX_IN_FLIGHT'] == 4
+    assert resolved['MAX_RETRIES'] == 7, 'the later layer has to win'
+    assert resolved.label('MAX_IN_FLIGHT') == "TelegramBotProfile(vip).overrides['MAX_IN_FLIGHT']"
+    assert resolved.label('MAX_RETRIES') == "TelegramBot(123456).overrides['MAX_RETRIES']"
 
 
 def test_a_section_cannot_decide_what_the_process_owns():

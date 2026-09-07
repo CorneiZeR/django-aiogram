@@ -57,6 +57,8 @@ Neither is required for the project to boot.
 | `ENABLED` | `True` | Whether this process sends — to Telegram, or into the broker. The depth reads answer regardless |
 | `AUTODISCOVER` | `True` | Import `<app>.<MODULE_NAME>` on startup |
 | `MODULE_NAME` | `'tg_router'` | Module to look for in each installed app |
+| `BOT_PROVIDERS` | `('django_aiogram.runtime.providers.from_settings',)` | Where the bots come from, by dotted path and in the order they are read. The shipped default reads `TELEGRAM_BOTS`; `django_aiogram.runtime.providers.from_database` reads the `TelegramBot` table, for a project whose clients bring their own bot. A path that cannot be imported is refused rather than skipped — a source nobody reads is a set of bots nobody serves. Where two sources name one identity the first keeps it, and the collision is logged |
+| `BOT_REFRESH_INTERVAL` | `30` | Seconds between re-reads of the providers. The poll is what makes a change arrive at all; a change made through the admin also pushes, which is what makes it arrive in a second. A pass over an unchanged table costs one aggregate per table, and a provider that suddenly reads no bots at all is held for one pass before it is believed |
 
 **Every boolean setting here is parsed, not tested for truthiness**: `'false'`,
 `'no'`, `'off'` and `0` all mean false, wherever a boolean is accepted. Anything

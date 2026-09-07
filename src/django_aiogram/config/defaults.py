@@ -110,6 +110,13 @@ DEFAULTS: dict[str, Any] = {
     'EVENT_LOG_DATABASE': '',
     # write on the calling thread instead of the writer's: tests only
     'EVENT_LOG_SYNC': False,
+    # where the bots come from, by dotted path and in order. The shipped one reads
+    # `TELEGRAM_BOTS`; a project whose clients bring their own bot adds the one that reads the
+    # table, or writes its own. Process-scoped: which sources exist is not a bot's decision
+    'BOT_PROVIDERS': ('django_aiogram.runtime.providers.from_settings',),
+    # how often a supervisor re-reads them. The push through the transport is what makes a
+    # change arrive in a second; this is the poll that makes it arrive at all
+    'BOT_REFRESH_INTERVAL': 30,
 }
 
 
@@ -128,6 +135,6 @@ DEFAULTS: dict[str, Any] = {
 #: A section naming one of these is refused by `E053` rather than honoured for whichever bot
 #: resolved last.
 PROCESS_SCOPED: frozenset[str] = frozenset(
-    {'AUTODISCOVER', 'MODULE_NAME', 'WORKER_NAME', 'FSM_STORAGE'}
+    {'AUTODISCOVER', 'MODULE_NAME', 'WORKER_NAME', 'FSM_STORAGE', 'BOT_PROVIDERS', 'BOT_REFRESH_INTERVAL'}
     | {key for key in DEFAULTS if key.startswith('EVENT_LOG')},
 )

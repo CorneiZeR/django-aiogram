@@ -35,6 +35,34 @@
   built by hand: Django builds an index without `CONCURRENTLY`, and the upgrading page has the
   order to do it in.
 
+- **Bots can arrive while the process runs.** `BOT_PROVIDERS` names where they come from, in
+  order: the shipped default reads `TELEGRAM_BOTS`, and
+  `django_aiogram.runtime.providers.from_database` reads the `TelegramBot` table — for a
+  project whose clients connect their own bot through its interface. A provider of your own is
+  a callable answering with resolved bots.
+
+  A supervisor brings what is running into line with what is configured, again and again
+  rather than once at startup. **A provider that cannot look has not said there is nothing to
+  serve**: a failed read leaves the running set exactly as it is, because the alternative is a
+  database blinking and taking every bot off the air. One bot that cannot be served is
+  quarantined with a reason and a growing wait, and the pass carries on to the others. A
+  quarantine belongs to the configuration that earned it, so a corrected token is tried on the
+  next pass rather than waiting the wait out.
+
+  **An empty answer has to be said twice**, and for the same reason a failed read is not a
+  removal: a provider that returned twenty bots and now returns none is usually a query that
+  reached the wrong place. The first such read is held, the second is honoured, and a
+  deployment that really removed its last bot converges one interval later. An unchanged
+  table, meanwhile, is answered from what was last read -- one aggregate per table rather than
+  resolving every bot through its profile every few seconds in every container.
+
+  A change made through a project's own interface reaches a running container in about a
+  second: saving one of those rows publishes a notice on the queue, and a consumer that reads
+  it asks the supervisor for a pass. The notice says *read again* rather than carrying the
+  change, so a duplicate costs nothing, a loss costs one `BOT_REFRESH_INTERVAL`, and two of
+  them out of order cannot leave a process serving the wrong bots. A queue that cannot be
+  reached costs the second, never the save.
+
 ### Changed
 
 - **`TELEGRAM_BOT` is now `TELEGRAM_BOT_DEFAULTS`, and every bot is a section under

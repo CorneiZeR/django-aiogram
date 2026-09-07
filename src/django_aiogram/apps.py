@@ -50,6 +50,15 @@ class TelegramBotAppConfig(AppConfig):
 
         register(check_settings)
 
+        if enabled:
+            # what makes a bot added through a project's own interface reach a running
+            # container in a second rather than at the next poll. Connected here rather than at
+            # import, and per model rather than for every save in the project: Django checks
+            # for `post_delete` receivers before taking its fast-delete path
+            from django_aiogram.runtime import control  # noqa: PLC0415 - nothing expensive at import
+
+            control.connect()
+
         if enabled and coerce_bool(conf['AUTODISCOVER'], f"{SETTINGS_NAME}['AUTODISCOVER']"):
             from django_aiogram.consumer.routers import autodiscover_tg_routers  # noqa: PLC0415 - only when enabled
 
