@@ -40,6 +40,7 @@ def _send_raw_of(bot_id: int) -> 'Callable[..., Any]':
 
     return bots.by_id(bot_id).send_raw
 
+
 #: what signal.signal returns: a handler, one of the SIG_* constants, or None
 Handler = Callable[[int, FrameType | None], Any] | int | None
 

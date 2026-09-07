@@ -186,10 +186,16 @@ drains across the upgrade — the reverse does not hold: a 2.x consumer handed a
 new payload calls the Telegram method with `__envelope__` as a keyword, raises,
 logs it and swallows it, and the message is gone with nothing to redeliver.
 
-Both are one-time concerns. After 3.0 the order is whatever you like, and 5.0 keeps it that
-way: a queued message names the bot it is for, and that arrived as a field the reader ignores
-where it does not know it rather than as a new envelope version — so either side may be
-deployed first.
+Both are one-time concerns. After 3.0 the order is whatever you like **while the deployment
+has one bot**, and 5.0 keeps it that way: a queued message names the bot it is for, and that
+arrived as a field the reader ignores where it does not know it rather than as a new envelope
+version, so nothing is lost in either direction.
+
+**A second bot changes that.** A 4.1 consumer cannot read the field, so it delivers every
+message through the one bot it has — including one queued for the other, which then goes out
+under the wrong token, to a chat that bot may not be in. Nothing is dropped and nothing
+raises; it is simply the wrong bot. So: upgrade the consumers to 5.0 first, and start queueing
+for a second bot only once they are all there.
 
 Note the absence of `ports:` on `redis`. Nothing outside the compose network
 reaches it, which is why no password appears here. Publish that port and Redis

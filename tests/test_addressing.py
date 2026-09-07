@@ -139,6 +139,24 @@ def test_a_message_naming_no_bot_goes_to_the_process_own():
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_consumer_that_cannot_route_delivers_through_its_own_bot():
+    """Which is what a 4.1 consumer does with a 5.0 payload, and why the upgrade has an order.
+
+    A consumer with no route is exactly that consumer: it reads the keys it knows and hands
+    the message to the one bot it has. For a deployment with one bot that is the right answer
+    and nothing is lost. For one with two it is the *wrong bot* — the wrong token, and a chat
+    it may not be in — with nothing raised and nothing dropped to notice it by. So the pages
+    ask for every consumer to be at 5.0 before a second bot starts queueing, and this is the
+    behaviour that makes them ask.
+    """
+    handled = []
+    delivery = get_delivery(handler=lambda **call: handled.append(call['text']))
+
+    assert delivery.dispatch(_bytes(a_payload(bot=654321, kwargs={'chat_id': 1, 'text': 'for support'})))
+    assert handled == ['for support'], 'a consumer without a route refused a payload it should deliver'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_message_for_a_bot_this_process_does_not_serve_is_left_in_flight(caplog):
     """Not acknowledged, and not delivered by somebody else's bot either.
 

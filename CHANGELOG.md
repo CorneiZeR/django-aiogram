@@ -58,6 +58,12 @@
   a set of the versions it understands, separate from the one it writes, so the next bump
   cannot make that mistake either.
 
+  So either container may be deployed first **while the deployment runs one bot**. Adding a
+  second one asks for the consumers to be at 5.0 already: a 4.1 consumer cannot read the field,
+  and would deliver a message queued for the new bot through the old one -- the wrong token,
+  and a chat it may not be in. Nothing raises and nothing is dropped, which is exactly why the
+  order matters.
+
   New check ids: `E050`-`E054` and `W010`. `W003` now asks the shared dict only, and `W010`
   asks each section, so one typo is one finding rather than one per bot.
 
