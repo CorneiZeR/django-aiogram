@@ -62,7 +62,7 @@ def test_consumer_starts_only_after_the_loop_is_running(monkeypatch):
     events = []
     monkeypatch.setattr(
         'django_aiogram.management.commands.start_tgbot.get_delivery',
-        lambda handler: RecordingDelivery(events),
+        lambda handler, route=None: RecordingDelivery(events),
     )
 
     def fake_polling():
@@ -87,7 +87,7 @@ def test_shutdown_is_safe_when_the_consumer_never_started(monkeypatch):
     events = []
     monkeypatch.setattr(
         'django_aiogram.management.commands.start_tgbot.get_delivery',
-        lambda handler: RecordingDelivery(events),
+        lambda handler, route=None: RecordingDelivery(events),
     )
 
     def failing_polling():
@@ -116,7 +116,7 @@ def test_the_previous_sigterm_handler_is_restored(monkeypatch):
     try:
         monkeypatch.setattr(
             'django_aiogram.management.commands.start_tgbot.get_delivery',
-            lambda handler: _NoDelivery(),
+            lambda handler, route=None: _NoDelivery(),
         )
         monkeypatch.setattr(bot, 'close', lambda: None)
         monkeypatch.setattr(bot, 'start_polling', lambda: None)
@@ -168,7 +168,7 @@ def test_webhook_mode_consumes_without_calling_telegram(monkeypatch, mode):
     handlers = []
     monkeypatch.setattr(
         'django_aiogram.management.commands.start_tgbot.get_delivery',
-        lambda handler: handlers.append(handler) or Delivery(),
+        lambda handler, route=None: handlers.append(handler) or Delivery(),
     )
     monkeypatch.setattr(bot, 'close', lambda: events.append('closed'))
     monkeypatch.setattr(bot, 'start_polling', lambda: events.append('POLLED'))
@@ -292,7 +292,7 @@ def run_start_command(**options):
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(
             'django_aiogram.management.commands.start_tgbot.get_delivery',
-            lambda handler: Delivery(),
+            lambda handler, route=None: Delivery(),
         )
         patch.setattr(bot, 'close', lambda: None)
         patch.setattr(bot, 'start_polling', lambda: events.append('polled'))
@@ -383,7 +383,7 @@ def test_the_consumer_join_is_derived_from_the_transports_own_deadline(monkeypat
 
     monkeypatch.setattr(
         'django_aiogram.management.commands.start_tgbot.get_delivery',
-        lambda handler: SlowDelivery([]),
+        lambda handler, route=None: SlowDelivery([]),
     )
     monkeypatch.setattr(bot, 'start_polling', lambda: bot.loop.run_until_complete(asyncio.sleep(0)))
     monkeypatch.setattr(bot, 'close', lambda: None)
@@ -404,7 +404,7 @@ def test_a_consumer_that_outlives_its_join_is_reported(monkeypatch, caplog):
 
     monkeypatch.setattr(
         'django_aiogram.management.commands.start_tgbot.get_delivery',
-        lambda handler: StuckDelivery([]),
+        lambda handler, route=None: StuckDelivery([]),
     )
     monkeypatch.setattr(bot, 'start_polling', lambda: bot.loop.run_until_complete(asyncio.sleep(0)))
     monkeypatch.setattr(bot, 'close', lambda: None)
@@ -439,7 +439,7 @@ def test_a_server_without_lmove_is_refused_when_crash_safety_is_required(monkeyp
     started = []
     monkeypatch.setattr(
         'django_aiogram.management.commands.start_tgbot.get_delivery',
-        lambda handler: OldServer(started),
+        lambda handler, route=None: OldServer(started),
     )
     # recorded too: asserting only on the consumer would let the probe move after
     # start_polling and still pass, and a process polling updates with nothing
@@ -473,7 +473,7 @@ def test_an_unreachable_redis_does_not_read_as_an_old_server(monkeypatch, caplog
 
     monkeypatch.setattr(
         'django_aiogram.management.commands.start_tgbot.get_delivery',
-        lambda handler: Unreachable(events),
+        lambda handler, route=None: Unreachable(events),
     )
 
     def polled():
@@ -506,7 +506,7 @@ def test_the_consumer_is_not_started_by_the_shutdown_itself(monkeypatch, caplog)
     events = []
     monkeypatch.setattr(
         'django_aiogram.management.commands.start_tgbot.get_delivery',
-        lambda handler: RecordingDelivery(events),
+        lambda handler, route=None: RecordingDelivery(events),
     )
     # the loop never runs, so the queued start is still queued in the finally
     monkeypatch.setattr(Command, '_idle_on_the_loop', lambda self: None)

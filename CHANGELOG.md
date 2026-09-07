@@ -44,6 +44,35 @@
   `bots.by_id(...)` by the identity in its token. `django_aiogram.bot` is `bots['default']` --
   the same object, since it is what handlers are registered on and what a shutdown closes.
 
+- **A queued message names the bot it is for**, so one queue serves several of them: the
+  producer stamps the number in its own token, and the consumer hands the message to that
+  bot's send. A message for a bot the process does not serve is left *in flight* rather than
+  acknowledged — delivering it through another bot would send it under the wrong token, and
+  acknowledging would destroy a message a correctly configured process can still take.
+
+  A payload whose identity cannot be *read* is refused outright rather than treated as naming
+  none: the no-bot answer means "deliver through this process's own bot", so anything else
+  would let whoever can write to the queue have a message sent under a token they did not
+  name. Absent is not the same as unreadable, and only the first is an upgrade.
+
+  And a consumer serving one bot -- which is handed no routing, since there is nothing to
+  choose between -- still delivers only what is its own. Two such processes can share a queue,
+  so a message naming the other one is left in flight rather than sent under this bot's token.
+
+  **The envelope version did not move for it.** The reader takes the keys it knows and ignores
+  the rest, so a 4.1 consumer handed a 5.0 payload delivers it through the one bot it has, and
+  a 5.0 consumer handed a 4.1 payload finds no bot named and does the same. A bump would have
+  made the rolling upgrade a choice between losing the backlog and stopping the world -- an
+  older envelope is *recorded and acknowledged*, which is to say dropped. The reader now keeps
+  a set of the versions it understands, separate from the one it writes, so the next bump
+  cannot make that mistake either.
+
+  So either container may be deployed first **while the deployment runs one bot**. Adding a
+  second one asks for the consumers to be at 5.0 already: a 4.1 consumer cannot read the field,
+  and would deliver a message queued for the new bot through the old one -- the wrong token,
+  and a chat it may not be in. Nothing raises and nothing is dropped, which is exactly why the
+  order matters.
+
   New check ids: `E050`-`E054` and `W010`. `W003` now asks the shared dict only, and `W010`
   asks each section, so one typo is one finding rather than one per bot.
 

@@ -19,6 +19,16 @@ To run more than one, add a section per bot under `TELEGRAM_BOTS` — see
 they configure the process, not a bot, and `E053` refuses a section that names them.
 `ENABLED` is not one of them, so a single bot can still be switched off on its own.
 
+**Either container may be deployed first, while you run one bot.** A queued message now names
+the bot it is for, and that is a field rather than a new envelope version: a 4.1 consumer
+handed a 5.0 payload delivers it through the one bot it has, and a 5.0 consumer handed a 4.1
+payload finds no bot named and does the same. Nothing is lost in either direction.
+
+**Before you add a second bot, every consumer has to be at 5.0.** A 4.1 one cannot read the
+field, so a message queued for the new bot would be delivered through the old one — the wrong
+token, and a chat it may not be in. Nothing raises and nothing is dropped, which is what makes
+this worth doing in order.
+
 If you ship a `Broker` of your own, `option`, `call_timeout` and `broker_class` now take the
 settings to read from. Calling them is unchanged — the argument is optional and falls back to
 the shared settings. An **override** is not: `def option(cls, key, settings=None)` and

@@ -60,6 +60,9 @@ from django_aiogram.wire.serializers import PickleReadRefusedError, Serializatio
 logger = logging.getLogger('django_aiogram')
 
 Handler = Callable[..., Any]
+#: answers with the handler for one bot's identity. Raising is how it says this process serves
+#: no such bot, which `Delivery._handler_for` turns into a message left in flight
+Route = Callable[[int], Handler]
 
 
 def defers_completion(handler: Handler) -> bool:
@@ -99,9 +102,21 @@ def accepts_keyword(handler: Handler, name: str) -> bool:
 class Delivery(ABC):
     """Consumes whichever transport `BROKER` names, until stopped."""
 
-    def __init__(self, handler: Handler) -> None:
-        """Take what each decoded message is handed to once it arrives."""
+    def __init__(self, handler: Handler, route: 'Route | None' = None) -> None:
+        """Take what each decoded message is handed to once it arrives.
+
+        ``route`` is how a message reaches the bot it was queued for: it answers with the
+        handler for one identity, and ``handler`` is what a payload naming no bot gets --
+        every 4.x payload, and every send by a bot whose token has no identity in it.
+
+        Both, rather than the route alone, because the shape of the handler is read once here
+        rather than per message: whether it takes ``on_complete``, and whether it takes
+        ``on_refused``. Every routed handler is some bot's ``send_raw`` and they are the same
+        shape, so asking one answers for all -- and a route handing back something else would
+        be answered as though it were `send_raw`, which is why the contract says so out loud.
+        """
         self.handler = handler
+        self.route = route
         self._stop = threading.Event()
         # the one transport this consumer talks to, resolved once: everything below asks it
         # rather than a Redis client, which is what lets a second transport exist at all
@@ -435,6 +450,16 @@ class Delivery(ABC):
                 extra={'tg_function': envelope.function},
             )
             return True
+        try:
+            handler = self._handler_for(envelope)
+        except Exception:
+            # left in flight, not acknowledged: this process is not configured for that bot
+            # and another one may be. `tgbot_reclaim` is what puts it back once one is
+            logger.exception(
+                'leaving a message for a bot this process does not serve in flight',
+                extra={'tg_bot_id': envelope.bot_id, 'tg_key': self.processing_key},
+            )
+            return False
         self._record(EventKind.OUTBOUND_CONSUMED, envelope)
         # by keyword, the way 2.x splatted it: a handler taking **kwargs
         # only — which every documented recipe does — refuses a positional.
@@ -452,9 +477,37 @@ class Delivery(ABC):
             'correlation_id': envelope.correlation_id,
             'queued_at': envelope.queued_at,
         }
-        return self._hand_over(envelope, call, handle)
+        return self._hand_over(envelope, call, handle, handler)
 
-    def _hand_over(self, envelope: Envelope, call: dict[str, Any], handle: object) -> bool:
+    def _handler_for(self, envelope: Envelope) -> Handler:
+        """Return the handler for the bot this message names, or the one for no bot at all.
+
+        Raises where the identity names a bot this process does not serve. `dispatch` leaves
+        such a message *in flight* rather than acknowledging it, which is the same answer it
+        gives an envelope from a newer version and for the same reason: the message is
+        perfectly deliverable by a process that is configured for it, and acknowledging would
+        destroy it over a deployment that has not caught up.
+
+        **A consumer with no route still checks the identity**, and that is not belt and
+        braces. A process serving one bot is handed no route -- there is nothing to choose
+        between -- and two such processes can share a queue, so a message naming the *other*
+        one would otherwise be delivered by this bot and acknowledged: the wrong token, into a
+        chat it may not be in, and the message gone. Only a payload naming this process's own
+        bot, or naming none, is its to deliver.
+        """
+        if envelope.bot_id is None:
+            return self.handler
+        if self.route is not None:
+            return self.route(envelope.bot_id)
+        # deferred: this reads Django settings and the module is imported by the checks
+        from django_aiogram.config.bots import records  # noqa: PLC0415 - as above
+
+        if envelope.bot_id not in {found.bot_id for found in records()}:
+            msg = f'this process serves no bot with the identity {envelope.bot_id}'
+            raise LookupError(msg)
+        return self.handler
+
+    def _hand_over(self, envelope: Envelope, call: dict[str, Any], handle: object, handler: Handler) -> bool:
         """Call the handler, and say whether the message may be acknowledged.
 
         Cancellation is the reason this is not one ``except``: it is a
@@ -477,7 +530,7 @@ class Delivery(ABC):
                 call['on_refused'] = self._release_for(handle)
             self._in_flight += 1
         try:
-            self.handler(**call)
+            handler(**call)
         except asyncio.CancelledError:
             if deferring:
                 self._in_flight -= 1
@@ -648,6 +701,27 @@ def delivery_class() -> type[Delivery]:
     return resolved
 
 
-def get_delivery(handler: Handler) -> Delivery:
-    """Build the consumer ``DELIVERY`` names, with the handler it delivers through."""
-    return delivery_class()(handler)
+def get_delivery(handler: Handler, route: 'Route | None' = None) -> Delivery:
+    """Build the consumer ``DELIVERY`` names, with the handlers it delivers through.
+
+    ``DELIVERY`` is a documented seam, and what it promised was a subclass implementing
+    ``run()`` -- so a project's own ``__init__(self, handler)`` predates the route and must keep
+    working. It is passed only to a class that says it takes one.
+
+    A class that does not, in a process serving **several** bots, is refused rather than built:
+    without a route every addressed message would be delivered through the process's own bot,
+    under a token the producer did not name, silently. With one bot there is nothing to route
+    and nothing to say.
+    """
+    resolved = delivery_class()
+    if accepts_keyword(resolved.__init__, 'route'):
+        return resolved(handler, route=route)
+    if route is not None:
+        named = f'{resolved.__module__}.{resolved.__qualname__}'
+        raise DeliveryNotConfiguredError(
+            named,
+            'whose __init__ takes no `route`, and this process serves more than one bot: '
+            'every addressed message would be delivered through the wrong one. Add '
+            '`route=None` to its __init__ and hand it to `Delivery.__init__`.',
+        )
+    return resolved(handler)

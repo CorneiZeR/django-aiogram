@@ -118,7 +118,7 @@ def test_the_join_bound_is_read_before_the_threads_it_bounds(monkeypatch):
     monkeypatch.setattr(
         command_module,
         'get_delivery',
-        lambda handler: SimpleNamespace(
+        lambda handler, route=None: SimpleNamespace(
             start_thread=started_thread,
             stop=lambda: None,
             collect=lambda: collected.append('collected'),
@@ -206,7 +206,7 @@ def test_sigterm_unwinds_polling(monkeypatch):
 
     monkeypatch.setattr(
         'django_aiogram.management.commands.start_tgbot.get_delivery',
-        lambda handler: Delivery(),
+        lambda handler, route=None: Delivery(),
     )
     monkeypatch.setattr(bot, 'close', lambda: events.append('closed'))
 
