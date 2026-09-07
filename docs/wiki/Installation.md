@@ -133,7 +133,9 @@ package needs them only when something actually reaches Telegram or Redis, so
 tests, migrations and a build all run without them.
 
 The package ships tables of its own — the event log, the schedule an `eta` writes to, and the
-rows a project configures bots in — so run migrations after adding it:
+rows a project configures bots in — so run migrations after adding it. With
+`EVENT_LOG_DATABASE` naming a database of its own, migrate both: the feed lives there and
+everything else does not.
 
 ```shell
 python manage.py migrate

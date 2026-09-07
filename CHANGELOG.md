@@ -29,9 +29,11 @@
   table is a dump of every bot's credential.
 
   Nothing reads any of it until a supervisor or the admin is configured, and a project running
-  one bot from `settings.py` writes no row at all. **Run `manage.py migrate`.** The index on
-  the event log is a migration of its own so that a large feed can have it built by hand:
-  Django builds an index without `CONCURRENTLY`, and the upgrading page has the two commands.
+  one bot from `settings.py` writes no row at all. **Run `manage.py migrate`** -- on both databases where
+  `EVENT_LOG_DATABASE` names one of its own, since the feed lives there and everything else
+  does not. The index on the feed is a migration of its own so that a large one can have it
+  built by hand: Django builds an index without `CONCURRENTLY`, and the upgrading page has the
+  order to do it in.
 
 ### Changed
 
