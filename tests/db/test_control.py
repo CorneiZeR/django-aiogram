@@ -5,7 +5,10 @@ through the transport or not at all. These cases are about that trip: what is pu
 a consumer does with it, and what happens when the queue is not there.
 """
 
+import contextlib
+
 import pytest
+from django.db import transaction
 from django.test import override_settings
 
 from django_aiogram.consumer.delivery import get_delivery
@@ -14,7 +17,7 @@ from django_aiogram.runtime import control, groups
 from django_aiogram.runtime.supervisor import Supervisor, serving
 from django_aiogram.wire.serializers import get_serializer
 
-pytestmark = pytest.mark.django_db(transaction=True)
+pytestmark = pytest.mark.django_db(transaction=True, databases=['default', 'logs'])
 
 MEMORY = {'BROKER': 'django_aiogram.testing.InMemoryBroker', 'FSM_STORAGE': 'memory'}
 
@@ -88,6 +91,24 @@ def test_listening_for_a_change_does_not_cost_the_fast_delete_path():
 
     assert not post_delete.has_listeners(TelegramEvent), 'the feed gained a delete listener'
     assert post_delete.has_listeners(TelegramBot), 'a bot change is not being listened for'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=MEMORY)
+def test_a_rollback_on_the_database_the_row_went_to_announces_nothing():
+    """The notice waits on the connection holding the row, not on whichever one is default.
+
+    Django hands a model signal the alias its row was written on. Waiting on `default` while
+    the row sits in a block on another one runs the publish immediately — so a rollback would
+    have announced a bot that does not exist, and a container would have read it as gone
+    again on its next pass.
+    """
+    with contextlib.suppress(RuntimeError), transaction.atomic(using='logs'):
+        TelegramBot.objects.using('logs').create(bot_id=123456, token='123456:AAaa')
+        msg = 'the block the row was written in fails'
+        raise RuntimeError(msg)
+
+    assert not TelegramBot.objects.using('logs').filter(bot_id=123456).exists()
+    assert groups.live_groups() == (), 'a rolled-back configuration was announced'
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={'BROKER': 'no.such.Broker'})

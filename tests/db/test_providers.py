@@ -72,14 +72,19 @@ def test_the_first_source_to_name_an_identity_keeps_it(caplog):
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={'BOT_PROVIDERS': FROM_DB}, TELEGRAM_BOTS=None)
 def test_a_token_with_no_identity_is_left_out_and_said_once(caplog):
-    """Nothing could address it, and serving it would queue messages that name no bot."""
+    """Nothing could address it, and serving it would queue messages that name no bot.
+
+    Counted rather than looked for: `any` passes on a log that repeats the same bot for every
+    provider in the chain, which is the shape a reader of this name would not expect.
+    """
     TelegramBot.objects.create(bot_id=123456, token='not-a-token')
 
     with caplog.at_level('WARNING', logger='django_aiogram'):
         found = providers.desired()
 
     assert found == ()
-    assert any('carries no identity' in record.getMessage() for record in caplog.records)
+    said = [record for record in caplog.records if 'carries no identity' in record.getMessage()]
+    assert len(said) == 1, f'said {len(said)} times, and the promise is once per read'
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={'BOT_PROVIDERS': ('no.such.provider',)})

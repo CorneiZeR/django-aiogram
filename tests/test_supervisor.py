@@ -149,6 +149,39 @@ def test_a_quarantined_bot_waits_before_it_is_tried_again_and_the_wait_grows():
     assert second.until - clock.now > first.until, 'the second wait is no longer than the first'
 
 
+def test_a_corrected_bot_is_tried_at_once_rather_than_waiting_out_its_backoff():
+    """An operator who fixes a token watches nothing happen for up to five minutes otherwise.
+
+    The quarantine was earned by a configuration that is no longer the one being asked for, so
+    the wait it carries is about a problem that may already be gone.
+    """
+    refused = {123456: RuntimeError('this token is refused')}
+    supervisor, started, _ = watching(refused)
+
+    with override_settings(TELEGRAM_BOTS={'a': {'TOKEN': TOKEN}}):
+        supervisor.reconcile()
+    assert 123456 in supervisor.quarantined
+
+    refused.clear()
+    with override_settings(TELEGRAM_BOTS={'a': {'TOKEN': '123456:AAcorrected'}}):
+        supervisor.reconcile()
+
+    assert started == [123456], 'the corrected bot waited out a backoff the old token earned'
+    assert supervisor.quarantined == {}
+
+
+def test_a_bot_that_has_failed_for_ever_still_has_a_wait_that_is_a_number():
+    """`2 ** attempts` stops being a float long before a long-lived process stops running.
+
+    The overflow would escape into the pass and stop every bot after this one — which is the
+    promise this class exists to keep, broken by the arithmetic that keeps the retries rare.
+    """
+    from django_aiogram.runtime.supervisor import _LONGEST_WAIT, Quarantined
+
+    assert Quarantined(reason='x', until=0.0, attempts=1_025).wait() == _LONGEST_WAIT
+    assert Quarantined(reason='x', until=0.0, attempts=10_000).wait() == _LONGEST_WAIT
+
+
 def test_a_quarantine_is_forgotten_when_the_bot_goes_away():
     """Otherwise a client who disconnects a broken bot and reconnects it waits out an old backoff."""
     supervisor, _, _ = watching({123456: RuntimeError('refused')})

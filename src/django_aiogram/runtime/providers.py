@@ -87,9 +87,9 @@ def desired() -> 'tuple[BotRecord, ...]':
     first. Reported rather than silently resolved, because two sources disagreeing about a
     token is a configuration somebody has to fix.
 
-    A bot with no identity in its token is left out, and said once per read: nothing could
-    address it -- `E052` reports the same thing about a section -- and serving it would put
-    messages on a queue that name no bot at all.
+    A bot with no identity in its token is left out, and reported once for each read it
+    appears in: nothing could address it -- `E052` reports the same thing about a section --
+    and serving it would put messages on a queue that name no bot at all.
     """
     seen: dict[int, BotRecord] = {}
     for provider in providers():

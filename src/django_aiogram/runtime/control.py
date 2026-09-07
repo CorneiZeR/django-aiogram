@@ -19,6 +19,7 @@ Published on the caller's commit, so a save the transaction rolls back announces
 import logging
 from typing import TYPE_CHECKING
 
+from django.db import DEFAULT_DB_ALIAS
 from django.db.models.signals import post_delete, post_save
 
 from django_aiogram.producer.committing import after_commit
@@ -83,8 +84,12 @@ def apply_control(payload: object) -> None:
         logger.exception('a reconciliation asked for by a control message failed')
 
 
-def announce() -> None:
+def announce(using: str = DEFAULT_DB_ALIAS) -> None:
     """Publish the notice, on the caller's commit, and let nothing about it reach the caller.
+
+    ``using`` is the database the change was written on, which Django hands to a model signal:
+    waiting on the wrong connection would run the publish immediately, and a rollback would
+    then have announced a bot that does not exist.
 
     A save that cannot be announced is still a save: the poll picks the change up within
     ``BOT_REFRESH_INTERVAL``, so a broker that is down costs seconds rather than the write. It
@@ -106,7 +111,7 @@ def announce() -> None:
         except Exception:
             logger.exception('could not announce a bot change; the next poll will pick it up')
 
-    after_commit(publish)
+    after_commit(publish, using=using)
 
 
 #: the rows a bot is configured in, by name. Connected per model rather than for every save in
@@ -134,6 +139,6 @@ def connect() -> None:
         post_delete.connect(_announce_a_configuration_change, sender=model, dispatch_uid=f'{_UID}.deleted.{name}')
 
 
-def _announce_a_configuration_change(**kwargs: 'Any') -> None:
-    """Announce that one of those rows changed, whichever of them it was."""
-    announce()
+def _announce_a_configuration_change(using: str = DEFAULT_DB_ALIAS, **kwargs: 'Any') -> None:
+    """Announce that one of those rows changed, whichever of them it was and wherever it went."""
+    announce(using=using)
