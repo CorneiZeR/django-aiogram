@@ -20,6 +20,10 @@ exactly this reason.
 unusable transport: the bot is quarantined with a reason and a moment to try again, and the
 pass carries on to the others. A supervisor that raised would take the healthy bots down with
 the broken one.
+
+**And a moment to try again is not always the right answer.** What the failure *was* decides
+that, and :mod:`django_aiogram.runtime.lifecycle` is where it is decided: a revoked token
+waits for a new one rather than for a clock.
 """
 
 import logging
@@ -27,12 +31,15 @@ import math
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from django.core.exceptions import ImproperlyConfigured
+from django.utils import timezone
 
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.settings import conf
+from django_aiogram.runtime.lifecycle import Fate, classify, forget, remember, waits
 from django_aiogram.runtime.providers import desired
 
 if TYPE_CHECKING:
@@ -58,14 +65,17 @@ class Quarantined:
 
     reason: str
     #: monotonic, not wall clock: a supervisor sleeps and wakes across a clock that may be
-    #: adjusted under it, and "five seconds from now" has to survive that
-    until: float
+    #: adjusted under it, and "five seconds from now" has to survive that. ``None`` is a
+    #: quarantine no wait will end -- a revoked token -- and only a changed record clears it
+    until: float | None
     #: the configuration that failed. A corrected token is a different record, and waiting out
     #: a backoff earned by the old one would leave an operator who fixed the problem watching
     #: nothing happen for up to five minutes
     record: 'BotRecord | None' = None
     #: how many attempts have failed, which is what makes the wait grow
     attempts: int = 1
+    #: what the failure was, which is what decides whether anything will retry it
+    fate: Fate = Fate.UNKNOWN
 
     def wait(self) -> float:
         """Return how long the next quarantine should last, doubling up to the ceiling.
@@ -131,27 +141,51 @@ class Supervisor:
     def _start(self, identity: int, record: 'BotRecord') -> None:
         """Serve one bot, or quarantine it with the reason it could not be served."""
         held = self.quarantined.get(identity)
+        # remembered before the branch below drops it: a corrected token is exactly the case
+        # where the row still says quarantined and a person is waiting to see it stop saying so
+        was_held = held is not None
         if held is not None and held.record != record:
             # the configuration changed under the quarantine, so the reason it was quarantined
             # for may be gone. Tried at once and from a fresh backoff
             del self.quarantined[identity]
             held = None
-        if held is not None and self.clock() < held.until:
+        if held is not None and (held.until is None or self.clock() < held.until):
+            # `None` outlives every wait: nothing but a new token ends it, and a new token is
+            # the changed record above rather than an elapsed clock
             return
         try:
             self.start(record)
         except Exception as refused:
             attempts = held.attempts + 1 if held is not None else 1
-            entry = Quarantined(reason=type(refused).__name__, until=0.0, record=record, attempts=attempts)
-            entry.until = self.clock() + entry.wait()
+            fate = classify(refused)
+            entry = Quarantined(
+                reason=type(refused).__name__,
+                until=None,
+                record=record,
+                attempts=attempts,
+                fate=fate,
+            )
+            wait = entry.wait() if waits(fate) else None
+            entry.until = None if wait is None else self.clock() + wait
             self.quarantined[identity] = entry
             logger.exception(
                 'a bot could not be served; quarantining it and carrying on',
-                extra={'tg_bot_id': identity, 'tg_bot': record.alias, 'tg_attempts': attempts},
+                extra={
+                    'tg_bot_id': identity,
+                    'tg_bot': record.alias,
+                    'tg_attempts': attempts,
+                    'tg_fate': fate.value,
+                },
             )
+            # the wall clock, and only here: a row is read by a person and by another process,
+            # neither of which shares this one's monotonic clock
+            until = None if wait is None else timezone.now() + timedelta(seconds=wait)
+            remember(identity, fate, entry.reason, until)
             return
         self.running[identity] = record
         self.quarantined.pop(identity, None)
+        if was_held:
+            forget(identity)
 
     def _stop(self, identity: int, why: str) -> None:
         """Stop serving one bot, and let a failure to stop it not stop the pass.
