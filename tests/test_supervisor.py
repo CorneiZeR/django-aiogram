@@ -46,9 +46,13 @@ def watching(refuse=None):
     unservable without touching the others.
     """
     refuse = refuse or {}
-    started, stopped = [], []
+    started, stopped, attempted = [], [], []
 
     def start(record):
+        # recorded before the refusal, and separately from `started`: a case about a bot that
+        # is *not tried again* cannot assert on the list only successes reach, which would
+        # read the same whether the retry happened or not
+        attempted.append(record.bot_id)
         if record.bot_id in refuse:
             raise refuse[record.bot_id]
         started.append(record.bot_id)
@@ -57,6 +61,7 @@ def watching(refuse=None):
     # the mapping itself, so a case can stop refusing: a conflict is a failure that clears
     # without anybody editing a configuration, which is what tells it apart from the rest
     supervisor.refuse = refuse
+    supervisor.attempted = attempted
     return supervisor, started, stopped
 
 
@@ -271,7 +276,7 @@ def test_a_revoked_token_is_not_tried_again_and_the_other_bots_keep_running():
         supervisor.clock.now += 10_000
         supervisor.reconcile()
 
-    assert started == [654321], 'a revoked token was tried again by a timer'
+    assert supervisor.attempted == [123456, 654321], 'a revoked token was tried again by a timer'
 
 
 def test_a_conflict_is_waited_out_rather_than_left_to_a_person():
