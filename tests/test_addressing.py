@@ -147,22 +147,27 @@ def test_a_message_naming_no_bot_goes_to_the_process_own():
     assert handled == [('default', 'unnamed')]
 
 
-@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
-def test_a_consumer_that_cannot_route_delivers_through_its_own_bot():
-    """Which is what a 4.1 consumer does with a 5.0 payload, and why the upgrade has an order.
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'TOKEN': TOKEN})
+def test_a_consumer_with_no_route_still_only_delivers_what_is_its_own():
+    """A process serving one bot is handed no route, and two of them can share a queue.
 
-    A consumer with no route is exactly that consumer: it reads the keys it knows and hands
-    the message to the one bot it has. For a deployment with one bot that is the right answer
-    and nothing is lost. For one with two it is the *wrong bot* — the wrong token, and a chat
-    it may not be in — with nothing raised and nothing dropped to notice it by. So the pages
-    ask for every consumer to be at 5.0 before a second bot starts queueing, and this is the
-    behaviour that makes them ask.
+    So "no route" cannot mean "deliver anything": a message naming the other process's bot
+    would go out under this bot's token, into a chat it may not be in, and be acknowledged —
+    gone. Only a payload naming this bot, or naming none, is its to deliver.
+
+    This is also what keeps the upgrade hazard on the pages a *4.1* hazard rather than one
+    this release has: a 4.1 consumer cannot read the field at all, and no case here can be
+    that consumer.
     """
     handled = []
     delivery = get_delivery(handler=lambda **call: handled.append(call['text']))
 
-    assert delivery.dispatch(_bytes(a_payload(bot=654321, kwargs={'chat_id': 1, 'text': 'for support'})))
-    assert handled == ['for support'], 'a consumer without a route refused a payload it should deliver'
+    assert delivery.dispatch(_bytes(a_payload(bot=123456, kwargs={'chat_id': 1, 'text': 'mine'})))
+    assert handled == ['mine'], 'a message for the bot this process serves was refused'
+
+    foreign = _bytes(a_payload(bot=654321, kwargs={'chat_id': 1, 'text': 'not mine'}))
+    assert delivery.dispatch(foreign) is False
+    assert handled == ['mine'], "a message for another process's bot was delivered by this one"
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
@@ -218,6 +223,32 @@ def test_two_bots_sending_through_one_queue_are_told_apart_end_to_end():
             assert delivery.dispatch(message), 'a message was left in flight'
 
     assert sorted(delivered) == sorted([(123456, 'from the default'), (654321, 'from support')]), delivered
+
+
+class KeywordOnly(BlpopDelivery):
+    """A consumer taking the route as a keyword-only argument, which is a legal way to write it."""
+
+    def __init__(self, handler, *, route=None):
+        """Take the pair, with the route reachable only by name."""
+        super().__init__(handler, route)
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'DELIVERY': 'tests.test_addressing.KeywordOnly'})
+def test_a_keyword_only_route_is_passed_by_name():
+    """`accepts_keyword` accepts a keyword-only parameter, so the call that follows has to be one.
+
+    Positionally this is a `TypeError` at startup, on a class the setting is documented to
+    accept — the same shape of break as the one-argument consumer below, reached from the
+    other side.
+    """
+
+    def route(bot_id):
+        return None
+
+    built = get_delivery(handler=lambda **call: None, route=route)
+
+    assert isinstance(built, KeywordOnly)
+    assert built.route is route
 
 
 class Older(BlpopDelivery):

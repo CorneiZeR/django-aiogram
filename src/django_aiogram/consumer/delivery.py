@@ -482,15 +482,30 @@ class Delivery(ABC):
     def _handler_for(self, envelope: Envelope) -> Handler:
         """Return the handler for the bot this message names, or the one for no bot at all.
 
-        Raises where the identity names a bot this process does not have. `dispatch` leaves
+        Raises where the identity names a bot this process does not serve. `dispatch` leaves
         such a message *in flight* rather than acknowledging it, which is the same answer it
         gives an envelope from a newer version and for the same reason: the message is
         perfectly deliverable by a process that is configured for it, and acknowledging would
         destroy it over a deployment that has not caught up.
+
+        **A consumer with no route still checks the identity**, and that is not belt and
+        braces. A process serving one bot is handed no route -- there is nothing to choose
+        between -- and two such processes can share a queue, so a message naming the *other*
+        one would otherwise be delivered by this bot and acknowledged: the wrong token, into a
+        chat it may not be in, and the message gone. Only a payload naming this process's own
+        bot, or naming none, is its to deliver.
         """
-        if self.route is None or envelope.bot_id is None:
+        if envelope.bot_id is None:
             return self.handler
-        return self.route(envelope.bot_id)
+        if self.route is not None:
+            return self.route(envelope.bot_id)
+        # deferred: this reads Django settings and the module is imported by the checks
+        from django_aiogram.config.bots import records  # noqa: PLC0415 - as above
+
+        if envelope.bot_id not in {found.bot_id for found in records()}:
+            msg = f'this process serves no bot with the identity {envelope.bot_id}'
+            raise LookupError(msg)
+        return self.handler
 
     def _hand_over(self, envelope: Envelope, call: dict[str, Any], handle: object, handler: Handler) -> bool:
         """Call the handler, and say whether the message may be acknowledged.
@@ -700,7 +715,7 @@ def get_delivery(handler: Handler, route: 'Route | None' = None) -> Delivery:
     """
     resolved = delivery_class()
     if accepts_keyword(resolved.__init__, 'route'):
-        return resolved(handler, route)
+        return resolved(handler, route=route)
     if route is not None:
         named = f'{resolved.__module__}.{resolved.__qualname__}'
         raise DeliveryNotConfiguredError(
