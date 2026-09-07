@@ -28,8 +28,11 @@ log rows for the duration, not messages.
 SELECT count(*) FROM django_aiogram_event;
 ```
 
-At a few hundred thousand rows the build is seconds and there is nothing to arrange. Where it
-is not, apply everything up to the index, skip that one, and build it yourself:
+Nothing here can tell you what that number costs on your database — this package has no
+benchmark to offer and the answer depends on your hardware, your row width and what else the
+table is doing. Decide it against your own maintenance window: if a build you can measure
+fits, take the migration. If it does not, or you cannot hold writes at all, apply everything
+up to the index, skip that one, and build it yourself:
 
 ```shell
 python manage.py migrate django_aiogram 0006      # the tables and the columns
