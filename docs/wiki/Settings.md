@@ -19,7 +19,7 @@ Scalar values can also come from `DJANGO_AIOGRAM_<NAME>`, and one bot's from
 A bot is identified by the number in front of the colon in its token, read without asking
 Telegram. That number is the one thing about a bot that holds still: an alias is a name a
 project may change and a token is a credential it may rotate, and a rotated token keeps the
-same identity. These belong to the process rather than to a bot — `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `FSM_STORAGE`, `EVENT_LOG` and every `EVENT_LOG_*` one — so a section naming one is refused by `E053` instead of
+same identity. These belong to the process rather than to a bot — `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `FSM_STORAGE`, `BOT_PROVIDERS`, `BOT_REFRESH_INTERVAL`, `MAX_BOTS_PER_WORKER`, `BOT_LEASE_SECONDS`, `EVENT_LOG` and every `EVENT_LOG_*` one — so a section naming one is refused by `E053` instead of
 deciding for every bot in the process. `ENABLED` is not among them: a bot may be switched off
 on its own.
 
@@ -59,6 +59,8 @@ Neither is required for the project to boot.
 | `MODULE_NAME` | `'tg_router'` | Module to look for in each installed app |
 | `BOT_PROVIDERS` | `('django_aiogram.runtime.providers.from_settings',)` | Where the bots come from, by dotted path and in the order they are read. The shipped default reads `TELEGRAM_BOTS`; `django_aiogram.runtime.providers.from_database` reads the `TelegramBot` table, for a project whose clients bring their own bot. A path that cannot be imported is refused rather than skipped — a source nobody reads is a set of bots nobody serves. Where two sources name one identity the first keeps it, and the collision is logged |
 | `BOT_REFRESH_INTERVAL` | `30` | Seconds between re-reads of the providers. The poll is what makes a change arrive at all; a change made through the admin also pushes, which is what makes it arrive in a second. A pass over an unchanged table costs one aggregate per table, and a provider that suddenly reads no bots at all is held for one pass before it is believed |
+| `MAX_BOTS_PER_WORKER` | `0` | How many bots one polling process may hold at once; `0` is as many as it is given. Exclusivity comes from a lease per bot, so this is what splits a set of bots across containers — and what bounds a container that would otherwise take all of them |
+| `BOT_LEASE_SECONDS` | `90` | How long a bot's polling lease is believed. It is renewed on every pass, so it has to be comfortably longer than `BOT_REFRESH_INTERVAL`; `W011` says so when it is not. A container that dies loses its bots after this long, which is also how long two of them could poll one token |
 
 **Every boolean setting here is parsed, not tested for truthiness**: `'false'`,
 `'no'`, `'off'` and `0` all mean false, wherever a boolean is accepted. Anything
@@ -360,6 +362,7 @@ entry naming a retired one is dead but harmless.
 | `W001` / `W002` | `TOKEN` / `REDIS_URL` empty while the bot is enabled |
 | `W003` | `TELEGRAM_BOT_DEFAULTS` contains unknown keys |
 | `W010` | one bot's section contains unknown keys |
+| `W011` | `BOT_LEASE_SECONDS` is not at least twice `BOT_REFRESH_INTERVAL`, so the lease lapses between the renewals a pass makes and the bot is traded between containers — each trade a 409 from Telegram for whoever was polling |
 | `W004` | `BLPOP_TIMEOUT` is **above** the ceiling the consumer applies — `min(HEARTBEAT_INTERVAL, floor(<the transport timeout>) - 1)`, never below 1 — so the take is silently shortened to it. Equal to the ceiling is not warned about and is not shortened. The hint names whichever of the two binds, and the transport term is the one `BROKER` names rather than always `REDIS_TIMEOUT` |
 | `E001`–`E003`, `E017`, `E049` | a boolean setting holds something that cannot be read as true or false. `ENABLED` and `AUTODISCOVER` are read while the app loads, so in practice those two refuse the boot with the same message before `check` runs at all |
 | `E004`–`E007`, `E009`–`E011` | a string setting is wrong, or not one of the allowed values |
@@ -393,8 +396,10 @@ entry naming a retired one is dead but harmless.
 | `E050` | `TELEGRAM_BOT` is still set. 5.0 split it into `TELEGRAM_BOT_DEFAULTS` and `TELEGRAM_BOTS`, and nothing reads the old name: every value left in it is ignored, and whatever it configured resolves from the shared defaults, the environment or this package's own defaults instead. A project that kept its token there has none |
 | `E051` | two aliases hold one token, which is one bot under two names: the pair would race for its updates and pace against two budgets |
 | `E052` | `TOKEN` is not a bot token. One reads `<bot id>:<secret>`, and the number before the colon is what identifies the bot — a token with none cannot be told apart from another bot's |
-| `E053` | a bot's section sets a setting the process owns — `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `FSM_STORAGE`, `EVENT_LOG` or an `EVENT_LOG_*` one. There is one writer thread, one in-flight list and one handler tree per process, so a per-bot value could only mean whichever bot resolved last wins |
+| `E053` | a bot's section sets a setting the process owns — `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `FSM_STORAGE`, `BOT_PROVIDERS`, `BOT_REFRESH_INTERVAL`, `MAX_BOTS_PER_WORKER`, `BOT_LEASE_SECONDS`, `EVENT_LOG` or an `EVENT_LOG_*` one. There is one writer thread, one in-flight list and one handler tree per process, so a per-bot value could only mean whichever bot resolved last wins |
 | `E054` | `TELEGRAM_BOTS` cannot be read: it is not a mapping, an alias is not a name, or a section is not a mapping |
+| `E055` | `MAX_BOTS_PER_WORKER` is not an integer, or is negative. `0` is not: it means as many bots as this process is given |
+| `E056` | `BOT_LEASE_SECONDS` is not a finite number, or is below 1 |
 | `I001` | `WORKER_NAME` is empty **and** the hostname is one Docker generated, so a replacement container gets a different name — which strands whatever the old container was sending. Information rather than a warning because a check cannot tell a consumer from a web process, and every container without `hostname:` matches; `start_tgbot` warns for itself at startup |
 | `I003` | `django_redis_aiogram_event` — the table 3.x wrote to — is still on whichever database the log resolves to, holding rows this release does not read. Information because leaving them there is a legitimate choice and a check cannot tell it from an oversight; always on, because it is what makes `manage.py tgbot_move_events` discoverable. Asked of the log's alias rather than the default, so a project with `EVENT_LOG_DATABASE` set is not the one that hears nothing |
 | `I002` | `EVENT_LOG_DATABASE` names an alias and nothing in `DATABASE_ROUTERS` that this check can read sends this app there — a dotted path counts, and so does an instance, but a bare class does not: Django uses a non-string entry as it stands, so its `db_for_read` would be called without one. So a plain `migrate` may not create the table — `migrate --database=<alias>` still would. Information rather than a warning: a router of your own returning that alias is equally correct, and this cannot see inside one |

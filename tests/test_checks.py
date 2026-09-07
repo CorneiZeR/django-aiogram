@@ -2067,3 +2067,66 @@ def test_a_memory_store_asks_for_no_driver(monkeypatch):
     reported = [message.id for message in check_settings()]
 
     assert 'django_aiogram.E019' not in reported, reported
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'BOT_LEASE_SECONDS': 30, 'BOT_REFRESH_INTERVAL': 30})
+def test_a_lease_a_pass_cannot_keep_held_is_reported():
+    """A lease equal to the interval that renews it lapses between renewals.
+
+    Each lapse moves the bot to another container, and each move is a 409 from Telegram for
+    whoever was polling — the situation the lease exists to prevent, caused by the lease.
+    """
+    reported = [message for message in check_settings() if str(message.id).endswith('W011')]
+
+    assert reported, 'a lease that cannot survive its own renewal interval was not reported'
+    assert 'renewing every 30s' in reported[0].msg, reported[0].msg
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'BOT_LEASE_SECONDS': 1.2, 'BOT_REFRESH_INTERVAL': 0.5})
+def test_a_lease_is_judged_against_the_interval_the_supervisor_applies():
+    """`interval()` clamps to a second, so 0.5 is not what the renewals happen at.
+
+    Compared against the number as written, a 1.2s lease clears twice 0.5 and is reported as
+    fine — while the process renews every second and the lease lapses in between.
+    """
+    reported = [message for message in check_settings() if str(message.id).endswith('W011')]
+
+    assert reported, 'the lease was judged against an interval nothing uses'
+    assert 'renewing every 1s' in reported[0].msg, reported[0].msg
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={
+        'BOT_LEASE_SECONDS': 30,
+        'BOT_REFRESH_INTERVAL': 30,
+        'MODE': 'webhook',
+        'WEBHOOK_URL': 'https://example.test/tg',
+        'WEBHOOK_SECRET': 'a-secret',
+    }
+)
+def test_a_lease_nothing_takes_is_not_reported():
+    """A webhook update arrives wherever the request landed, so no lease is ever claimed.
+
+    Reported anyway, this fails `check --fail-level WARNING` over a number nothing reads.
+    """
+    assert [message for message in check_settings() if str(message.id).endswith('W011')] == []
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={
+        'BOT_LEASE_SECONDS': 30,
+        'BOT_REFRESH_INTERVAL': 30,
+        'MODE': 'webhook',
+        'WEBHOOK_URL': 'https://example.test/tg',
+        'WEBHOOK_SECRET': 'a-secret',
+    },
+    TELEGRAM_BOTS={'default': {'TOKEN': '123456:AAaa'}, 'support': {'TOKEN': '654321:BBbb', 'MODE': 'polling'}},
+)
+def test_one_polling_bot_among_webhook_ones_is_enough_to_report_the_lease():
+    """`MODE` is a bot's setting, so the question is whether anything polls, not what the
+    defaults say — and one finding covers them all, because both numbers in it are the
+    process's.
+    """
+    reported = [message for message in check_settings() if str(message.id).endswith('W011')]
+
+    assert len(reported) == 1, f'expected one finding for the process, got {len(reported)}'

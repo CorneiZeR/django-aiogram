@@ -310,6 +310,62 @@ def _settings_one_process_decides(_key: str, _record: BotRecord) -> list[Problem
     return problems
 
 
+def _a_lease_a_pass_can_renew(key: str, record: BotRecord) -> list[Problem]:
+    """Warn when the lease is not comfortably longer than the pass that renews it.
+
+    A polling process renews its leases once per :setting:`BOT_REFRESH_INTERVAL`, so a lease
+    shorter than that expires between renewals and the bots are traded between containers on
+    every pass -- each trade a 409 from Telegram for whoever was polling. Twice the interval
+    is the floor here, which survives one missed pass.
+
+    Silent where nothing polls: a webhook update arrives wherever the request landed, so no
+    lease is taken and this deployment would be failing ``check --fail-level WARNING`` over a
+    number nothing reads. ``MODE`` is a bot's setting rather than the process's, so the
+    question is whether *any* configured bot polls -- and one finding covers them all, since
+    the two numbers in it are the process's.
+    """
+    if not _anything_polls():
+        return []
+    try:
+        lease = float(_setting(key, record))
+        # the floor the supervisor applies, not the number as written: `interval()` clamps to
+        # a second, so a `BOT_REFRESH_INTERVAL` of 0.5 renews every second and a lease of 1.2s
+        # would pass a comparison against the raw value while lapsing between renewals
+        interval = max(1.0, float(record['BOT_REFRESH_INTERVAL']))
+    except (TypeError, ValueError, OverflowError, ImproperlyConfigured):
+        return []  # E056 and the interval's own rule own the type complaints
+    if lease >= interval * 2:
+        return []
+    return [
+        Problem(
+            f'is {lease:g}s, which a process renewing every {interval:g}s cannot keep held.',
+            hint=(
+                f'Raise it above twice {SETTINGS_NAME}["BOT_REFRESH_INTERVAL"], or lower that: '
+                'a lease that lapses between renewals moves the bot to another container, and '
+                'both of them poll it until it settles.'
+            ),
+        )
+    ]
+
+
+def _anything_polls() -> bool:
+    """Whether any configured bot takes its updates by polling, which is the default.
+
+    A member check before the string one, for the reason :func:`_serviceable_webhook` gives:
+    ``UpdateMode`` mixes in ``str``, and since 3.11 ``str(UpdateMode.POLLING)`` is
+    ``'UpdateMode.POLLING'``.
+    """
+    try:
+        configured = records()
+    except ImproperlyConfigured:
+        return True  # E054 owns an unreadable dict; a rule about polling assumes it happens
+    for bot in configured:
+        mode = bot.get('MODE')
+        if mode is UpdateMode.POLLING or str(mode or '').strip().lower() == UpdateMode.POLLING.value:
+            return True
+    return not configured
+
+
 def _the_dict_5_0_replaced(_key: str, _record: BotRecord) -> list[Problem]:
     """Name the setting 5.0 split in two, where a project still holds the old one.
 

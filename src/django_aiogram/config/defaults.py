@@ -117,6 +117,12 @@ DEFAULTS: dict[str, Any] = {
     # how often a supervisor re-reads them. The push through the transport is what makes a
     # change arrive in a second; this is the poll that makes it arrive at all
     'BOT_REFRESH_INTERVAL': 30,
+    # how many bots one polling process may hold at once; 0 is as many as it is given.
+    # Process-scoped: it is a statement about this container, not about any bot
+    'MAX_BOTS_PER_WORKER': 0,
+    # how long a bot's polling lease is believed. Renewed every pass, so it has to be
+    # comfortably longer than `BOT_REFRESH_INTERVAL` -- `W011` says so when it is not
+    'BOT_LEASE_SECONDS': 90,
 }
 
 
@@ -135,6 +141,15 @@ DEFAULTS: dict[str, Any] = {
 #: A section naming one of these is refused by `E053` rather than honoured for whichever bot
 #: resolved last.
 PROCESS_SCOPED: frozenset[str] = frozenset(
-    {'AUTODISCOVER', 'MODULE_NAME', 'WORKER_NAME', 'FSM_STORAGE', 'BOT_PROVIDERS', 'BOT_REFRESH_INTERVAL'}
+    {
+        'AUTODISCOVER',
+        'MODULE_NAME',
+        'WORKER_NAME',
+        'FSM_STORAGE',
+        'BOT_PROVIDERS',
+        'BOT_REFRESH_INTERVAL',
+        'MAX_BOTS_PER_WORKER',
+        'BOT_LEASE_SECONDS',
+    }
     | {key for key in DEFAULTS if key.startswith('EVENT_LOG')},
 )
