@@ -59,6 +59,7 @@ bot_quarantined = Signal()
 #: sent when a bot that was quarantined is being served again, with ``bot_id``
 bot_recovered = Signal()
 
+#: held across the database write itself, not only around the dictionary -- see :func:`_write`
 _lock = threading.Lock()
 #: the state writes a database refused, by identity, newest only. Retried by :func:`flush`
 _unwritten: 'dict[int, dict[str, object]]' = {}
@@ -157,13 +158,28 @@ def flush() -> None:
     catch up.
     """
     with _lock:
-        held = dict(_unwritten)
-    for bot_id, fields in held.items():
-        _write(fields, bot_id)
+        for bot_id, fields in list(_unwritten.items()):
+            _attempt(fields, bot_id)
 
 
 def _write(fields: 'dict[str, object]', bot_id: int) -> None:
-    """Update one bot's row, if it has one, and keep what a database refused for `flush`."""
+    """Update one bot's row, if it has one, and keep what a database refused for `flush`.
+
+    The write happens under the lock, and that is the point of the lock rather than a
+    consequence of it: a retry chosen from what was held and *then* written could land after
+    a newer state had been written by another thread, leaving the row saying the older thing
+    with nothing left to retry it. Held under one lock, an older write cannot run after a
+    newer one, because :func:`flush` reads what is held inside it.
+
+    Cheap enough to do that way: a state write happens when a bot changes state, which is
+    once per failure and once per recovery, and never on the path a message travels.
+    """
+    with _lock:
+        _attempt(fields, bot_id)
+
+
+def _attempt(fields: 'dict[str, object]', bot_id: int) -> None:
+    """Write one state, with the lock already held by the caller."""
     try:
         # deferred: importing models reaches the app registry, and a supervisor runs in
         # processes that have no database configured at all
@@ -171,15 +187,13 @@ def _write(fields: 'dict[str, object]', bot_id: int) -> None:
 
         TelegramBot.objects.filter(bot_id=bot_id).update(**fields)
     except Exception:
-        with _lock:
-            # the latest state, not a queue of them: a row holds one, and replaying an
-            # earlier quarantine over a bot that has since recovered is the failure this
-            # would otherwise introduce
-            _unwritten[bot_id] = fields
+        # the latest state, not a queue of them: a row holds one, and replaying an earlier
+        # quarantine over a bot that has since recovered is the failure this would otherwise
+        # introduce
+        _unwritten[bot_id] = fields
         logger.exception(
             "could not record a bot's state; it will be retried on the next pass",
             extra={'tg_bot_id': bot_id},
         )
         return
-    with _lock:
-        _unwritten.pop(bot_id, None)
+    _unwritten.pop(bot_id, None)

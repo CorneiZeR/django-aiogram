@@ -227,3 +227,27 @@ def test_a_fresh_process_tries_a_revoked_bot_once_rather_than_never():
         second.reconcile()
 
     assert tried == [123456, 123456], 'a restart either inherited the quarantine or retried on a timer'
+
+
+def test_a_state_write_happens_under_the_lock_that_chose_it(monkeypatch):
+    """Otherwise a retry can land after a newer state and leave the row saying the older one.
+
+    Asserted on the lock rather than with threads, and for the reason a threaded case would
+    be worse: the interleaving that loses the newer write needs the retry to be chosen, then
+    descheduled, then run, which a test cannot ask for. What it can pin is the property that
+    makes the interleaving impossible -- the row is written while the lock that read what was
+    held is still held.
+    """
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa')
+    under = []
+
+    original = QuerySet.update
+
+    def watching(self, **fields):
+        under.append(lifecycle._lock.locked())
+        return original(self, **fields)
+
+    monkeypatch.setattr(QuerySet, 'update', watching)
+    lifecycle.remember(123456, Fate.CONFLICT, 'TelegramConflictError', None)
+
+    assert under == [True], 'the write ran with the lock released, so a stale retry could follow it'
