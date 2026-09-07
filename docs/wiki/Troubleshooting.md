@@ -355,6 +355,26 @@ Then, in the order these bite:
 `ImproperlyConfigured` rather than a silent fallback. Both the app startup and
 the send path read it the same way.
 
+## Two containers, and a bot polled by neither or both
+
+Polling is exclusive, so a polling container holds a lease per bot: one row in
+`django_aiogram_bot_lease`, named by `WORKER_NAME`, renewed on every pass.
+
+```shell
+manage.py shell -c "from django_aiogram.models import TelegramBotLease as L; print(list(L.objects.values_list('bot_id', 'holder', 'expires_at')))"
+```
+
+- **A bot nobody holds** while containers are running means every one of them is at
+  `MAX_BOTS_PER_WORKER`. Raise it, or add a container.
+- **A bot that keeps changing holder** means the lease lapses between renewals:
+  `BOT_LEASE_SECONDS` is not comfortably longer than `BOT_REFRESH_INTERVAL`, which
+  `manage.py check` reports as `W011`. Each trade is a 409 for whoever was polling.
+- **A lease held by a container that is gone** is taken by the next one to ask, once
+  `expires_at` passes. A container that shut down cleanly released it already.
+- **Two containers with the same `WORKER_NAME`** share one lease, which is not
+  exclusivity at all — they will both poll every bot either of them claims. `I001` is
+  about that name for the same reason.
+
 ## One client's bot stopped answering
 
 Read the row: `quarantine_reason` says what happened and `quarantined_until` says

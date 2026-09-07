@@ -109,6 +109,14 @@ class Supervisor:
     quarantined: dict[int, Quarantined] = field(default_factory=dict)
     #: monotonic, for the same reason `Quarantined.until` is
     clock: 'Callable[[], float]' = time.monotonic
+    #: whether serving a bot has to be exclusive, which for polling it does: two processes
+    #: calling `getUpdates` for one token get a 409 and half the updates each. A consumer or a
+    #: webhook process sets nothing here -- an update arrives wherever the request landed, and
+    #: competing consumers on a queue are what every transport is for
+    exclusive: bool = False
+    #: every bot this process has held a lease on, so a shutdown releases them even when the
+    #: bot was stopped earlier in the same pass
+    holding: set[int] = field(default_factory=set)
 
     def reconcile(self) -> None:
         """Read what should be running and make it so, or leave everything as it is.
@@ -126,6 +134,18 @@ class Supervisor:
             # there is nothing to serve
             logger.exception('could not read the configured bots; leaving the running set alone')
             return
+
+        if self.exclusive:
+            # after the read and before anything is started: a bot this process may not poll
+            # is one it must not have running either, and a lease it lost while it was not
+            # renewing is the same thing arriving from the other direction
+            allowed = set(self._leased(wanted))
+            self.holding |= allowed
+            for identity in [held for held in wanted if held not in allowed]:
+                if identity in self.running:
+                    self._stop(identity, 'the lease went to another process')
+                self.quarantined.pop(identity, None)
+                del wanted[identity]
 
         for identity in [held for held in self.running if held not in wanted]:
             self._stop(identity, 'no longer configured')
@@ -206,6 +226,42 @@ class Supervisor:
             )
         finally:
             self.running.pop(identity, None)
+
+    def _leased(self, wanted: 'dict[int, BotRecord]') -> 'tuple[int, ...]':
+        """Return the bots this process holds a lease on, taking what it can.
+
+        The ones it is already serving come first, so a pass does not hand a bot it holds to
+        another container merely because the desired set grew past ``MAX_BOTS_PER_WORKER``.
+
+        A failure to reach the leases leaves the running set alone, which is the rule this
+        module already applies to a provider that could not look: the alternative is a
+        database blinking and stopping every bot in the container.
+        """
+        # deferred: the leases reach the ORM, and this module is imported where there is none
+        from django_aiogram.runtime.leases import claim  # noqa: PLC0415 - as above
+
+        asked = [held for held in wanted if held in self.running] + [
+            held for held in wanted if held not in self.running
+        ]
+        try:
+            return claim(asked)
+        except Exception:
+            logger.exception('could not read the bot leases; keeping the bots already held')
+            return tuple(held for held in asked if held in self.running)
+
+    def released(self) -> None:
+        """Stop every bot this process is serving and give up its leases.
+
+        For a shutdown: leases lapse on their own, and waiting `BOT_LEASE_SECONDS` for them is
+        a client's bot answering nothing for that long when another container was ready.
+        """
+        for identity in list(self.running):
+            self._stop(identity, 'shutting down')
+        if not self.exclusive:
+            return
+        from django_aiogram.runtime.leases import release  # noqa: PLC0415 - as above
+
+        release(list(self.holding))
 
     def interval(self) -> float:
         """How long to wait before the next pass, never below a second."""

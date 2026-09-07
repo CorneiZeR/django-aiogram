@@ -310,6 +310,33 @@ def _settings_one_process_decides(_key: str, _record: BotRecord) -> list[Problem
     return problems
 
 
+def _a_lease_a_pass_can_renew(key: str, record: BotRecord) -> list[Problem]:
+    """Warn when the lease is not comfortably longer than the pass that renews it.
+
+    A polling process renews its leases once per :setting:`BOT_REFRESH_INTERVAL`, so a lease
+    shorter than that expires between renewals and the bots are traded between containers on
+    every pass -- each trade a 409 from Telegram for whoever was polling. Twice the interval
+    is the floor here, which survives one missed pass.
+    """
+    try:
+        lease = float(_setting(key, record))
+        interval = float(record['BOT_REFRESH_INTERVAL'])
+    except (TypeError, ValueError, OverflowError, ImproperlyConfigured):
+        return []  # E056 and the interval's own rule own the type complaints
+    if lease >= interval * 2:
+        return []
+    return [
+        Problem(
+            f'is {lease:g}s, which a process renewing every {interval:g}s cannot keep held.',
+            hint=(
+                f'Raise it above twice {SETTINGS_NAME}["BOT_REFRESH_INTERVAL"], or lower that: '
+                'a lease that lapses between renewals moves the bot to another container, and '
+                'both of them poll it until it settles.'
+            ),
+        )
+    ]
+
+
 def _the_dict_5_0_replaced(_key: str, _record: BotRecord) -> list[Problem]:
     """Name the setting 5.0 split in two, where a project still holds the old one.
 

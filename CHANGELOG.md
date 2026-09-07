@@ -63,6 +63,22 @@
   them out of order cannot leave a process serving the wrong bots. A queue that cannot be
   reached costs the second, never the save.
 
+- **Two containers over one set of bots split them, and neither polls the other's.**
+  `getUpdates` is exclusive -- two processes calling it for one token get a 409 and half the
+  updates each -- and with bots arriving at run time there is no deploy-time list to divide
+  them by. So a polling process claims a lease per bot: a row, taken by compare-and-set, held
+  under this worker's name and renewed on every pass. `MAX_BOTS_PER_WORKER` bounds how many
+  one container takes, and the bots it is already serving come first, so a new client's bot
+  arriving does not take an existing one off the air.
+
+  Failover is the same mechanism: a container that stops renewing loses its bots to whoever
+  asks next, one `BOT_LEASE_SECONDS` later, and a clean shutdown releases them at once rather
+  than making a client wait that out. A lease another process has taken over is left alone --
+  deleting it would put two pollers on one token, which is the thing being prevented. Leases
+  that cannot be read leave the running set alone, like a provider that could not look.
+
+  Webhook deployments need none of it: an update arrives wherever the request landed.
+
 - **A bot's failure is read for what it was.** 401 means the token is gone, and nothing but a
   new one brings it back — so it is not retried on a timer, where it would be one doomed
   request per bot every five minutes for as long as the container runs. 409 means something
