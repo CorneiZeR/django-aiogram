@@ -63,6 +63,23 @@
   them out of order cannot leave a process serving the wrong bots. A queue that cannot be
   reached costs the second, never the save.
 
+- **A bot's failure is read for what it was.** 401 means the token is gone, and nothing but a
+  new one brings it back — so it is not retried on a timer, where it would be one doomed
+  request per bot every five minutes for as long as the container runs. 409 means something
+  else is polling those updates, which is what a deploy looks like before the old process
+  exits, and it clears itself on the wait. A 429, a closed socket or a 5xx is the ordinary
+  weather and gets the ordinary backoff.
+
+  The reason and the moment to try again are written on the bot's row, so an admin page
+  answers "why did this client's bot stop" without reading a container's log, and
+  `bot_quarantined` / `bot_recovered` are the signals a project connects to reach the person
+  whose bot it was. A state write a database refused is retried by the next pass rather than
+  lost, because neither end of it is written again otherwise: a bot that recovered is running
+  and unchanged, and a revoked one is held with no clock. A new token clears any of it on the
+  next pass, `revoked` included: the
+  identity is the number in front of the colon, so a rotated token is the same bot with a
+  changed configuration and its queue, its feed history and its pending sends stay.
+
 ### Changed
 
 - **`TELEGRAM_BOT` is now `TELEGRAM_BOT_DEFAULTS`, and every bot is a section under

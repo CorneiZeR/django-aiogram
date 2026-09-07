@@ -40,6 +40,7 @@ src/django_aiogram/
                         the handler tree and the HTTP session
         providers.py    where the bots come from: the settings, the table, or a project's own
         supervisor.py   the pass that makes what is running match what is configured
+        lifecycle.py    what a bot's failure was, and who is told about it
         control.py      the notice that says "read again", and what it may not cost a save
         profiles.py     what two bots must agree on before they share anything
         groups.py       the objects a profile owns: the transport, and what drains it

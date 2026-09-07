@@ -355,6 +355,56 @@ Then, in the order these bite:
 `ImproperlyConfigured` rather than a silent fallback. Both the app startup and
 the send path read it the same way.
 
+## One client's bot stopped answering
+
+Read the row: `quarantine_reason` says what happened and `quarantined_until` says
+when it will be tried again. An empty reason means nothing is wrong with the bot,
+and `enabled` is then the switch to look at — that one is a person's decision, and
+the quarantine is the software's.
+
+The reason is prefixed by what the failure was, and the three that are told apart
+have different answers:
+
+| prefix | what happened | what fixes it |
+| --- | --- | --- |
+| `revoked` | 401: the token is gone — revoked in BotFather, or the bot deleted | a new token, and nothing else. `quarantined_until` is empty because no wait ends this one |
+| `conflict` | 409: something else is polling this token, usually an old process that has not exited | itself, on the wait shown |
+| `transient` | 429, a closed socket, a 5xx | itself, on the wait shown |
+| `unknown` | anything this package does not recognise — a transport that cannot be imported, a bug | look at the container's log: the line carries `tg_fate` and the exception |
+
+A new token clears a quarantine on the next pass rather than on the wait, including
+a `revoked` one: the bot is identified by the number in front of the colon, so a
+rotated token is the same bot with a changed configuration, and its queue, its feed
+history and its pending sends stay where they are.
+
+To reach the client whose bot it was, connect the signal — the container cannot fix
+a revoked token and the person who owns it can:
+
+```python
+from django_aiogram.runtime.lifecycle import Fate, bot_quarantined
+
+
+def tell_them(bot_id, fate, reason, until, **kwargs):
+    if fate is Fate.REVOKED:
+        ...  # e-mail the account this bot belongs to
+
+
+bot_quarantined.connect(tell_them, dispatch_uid='billing.bot_quarantined')
+```
+
+`bot_recovered` is sent with `bot_id` when a quarantined bot is being served again.
+
+A quarantine belongs to the process that earned it, so a restarted container tries
+every configured bot once — a revoked token included. The row cannot say whether the
+token in it is still the one Telegram refused, so inheriting the quarantine would
+outlive a token corrected while the container was down; one refused request per bot
+per start is the cheaper end of that.
+
+**Edit those rows through a saved instance, not `QuerySet.update()`.** The notice
+that wakes a container is a `post_save` receiver and the poll compares
+`updated_at`; `update()` fires no signal and moves no `auto_now` column, so a
+change made that way is invisible until something else moves either.
+
 ## Sends are slow
 
 That is likely the pacing in **[Rate limits](Rate-limits.md)** doing its job: one

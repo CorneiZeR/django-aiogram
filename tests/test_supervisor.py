@@ -5,12 +5,26 @@ removal, one bot's failure is its own, and a pass reads the whole desired set ra
 change somebody sent.
 """
 
+import pytest
+from aiogram.exceptions import TelegramConflictError, TelegramUnauthorizedError
+from aiogram.methods import GetMe
 from django.test import override_settings
 
+from django_aiogram.runtime.lifecycle import Fate
 from django_aiogram.runtime.supervisor import Supervisor, serving
 
 TOKEN = '123456:AAone'
 OTHER = '654321:BBtwo'
+
+
+@pytest.fixture(autouse=True)
+def _no_row_to_write(monkeypatch):
+    """Nothing here has a database, and what the row says is `tests/db/test_lifecycle.py`.
+
+    Silenced rather than left to fail: writing the state is best effort by design, so a case
+    about the pass would otherwise assert against a log full of the blocker's refusals.
+    """
+    monkeypatch.setattr('django_aiogram.runtime.lifecycle._write', lambda *args, **kwargs: None)
 
 
 class Ticking:
@@ -32,14 +46,22 @@ def watching(refuse=None):
     unservable without touching the others.
     """
     refuse = refuse or {}
-    started, stopped = [], []
+    started, stopped, attempted = [], [], []
 
     def start(record):
+        # recorded before the refusal, and separately from `started`: a case about a bot that
+        # is *not tried again* cannot assert on the list only successes reach, which would
+        # read the same whether the retry happened or not
+        attempted.append(record.bot_id)
         if record.bot_id in refuse:
             raise refuse[record.bot_id]
         started.append(record.bot_id)
 
     supervisor = Supervisor(start=start, stop=stopped.append, clock=Ticking())
+    # the mapping itself, so a case can stop refusing: a conflict is a failure that clears
+    # without anybody editing a configuration, which is what tells it apart from the rest
+    supervisor.refuse = refuse
+    supervisor.attempted = attempted
     return supervisor, started, stopped
 
 
@@ -233,3 +255,61 @@ def test_the_process_supervisor_is_reachable_for_a_push():
 
     assert serving(supervisor) is supervisor
     assert serving() is supervisor
+
+
+def test_a_revoked_token_is_not_tried_again_and_the_other_bots_keep_running():
+    """The case #115 names: nothing but a new token fixes a 401, so nothing retries it.
+
+    Retried on the ordinary backoff it would be one request per bot every five minutes for
+    as long as the container runs, all of them failing for the reason the first one did --
+    and the bot next to it must not notice any of that.
+    """
+    revoked = TelegramUnauthorizedError(method=GetMe(), message='Unauthorized')
+    supervisor, started, _ = watching({123456: revoked})
+
+    with override_settings(TELEGRAM_BOTS={'a': {'TOKEN': TOKEN}, 'b': {'TOKEN': OTHER}}):
+        supervisor.reconcile()
+        assert started == [654321], 'the healthy bot was taken down with the broken one'
+        assert supervisor.quarantined[123456].fate is Fate.REVOKED
+        assert supervisor.quarantined[123456].until is None, 'a revoked token was given a clock'
+
+        supervisor.clock.now += 10_000
+        supervisor.reconcile()
+
+    assert supervisor.attempted == [123456, 654321], 'a revoked token was tried again by a timer'
+
+
+def test_a_conflict_is_waited_out_rather_than_left_to_a_person():
+    """It is what a deploy looks like while the old process is still polling its updates."""
+    conflict = TelegramConflictError(method=GetMe(), message='terminated by other getUpdates')
+    supervisor, started, _ = watching({123456: conflict})
+
+    with override_settings(TELEGRAM_BOTS={'a': {'TOKEN': TOKEN}}):
+        supervisor.reconcile()
+        held = supervisor.quarantined[123456]
+        assert held.fate is Fate.CONFLICT
+        assert held.until == supervisor.clock.now + held.wait()
+
+        supervisor.refuse.clear()
+        supervisor.clock.now += held.wait()
+        supervisor.reconcile()
+
+    assert started == [123456], 'a conflict that cleared itself was never tried again'
+
+
+def test_a_rotated_token_is_torn_down_and_rebuilt_under_the_same_identity():
+    """Identity is the number in front of the colon, so a rotation is not a new bot.
+
+    The old `Bot` was built from the old token and cannot be reused, so the order is the one
+    `reconcile` promises: stopped, then started, and never served twice at once.
+    """
+    supervisor, started, stopped = watching()
+
+    with override_settings(TELEGRAM_BOTS={'a': {'TOKEN': TOKEN}}):
+        supervisor.reconcile()
+    with override_settings(TELEGRAM_BOTS={'a': {'TOKEN': '123456:AArotated'}}):
+        supervisor.reconcile()
+
+    assert started == [123456, 123456]
+    assert stopped == [123456], 'the bot built from the old token was left running'
+    assert supervisor.running[123456]['TOKEN'] == '123456:AArotated'
