@@ -65,6 +65,22 @@ def _uncached_settings():
     conf.reset()
 
 
+@pytest.fixture(autouse=True)
+def _providers_read_afresh():
+    """Forget the watermark and the held answers between cases.
+
+    Both are process-wide caches over rows a `django_db` case rolls back, and the held answer
+    is the one that bites: a case whose provider reads nothing after a case whose provider read
+    a bot is exactly the shape the empty-answer guard holds back, so it would be handed the
+    other case's bot.
+    """
+    from django_aiogram.runtime import providers
+
+    providers.forget()
+    yield
+    providers.forget()
+
+
 @pytest.fixture
 def redis_server(monkeypatch):
     """Swap the shared connection for an in-memory one, sync and async alike.

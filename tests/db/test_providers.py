@@ -92,3 +92,78 @@ def test_a_provider_that_cannot_be_imported_is_refused():
     """A source nobody reads is a set of bots nobody serves, and it must not look healthy."""
     with pytest.raises(ImportError):
         providers.desired()
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'BOT_PROVIDERS': FROM_DB})
+def test_an_unchanged_table_is_answered_without_reading_the_rows(django_assert_num_queries):
+    """Every container runs a pass every few seconds, and most passes have nothing to do.
+
+    So the rows are read once and the watermark -- one aggregate per table -- is what the next
+    pass pays for. Without it a hundred bots are resolved through their profiles every few
+    seconds in every container, which is three layers of arithmetic per row for an answer that
+    has not moved.
+    """
+    profile = TelegramBotProfile.objects.create(name='vip', overrides={'MAX_RETRIES': 2})
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', profile=profile)
+
+    with django_assert_num_queries(3):  # two aggregates and the rows
+        first = providers.desired()
+    with django_assert_num_queries(2):  # the aggregates alone
+        again = providers.desired()
+
+    assert first == again
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'BOT_PROVIDERS': FROM_DB})
+def test_a_changed_row_is_seen_on_the_next_pass():
+    """The other half, and the one that matters more: a cache is only allowed if it is right.
+
+    A token edited in the admin has to reach the container, so the watermark has to move when
+    a row does -- and `updated_at` is what moves it.
+    """
+    row = TelegramBot.objects.create(bot_id=123456, token='123456:AAaa')
+    assert providers.desired()[0]['TOKEN'] == '123456:AAaa'
+
+    row.token = '123456:AArotated'
+    row.save()
+
+    assert providers.desired()[0]['TOKEN'] == '123456:AArotated', 'the watermark did not move with the row'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'BOT_PROVIDERS': FROM_DB})
+def test_a_deleted_row_is_seen_on_the_next_pass():
+    """A delete moves no timestamp, so the count is in the watermark as well as the maximum.
+
+    The older of the two is the one deleted here, and that is the whole case: deleting the
+    *newer* one lowers `max(updated_at)` and would be noticed by a watermark that never
+    counted anything. Measured -- with the count dropped from the watermark this case passes
+    and this one fails.
+    """
+    older = TelegramBot.objects.create(bot_id=123456, token='123456:AAaa')
+    TelegramBot.objects.create(bot_id=654321, token='654321:BBbb')
+    assert len(providers.desired()) == 2
+
+    older.delete()
+
+    assert [found.bot_id for found in providers.desired()] == [654321]
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'BOT_PROVIDERS': FROM_DB})
+def test_an_empty_read_after_a_full_one_is_held_back_once(caplog):
+    """Twenty bots do not usually vanish at once; a query reaching the wrong database does.
+
+    So the first empty answer keeps what the provider last said -- the same rule as a provider
+    that raised, for an answer that reads the same way -- and the second is honoured, so a
+    deployment that really removed its last bot converges one pass later.
+    """
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa')
+    assert len(providers.desired()) == 1
+
+    TelegramBot.objects.all().delete()
+
+    with caplog.at_level('WARNING', logger='django_aiogram'):
+        held = providers.desired()
+    assert [found.bot_id for found in held] == [123456], 'one empty read deregistered the bot'
+    assert any('read no bots at all' in record.getMessage() for record in caplog.records)
+
+    assert providers.desired() == (), 'the second empty read was held back too'

@@ -11,15 +11,25 @@ look": :func:`desired` lets the failure through and the supervisor keeps what it
 a database that blinked would otherwise deregister every bot in the process. That is the same
 rule this package applies to a write that raised -- unknown is not refused -- read from the
 other side.
+
+**And an empty answer has to be said twice.** A provider that returned twenty bots and now
+returns none is far more often a query that found the wrong database than twenty bots being
+deleted at once, so the first such read is kept rather than acted on, and the second is
+honoured. A deployment that really did remove its last bot converges one interval later,
+which is the cheap half of that trade.
 """
 
 import logging
-from typing import TYPE_CHECKING
+import threading
+from typing import TYPE_CHECKING, Any
 
+from django.core.signals import setting_changed
+from django.db.models import Count, Max
+from django.dispatch import receiver
 from django.utils.module_loading import import_string
 
-from django_aiogram.config.bots import records, resolve
-from django_aiogram.config.settings import conf
+from django_aiogram.config.bots import BOTS_SETTINGS_NAME, records, resolve
+from django_aiogram.config.settings import SETTINGS_NAME, conf
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
@@ -29,9 +39,17 @@ if TYPE_CHECKING:
     #: what a provider is: something callable that answers with the bots it can see
     Provider = Callable[[], Iterable[BotRecord]]
 
-__all__ = ('desired', 'from_database', 'from_settings', 'providers')
+__all__ = ('desired', 'forget', 'from_database', 'from_settings', 'providers')
 
 logger = logging.getLogger('django_aiogram')
+
+_lock = threading.Lock()
+#: what the last read of the table found, with the watermark it was read at. A pass happens
+#: every few seconds in every container, and resolving a bot is three layers of arithmetic per
+#: row -- so an unchanged table is answered without reading the rows at all
+_from_table: 'tuple[object, tuple[BotRecord, ...]] | None' = None
+#: what each provider last said, by path, so an empty answer can be told from a first one
+_last_said: 'dict[str, tuple[BotRecord, ...]]' = {}
 
 
 def from_settings() -> 'tuple[BotRecord, ...]':
@@ -56,7 +74,17 @@ def from_database() -> 'tuple[BotRecord, ...]':
     """
     # deferred: importing models reaches the app registry, and this module is imported wherever
     # the settings are read -- including in a process that has none
-    from django_aiogram.models import TelegramBot  # noqa: PLC0415 - as above
+    from django_aiogram.models import TelegramBot, TelegramBotProfile  # noqa: PLC0415 - as above
+
+    global _from_table  # noqa: PLW0603 - one table per process, like the rows it caches
+    mark = (
+        TelegramBot.objects.aggregate(at=Max('updated_at'), n=Count('pk')),
+        TelegramBotProfile.objects.aggregate(at=Max('updated_at'), n=Count('pk')),
+    )
+    with _lock:
+        held = _from_table
+    if held is not None and held[0] == mark:
+        return held[1]
 
     found = []
     for row in TelegramBot.objects.filter(enabled=True).select_related('profile'):
@@ -65,7 +93,10 @@ def from_database() -> 'tuple[BotRecord, ...]':
             layers.append((f'TelegramBotProfile({row.profile.name}).overrides', row.profile.overrides))
         layers.append((f'TelegramBot({row.bot_id}).overrides', {'TOKEN': row.token, **row.overrides}))
         found.append(resolve(str(row.bot_id), *layers))
-    return tuple(found)
+    read = tuple(found)
+    with _lock:
+        _from_table = (mark, read)
+    return read
 
 
 def providers() -> 'Iterator[Provider]':
@@ -79,6 +110,28 @@ def providers() -> 'Iterator[Provider]':
         yield import_string(path)
 
 
+def _read(path: str, provider: 'Provider') -> 'tuple[BotRecord, ...]':
+    """Read one provider, holding back the first empty answer it gives after a full one.
+
+    The count is what is compared, not the bots: a provider that swapped every bot for another
+    twenty read something, and this is only about the answer that reads like a failure without
+    being one.
+    """
+    got = tuple(provider())
+    with _lock:
+        held = _last_said.get(path)
+        # `()` rather than `del`: the *next* empty read finds nothing held and is honoured, so
+        # a deployment that really has no bots left converges on the pass after this one
+        _last_said[path] = () if not got and held else got
+    if not got and held:
+        logger.warning(
+            'a provider read no bots at all; keeping what it last said until it says so again',
+            extra={'tg_provider': path, 'tg_bots': len(held)},
+        )
+        return held
+    return got
+
+
 def desired() -> 'tuple[BotRecord, ...]':
     """Return every bot the providers can see, with the first to name an identity keeping it.
 
@@ -87,13 +140,18 @@ def desired() -> 'tuple[BotRecord, ...]':
     first. Reported rather than silently resolved, because two sources disagreeing about a
     token is a configuration somebody has to fix.
 
+    An empty answer is held back once -- see :func:`_read` -- and a failure is not caught here
+    at all: the supervisor is what keeps the running set through it.
+
     A bot with no identity in its token is left out, and reported once for each read it
     appears in: nothing could address it -- `E052` reports the same thing about a section --
     and serving it would put messages on a queue that name no bot at all.
     """
     seen: dict[int, BotRecord] = {}
-    for provider in providers():
-        for record in provider():
+    # zipped rather than resolved again: the path is what a held answer is keyed by, and
+    # `providers()` is what refuses one that cannot be imported
+    for path, provider in zip(conf['BOT_PROVIDERS'], providers(), strict=True):
+        for record in _read(path, provider):
             identity = record.bot_id
             if identity is None:
                 logger.warning(
@@ -109,3 +167,23 @@ def desired() -> 'tuple[BotRecord, ...]':
                 continue
             seen[identity] = record
     return tuple(seen.values())
+
+
+def forget() -> None:
+    """Drop what was read: the table's watermark and every provider's last answer."""
+    global _from_table  # noqa: PLW0603 - as above
+    with _lock:
+        _from_table = None
+        _last_said.clear()
+
+
+@receiver(setting_changed, dispatch_uid='django_aiogram.runtime.providers')
+def _forget_what_was_read(**kwargs: Any) -> None:
+    """Drop both caches when a setting a resolved bot was built from moves.
+
+    The watermark is over rows, and the layers under them are settings: a change to
+    ``TELEGRAM_BOT_DEFAULTS`` moves every resolved value without touching a row, so a cache
+    keyed only on the table would answer with the settings as they were.
+    """
+    if kwargs.get('setting') in {SETTINGS_NAME, BOTS_SETTINGS_NAME}:
+        forget()
