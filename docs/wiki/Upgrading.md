@@ -6,7 +6,16 @@ at a time: each covers a single hop and assumes the ones below it are done.
 
 # From 4.1 to 5.0
 
-**One required step: rename `TELEGRAM_BOT` to `TELEGRAM_BOT_DEFAULTS`.** Nothing reads the old
+**Two required steps.** Run `manage.py migrate`, and rename `TELEGRAM_BOT` to
+`TELEGRAM_BOT_DEFAULTS`.
+
+5.0 adds four tables — profiles, queues, bots and the polling lease — and a column on three
+that already had rows. A project that configures its bots in `settings.py` never writes to any
+of the four, so they stay empty; the migration is safe on a running deployment, and the one
+change with a shape to it is the replay claim, whose uniqueness moves from the correlation id
+to the pair with the bot. Any claim rows you have are for failures already replayed.
+
+**The rename.** Nothing reads the old
 name, so every value left in it is ignored and whatever it configured falls back to the
 environment or to this package's defaults — a project that kept its token there has none.
 `manage.py check` reports it as `E050` rather than leaving you to find out at the first send.
