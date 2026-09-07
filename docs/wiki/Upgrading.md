@@ -19,6 +19,11 @@ To run more than one, add a section per bot under `TELEGRAM_BOTS` — see
 they configure the process, not a bot, and `E053` refuses a section that names them.
 `ENABLED` is not one of them, so a single bot can still be switched off on its own.
 
+**Either container may be deployed first.** A queued message now names the bot it is for, and
+that is a field rather than a new envelope version: a 4.1 consumer handed a 5.0 payload
+delivers it through the one bot it has, and a 5.0 consumer handed a 4.1 payload finds no bot
+named and does the same.
+
 If you ship a `Broker` of your own, `option`, `call_timeout` and `broker_class` now take the
 settings to read from. Calling them is unchanged — the argument is optional and falls back to
 the shared settings. An **override** is not: `def option(cls, key, settings=None)` and

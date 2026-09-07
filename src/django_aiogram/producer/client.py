@@ -161,6 +161,15 @@ class TelegramBot(RouterShortcuts):
             return self._record
 
     @property
+    def bot_id(self) -> int | None:
+        """The number in this bot's token, which is what a queued message names it by.
+
+        ``None`` where the token has no identity to read — `E052` reports that — and a payload
+        then names no bot at all, which a consumer delivers through its own.
+        """
+        return self.settings.bot_id
+
+    @property
     def group(self) -> 'RuntimeGroup':
         """The objects this bot shares with every bot configured like it."""
         from django_aiogram.runtime.groups import group_for  # noqa: PLC0415 - as above
@@ -1203,7 +1212,7 @@ class TelegramBot(RouterShortcuts):
             # no broker resolved and none needed: the row holds the bytes, and whichever
             # transport is configured when it comes due is the one that carries it
             due_at = due_moment(eta)
-            schedule(function, serialise(function, [(identifier, kwargs)], due_at.timestamp()), due_at)
+            schedule(function, serialise(function, [(identifier, kwargs)], due_at.timestamp(), self.bot_id), due_at)
             return identifier
 
         # before the context manager, like the awaiting twin does: a `BROKER` that cannot be
@@ -1217,7 +1226,7 @@ class TelegramBot(RouterShortcuts):
         # the first caller who could have acted on the advice hearing nothing. Same reasoning as
         # `check_function` in `send`, one failure mode further along
         mention_asend('aenqueue')
-        write = serialise(function, [(identifier, kwargs)])
+        write = serialise(function, [(identifier, kwargs)], bot_id=self.bot_id)
         if not self._deferred(function, [write], broker.publish):
             with publishing(function, write) as ready:
                 broker.publish(ready.payloads)
@@ -1249,11 +1258,12 @@ class TelegramBot(RouterShortcuts):
             # from a coroutine -- measured. An earlier comment here claimed this path merely
             # blocked like its twin, and an `eta` on this method simply raised
             due_at = due_moment(eta)
-            await aschedule(function, serialise(function, [(identifier, kwargs)], due_at.timestamp()), due_at)
+            written = serialise(function, [(identifier, kwargs)], due_at.timestamp(), self.bot_id)
+            await aschedule(function, written, due_at)
             return identifier
 
         broker = self.broker
-        write = serialise(function, [(identifier, kwargs)])
+        write = serialise(function, [(identifier, kwargs)], bot_id=self.bot_id)
         if not self._deferred(function, [write], broker.publish):
             with publishing(function, write) as ready:
                 await broker.apublish(ready.payloads)
@@ -1328,9 +1338,9 @@ class TelegramBot(RouterShortcuts):
             if writing and due_at is not None:
                 # a scheduled fan-out needs no broker and no commit hook: the rows are the
                 # caller's own write, so `atomic()` rolls them back on its own
-                schedule(function, serialise(function, chunk, due_at.timestamp()), due_at)
+                schedule(function, serialise(function, chunk, due_at.timestamp(), self.bot_id), due_at)
             elif broker is not None:
-                write = serialise(function, chunk)
+                write = serialise(function, chunk, bot_id=self.bot_id)
                 if waiting:
                     held.append(write)
                 else:
@@ -1370,9 +1380,9 @@ class TelegramBot(RouterShortcuts):
         identifiers: list[uuid.UUID] = []
         for chunk in chunks(chat_ids, chunk_size, kwargs):
             if writing and due_at is not None:
-                await aschedule(function, serialise(function, chunk, due_at.timestamp()), due_at)
+                await aschedule(function, serialise(function, chunk, due_at.timestamp(), self.bot_id), due_at)
             elif broker is not None:
-                write = serialise(function, chunk)
+                write = serialise(function, chunk, bot_id=self.bot_id)
                 if waiting:
                     held.append(write)
                 else:

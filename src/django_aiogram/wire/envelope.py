@@ -28,6 +28,13 @@ from django_aiogram.exceptions import DjangoRedisAiogramError
 ENVELOPE_KEY = '__envelope__'
 ENVELOPE_VERSION = 1
 
+#: every version this reader understands, which is not the same as the one it writes. A bump
+#: that forgot the difference would be a data loss rather than an upgrade: an older payload
+#: reaches `MalformedEnvelopeError` below, and that one is *recorded and acknowledged* -- so
+#: every message a not-yet-deployed producer left on the queue would be thrown away by the
+#: consumer that arrived first. Reading is what has to be generous; writing stays at one
+READABLE_VERSIONS = frozenset({1})
+
 
 class MalformedEnvelopeError(DjangoRedisAiogramError, ValueError):
     """A payload decoded, but is not a shape any version of this reads.
@@ -69,6 +76,10 @@ class Envelope:
     correlation_id: uuid.UUID | None = None
     #: a float, not a datetime: it survives both serializers without a codec
     queued_at: float = 0.0
+    #: which bot is to make this call, by the number in its token. ``None`` is a payload
+    #: written before there was more than one -- by 4.x, or by a 5.0 producer for a bot whose
+    #: token has no identity to read -- and the consumer delivers it as the process's own
+    bot_id: int | None = None
 
 
 def pack(
@@ -76,15 +87,30 @@ def pack(
     kwargs: dict[str, Any],
     correlation_id: uuid.UUID,
     queued_at: float,
+    bot_id: int | None = None,
 ) -> dict[str, Any]:
-    """Build the payload that goes on the list."""
-    return {
+    """Build the payload that goes on the list.
+
+    ``bot`` is added rather than the version bumped, and that is deliberate: :func:`unpack`
+    reads the keys it knows and ignores the rest, so a 4.x consumer handed this payload
+    delivers it through the one bot it has -- which is the right answer for a deployment that
+    has one -- and a 5.0 consumer handed a 4.x payload finds no ``bot`` and does the same. A
+    bump would have made the rolling upgrade a choice between losing the backlog and stopping
+    the world.
+
+    Left out when there is nothing to say: a bot whose token has no identity in it cannot be
+    named, and `E052` is what reports that rather than a payload nobody can route.
+    """
+    packed = {
         ENVELOPE_KEY: ENVELOPE_VERSION,
         'correlation_id': correlation_id.hex,
         'queued_at': queued_at,
         'function': function,
         'kwargs': kwargs,
     }
+    if bot_id is not None:
+        packed['bot'] = bot_id
+    return packed
 
 
 def _as_uuid(value: object) -> uuid.UUID | None:
@@ -118,6 +144,19 @@ def _as_time(value: object) -> float:
     return seconds if math.isfinite(seconds) else 0.0
 
 
+def _as_bot_id(value: object) -> int | None:
+    """Read the identity a payload names, or ``None`` where it names none readably.
+
+    Exactly an ``int``, and not through ``int()``: this came off an untrusted queue, and a
+    float or a numeric string that happened to parse would route a message to a bot the
+    producer did not name. ``True`` is refused with them -- it is an ``int`` to Python and is
+    not an identity anyone wrote.
+    """
+    if type(value) is not int or value <= 0:
+        return None
+    return value
+
+
 def unpack(payload: object) -> Envelope:
     """Read either shape, from whatever the queue actually held.
 
@@ -143,8 +182,9 @@ def unpack(payload: object) -> Envelope:
         raise MalformedEnvelopeError(unreadable)
     if version > ENVELOPE_VERSION:
         raise UnknownEnvelopeVersionError(version)
-    if version < ENVELOPE_VERSION:
-        # not a future shape somebody can deliver later, so it is not kept
+    if version not in READABLE_VERSIONS:
+        # not a shape any version of this reads, and not one a later release will either --
+        # what a *newer* producer wrote is the branch above, and it is kept for an upgrade
         older = f'envelope version {version}'
         raise MalformedEnvelopeError(older)
     arguments = payload.get('kwargs')
@@ -153,4 +193,5 @@ def unpack(payload: object) -> Envelope:
         kwargs=dict(arguments) if isinstance(arguments, Mapping) else {},
         correlation_id=_as_uuid(payload.get('correlation_id')),
         queued_at=_as_time(payload.get('queued_at')),
+        bot_id=_as_bot_id(payload.get('bot')),
     )

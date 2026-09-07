@@ -44,6 +44,20 @@
   `bots.by_id(...)` by the identity in its token. `django_aiogram.bot` is `bots['default']` --
   the same object, since it is what handlers are registered on and what a shutdown closes.
 
+- **A queued message names the bot it is for**, so one queue serves several of them: the
+  producer stamps the number in its own token, and the consumer hands the message to that
+  bot's send. A message for a bot the process does not serve is left *in flight* rather than
+  acknowledged — delivering it through another bot would send it under the wrong token, and
+  acknowledging would destroy a message a correctly configured process can still take.
+
+  **The envelope version did not move for it.** The reader takes the keys it knows and ignores
+  the rest, so a 4.1 consumer handed a 5.0 payload delivers it through the one bot it has, and
+  a 5.0 consumer handed a 4.1 payload finds no bot named and does the same. A bump would have
+  made the rolling upgrade a choice between losing the backlog and stopping the world -- an
+  older envelope is *recorded and acknowledged*, which is to say dropped. The reader now keeps
+  a set of the versions it understands, separate from the one it writes, so the next bump
+  cannot make that mistake either.
+
   New check ids: `E050`-`E054` and `W010`. `W003` now asks the shared dict only, and `W010`
   asks each section, so one typo is one finding rather than one per bot.
 

@@ -1102,7 +1102,7 @@ def test_a_send_the_drain_finishes_is_acknowledged_before_the_command_returns(re
     monkeypatch.setattr('django_aiogram.management.commands.start_tgbot.bot', instance)
     monkeypatch.setattr(
         'django_aiogram.management.commands.start_tgbot.get_delivery',
-        lambda handler: BlpopDelivery(handler=handler),
+        lambda handler, route=None: BlpopDelivery(handler=handler),
     )
     release = threading.Event()
     monkeypatch.setattr(Command, 'idle_event', release)

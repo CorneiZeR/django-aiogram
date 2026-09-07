@@ -186,7 +186,10 @@ drains across the upgrade — the reverse does not hold: a 2.x consumer handed a
 new payload calls the Telegram method with `__envelope__` as a keyword, raises,
 logs it and swallows it, and the message is gone with nothing to redeliver.
 
-Both are one-time concerns. After 3.0 the order is whatever you like.
+Both are one-time concerns. After 3.0 the order is whatever you like, and 5.0 keeps it that
+way: a queued message names the bot it is for, and that arrived as a field the reader ignores
+where it does not know it rather than as a new envelope version — so either side may be
+deployed first.
 
 Note the absence of `ports:` on `redis`. Nothing outside the compose network
 reaches it, which is why no password appears here. Publish that port and Redis

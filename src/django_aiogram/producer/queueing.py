@@ -87,6 +87,7 @@ def serialise(
     function: str,
     messages: list[tuple[uuid.UUID, dict[str, Any]]],
     queued_at: float | None = None,
+    bot_id: int | None = None,
 ) -> Queueing:
     """Turn the calls into payloads, and stamp the moment they were made.
 
@@ -108,6 +109,11 @@ def serialise(
     where the call was written, rather than reading them again from a commit hook that runs
     after the caller has moved on.
 
+    ``bot_id`` is stamped on every payload, so a consumer serving several bots knows which
+    one a message is for. Written where the send was made rather than read at delivery: the
+    producer is the only place that knows, and a scheduled send is serialized hours before
+    anything takes it off the queue.
+
     ``queued_at`` is passed in by exactly one caller, and for a reason worth stating: a
     scheduled send is serialized when it is *scheduled* and published when it comes **due**,
     so stamping it now would report the whole wait as queue latency. Its due time goes in
@@ -122,7 +128,8 @@ def serialise(
     try:
         return Queueing(
             payloads=[
-                serializer.dumps(pack(function, kwargs, identifier, queued_at)) for identifier, kwargs in messages
+                serializer.dumps(pack(function, kwargs, identifier, queued_at, bot_id))
+                for identifier, kwargs in messages
             ],
             messages=messages,
             queued_at=queued_at,
@@ -167,7 +174,11 @@ def publishing(function: str, write: Queueing) -> 'Iterator[Queueing]':
 
 
 @contextlib.contextmanager
-def queueing(function: str, messages: list[tuple[uuid.UUID, dict[str, Any]]]) -> 'Iterator[Queueing]':
+def queueing(
+    function: str,
+    messages: list[tuple[uuid.UUID, dict[str, Any]]],
+    bot_id: int | None = None,
+) -> 'Iterator[Queueing]':
     """Everything a queue write does, except the write.
 
     The two halves in one call, for the producer that publishes where it stands. A producer
@@ -175,7 +186,7 @@ def queueing(function: str, messages: list[tuple[uuid.UUID, dict[str, Any]]]) ->
     :func:`~django_aiogram.producer.committing.defer` — because only the second half may
     wait.
     """
-    with publishing(function, serialise(function, messages)) as write:
+    with publishing(function, serialise(function, messages, bot_id=bot_id)) as write:
         yield write
 
 

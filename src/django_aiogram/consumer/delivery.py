@@ -60,6 +60,9 @@ from django_aiogram.wire.serializers import PickleReadRefusedError, Serializatio
 logger = logging.getLogger('django_aiogram')
 
 Handler = Callable[..., Any]
+#: answers with the handler for one bot's identity. Raising is how it says this process serves
+#: no such bot, which `Delivery._handler_for` turns into a message left in flight
+Route = Callable[[int], Handler]
 
 
 def defers_completion(handler: Handler) -> bool:
@@ -99,9 +102,21 @@ def accepts_keyword(handler: Handler, name: str) -> bool:
 class Delivery(ABC):
     """Consumes whichever transport `BROKER` names, until stopped."""
 
-    def __init__(self, handler: Handler) -> None:
-        """Take what each decoded message is handed to once it arrives."""
+    def __init__(self, handler: Handler, route: 'Route | None' = None) -> None:
+        """Take what each decoded message is handed to once it arrives.
+
+        ``route`` is how a message reaches the bot it was queued for: it answers with the
+        handler for one identity, and ``handler`` is what a payload naming no bot gets --
+        every 4.x payload, and every send by a bot whose token has no identity in it.
+
+        Both, rather than the route alone, because the shape of the handler is read once here
+        rather than per message: whether it takes ``on_complete``, and whether it takes
+        ``on_refused``. Every routed handler is some bot's ``send_raw`` and they are the same
+        shape, so asking one answers for all -- and a route handing back something else would
+        be answered as though it were `send_raw`, which is why the contract says so out loud.
+        """
         self.handler = handler
+        self.route = route
         self._stop = threading.Event()
         # the one transport this consumer talks to, resolved once: everything below asks it
         # rather than a Redis client, which is what lets a second transport exist at all
@@ -435,6 +450,16 @@ class Delivery(ABC):
                 extra={'tg_function': envelope.function},
             )
             return True
+        try:
+            handler = self._handler_for(envelope)
+        except Exception:
+            # left in flight, not acknowledged: this process is not configured for that bot
+            # and another one may be. `tgbot_reclaim` is what puts it back once one is
+            logger.exception(
+                'leaving a message for a bot this process does not serve in flight',
+                extra={'tg_bot_id': envelope.bot_id, 'tg_key': self.processing_key},
+            )
+            return False
         self._record(EventKind.OUTBOUND_CONSUMED, envelope)
         # by keyword, the way 2.x splatted it: a handler taking **kwargs
         # only — which every documented recipe does — refuses a positional.
@@ -452,9 +477,22 @@ class Delivery(ABC):
             'correlation_id': envelope.correlation_id,
             'queued_at': envelope.queued_at,
         }
-        return self._hand_over(envelope, call, handle)
+        return self._hand_over(envelope, call, handle, handler)
 
-    def _hand_over(self, envelope: Envelope, call: dict[str, Any], handle: object) -> bool:
+    def _handler_for(self, envelope: Envelope) -> Handler:
+        """Return the handler for the bot this message names, or the one for no bot at all.
+
+        Raises where the identity names a bot this process does not have. `dispatch` leaves
+        such a message *in flight* rather than acknowledging it, which is the same answer it
+        gives an envelope from a newer version and for the same reason: the message is
+        perfectly deliverable by a process that is configured for it, and acknowledging would
+        destroy it over a deployment that has not caught up.
+        """
+        if self.route is None or envelope.bot_id is None:
+            return self.handler
+        return self.route(envelope.bot_id)
+
+    def _hand_over(self, envelope: Envelope, call: dict[str, Any], handle: object, handler: Handler) -> bool:
         """Call the handler, and say whether the message may be acknowledged.
 
         Cancellation is the reason this is not one ``except``: it is a
@@ -477,7 +515,7 @@ class Delivery(ABC):
                 call['on_refused'] = self._release_for(handle)
             self._in_flight += 1
         try:
-            self.handler(**call)
+            handler(**call)
         except asyncio.CancelledError:
             if deferring:
                 self._in_flight -= 1
@@ -648,6 +686,6 @@ def delivery_class() -> type[Delivery]:
     return resolved
 
 
-def get_delivery(handler: Handler) -> Delivery:
-    """Build the consumer ``DELIVERY`` names, with the handler it delivers through."""
-    return delivery_class()(handler)
+def get_delivery(handler: Handler, route: 'Route | None' = None) -> Delivery:
+    """Build the consumer ``DELIVERY`` names, with the handlers it delivers through."""
+    return delivery_class()(handler, route)
