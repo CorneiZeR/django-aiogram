@@ -44,17 +44,15 @@ from aiogram.types import Update
 from django.core.exceptions import ImproperlyConfigured
 
 from django_aiogram.api import check_function, resolve_call
-from django_aiogram.broker.registry import close_broker, get_broker
+from django_aiogram.broker.registry import close_broker
 from django_aiogram.config.enums import EventKind
-from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
-from django_aiogram.db import DatabaseConnectionMiddleware
+from django_aiogram.config.settings import coerce_bool
 from django_aiogram.eventlog.events import short_id
-from django_aiogram.eventlog.instrumentation import install_instrumentation
 from django_aiogram.eventlog.recorder import recorder
 from django_aiogram.eventlog.records import Event, as_identifier
 from django_aiogram.exceptions import LoopThreadNotStartedError, ShuttingDownError
 from django_aiogram.producer.committing import defer
-from django_aiogram.producer.from_settings import build_default_properties, build_storage
+from django_aiogram.producer.from_settings import build_default_properties
 from django_aiogram.producer.looping import LOOP_THREAD, RUNNER_TIMEOUT, drain_budget, loop_lock, mention_asend
 from django_aiogram.producer.outbound import TASK_PREFIX, Outbound, completion, resolve_correlation_id, settle
 from django_aiogram.producer.queueing import Queueing, chunks, publishing, serialise
@@ -62,6 +60,7 @@ from django_aiogram.producer.routing import RouterShortcuts
 from django_aiogram.producer.scheduling import aschedule, cancel, due_moment, schedule
 from django_aiogram.producer.throttling import RateLimiter, get_rate_limiter
 from django_aiogram.redis import aclose_redis
+from django_aiogram.runtime import process
 
 if TYPE_CHECKING:
     # the type the queued producers accept beside a method *name*: a caller who wants their
@@ -70,10 +69,14 @@ if TYPE_CHECKING:
     # — `api.is_method` says why
     from aiogram.methods.base import TelegramMethod
 
+    from django_aiogram.broker.base import Broker
+    from django_aiogram.config.bots import BotRecord
+
     # `outcomes` reaches the ORM through `writer`, and this module is imported by
     # `_singleton` on the first touch of `bot` — earlier than the app registry in a process
     # that only ever queues. The two methods below import it when they are called
     from django_aiogram.eventlog.outcomes import Outcome
+    from django_aiogram.runtime.groups import RuntimeGroup
 
 logger = logging.getLogger('django_aiogram')
 
@@ -104,13 +107,24 @@ class TelegramBot(RouterShortcuts):
         self,
         max_retries: int | None = None,
         loop: AbstractEventLoop | None = None,
+        record: 'BotRecord | None' = None,
     ) -> None:
         """Record the overrides; nothing aiogram or Redis owns is built here."""
+        #: which bot this is, by the name it is configured under. The *record* is not held:
+        #: a settings change moves what it says, and a caller keeping this object across one --
+        #: `bots['support']` in a test suite, say -- would otherwise send with the token from a
+        #: block that had ended
+        self._alias = record.alias if record is not None else None
+        #: the record it was built from, and only for an alias that stops resolving: a bot
+        #: handed a record of its own has no other answer once its section is gone
+        self._record = record
         self._max_retries = max_retries
         self._loop = loop
         self._bot: Bot | None = None
-        self._dispatcher: Dispatcher | None = None
-        self._router = Router()
+        #: what the decorators register on, and the same object for every bot in this process
+        self._router = process.router()
+        #: the process generation the aiogram `Bot` above was built at, if it has been
+        self._built_at: int | None = None
         #: sends this bot scheduled, so shutdown drains its own work only
         # the call behind each task, so shutdown can say what it canceled
         self._sends: dict[asyncio.Task[None], Outbound] = {}
@@ -127,8 +141,43 @@ class TelegramBot(RouterShortcuts):
         # only true while close() is flushing the loop, so the refusal below can tell
         # a hand-off queued before shutdown from one queued during it
         self._draining = False
-        # reentrant: _attach_router holds it while reading self.dispatcher
         self._build_guard = threading.RLock()
+
+    @property
+    def settings(self) -> 'BotRecord':
+        """Return this bot's settings, and the labels that say where each value came from."""
+        # deferred: `config.bots` reads Django settings, and this module is imported by a
+        # process that may never touch one
+        from django_aiogram.config.bots import DEFAULT_ALIAS, record  # noqa: PLC0415 - as above
+
+        try:
+            return record(self._alias or DEFAULT_ALIAS)
+        except ImproperlyConfigured:
+            # an alias that no longer resolves, which is a section a settings change took away.
+            # A bot built from a record of its own still has that; the default has nothing to
+            # fall back to, and its refusal is the one a project needs to hear
+            if self._record is None:
+                raise
+            return self._record
+
+    @property
+    def group(self) -> 'RuntimeGroup':
+        """The objects this bot shares with every bot configured like it."""
+        from django_aiogram.runtime.groups import group_for  # noqa: PLC0415 - as above
+
+        return group_for(self.settings)
+
+    @property
+    def broker(self) -> 'Broker':
+        """The transport this bot publishes to and reads depths from.
+
+        Through the registry rather than through :attr:`group`, and the difference is what a
+        capture rests on: an override is consulted before anything resolves `BROKER`, so a
+        suite that hands in a broker never needs a transport it is not using to be nameable.
+        """
+        from django_aiogram.broker.registry import get_broker  # noqa: PLC0415 - as above
+
+        return get_broker(self.settings)
 
     @property
     def enabled(self) -> bool:
@@ -139,7 +188,7 @@ class TelegramBot(RouterShortcuts):
         deep the queue is. `queue_depth` says so too, and `tests/test_enabled_flag.py` fails if either reader
         grows a gate.
         """
-        return coerce_bool(conf['ENABLED'], f"{SETTINGS_NAME}['ENABLED']")
+        return coerce_bool(self.settings['ENABLED'], self.settings.label('ENABLED'))
 
     @property
     def _raises_send_failures(self) -> bool:
@@ -150,7 +199,7 @@ class TelegramBot(RouterShortcuts):
         ``'false'``, which is truthy — used to re-raise the exception the project had asked
         to have swallowed, on a path that only runs once a send has exhausted its retries.
         """
-        return coerce_bool(conf['RAISE_EXCEPTION'], f"{SETTINGS_NAME}['RAISE_EXCEPTION']")
+        return coerce_bool(self.settings['RAISE_EXCEPTION'], self.settings.label('RAISE_EXCEPTION'))
 
     @property
     def rate_limiter(self) -> RateLimiter | None:
@@ -162,14 +211,14 @@ class TelegramBot(RouterShortcuts):
         # no instance cache: the registry already caches per token, and holding
         # a second copy here is what kept a bot on stale RATE_LIMIT settings
         # after the registry was reset
-        return get_rate_limiter(str(conf['TOKEN'] or ''))
+        return get_rate_limiter(str(self.settings['TOKEN'] or ''))
 
     @property
     def max_retries(self) -> int:
         """How many rate-limited attempts a send gets before it is given up on."""
         if self._max_retries is not None:
             return self._max_retries
-        return int(conf['MAX_RETRIES'])
+        return int(self.settings['MAX_RETRIES'])
 
     @property
     def loop(self) -> AbstractEventLoop:
@@ -186,65 +235,63 @@ class TelegramBot(RouterShortcuts):
     @property
     def bot(self) -> Bot:
         """The aiogram ``Bot``, which is the first thing that needs a token."""
+        # a cached `Bot` holds a token and a session, and both can go stale under it: a
+        # settings change moves the token, and closing the process's session leaves this one
+        # holding a closed socket. The generation says when either happened.
+        #
+        # Only one this class built, which `_built_at` is what says: a caller that planted a
+        # bot of its own -- every double in the suite does -- keeps it, since nothing here
+        # knows what it was built from or how to build another
+        if self._bot is not None and self._built_at is not None and self._built_at != process.generation():
+            self._bot = None
         if self._bot is None:
-            token = conf['TOKEN']
+            token = self.settings['TOKEN']
             if not token:
-                msg = f"{SETTINGS_NAME}['TOKEN'] is required to talk to Telegram."
+                msg = f'{self.settings.label("TOKEN")} is required to talk to Telegram.'
                 raise ImproperlyConfigured(msg)
             with self._build_guard:
                 if self._bot is None:
-                    self._bot = Bot(token=token, default=build_default_properties())
+                    # the session is the process's: nothing here configures it, and a connector
+                    # each is what would make a bot expensive
+                    self._built_at = process.generation()
+                    self._bot = Bot(
+                        token=token,
+                        default=build_default_properties(self.settings),
+                        session=process.session(),
+                    )
         return self._bot
 
     @property
     def dispatcher(self) -> Dispatcher:
-        """The aiogram ``Dispatcher``: the FSM storage, the connection reset, the event log.
+        """The one dispatcher this process has, with its store and its middleware.
 
-        Built here and only here, so polling and webhook get the same middleware chain -- one
-        update middleware sees every update exactly once, whichever way updates arrive.
-
-        The order of the two registrations is the contract, not a detail.
-        :class:`~django_aiogram.db.DatabaseConnectionMiddleware` goes on first and so runs
-        outermost, which is what makes the connection reset the first thing that happens to an
-        update and the last: a recording middleware that wrote its row through a dead connection
-        would be the same outage one frame further in.
-
-        And it is unconditional, where `install_instrumentation` returns before building anything
-        if nothing reads events. The event log is optional; a live database connection is not.
+        One per process rather than one per bot, and `runtime.process` says why: a ``Router``
+        cannot be attached to two dispatchers, so a dispatcher each would be a handler tree
+        each -- and whether a project's handlers served a bot would depend on whether its
+        transport settings matched another's.
         """
-        if self._dispatcher is None:
-            # two concurrent first requests would otherwise build one each, and
-            # the router would attach to whichever was discarded
-            with self._build_guard:
-                if self._dispatcher is None:
-                    self._dispatcher = Dispatcher(storage=build_storage())
-                    self._dispatcher.update.outer_middleware.register(DatabaseConnectionMiddleware())
-                    install_instrumentation(self._dispatcher)
-        return self._dispatcher
+        return process.dispatcher()
 
     @property
     def router(self) -> Router:
-        """Router holding every handler registered through the decorators."""
-        return self._router
+        """The router every handler in this process is registered on.
+
+        Shared for the reason above, and the same object for every bot: handlers belong to the
+        project. A handler that should answer for one bot alone reads the ``bot`` aiogram
+        injects into it.
+        """
+        return process.router()
 
     @property
     def is_worker(self) -> bool:
         """True only inside the process that runs the bot itself."""
         return self._polling
 
-    def _attach_router(self) -> None:
-        """Attach the router once; aiogram refuses a second attachment.
-
-        Under the build lock: two concurrent first requests would both see no
-        parent and the second would raise.
-        """
-        with self._build_guard:
-            if self._router.parent_router is None:
-                self.dispatcher.include_router(self._router)
-
     def start_polling(self) -> None:
         """Attach the router and block on Telegram long polling."""
-        self._attach_router()
+        # touching it is what attaches the shared router: the dispatcher includes it as it is
+        # built, so every bot in the process gets the same handlers
+        _ = self.dispatcher
 
         async def poll() -> None:
             """Long-poll Telegram, with ``_polling`` true only while this is running.
@@ -271,7 +318,9 @@ class TelegramBot(RouterShortcuts):
         scheduling: the response must not be sent before the handlers have run,
         or a failure would go unreported and the request would look successful.
         """
-        self._attach_router()
+        # touching it is what attaches the shared router: the dispatcher includes it as it is
+        # built, so every bot in the process gets the same handlers
+        _ = self.dispatcher
         owned = self._ensure_loop_runs()
 
         coroutine = self.dispatcher.feed_update(self.bot, update)
@@ -529,9 +578,9 @@ class TelegramBot(RouterShortcuts):
             check_function(function)
             # and the broker for the same reason, one failure mode further along: `enqueue`
             # resolves it below, so a misconfigured `BROKER` used to raise *after* the latch
-            # was spent. Cheap to do twice -- the registry caches per process, so the call
-            # inside `enqueue` is a hit. `aenqueue` was fixed first and this is its twin
-            get_broker()
+            # was spent. Cheap to do twice -- the group caches it, so the call inside `enqueue`
+            # is a hit. `aenqueue` was fixed first and this is its twin
+            _ = self.broker
             mention_asend('asend')
         return self.enqueue(function, correlation_id=identifier, **kwargs)
 
@@ -605,7 +654,7 @@ class TelegramBot(RouterShortcuts):
             # because close() refuses on a running loop, so a process that gave the loop a
             # thread could otherwise never close its bot
             self._stop_runner(drain_timeout)
-            if self._loop is not None or self._bot is not None or self._dispatcher is not None:
+            if self._loop is not None or self._bot is not None or process.holding():
                 loop = self.loop
                 if loop.is_running():
                     # run_until_complete and loop.close() both raise on a running
@@ -616,13 +665,17 @@ class TelegramBot(RouterShortcuts):
                 # keeps the teardown from interleaving with it
                 with loop_lock(loop):
                     self._drain(drain_timeout)
-                    # RedisStorage owns a second, async Redis client nothing else closes
-                    if self._dispatcher is not None:
-                        loop.run_until_complete(self._dispatcher.storage.close())
-                        self._dispatcher = None
-                    if self._bot is not None:
-                        loop.run_until_complete(self._bot.session.close())
-                        self._bot = None
+                    # RedisStorage owns a second, async Redis client nothing else closes, and
+                    # the session is shared -- both belong to the process, so both are closed
+                    # here and rebuilt by whatever asks next. Closing is a shutdown, and a
+                    # process that closes one of its bots is one on its way out
+                    closing = process.close_storage()
+                    if closing is not None:
+                        loop.run_until_complete(closing)
+                    self._bot = None
+                    ending = process.close_session()
+                    if ending is not None:
+                        loop.run_until_complete(ending)
                     if not loop.is_closed():
                         loop.close()
             self._loop = None
@@ -782,7 +835,7 @@ class TelegramBot(RouterShortcuts):
             if self._raises_send_failures and last_error is not None:
                 raise last_error
 
-        call_kwargs = {**conf['DEFAULT_KWARGS'](function), **kwargs}
+        call_kwargs = {**self.settings['DEFAULT_KWARGS'](function), **kwargs}
         outbound = Outbound(identifier, function, call_kwargs)
         self._schedule(send(), outbound, on_complete, on_refused)
         return identifier
@@ -1158,7 +1211,7 @@ class TelegramBot(RouterShortcuts):
         # *queueing* drop — which the event log defines as a write that may still have been
         # applied, so re-sending may duplicate. Nothing was written, and the two producers
         # promise the same rows
-        broker = get_broker()
+        broker = self.broker
         # after the broker resolves, not before: the mention fires once per process, so a call
         # that is about to raise on a misconfigured `BROKER` would otherwise spend it and leave
         # the first caller who could have acted on the advice hearing nothing. Same reasoning as
@@ -1199,7 +1252,7 @@ class TelegramBot(RouterShortcuts):
             await aschedule(function, serialise(function, [(identifier, kwargs)], due_at.timestamp()), due_at)
             return identifier
 
-        broker = get_broker()
+        broker = self.broker
         write = serialise(function, [(identifier, kwargs)])
         if not self._deferred(function, [write], broker.publish):
             with publishing(function, write) as ready:
@@ -1258,7 +1311,7 @@ class TelegramBot(RouterShortcuts):
         # resolved before the first chunk, as above: a broker that cannot be resolved is not
         # a chunk that failed to write. Not resolved at all for a scheduled batch, which
         # reaches no transport today and takes whichever one is configured when it comes due
-        broker = get_broker() if writing and due_at is None else None
+        broker = self.broker if writing and due_at is None else None
         if writing:
             mention_asend('asend_many')
         # the hook is registered before the first chunk and handed the list it will read at
@@ -1310,7 +1363,7 @@ class TelegramBot(RouterShortcuts):
         # after the decision, not before: a disabled process may have no transport
         # configured at all, and resolving one would raise where the point is to do nothing.
         # A scheduled batch is the same case for a different reason -- see the twin above
-        broker = get_broker() if writing and due_at is None else None
+        broker = self.broker if writing and due_at is None else None
         # before the loop and handed an empty list, exactly as the synchronous twin does
         held: list[Queueing] = []
         waiting = broker is not None and self._deferred(function, held, broker.publish)
@@ -1401,11 +1454,11 @@ class TelegramBot(RouterShortcuts):
         Growing is not by itself a fault — producers can outpace delivery, and
         ``MAX_IN_FLIGHT`` holds intake back on purpose. See **Troubleshooting**.
         """
-        return get_broker().depth()
+        return self.broker.depth()
 
     async def aqueue_depth(self) -> int:
         """:meth:`queue_depth` without blocking the loop this coroutine runs on."""
-        return await get_broker().adepth()
+        return await self.broker.adepth()
 
     def inflight_depth(self, worker: str | None = None) -> int:
         """How many messages one worker is part-way through sending.
@@ -1415,11 +1468,11 @@ class TelegramBot(RouterShortcuts):
         those keys follow is this package's business, not an exporter's to
         reproduce.
         """
-        return get_broker().inflight_depth(worker)
+        return self.broker.inflight_depth(worker)
 
     async def ainflight_depth(self, worker: str | None = None) -> int:
         """:meth:`inflight_depth` without blocking the loop this coroutine runs on."""
-        return await get_broker().ainflight_depth(worker)
+        return await self.broker.ainflight_depth(worker)
 
     def __repr__(self) -> str:
         """Say whether the aiogram bot behind this facade has been built yet."""

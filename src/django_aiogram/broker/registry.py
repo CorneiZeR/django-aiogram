@@ -5,7 +5,6 @@ installed: two drivers present would make the choice ambiguous, and one present 
 a typo in the setting look like a working configuration.
 """
 
-import atexit
 import contextlib
 import threading
 from typing import TYPE_CHECKING
@@ -22,7 +21,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
     from typing import Any
 
-__all__ = ('SHIPPED', 'broker_class', 'close_broker', 'get_broker', 'use_broker')
+__all__ = ('SHIPPED', 'broker_class', 'close_broker', 'get_broker', 'overriding', 'use_broker')
 
 #: what each shipped broker needs, keyed by dotted path — readable *without* importing the
 #: module, so a check can name the missing extra even where the import would fail
@@ -36,16 +35,12 @@ SHIPPED: dict[str, tuple[str, str]] = {
 }
 
 _lock = threading.Lock()
-_broker: Broker | None = None
 #: a broker handed in rather than resolved, for the length of a test. Consulted *before*
 #: `BROKER` and never built from it, which is the whole reason it is not simply an
 #: `override_settings` in `django_aiogram.testing`: a case that overrides the setting itself --
 #: and every `@override_settings(TELEGRAM_BOT_DEFAULTS=...)` replaces the dict whole -- would otherwise
 #: undo the helper it is running inside, silently, and at a moment it did not choose
 _overrides: list[tuple[object, Broker]] = []
-#: registered once per process rather than per build, so a settings change that replaces the
-#: broker does not stack another callback. `close_broker` is idempotent either way
-_exit_hook_armed = False
 
 
 def broker_class(settings: 'Mapping[str, Any] | None' = None, *, verify_driver: bool = True) -> type[Broker]:
@@ -99,49 +94,34 @@ def _require(path: str, module: str, extra: str) -> None:
         raise BrokerDependencyError(path.rsplit('.', 1)[-1], module, extra)
 
 
-def get_broker() -> Broker:
-    """Return the one broker this process uses, building it on the first ask.
+def get_broker(settings: 'Mapping[str, Any] | None' = None) -> Broker:
+    """Return the transport one bot uses, building its group's on the first ask.
 
-    Cached like the Redis client was, and for the same reason: a transport holds a
-    connection, and building one per send is what the 3.x accessor existed to avoid.
+    Cached by *profile* since 5.0 rather than per process: twenty bots configured alike share
+    one connection, and one configured differently gets its own. `settings` names the bot;
+    without them the shared defaults answer, which is what a process with one bot has.
 
-    An override from :func:`use_broker` wins over both the cache and the setting, and is the
-    only way anything but ``BROKER`` decides this.
-
-    **One lock over the whole choice**, rather than a lock-free read of the cache after
-    checking for an override. Between the two, another thread could install one -- and then a
-    send made *inside* a capture would go to the configured transport instead, which is a test
-    that fails for a reason nothing in it can show. The cost is an uncontended acquisition on a
-    path that ends in a socket write.
+    An override from :func:`use_broker` wins over both the group and the setting, and is the
+    only way anything but `BROKER` decides this.
     """
-    global _broker, _exit_hook_armed  # noqa: PLW0603 - one per process, like the connection it holds
+    # deferred: `runtime.groups` reaches back here for `broker_class`, and a module-scope import
+    # either way round would be a cycle
+    from django_aiogram.runtime.groups import group_for  # noqa: PLC0415 - as above
+
+    held = overriding()
+    if held is not None:
+        return held
+    return group_for(conf if settings is None else settings).broker
+
+
+def overriding() -> Broker | None:
+    """Return the broker a :func:`use_broker` block installed, if one is standing.
+
+    Read by the groups as well as here, so a capture reaches a bot whichever way its transport
+    is asked for.
+    """
     with _lock:
-        if _overrides:
-            return _overrides[-1][1]
-        if _broker is None:
-            cls = broker_class()
-            cls.verify()
-            _broker = cls()
-            if not _exit_hook_armed:
-                # `Broker.close()` says it is "called once, at shutdown", and until this line
-                # nothing called it there: the only path to `close_broker` was the
-                # `setting_changed` receiver below, which fires in a test suite and never in a
-                # deployment. So the Kafka producer was never flushed and its consumer never
-                # left its group -- a member that disappears without saying so holds its
-                # partitions until the session times out, which is a bot restart that delivers
-                # nothing for that long. `EventRecorder` has armed an `atexit` for its writer
-                # all along; this is the same trade in the same shape.
-                #
-                # This hook runs during interpreter shutdown, on the main thread, which is not
-                # the thread that opened a consumer's connection -- and `bot.close()`, the other
-                # path here, runs wherever a caller happens to be. Neither can promise the
-                # owning thread, which is why each transport's `close()` already restricts what
-                # it touches from a foreign one: pika's asks the owner through
-                # `add_callback_threadsafe`, and librdkafka's flushes the process producer and
-                # closes only the calling thread's consumer.
-                atexit.register(close_broker)
-                _exit_hook_armed = True
-        return _broker
+        return _overrides[-1][1] if _overrides else None
 
 
 @contextlib.contextmanager
@@ -183,15 +163,14 @@ def use_broker(broker: Broker) -> 'Iterator[Broker]':
 
 
 def close_broker() -> None:
-    """Drop the cached broker, closing it first. Safe to call when there is none."""
-    global _broker
-    with _lock:
-        current, _broker = _broker, None
-    if current is not None:
-        current.close()
+    """Close every transport this process built. Safe to call when there is none."""
+    # deferred for the reason `get_broker` gives
+    from django_aiogram.runtime.groups import close_groups  # noqa: PLC0415 - as above
+
+    close_groups()
 
 
-@receiver(setting_changed)
+@receiver(setting_changed, dispatch_uid='django_aiogram.broker.registry')
 def _forget_the_broker(**kwargs: 'Any') -> None:
     """Rebuild on the next ask when the settings change, as the client does.
 

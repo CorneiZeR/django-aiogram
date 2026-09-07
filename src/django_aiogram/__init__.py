@@ -15,19 +15,22 @@ TYPE_CHECKING = False
 
 __version__ = '5.0.0.dev0'
 
-__all__ = ('TelegramBot', '__version__', 'bot', 'conf')
+__all__ = ('TelegramBot', '__version__', 'bot', 'bots', 'conf')
 
 if TYPE_CHECKING:
     from typing import Any
 
     from django_aiogram.config.settings import conf as conf
     from django_aiogram.producer.client import TelegramBot as TelegramBot
+    from django_aiogram.runtime.registry import Bots
 
     bot: TelegramBot
+    bots: Bots
 
 #: which module each lazy export lives in
 _EXPORTS = {
     'TelegramBot': 'django_aiogram.producer.client',
+    'bots': 'django_aiogram.runtime.registry',
     'conf': 'django_aiogram.config.settings',
 }
 

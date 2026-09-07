@@ -18,10 +18,31 @@
   same identity.
 
   Settings the process owns rather than a bot -- `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`,
-  `EVENT_LOG` and every `EVENT_LOG_*` one -- may not be set per bot. `ENABLED` is not one of
+  `FSM_STORAGE`, `EVENT_LOG` and every `EVENT_LOG_*` one -- may not be set per bot. `ENABLED` is not one of
   them: a bot may be switched off on its own. There is one writer thread and one
   in-flight list per process, so a per-bot value could only mean whichever bot resolved last
   wins. `E053` reports the attempt.
+
+- **Bots configured alike share one transport.** What two bots have to agree on before they
+  may share anything is computed from their resolved settings -- the transport and its own
+  options, the consumer named in `DELIVERY`, the serializer, the consumer's numbers -- so twenty bots on one configuration hold
+  one connection between them and one configured differently gets its own. It is computed
+  rather than named: a setting choosing the group would be a second source of truth, and two
+  sections written differently that resolve the same are one configuration.
+
+  What stays a bot's own is its token, its pacing and its aiogram `Bot`, which costs almost
+  nothing. What belongs to the *process* is the dispatcher, the handler tree and the FSM
+  store: a `Router` cannot be attached to two dispatchers, so a dispatcher per bot would make
+  whether your handlers serve a bot depend on whether its transport settings happened to match
+  another's. `FSM_STORAGE` is process-owned for that reason.
+
+  The shipped Redis store now keys on the bot's identity as well as the chat --
+  `DefaultKeyBuilder(with_bot_id=True)`, against aiogram's default of `False`. Measured: with
+  it off, two bots produce the same key for one person, so each answers with the other's state.
+
+  `django_aiogram.bots['support']` is how a project reaches a bot that is not the default, and
+  `bots.by_id(...)` by the identity in its token. `django_aiogram.bot` is `bots['default']` --
+  the same object, since it is what handlers are registered on and what a shutdown closes.
 
   New check ids: `E050`-`E054` and `W010`. `W003` now asks the shared dict only, and `W010`
   asks each section, so one typo is one finding rather than one per bot.

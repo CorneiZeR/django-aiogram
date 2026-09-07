@@ -1047,12 +1047,13 @@ def test_running_the_checks_leaves_no_broker_behind():
     nothing; the cache is for the process that actually sends.
     """
     from django_aiogram.broker import registry
+    from django_aiogram.runtime import groups
 
     registry.close_broker()
 
     check_settings()
 
-    assert registry._broker is None, 'running the checks cached a broker for the whole process'
+    assert groups.live_groups() == (), 'running the checks built a group for the whole process'
 
 
 @override_settings(

@@ -115,9 +115,19 @@ DEFAULTS: dict[str, Any] = {
 
 #: settings a bot may not have of its own, because the thing they configure is one per
 #: process rather than one per bot: the event log's writer thread, the name this worker's
-#: in-flight list is keyed on, and the router discovery that runs once at startup. A section
-#: naming one of these is refused by `E053` rather than honoured for whichever bot resolved
-#: last.
+#: in-flight list is keyed on, the router discovery that runs once at startup, and the FSM
+#: store.
+#:
+#: The store is here because the handlers are. A ``Router`` cannot be attached to two
+#: dispatchers, so a dispatcher per bot would mean a handler tree per bot -- and whether a
+#: project's handlers served a bot would depend on whether its transport settings happened to
+#: match another's. One dispatcher, one router tree and one store per process is what makes
+#: ``bot.router`` mean the same thing for every bot; ``with_bot_id`` is what keeps two bots'
+#: chat state apart inside that one store.
+#:
+#: A section naming one of these is refused by `E053` rather than honoured for whichever bot
+#: resolved last.
 PROCESS_SCOPED: frozenset[str] = frozenset(
-    {'AUTODISCOVER', 'MODULE_NAME', 'WORKER_NAME'} | {key for key in DEFAULTS if key.startswith('EVENT_LOG')},
+    {'AUTODISCOVER', 'MODULE_NAME', 'WORKER_NAME', 'FSM_STORAGE'}
+    | {key for key in DEFAULTS if key.startswith('EVENT_LOG')},
 )

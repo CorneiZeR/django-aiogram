@@ -19,7 +19,7 @@ Scalar values can also come from `DJANGO_AIOGRAM_<NAME>`, and one bot's from
 A bot is identified by the number in front of the colon in its token, read without asking
 Telegram. That number is the one thing about a bot that holds still: an alias is a name a
 project may change and a token is a credential it may rotate, and a rotated token keeps the
-same identity. These belong to the process rather than to a bot — `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `EVENT_LOG` and every `EVENT_LOG_*` one — so a section naming one is refused by `E053` instead of
+same identity. These belong to the process rather than to a bot — `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `FSM_STORAGE`, `EVENT_LOG` and every `EVENT_LOG_*` one — so a section naming one is refused by `E053` instead of
 deciding for every bot in the process. `ENABLED` is not among them: a bot may be switched off
 on its own.
 
@@ -71,7 +71,7 @@ was the last setting read that way, and no longer is. See **[Deployment](Deploym
 | ------- | ------- | ----------- |
 | `DEFAULT_BOT_PROPERTIES` | `{}` | Passed to aiogram's `DefaultBotProperties` |
 | `DEFAULT_KWARGS` | `lambda fn: {}` | Per-function extras the above cannot express |
-| `FSM_STORAGE` | `'redis'` | `'redis'`, `'memory'`, or a dotted path |
+| `FSM_STORAGE` | `'redis'` | `'redis'`, `'memory'`, or a dotted path. One store per process, shared by every bot: the handlers are shared, and a `Router` cannot be attached to two dispatchers. The shipped Redis store keys on the bot's identity as well as the chat, so one person talking to two of your bots has a state with each — a store of your own has to do the same |
 | `MAX_RETRIES` | `10` | Retries after a Telegram rate-limit refusal |
 | `RAISE_EXCEPTION` | `False` | Let `send_raw` propagate failures |
 | `TRANSACTIONAL` | `False` | Hold the queue write until the caller's transaction commits |
@@ -391,7 +391,7 @@ entry naming a retired one is dead but harmless.
 | `E050` | `TELEGRAM_BOT` is still set. 5.0 split it into `TELEGRAM_BOT_DEFAULTS` and `TELEGRAM_BOTS`, and nothing reads the old name: every value left in it is ignored, and whatever it configured resolves from the shared defaults, the environment or this package's own defaults instead. A project that kept its token there has none |
 | `E051` | two aliases hold one token, which is one bot under two names: the pair would race for its updates and pace against two budgets |
 | `E052` | `TOKEN` is not a bot token. One reads `<bot id>:<secret>`, and the number before the colon is what identifies the bot — a token with none cannot be told apart from another bot's |
-| `E053` | a bot's section sets a setting the process owns — `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `EVENT_LOG` or an `EVENT_LOG_*` one. There is one writer thread and one in-flight list per process, so a per-bot value could only mean whichever bot resolved last wins |
+| `E053` | a bot's section sets a setting the process owns — `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `FSM_STORAGE`, `EVENT_LOG` or an `EVENT_LOG_*` one. There is one writer thread, one in-flight list and one handler tree per process, so a per-bot value could only mean whichever bot resolved last wins |
 | `E054` | `TELEGRAM_BOTS` cannot be read: it is not a mapping, an alias is not a name, or a section is not a mapping |
 | `I001` | `WORKER_NAME` is empty **and** the hostname is one Docker generated, so a replacement container gets a different name — which strands whatever the old container was sending. Information rather than a warning because a check cannot tell a consumer from a web process, and every container without `hostname:` matches; `start_tgbot` warns for itself at startup |
 | `I003` | `django_redis_aiogram_event` — the table 3.x wrote to — is still on whichever database the log resolves to, holding rows this release does not read. Information because leaving them there is a legitimate choice and a check cannot tell it from an oversight; always on, because it is what makes `manage.py tgbot_move_events` discoverable. Asked of the log's alias rather than the default, so a project with `EVENT_LOG_DATABASE` set is not the one that hears nothing |

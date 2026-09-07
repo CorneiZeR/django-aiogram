@@ -231,6 +231,8 @@ def test_sigterm_unwinds_polling(monkeypatch):
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_close_releases_the_fsm_storage():
     """RedisStorage owns a second async client that nothing else closes."""
+    from django_aiogram.runtime import process
+
     instance = TelegramBot()
     storage = instance.dispatcher.storage
     closed = []
@@ -244,7 +246,8 @@ def test_close_releases_the_fsm_storage():
     instance.close()
 
     assert closed == [True]
-    assert instance._dispatcher is None
+    # the store belongs to the process now, so what must be released is the process's
+    assert process._dispatcher is None
     assert instance._bot is None
 
 

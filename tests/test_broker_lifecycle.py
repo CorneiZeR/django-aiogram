@@ -29,6 +29,9 @@ from django.test import override_settings
 
 from django_aiogram import TelegramBot
 from django_aiogram.broker import registry
+from django_aiogram.config.settings import conf
+from django_aiogram.runtime import groups
+from django_aiogram.runtime.profiles import profile_of
 
 SETTINGS = {
     'TOKEN': '42:x',
@@ -49,14 +52,36 @@ class Closeable:
 
 @pytest.fixture
 def fresh_registry(monkeypatch):
-    """A registry with no broker and no armed hook, restored afterwards.
+    """A registry with no group built and no armed hook, restored afterwards.
 
     Both are process-global, so a test that armed the hook would otherwise decide the answer
     for every test after it — which is the shape of pass that means nothing.
+
+    The state moved to `runtime.groups` in 5.0, where the transport is cached by profile rather
+    than per process; the registry is still what a caller asks, which is why this hands that
+    back.
     """
-    monkeypatch.setattr(registry, '_broker', None)
-    monkeypatch.setattr(registry, '_exit_hook_armed', False)
+    monkeypatch.setattr(groups, '_groups', {})
+    monkeypatch.setattr(groups, '_exit_hook_armed', False)
     return registry
+
+
+@pytest.fixture
+def planted(fresh_registry, monkeypatch):
+    """Put a transport where a group would have built one, and hand the group back.
+
+    The cache is per profile since 5.0, so a case about closing what was built has to reach
+    the group rather than a module global. Everything else about these cases is unchanged:
+    they are about `close()`, not about where the object was kept.
+    """
+
+    def install(broker):
+        group = groups.RuntimeGroup(profile_of(conf), conf)
+        group._broker = broker
+        monkeypatch.setattr(groups, '_groups', {group.profile: group})
+        return group
+
+    return install
 
 
 @pytest.fixture
@@ -72,8 +97,8 @@ def test_building_the_broker_arms_an_exit_hook(fresh_registry, armed, redis_serv
     """The hook is what makes `close()`'s own docstring true for a process that never closes."""
     fresh_registry.get_broker()
 
-    assert fresh_registry.close_broker in armed, (
-        f'nothing armed close_broker at exit; atexit was handed {[getattr(h, "__name__", h) for h in armed]}'
+    assert groups.close_groups in armed, (
+        f'nothing armed the shutdown at exit; atexit was handed {[getattr(h, "__name__", h) for h in armed]}'
     )
 
 
@@ -90,10 +115,10 @@ def test_the_hook_is_armed_once_however_often_the_broker_is_rebuilt(fresh_regist
     fresh_registry.close_broker()
     fresh_registry.get_broker()
 
-    assert armed.count(fresh_registry.close_broker) == 1, f'armed {armed.count(fresh_registry.close_broker)} times'
+    assert armed.count(groups.close_groups) == 1, f'armed {armed.count(groups.close_groups)} times'
 
 
-def test_closing_the_bot_closes_the_transport(fresh_registry, monkeypatch):
+def test_closing_the_bot_closes_the_transport(planted):
     """`start_tgbot` joins the consumer before this, so nothing is taking from the broker.
 
     Asserted through `bot.close()` rather than through `close_broker` directly, because the
@@ -101,21 +126,21 @@ def test_closing_the_bot_closes_the_transport(fresh_registry, monkeypatch):
     everything around it.
     """
     broker = Closeable()
-    monkeypatch.setattr(fresh_registry, '_broker', broker)
+    group = planted(broker)
 
     TelegramBot().close()
 
     assert broker.closed == 1, 'closing the bot left the transport open'
-    assert fresh_registry._broker is None, 'the closed broker is still cached'
+    assert group._broker is None, 'the closed broker is still cached'
 
 
-def test_closing_twice_is_not_an_error(fresh_registry, monkeypatch):
+def test_closing_twice_is_not_an_error(planted):
     """Both mechanisms can reach it — `close()` and then `atexit` — so it has to be idempotent."""
     broker = Closeable()
-    monkeypatch.setattr(fresh_registry, '_broker', broker)
+    planted(broker)
 
-    fresh_registry.close_broker()
-    fresh_registry.close_broker()
+    registry.close_broker()
+    registry.close_broker()
 
     assert broker.closed == 1, 'the second close reached a broker that was already released'
 
@@ -124,10 +149,10 @@ def test_closing_with_no_broker_built_does_nothing(fresh_registry):
     """The common case at exit: a process that imported the package and never sent."""
     fresh_registry.close_broker()
 
-    assert fresh_registry._broker is None
+    assert groups.live_groups() == ()
 
 
-def test_a_transport_that_fails_to_close_does_not_wedge_the_bot(fresh_registry, monkeypatch):
+def test_a_transport_that_fails_to_close_does_not_wedge_the_bot(planted):
     """The flags gate sending, so leaving them set retires the bot for the life of the process.
 
     `close_broker` propagates on purpose — a caller should hear that a queue could not be
@@ -141,7 +166,7 @@ def test_a_transport_that_fails_to_close_does_not_wedge_the_bot(fresh_registry, 
             msg = 'the broker could not be released'
             raise RuntimeError(msg)
 
-    monkeypatch.setattr(fresh_registry, '_broker', Stubborn())
+    planted(Stubborn())
     instance = TelegramBot()
 
     with pytest.raises(RuntimeError, match='could not be released'):
@@ -151,7 +176,7 @@ def test_a_transport_that_fails_to_close_does_not_wedge_the_bot(fresh_registry, 
     assert instance._draining is False, 'and draining, which refuses them differently'
 
 
-def test_a_skipped_teardown_leaves_the_transport_alone(fresh_registry, monkeypatch, caplog):
+def test_a_skipped_teardown_leaves_the_transport_alone(planted, monkeypatch, caplog):
     """`close()` refuses a running loop and expects to be called again, so nothing may be released.
 
     The transport is process-global and the loop that is still running is the one polling, so
@@ -168,7 +193,7 @@ def test_a_skipped_teardown_leaves_the_transport_alone(fresh_registry, monkeypat
             return False
 
     broker = Closeable()
-    monkeypatch.setattr(fresh_registry, '_broker', broker)
+    planted(broker)
     instance = TelegramBot()
     monkeypatch.setattr(instance, '_loop', Running())
 
@@ -182,7 +207,7 @@ def test_a_skipped_teardown_leaves_the_transport_alone(fresh_registry, monkeypat
     assert instance._closing is False, 'and the retry it asks for must still be possible'
 
 
-def test_a_teardown_that_raises_leaves_the_transport_alone(fresh_registry, monkeypatch):
+def test_a_teardown_that_raises_leaves_the_transport_alone(planted, monkeypatch):
     """The same rule as a skipped teardown, reached by an exception instead of an early return.
 
     A bot whose drain or session close raised is half apart and its caller may retry, and the
@@ -191,7 +216,7 @@ def test_a_teardown_that_raises_leaves_the_transport_alone(fresh_registry, monke
     of having both paths.
     """
     broker = Closeable()
-    monkeypatch.setattr(fresh_registry, '_broker', broker)
+    planted(broker)
     instance = TelegramBot()
 
     def explode(_timeout):

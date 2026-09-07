@@ -444,7 +444,7 @@ def test_concurrent_first_requests_share_one_dispatcher(monkeypatch):
         built.append(made)
         return made
 
-    monkeypatch.setattr('django_aiogram.producer.client.Dispatcher', slow_dispatcher)
+    monkeypatch.setattr('django_aiogram.runtime.process.Dispatcher', slow_dispatcher)
     monkeypatch.setattr('django_aiogram.consumer.webhook.bot', instance)
 
     ready = threading.Barrier(4, timeout=10)

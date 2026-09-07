@@ -60,10 +60,14 @@ def test_bot_name_is_not_shadowed_by_a_module():
 
 
 def test_building_a_bot_is_cheap():
+    from django_aiogram.runtime import process
+
     instance = TelegramBot()
     assert instance._bot is None
-    assert instance._dispatcher is None
     assert instance._loop is None
+    # the dispatcher is the process's since 5.0, so the question is whether *anything* built
+    # one — a bot that built it on construction would pay for the FSM store on every import
+    assert process._dispatcher is None
 
 
 def test_bot_requires_token_only_when_used():
@@ -89,7 +93,11 @@ def test_handlers_register_without_a_token():
     async def handler(message):  # pragma: no cover - never dispatched
         ...
 
-    assert len(instance.router.observers['message'].handlers) == 1
+    # the router is the process's since 5.0 and `django.setup()` has already registered the
+    # fake app's handlers on it, so the question is whether this one arrived — not how many
+    # are there
+    registered = [held.callback for held in instance.router.observers['message'].handlers]
+    assert handler in registered
 
 
 def test_defaults_are_readable():

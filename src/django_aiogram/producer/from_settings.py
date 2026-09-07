@@ -19,7 +19,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 
 from django_aiogram.config.enums import StorageKind
-from django_aiogram.config.settings import SETTINGS_NAME, conf
+from django_aiogram.config.settings import SETTINGS_NAME, conf, setting_label
 from django_aiogram.eventlog.instrumentation import instrumented
 from django_aiogram.redis import connection_kwargs
 
@@ -29,17 +29,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger('django_aiogram')
 
 
-def build_default_properties() -> DefaultBotProperties:
-    """Build the bot-wide defaults such as parse_mode.
+def build_default_properties(settings: 'Mapping[str, Any] | None' = None) -> DefaultBotProperties:
+    """Build one bot's defaults, such as parse_mode.
 
     aiogram applies these to every call, which is why unset fields carry a
-    ``Default`` sentinel rather than None.
+    ``Default`` sentinel rather than None. They belong to the bot rather than to the group it
+    is in: two bots answering in different languages share every connection and neither's
+    ``parse_mode``.
     """
-    properties: Mapping[str, Any] = conf['DEFAULT_BOT_PROPERTIES']
+    resolved = conf if settings is None else settings
+    properties: Mapping[str, Any] = resolved['DEFAULT_BOT_PROPERTIES']
     try:
         return DefaultBotProperties(**properties)
     except TypeError as error:
-        msg = f"{SETTINGS_NAME}['DEFAULT_BOT_PROPERTIES']: {error}"
+        msg = f'{setting_label(settings, "DEFAULT_BOT_PROPERTIES")}: {error}'
         raise ImproperlyConfigured(msg) from None
 
 
@@ -67,11 +70,23 @@ def build_storage() -> BaseStorage:
         # imported here, not at module scope: aiogram's Redis storage imports the driver,
         # which is an extra since 4.0 — and a project on `memory` or another transport must
         # be able to import this module at all. `django_aiogram.redis` does the same
+        from aiogram.fsm.storage.base import DefaultKeyBuilder  # noqa: PLC0415 - as above
         from aiogram.fsm.storage.redis import RedisStorage  # noqa: PLC0415 - as above
 
         # the same deadlines the shared client gets: every update reads FSM state,
         # so a half-open Redis here wedges the whole bot rather than one send
-        return instrumented(RedisStorage.from_url(url, connection_kwargs=connection_kwargs()))
+        return instrumented(
+            RedisStorage.from_url(
+                url,
+                connection_kwargs=connection_kwargs(),
+                # **not aiogram's default, which is `False`.** The store is one per process and
+                # the bots in it are several, so a key without the identity is one key for every
+                # bot -- measured: `fsm:5:5:state` for both, so one person talking to two of them
+                # has one state and each answers with the other's. `StorageKey` carries the id
+                # either way, which is why `MemoryStorage` needs nothing here
+                key_builder=DefaultKeyBuilder(with_bot_id=True),
+            )
+        )
 
     try:
         storage_class = import_string(name)
