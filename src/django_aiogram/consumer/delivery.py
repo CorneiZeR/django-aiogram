@@ -687,5 +687,26 @@ def delivery_class() -> type[Delivery]:
 
 
 def get_delivery(handler: Handler, route: 'Route | None' = None) -> Delivery:
-    """Build the consumer ``DELIVERY`` names, with the handlers it delivers through."""
-    return delivery_class()(handler, route)
+    """Build the consumer ``DELIVERY`` names, with the handlers it delivers through.
+
+    ``DELIVERY`` is a documented seam, and what it promised was a subclass implementing
+    ``run()`` -- so a project's own ``__init__(self, handler)`` predates the route and must keep
+    working. It is passed only to a class that says it takes one.
+
+    A class that does not, in a process serving **several** bots, is refused rather than built:
+    without a route every addressed message would be delivered through the process's own bot,
+    under a token the producer did not name, silently. With one bot there is nothing to route
+    and nothing to say.
+    """
+    resolved = delivery_class()
+    if accepts_keyword(resolved.__init__, 'route'):
+        return resolved(handler, route)
+    if route is not None:
+        named = f'{resolved.__module__}.{resolved.__qualname__}'
+        raise DeliveryNotConfiguredError(
+            named,
+            'whose __init__ takes no `route`, and this process serves more than one bot: '
+            'every addressed message would be delivered through the wrong one. Add '
+            '`route=None` to its __init__ and hand it to `Delivery.__init__`.',
+        )
+    return resolved(handler)

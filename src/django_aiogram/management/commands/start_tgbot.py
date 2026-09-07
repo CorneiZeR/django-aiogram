@@ -28,6 +28,19 @@ from django_aiogram.eventlog.recorder import recorder
 logger = logging.getLogger('django_aiogram')
 
 
+def _routing() -> 'Callable[[int], Callable[..., Any]] | None':
+    """Return the route to deliver by, or ``None`` where there is nothing to route.
+
+    A process with one bot has every message addressed to it or to nobody, and a project's own
+    `Delivery` written before 5.0 takes no route at all -- so asking for one where it cannot
+    matter would refuse a consumer that works. `get_delivery` refuses such a class only where
+    the addressing does matter, which is what this decides.
+    """
+    from django_aiogram.config.bots import records  # noqa: PLC0415 - after the enabled gate, like the rest
+
+    return _send_raw_of if len(records()) > 1 else None
+
+
 def _send_raw_of(bot_id: int) -> 'Callable[..., Any]':
     """Return the send of the bot a queued message names, or raise if this process has none.
 
@@ -107,7 +120,7 @@ class Command(BaseCommand):
                 )
             )
 
-        delivery = get_delivery(handler=bot.send_raw, route=_send_raw_of)
+        delivery = get_delivery(handler=bot.send_raw, route=_routing())
         self._preflight(delivery)
         # the transport's own deadline, not `REDIS_TIMEOUT`: this bounds the thread being
         # joined below, and reading it from one transport's setting meant a consumer could be

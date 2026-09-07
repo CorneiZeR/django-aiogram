@@ -11,6 +11,7 @@ import pytest
 from django.test import override_settings
 
 from django_aiogram.consumer.delivery import BlpopDelivery, get_delivery
+from django_aiogram.exceptions import DeliveryNotConfiguredError
 from django_aiogram.wire import envelope
 from django_aiogram.wire.envelope import (
     ENVELOPE_KEY,
@@ -217,6 +218,39 @@ def test_two_bots_sending_through_one_queue_are_told_apart_end_to_end():
             assert delivery.dispatch(message), 'a message was left in flight'
 
     assert sorted(delivered) == sorted([(123456, 'from the default'), (654321, 'from support')]), delivered
+
+
+class Older(BlpopDelivery):
+    """A project's own consumer, written before there was a route to take."""
+
+    def __init__(self, handler):
+        """Take the handler and nothing else, which is all `DELIVERY` ever promised."""
+        super().__init__(handler)
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'DELIVERY': 'tests.test_addressing.Older'})
+def test_a_consumer_written_before_the_route_is_still_built():
+    """`DELIVERY` is a documented seam and what it asked for was `run()`, not a signature.
+
+    A project with one bot has nothing to route, so a consumer that takes only the handler is
+    correct and must keep working — the alternative is a startup `TypeError` on an upgrade
+    that changed nothing for them.
+    """
+    built = get_delivery(handler=lambda **call: None)
+
+    assert isinstance(built, Older)
+    assert built.route is None
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'DELIVERY': 'tests.test_addressing.Older'})
+def test_a_consumer_that_cannot_route_is_refused_where_routing_matters():
+    """The other side of it: silence here would be a message sent under the wrong token.
+
+    Refused at startup rather than at the first addressed message, and named, because a
+    consumer that cannot route is a configuration problem rather than a runtime one.
+    """
+    with pytest.raises(DeliveryNotConfiguredError, match='takes no `route`'):
+        get_delivery(handler=lambda **call: None, route=lambda bot_id: None)
 
 
 def _bytes(payload):

@@ -50,7 +50,24 @@ both old words against what to write instead.
 ### Writing your own
 
 Subclass `Delivery` and implement `run()`. Everything else is provided, and the provided parts
-are the ones that are easy to get wrong:
+are the ones that are easy to get wrong.
+
+**One bot needs nothing more.** A consumer written before 5.0 takes `__init__(self, handler)`
+and still works: with one bot every message is addressed to it or to nobody, and `run()` is
+still the whole contract.
+
+**Serving several bots asks for one more line.** A queued message names the bot it is for, and
+the route is what turns that number into the right send:
+
+```python
+class RoutingDelivery(Delivery):
+    def __init__(self, handler, route=None):
+        super().__init__(handler, route)
+```
+
+Without it, `manage.py start_tgbot` refuses to build the consumer where more than one bot is
+configured, and says so by name — rather than delivering every addressed message through the
+process's own bot, under a token the producer did not name.
 
 ```python
 from django_aiogram.consumer.delivery import Delivery
