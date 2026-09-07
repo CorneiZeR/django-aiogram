@@ -1,10 +1,16 @@
 """Add the tables a project configures its bots in, and tell three existing rows which bot.
 
 Four ``CREATE TABLE``s on tables that start empty -- profiles, queues, bots and the polling
-lease -- plus a column on each of the three tables that already had rows. Safe on a running
-deployment: the new columns are nullable or defaulted, nothing reads them until a supervisor
-or an admin is configured, and a project running one bot from ``settings.py`` never writes a
-row here at all.
+lease -- plus a column on each of the three tables that already had rows. The columns are
+nullable or defaulted, nothing reads them until a supervisor or an admin is configured, and a
+project running one bot from ``settings.py`` never writes a row here at all.
+
+**One operation is not free: the index on the feed.** That is the only table here whose size
+is set by traffic, and Django builds an index without ``CONCURRENTLY`` -- so on PostgreSQL this
+holds writes to it for as long as the build lasts. Nothing sending is affected, because the
+recorder drops rather than making a send wait; what it costs is log rows for the duration.
+``Upgrading.md`` carries the ``--fake`` and the hand-built index for a feed large enough to
+care, and names the index so a later ``makemigrations`` does not offer to create it twice.
 
 **The one change with a shape to it is the replay claim.** Its uniqueness moves from the
 correlation id to the pair with the bot, because with more than one bot a single id can name a

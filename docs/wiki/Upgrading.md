@@ -11,9 +11,29 @@ at a time: each covers a single hop and assumes the ones below it are done.
 
 5.0 adds four tables — profiles, queues, bots and the polling lease — and a column on three
 that already had rows. A project that configures its bots in `settings.py` never writes to any
-of the four, so they stay empty; the migration is safe on a running deployment, and the one
-change with a shape to it is the replay claim, whose uniqueness moves from the correlation id
-to the pair with the bot. Any claim rows you have are for failures already replayed.
+of the four, so they stay empty. The replay claim's uniqueness moves from the correlation id
+to the pair with the bot; any claim rows you have are for failures already replayed.
+
+**One step is not free, and it is the event log's.** The migration adds an index on
+`django_aiogram_event`, which is the one table here whose size is set by your traffic. Django
+builds an index without `CONCURRENTLY`, so on PostgreSQL that takes a lock which holds writes
+to the table for as long as the build lasts — minutes on a large feed. Nothing sending is
+affected: the recorder buffers and then drops rather than making a send wait, so the cost is
+log rows for the duration, not messages. On a feed big enough to care, build it by hand
+instead:
+
+```shell
+python manage.py migrate django_aiogram 0006 --fake
+```
+
+then create the index yourself, without holding the table:
+
+```sql
+CREATE INDEX CONCURRENTLY dja_event_bot ON django_aiogram_event (bot_id, id DESC);
+```
+
+The name has to match, or the next `makemigrations` will offer to create it again. If you
+prune the log aggressively, or turned it off, none of this applies — take the migration.
 
 **The rename.** Nothing reads the old
 name, so every value left in it is ignored and whatever it configured falls back to the
