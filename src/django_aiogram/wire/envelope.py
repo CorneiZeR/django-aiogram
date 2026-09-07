@@ -144,17 +144,29 @@ def _as_time(value: object) -> float:
     return seconds if math.isfinite(seconds) else 0.0
 
 
-def _as_bot_id(value: object) -> int | None:
-    """Read the identity a payload names, or ``None`` where it names none readably.
+def _as_bot_id(payload: 'Mapping[str, Any]') -> int | None:
+    """Read the identity a payload names, or ``None`` where it names none at all.
 
-    Exactly an ``int``, and not through ``int()``: this came off an untrusted queue, and a
-    float or a numeric string that happened to parse would route a message to a bot the
-    producer did not name. ``True`` is refused with them -- it is an ``int`` to Python and is
-    not an identity anyone wrote.
+    Two answers, and the difference is the whole of it. **No key** is a payload that names no
+    bot -- every 4.x one, and every send by a bot whose token has no identity to read -- and
+    the consumer delivers it through its own. **A key that cannot be read is refused**, because
+    nothing can be inferred from it and the fallback is the wrong one to reach for: delivering
+    such a message through the process's own bot sends it under a token the producer did not
+    name, into a chat that bot may not be in, and neither the sender nor the recipient hears
+    that it happened. This queue is a trust boundary.
+
+    Exactly an ``int``, and not through ``int()``: a float or a numeric string that happened to
+    parse would route a message to a bot nobody named. ``True`` is refused with them -- it is
+    an ``int`` to Python and is not an identity anyone wrote.
     """
-    if type(value) is not int or value <= 0:
+    if 'bot' not in payload:
         return None
-    return value
+    named = payload['bot']
+    if type(named) is not int or isinstance(named, bool) or named <= 0:
+        # the type only, never the value: it came off an untrusted queue and ends up in a log
+        unreadable = f'a bot identity of type {type(named).__name__}'
+        raise MalformedEnvelopeError(unreadable)
+    return named
 
 
 def unpack(payload: object) -> Envelope:
@@ -193,5 +205,5 @@ def unpack(payload: object) -> Envelope:
         kwargs=dict(arguments) if isinstance(arguments, Mapping) else {},
         correlation_id=_as_uuid(payload.get('correlation_id')),
         queued_at=_as_time(payload.get('queued_at')),
-        bot_id=_as_bot_id(payload.get('bot')),
+        bot_id=_as_bot_id(payload),
     )

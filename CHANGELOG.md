@@ -50,6 +50,11 @@
   acknowledged — delivering it through another bot would send it under the wrong token, and
   acknowledging would destroy a message a correctly configured process can still take.
 
+  A payload whose identity cannot be *read* is refused outright rather than treated as naming
+  none: the no-bot answer means "deliver through this process's own bot", so anything else
+  would let whoever can write to the queue have a message sent under a token they did not
+  name. Absent is not the same as unreadable, and only the first is an upgrade.
+
   **The envelope version did not move for it.** The reader takes the keys it knows and ignores
   the rest, so a 4.1 consumer handed a 5.0 payload delivers it through the one bot it has, and
   a 5.0 consumer handed a 4.1 payload finds no bot named and does the same. A bump would have

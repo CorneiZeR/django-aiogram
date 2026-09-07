@@ -69,14 +69,22 @@ def test_a_payload_from_before_the_field_still_reads():
 
 
 @pytest.mark.parametrize('written', [1.0, '123456', True, 0, -1, None, [123456]])
-def test_an_identity_that_is_not_one_reads_as_none(written):
+def test_an_identity_that_is_not_one_is_refused(written):
     """This came off an untrusted queue, so a value that merely parses must not route.
 
-    A float or a numeric string reaching `int()` would send a message to a bot the producer
-    never named — under the wrong token, to a chat that bot may not be in. `True` is refused
-    with them: it is an `int` to Python and is not an identity anyone wrote.
+    Refused rather than read as "no bot named", which is the difference that matters: the
+    no-bot answer means *deliver through this process's own*, so a value nobody can read would
+    otherwise send a message under a token the producer did not name, into a chat that bot may
+    not be in — and neither side hears that it happened. Nothing can be inferred from it, so
+    it is dropped like any other envelope this cannot read.
     """
-    assert unpack(a_payload(bot=written)).bot_id is None
+    with pytest.raises(MalformedEnvelopeError):
+        unpack(a_payload(bot=written))
+
+
+def test_a_payload_that_names_no_bot_is_not_refused():
+    """The other half, and the one an upgrade rests on: absent is not the same as unreadable."""
+    assert unpack(a_payload()).bot_id is None
 
 
 def test_the_reader_accepts_every_version_it_understands(monkeypatch):
