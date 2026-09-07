@@ -6,7 +6,72 @@ at a time: each covers a single hop and assumes the ones below it are done.
 
 # From 4.1 to 5.0
 
-**One required step: rename `TELEGRAM_BOT` to `TELEGRAM_BOT_DEFAULTS`.** Nothing reads the old
+**Two required steps: the migration, and the rename.** Read this whole section before running
+`migrate` — one of its operations is an index on the event log, and on a large feed that is a
+decision rather than a formality.
+
+5.0 adds four tables — profiles, queues, bots and the polling lease — and a column on three
+that already had rows. A project that configures its bots in `settings.py` never writes to any
+of the four, so they stay empty. The replay claim's uniqueness moves from the correlation id
+to the pair with the bot; any claim rows you have are for failures already replayed.
+
+**Which databases.** With `EVENT_LOG_DATABASE` unset, or naming `default`, everything is on one
+and `manage.py migrate` is the whole of it. With it naming another alias, the event log lives
+there and everything else lives on `default` — the router keeps each off the other — so both
+need migrating:
+
+```shell
+python manage.py migrate                        # the tables and the columns
+python manage.py migrate --database=warehouse    # the event log's own column and index
+```
+
+**The index on the feed is the one operation that is not free.** `0007` adds it to
+`django_aiogram_event`, the one table here whose size is set by your traffic. Django builds an
+index without `CONCURRENTLY`, so on PostgreSQL that takes a lock which holds writes to the
+table for as long as the build lasts. Nothing sending is affected: the recorder buffers and
+then drops rather than making a send wait, so the cost is log rows for the duration, not
+messages.
+
+**How large is large is a question about the table, not about the setting.** Turning
+`EVENT_LOG` off stops new rows and removes none of the old ones, so ask the database that
+actually holds the feed — the log alias where you have one:
+
+```shell
+python manage.py dbshell --database=warehouse -- -c 'SELECT count(*) FROM django_aiogram_event'
+```
+
+Nothing here can tell you what that number costs on your database: this package has no
+benchmark to offer and the answer depends on your hardware, your row width and what else the
+table is doing. Decide it against your own maintenance window. If a build you can measure
+fits, take the migration as it comes.
+
+**If it does not**, stop before the index, build it by hand, and only then record it:
+
+```shell
+python manage.py migrate django_aiogram 0006                        # tables and columns
+python manage.py migrate django_aiogram 0006 --database=warehouse    # the feed's column
+```
+
+```sql
+CREATE INDEX CONCURRENTLY dja_event_bot ON django_aiogram_event (bot_id, id DESC);
+```
+
+```shell
+python manage.py migrate django_aiogram 0007 --fake --database=warehouse
+```
+
+In that order. `--fake` records the migration as applied without running it, so a
+`CREATE INDEX CONCURRENTLY` that fails after it leaves the index missing with Django believing
+it exists, and nothing will build it again. A concurrent build that fails also leaves an
+invalid index behind — `DROP INDEX dja_event_bot` and start over.
+
+The name has to match, or the next `makemigrations` will offer to create it again. **Do not
+fake `0006`** to get at this: it carries the four tables and the `bot_id` columns, and a
+deployment that skipped it would refuse every event insert. And where the feed is on a log
+alias, `0007` is faked **there** rather than on `default`, where the event table does not
+exist and the migration is a no-op anyway.
+
+**The rename.** Nothing reads the old
 name, so every value left in it is ignored and whatever it configured falls back to the
 environment or to this package's defaults — a project that kept its token there has none.
 `manage.py check` reports it as `E050` rather than leaving you to find out at the first send.

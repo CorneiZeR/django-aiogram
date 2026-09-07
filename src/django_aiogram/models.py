@@ -1,14 +1,23 @@
-"""The three tables this app ships: the append-only feed, and two pieces of operational state.
+"""The tables this app ships: the append-only feed, and the operational state around it.
 
 Django imports this on every ``django.setup()`` — before ``AppConfig.ready()``
 and regardless of ``ENABLED`` — so it may not reach aiogram, directly or
 otherwise, and may not read settings at import time.
 
-`TelegramScheduledSend` holds the sends waiting for a time: a mover claims one, publishes it
-and deletes it. `TelegramReplayClaim` is one row per failure `tgbot_replay` is putting back,
-and it exists because a unique constraint is the only thing that is atomic on all four
-databases this package supports. Both are mutable, and neither is routed to a log database of
-its own. Everything else below is about the feed.
+One is the feed. Everything else is operational state -- mutable, and none of it routed to a
+log database of its own, because a claim the software cannot enforce because the log lives in a
+warehouse would be no claim at all:
+
+* `TelegramScheduledSend`, the sends waiting for a time: a mover claims one, publishes it and
+  deletes it.
+* `TelegramReplayClaim`, one row per failure `tgbot_replay` is putting back. It exists because
+  a unique constraint is the only claim that is atomic on all four databases this package
+  supports.
+* `TelegramBotProfile`, `TelegramQueue` and `TelegramBot`, which are what a project configures
+  a bot in when it does not configure it in ``settings.py``.
+* `TelegramBotLease`, which is how two containers agree on which of them polls a bot.
+
+Everything after the feed's own class is about those. The feed itself is below.
 
 Rows are inserted and never updated. The stages of one outbound message are
 three rows sharing a ``correlation_id``: the web process writes the queued row
@@ -48,6 +57,11 @@ class TelegramEvent(models.Model):
     update_id = models.BigIntegerField(null=True, blank=True)
     # the same name the in-flight list uses, so a row points at a container
     worker = models.CharField(max_length=128, blank=True)
+    #: which bot the row is about, by the number in its token. Null for a row written before
+    #: there was more than one, and for a bot whose token has no identity to read -- `E052`
+    #: reports that. A plain column and not a relation: the feed takes no foreign keys, and
+    #: the identity outlives any row describing the bot
+    bot_id = models.BigIntegerField(null=True, blank=True)
 
     attempt = models.PositiveSmallIntegerField(default=0)
     duration_ms = models.PositiveIntegerField(null=True, blank=True)
@@ -84,6 +98,9 @@ class TelegramEvent(models.Model):
             # alike, which is what made the count's documented bound untrue
             models.Index(fields=('kind', '-id'), name='dja_event_kind_id'),
             models.Index(fields=('chat_id', '-id'), name='dja_event_chat'),
+            # by -id for the reason the kind index gives: it matches `ordering`, so a
+            # changelist filtered to one bot pages without a sort
+            models.Index(fields=('bot_id', '-id'), name='dja_event_bot'),
         )
 
     def __str__(self) -> str:
@@ -124,6 +141,11 @@ class TelegramScheduledSend(models.Model):
     function = models.CharField(max_length=64)
     #: for the admin and for a drop row; the payload is the authority
     chat_id = models.BigIntegerField(null=True, blank=True)
+    #: which bot this will go out as. The payload carries it too -- it is stamped into the
+    #: envelope where the send was written -- and this column is what a mover serving one bot
+    #: filters on. No index of its own: the mover's query is `claimed_at, due_at` and a
+    #: leading `bot_id` would not serve it, so the flag that needs one brings it
+    bot_id = models.BigIntegerField(null=True, blank=True)
     #: the envelope as `serialise` produced it, ready for `Broker.publish`
     payload = models.BinaryField()
     #: set by the mover that owns this row. A second mover skips a claimed row rather than
@@ -196,9 +218,14 @@ class TelegramReplayClaim(models.Model):
     """
 
     id = models.BigAutoField(primary_key=True)
-    #: the failure being replayed, and the whole point of the table: **unique**, so the second
-    #: run to reach it is told by the database rather than by a read it has to trust
-    correlation_id = models.UUIDField(unique=True)
+    #: the failure being replayed. Unique **with the bot**, so the second run to reach it is
+    #: told by the database rather than by a read it has to trust
+    correlation_id = models.UUIDField()
+    #: which bot's failure this is. ``0`` where there is no identity to read rather than
+    #: ``NULL``, and that is the whole of it: a unique index treats two NULLs as distinct on
+    #: every database here, so a nullable column would let two runs claim one failure and send
+    #: the message twice -- which is the one thing this table exists to prevent
+    bot_id = models.BigIntegerField(default=0)
     claimed_at = models.DateTimeField(default=timezone.now)
     #: which process holds it, so a stale claim names something an operator can look at
     claimed_by = models.CharField(max_length=128, blank=True)
@@ -211,14 +238,214 @@ class TelegramReplayClaim(models.Model):
     replacement_id = models.UUIDField(null=True, blank=True)
 
     class Meta:
-        """One row per failure, and no index beyond the one the constraint already builds."""
+        """One row per failure per bot, and no index beyond the one the constraint builds."""
 
         db_table = 'django_aiogram_replay_claim'
         ordering = ('claimed_at', 'id')
         verbose_name = 'telegram replay claim'
         verbose_name_plural = 'telegram replay claims'
+        constraints = (models.UniqueConstraint(fields=('bot_id', 'correlation_id'), name='dja_replay_claim_once'),)
 
     def __str__(self) -> str:
         """Name the row the way an admin list reads."""
         state = 'queued' if self.queued_at else 'claimed'
         return f'{state} {self.correlation_id}'
+
+
+class TelegramBotProfile(models.Model):
+    """The settings a group of bots shares, as a row a person can edit.
+
+    A profile is what :mod:`django_aiogram.runtime.profiles` computes an identity from, and
+    this is where the values come from when they are not in ``settings.py``: a project running
+    tens of bots on three configurations writes three of these and points every bot at one.
+
+    **Sparse, by key presence.** ``overrides`` holds only what this profile decides; anything
+    absent is inherited from the shared defaults. Not a column per setting and not ``NULL``
+    meaning "inherit": ``RATE_LIMIT: None`` is a value -- it switches the limits off -- and a
+    nullable column cannot say both. That is the same rule the settings dicts follow, and one
+    rule is what keeps the three levels readable.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    #: what a bot points at and an operator reads. Unique because it is the name in the bot's
+    #: row rather than a description
+    name = models.CharField(max_length=64, unique=True)
+    #: only the settings this profile decides, keyed as the settings dicts are
+    overrides = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    #: the watermark a reconciling supervisor reads: a change here is a change to every bot on
+    #: this profile, and comparing one timestamp is cheaper than resolving them all
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        """Portable everywhere: one unique name, and the timestamp a supervisor polls."""
+
+        db_table = 'django_aiogram_bot_profile'
+        ordering = ('name',)
+        verbose_name = 'telegram bot profile'
+        verbose_name_plural = 'telegram bot profiles'
+        indexes = (models.Index(fields=('-updated_at',), name='dja_profile_changed'),)
+
+    def __str__(self) -> str:
+        """Name the profile the way an admin list reads."""
+        return self.name
+
+
+class TelegramQueue(models.Model):
+    """One declared queue, and the label that says which containers serve it.
+
+    **Declared rather than conjured.** A queue a producer names and nobody consumes is where
+    messages go to be forgotten, and a typo is all it takes -- which is why Celery's
+    declare-on-publish is the one thing not copied from it. A name that is not here is refused
+    where it was written.
+
+    ``pool`` is the deployment axis and the queue name is not: a container is told which pools
+    to serve, and pools are what stay stable while the queues under them come and go with the
+    clients that need one of their own.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    #: what the transport calls it -- a Redis list key, a stream, an AMQP queue, a Kafka topic
+    name = models.CharField(max_length=255, unique=True)
+    #: which set of containers serves it. Several queues share a pool; a container is started
+    #: with the pools rather than with the queues, so a new client's queue needs no redeploy
+    pool = models.CharField(max_length=64, default='default')
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        """Portable everywhere, and one index: the set a container asks for at startup."""
+
+        db_table = 'django_aiogram_queue'
+        ordering = ('pool', 'name')
+        verbose_name = 'telegram queue'
+        verbose_name_plural = 'telegram queues'
+        indexes = (models.Index(fields=('pool',), name='dja_queue_pool'),)
+
+    def __str__(self) -> str:
+        """Name the queue and the pool it is served by."""
+        return f'{self.name} ({self.pool})'
+
+
+class TelegramBot(models.Model):
+    """One bot a project configured at run time, rather than in ``settings.py``.
+
+    What a settings section says, as a row: the token, which profile it takes its settings
+    from, which queue it publishes to, and whether it is on. A project that adds bots through
+    its own interface writes these, and a provider reads them —
+    :mod:`django_aiogram.config.bots` is where the sections live and this is the other source.
+
+    **The identity is the key, not the row's own id.** The number in front of the colon in the
+    token is what a queued message, a feed row and a log line name a bot by, so it is what
+    everything else joins on -- and it survives a token rotation, which is exactly when a row
+    changes underneath.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    #: the number in front of the colon in the token, and the only identity anything else
+    #: uses. Unique, because two rows for one bot are two configurations for one Telegram
+    #: account -- see `E051`, which reports the same thing about the settings
+    bot_id = models.BigIntegerField(unique=True)
+    #: what a person calls it: the client's name, the product's, whatever the admin shows
+    label = models.CharField(max_length=128, blank=True)
+    #: the credential, **stored as it is given**. Nothing here encrypts it, and saying so is
+    #: the point: what protects it today is the database's own access control and the
+    #: permission below, which is why that permission exists at all.
+    #:
+    #: A project that needs it encrypted at rest gets `TOKEN_STORAGE` -- a seam with an
+    #: optional implementation behind an extra, rather than a hard dependency on
+    #: `cryptography` for everyone -- and until that lands this column is plain text. Treat a
+    #: dump of this table as a dump of every bot's credential.
+    token = models.TextField(blank=True)
+    #: where its settings come from. ``None`` means the shared defaults and nothing else
+    profile = models.ForeignKey(
+        TelegramBotProfile,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name='bots',
+    )
+    #: where its messages are published. ``None`` means whatever its profile resolves to
+    queue = models.ForeignKey(
+        TelegramQueue,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name='bots',
+    )
+    #: only what this bot decides, over its profile. Sparse for the reason the profile's are
+    overrides = models.JSONField(default=dict, blank=True)
+    #: whether a supervisor should be serving it at all. The switch a person reaches for, as
+    #: against the quarantine below, which the software sets
+    enabled = models.BooleanField(default=True)
+    #: why the software stopped serving it, if it did: a revoked token, a conflict on its
+    #: updates. Empty while nothing is wrong. Set by the supervisor rather than by a person
+    quarantine_reason = models.CharField(max_length=64, blank=True)
+    #: when it may be tried again, or ``None`` for a quarantine that needs a person -- a token
+    #: Telegram has refused is not going to start working on a timer
+    quarantined_until = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    #: the watermark a reconciling supervisor polls, for the reason the profile's says
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        """Portable everywhere, and the two questions a supervisor asks."""
+
+        db_table = 'django_aiogram_bot'
+        ordering = ('label', 'bot_id')
+        verbose_name = 'telegram bot'
+        verbose_name_plural = 'telegram bots'
+        # Django's four stock permissions plus the one it has no equivalent for, exactly as the
+        # feed does for its payloads: being allowed to switch a bot off is a different question
+        # from being allowed to read the credential that sends as it
+        permissions = (('view_telegrambot_token', 'Can see bot tokens'),)
+        indexes = (
+            models.Index(fields=('-updated_at',), name='dja_bot_changed'),
+            # what a supervisor reconciles from: the bots it should be serving
+            models.Index(fields=('enabled', 'bot_id'), name='dja_bot_serving'),
+        )
+
+    def __str__(self) -> str:
+        """Name the bot the way an admin list reads, without printing the token."""
+        return f'{self.label} ({self.bot_id})'.strip() if self.label else str(self.bot_id)
+
+
+class TelegramBotLease(models.Model):
+    """Which process is serving one bot's updates, so that only one of them is.
+
+    Polling is exclusive: two processes calling ``getUpdates`` for one token get a 409 and
+    half the updates each. This is how they agree, and it is the same mechanism
+    `TelegramReplayClaim` and `producer.scheduling.claim` use for the same reason -- a
+    compare-and-set against a unique row is the only claim that is atomic on every database
+    this package supports. No ``SKIP LOCKED``, which SQLite does not have.
+
+    **A lease rather than a lock.** A process that dies holding one would otherwise strand its
+    bots for ever, so the claim expires and another process takes it. What that costs is a
+    second poller for as long as the two overlap, which Telegram answers with a 409 -- the same
+    arithmetic the mover's lease makes, and the reason the renewal interval belongs well inside
+    the lease.
+
+    Webhook deployments need none of this: an update arrives wherever the request landed.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    #: the bot being served, by its identity. Unique: that is the claim
+    bot_id = models.BigIntegerField(unique=True)
+    #: which process holds it, so a stale lease names something an operator can look at
+    holder = models.CharField(max_length=128)
+    claimed_at = models.DateTimeField(default=timezone.now)
+    #: when this lease stops being believed. Renewed well inside it by the holder; a process
+    #: that stops renewing loses its bots to whoever asks next
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        """One row per bot, and the query a process runs to find what it may take."""
+
+        db_table = 'django_aiogram_bot_lease'
+        ordering = ('bot_id',)
+        verbose_name = 'telegram bot lease'
+        verbose_name_plural = 'telegram bot leases'
+        indexes = (models.Index(fields=('expires_at',), name='dja_lease_expiry'),)
+
+    def __str__(self) -> str:
+        """Name the lease the way an operator reads it: who holds what, until when."""
+        return f'{self.bot_id} held by {self.holder} until {self.expires_at:%Y-%m-%d %H:%M:%S}'

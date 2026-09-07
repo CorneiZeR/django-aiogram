@@ -86,7 +86,7 @@ Project uses django-aiogram 4.x. Rules:
   lookup answering `unknown` with nothing to refuse.
 - `python manage.py check` validates the settings; treat its E0xx/W0xx output as
   the spec.
-- Run `python manage.py migrate` after upgrading. The package ships two tables,
+- Run `python manage.py migrate` after upgrading. The package ships tables of its own,
   created whether or not you turn the event log on.
 - bot.send() returns a correlation id. Store it next to your own model if you
   want to join your records to the event log later.

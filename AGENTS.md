@@ -14,8 +14,10 @@ onto a Redis list, and the bot container consumes it.
 src/django_aiogram/
     __init__.py     lazy exports: bot, conf, redis_conn, get_redis, __version__
     apps.py         AppConfig.ready(): checks and autodiscover, both behind ENABLED
-    models.py       TelegramEvent, the append-only feed, and TelegramScheduledSend,
-                    the sends waiting for a time; migrations/ beside it
+    models.py       the append-only feed, and the operational state around it: the
+                    schedule, the replay claim, the bots a project configures at run
+                    time with their profiles and queues, and the polling lease;
+                    migrations/ beside it
     admin.py        the read-only changelist; registered from ready(), not on import
     healthcheck.py  the container probe; must import nothing needing the app registry
     api.py          the allowlist of Telegram API method names a payload may use

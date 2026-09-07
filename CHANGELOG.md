@@ -2,6 +2,39 @@
 
 ## 5.0.0 - unreleased
 
+### Added
+
+- **Four tables, for the bots a project configures at run time rather than in `settings.py`.**
+  `TelegramBotProfile` holds the settings a group of bots shares, `TelegramQueue` a declared
+  queue and the pool that serves it, `TelegramBot` one bot -- its identity, its token, the
+  profile and queue it points at, and whether it is on -- and `TelegramBotLease` is how two
+  containers agree on which of them polls a bot.
+
+  Overrides are sparse and by key presence, the same rule the settings dicts follow: not a
+  column per setting and not `NULL` meaning "inherit", because `RATE_LIMIT: None` is a value
+  and a nullable column cannot say both.
+
+  `TelegramEvent` and `TelegramScheduledSend` gain a `bot_id` column, and the replay claim's
+  uniqueness moves from the correlation id to the pair with the bot: one id can name a message
+  from each of several bots, and the old constraint would have refused the second bot's replay
+  as already handled. That column defaults to `0` rather than being nullable, because a unique
+  index treats two NULLs as distinct on every database this package supports -- so a nullable
+  one would let two runs claim one failure and send the message twice.
+
+  **The token column stores the token as given.** Nothing encrypts it yet: what protects it is
+  the database's own access control and the `view_telegrambot_token` permission the model
+  declares, which is why that permission exists. `TOKEN_STORAGE` -- a seam, with an optional
+  implementation behind an extra rather than `cryptography` as a dependency for everyone -- is
+  what a project needing encryption at rest will reach for, and until it lands a dump of this
+  table is a dump of every bot's credential.
+
+  Nothing reads any of it until a supervisor or the admin is configured, and a project running
+  one bot from `settings.py` writes no row at all. **Run `manage.py migrate`** -- on both databases where
+  `EVENT_LOG_DATABASE` names one of its own, since the feed lives there and everything else
+  does not. The index on the feed is a migration of its own so that a large one can have it
+  built by hand: Django builds an index without `CONCURRENTLY`, and the upgrading page has the
+  order to do it in.
+
 ### Changed
 
 - **`TELEGRAM_BOT` is now `TELEGRAM_BOT_DEFAULTS`, and every bot is a section under
