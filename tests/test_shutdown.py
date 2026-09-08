@@ -464,7 +464,7 @@ def test_the_recorder_is_stopped_even_when_close_raises(monkeypatch, redis_serve
     command.idle_event.set()
 
     with pytest.raises(RuntimeError, match='close blew up'):
-        command.handle(mode='webhook', idle=False, queues='', pools='')
+        command.handle(mode='webhook', idle=False, queues='', pools='', no_updates=False, updates_only=False)
 
     assert stopped, 'the recorder was not stopped when close() raised'
 

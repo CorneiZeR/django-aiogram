@@ -1273,3 +1273,47 @@ def test_the_command_reports_a_missing_driver_instead_of_tracebacking():
 
     assert "needs the 'aiokafka' package" in str(caught.value)
     assert 'django-aiogram[kafka]' in str(caught.value)
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0', 'TOKEN': '42:x'})
+def test_a_container_with_no_consumer_by_design_is_not_unhealthy(redis_server):
+    """`start_tgbot --updates-only` runs no consumer, so no heartbeat is ever written.
+
+    Read as a fault, the probe restarts a healthy container for ever — and the container is
+    doing exactly what it was told. The transport is still read: a receiver has to *send*
+    what its handlers produce, so a queue it cannot reach is a real failure.
+    """
+    report = check(consumes=False)
+
+    assert report.ok, report.message
+    assert 'not run here' in report.message, report.message
+    assert '0 queued' in report.message
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0', 'TOKEN': '42:x'})
+def test_a_container_that_should_have_a_consumer_is_still_told_when_it_has_none(redis_server):
+    """The other half: the flag is a statement about this container, not a way to pass."""
+    report = check()
+
+    assert not report.ok, report.message
+    assert 'heartbeat' in report.message.lower(), report.message
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0', 'TOKEN': '42:x'})
+def test_the_flag_reaches_the_check_from_either_entry_point(redis_server, monkeypatch):
+    """Two forms of the probe, one contract: a compose file may use either."""
+    from django_aiogram.healthcheck import Report
+
+    asked = []
+
+    def recording(**kwargs):
+        asked.append(kwargs)
+        return Report(ok=True, message='fine')
+
+    monkeypatch.setattr('django_aiogram.healthcheck.check', recording)
+    monkeypatch.setattr('django_aiogram.management.commands.tgbot_healthcheck.check', recording)
+
+    main(['--no-consumer'])
+    call_command('tgbot_healthcheck', '--no-consumer')
+
+    assert [kwargs['consumes'] for kwargs in asked] == [False, False], asked

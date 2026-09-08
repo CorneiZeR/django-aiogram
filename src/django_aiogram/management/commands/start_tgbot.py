@@ -169,6 +169,24 @@ class Command(BaseCommand):
             ),
         )
         parser.add_argument(
+            '--no-updates',
+            action='store_true',
+            help=(
+                'consume the queues and never ask Telegram for updates. The shape a webhook '
+                'deployment wants, where updates arrive in the web tier and this process '
+                'exists to send -- and the shape a sender pool wants at any scale.'
+            ),
+        )
+        parser.add_argument(
+            '--updates-only',
+            action='store_true',
+            help=(
+                'receive updates and consume nothing. Pair it with '
+                '`tgbot_healthcheck --no-consumer`, or the probe will call a container with '
+                'no consumer in it unhealthy for not having one.'
+            ),
+        )
+        parser.add_argument(
             '--idle',
             action='store_true',
             help=(
@@ -192,8 +210,9 @@ class Command(BaseCommand):
             return
 
         mode = self._mode_for_this_run(options)
+        receives, consumes = self._roles(options)
 
-        serving = self._queues_to_serve(options)
+        serving = self._queues_to_serve(options) if consumes else ()
         one_queue = _only_its_own_queue(serving, options['pools'])
 
         def consumer_for(queue: str) -> Delivery:
@@ -212,6 +231,7 @@ class Command(BaseCommand):
             return built
 
         ready = _built_for(serving, consumer_for)
+
         # the transport's own deadline, not `REDIS_TIMEOUT`: this bounds the thread being
         # joined below, and reading it from one transport's setting meant a consumer could be
         # inside a call the join had already given up on. Measured: at `KAFKA_TIMEOUT = 45`
@@ -228,7 +248,8 @@ class Command(BaseCommand):
         # attribute is set in `Delivery.__init__`, which a double standing in for a consumer need
         # not have run. The registry is asked once per queue with that queue's settings, which
         # is the same instance each delivery holds when it has one
-        join_timeout = max(_transport_for(name).call_ceiling for name in serving) + 1
+        # 1 where nothing is consumed: there is no thread to join, and `max` of nothing raises
+        join_timeout = max((_transport_for(name).call_ceiling for name in serving), default=0.0) + 1
         consumers = Consumers(build=consumer_for, join_timeout=join_timeout, ready=ready)
 
         # Both modes: starting the consumer before the loop runs would let a
@@ -256,7 +277,8 @@ class Command(BaseCommand):
                 logger.info('not starting the consumer: the shutdown had already begun')
                 return
             consumers.reconcile(serving)
-            watch.start()
+            if consumes:
+                watch.start()
 
         # the queues are re-read while the container runs, and that is what selecting by pool
         # is *for*: a queue created for a client an hour after the deploy is served without one.
@@ -273,7 +295,13 @@ class Command(BaseCommand):
 
         try:
             with contextlib.suppress(KeyboardInterrupt, SystemExit):
-                if mode == UpdateMode.WEBHOOK:
+                if not receives:
+                    # the consumers are on their own threads, so this process has to keep a
+                    # loop turning for the sends they hand over -- exactly what webhook mode
+                    # has always done, for exactly that reason
+                    self.stdout.write('Consuming the queues; this process asks for no updates.')
+                    self._idle_on_the_loop()
+                elif mode == UpdateMode.WEBHOOK:
                     self.stdout.write('Consuming the queue; updates are expected over HTTP.')
                     self._idle_on_the_loop()
                 else:
@@ -361,6 +389,32 @@ class Command(BaseCommand):
             # installed would turn a later SIGTERM into a stray interrupt
             with contextlib.suppress(ValueError):
                 signal.signal(signal.SIGTERM, previous)
+
+    def _roles(self, options: dict[str, Any]) -> tuple[bool, bool]:
+        """Say which of the two jobs this run does, and refuse a run that does neither.
+
+        `start_tgbot` has always done both, and at scale they do not scale together: a
+        webhook deployment wants a process that only sends, a busy pool wants receivers
+        without consumers, and a small installation wants what it has always had. Which is
+        why both is the default and each flag takes one away.
+
+        A container that does neither is refused rather than started: it would sit there
+        looking alive, answering a probe, and doing nothing at all.
+        """
+        receives = not options['no_updates']
+        consumes = not options['updates_only']
+        if not receives and not consumes:
+            msg = '--no-updates and --updates-only together leave nothing for this process to do.'
+            raise CommandError(msg)
+        if not consumes:
+            self.stdout.write(
+                self.style.WARNING(
+                    'Consuming nothing: this process only receives updates. Give the probe '
+                    '`--no-consumer`, or it will call this container unhealthy for having no '
+                    'consumer in it.'
+                )
+            )
+        return receives, consumes
 
     def _mode_for_this_run(self, options: dict[str, Any]) -> str:
         """Say how updates reach this process, and warn where the flag and the setting differ."""

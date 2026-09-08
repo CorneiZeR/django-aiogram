@@ -124,6 +124,18 @@
   down, or not migrated here -- declares nothing and refuses nothing; no table at all is a
   different state, where the settings are the whole declaration.
 
+- **Receiving updates and draining the queue are two jobs, and a container can do one.**
+  `start_tgbot --no-updates` consumes and never calls `getUpdates` -- the shape a webhook
+  deployment's sender pool is -- and `--updates-only` receives and consumes nothing. Both by
+  default, which is what every installation has today; both flags together are refused,
+  because a container that does neither would sit there looking alive and doing nothing.
+
+  A receiver has no consumer in it, so nothing writes a heartbeat: `tgbot_healthcheck
+  --no-consumer` (and `python -m django_aiogram.healthcheck --no-consumer`) is how the probe
+  is told that, and without it the probe restarts a container that is doing what it was told.
+  `start_tgbot` warns at startup rather than leaving it to be discovered. The transport is
+  still read either way -- a receiver has to send what its handlers produce.
+
 - **`manage.py tgbot_prune_queues`, for the queues a client leaves behind.** A queue per
   client keeps one backlog off another's, and it is also how a deployment leaks: the client
   goes, their bot's row goes, and a Redis key, an AMQP queue or a consumer group stays for

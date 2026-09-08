@@ -643,6 +643,37 @@ only one `getUpdates` consumer per bot, and the second will fight the first for
 updates — which is what the polling lease is for: containers agree through a row,
 and `MAX_BOTS_PER_WORKER` is what splits the bots between them.
 
+### Receiving and sending are two jobs
+
+`start_tgbot` does both by default, which is what a small installation wants and what it has
+always had. At scale they do not scale together, so each half can be turned off:
+
+```shell
+manage.py start_tgbot --no-updates      # consume the queues; never call getUpdates
+manage.py start_tgbot --updates-only    # receive updates; consume nothing
+```
+
+- **`--no-updates`** is the sender: the shape a webhook deployment wants, where updates arrive
+  in the web tier and this process exists to send, and the shape a sender pool wants at any
+  scale. A loop still turns in it, because the consumers hand their sends to one.
+- **`--updates-only`** is the receiver. Give its probe `--no-consumer` as well:
+
+  ```shell
+  manage.py tgbot_healthcheck --no-consumer
+  # the module form reads the settings itself, so it needs the variable `manage.py` sets
+  DJANGO_SETTINGS_MODULE=core.settings python -m django_aiogram.healthcheck --no-consumer
+  ```
+
+  Without it the probe asks whether a consumer is turning, finds no heartbeat — nothing in that
+  container writes one — and restarts a container that is doing exactly what it was told. The
+  transport is still read either way: a receiver has to *send* what its handlers produce, so a
+  queue it cannot reach is a real failure. The command warns about this at startup.
+- Both flags together are refused: a container that neither receives nor consumes would sit
+  there looking alive, answering the probe, and doing nothing.
+
+Shutdown is unchanged — whatever is running stops together, and the at-least-once guarantee
+holds across the halves, which is why `close()` and the drain stay one story.
+
 ### One container, several queues
 
 A queue is the isolation boundary: give a client one of their own and their
