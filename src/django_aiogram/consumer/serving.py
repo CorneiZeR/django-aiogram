@@ -55,7 +55,7 @@ class Consumers:
         #: finished: the sends drained on the way out report themselves into a queue only
         #: their own consumer reads, and a consumer dropped at `stop` takes those with it --
         #: every message the drain delivered would be sent again by the next container
-        self._stopped: dict[str, Delivery] = {}
+        self._stopped: list[tuple[str, Delivery, threading.Thread]] = []
         #: set by `stop`, and never cleared: a pass can be inside a database read when the
         #: shutdown begins, and one that came back afterwards would start a daemon consumer
         #: behind the joins -- doing transport work while `bot.close()` runs, with nothing
@@ -78,9 +78,13 @@ class Consumers:
                 logger.info('not reconciling the queues: the shutdown had already begun')
                 return
             for queue in [held for held in self.running if held not in asked]:
-                # settled here rather than kept: this is a queue that went away while the
-                # container runs, so nothing later in this process will collect for it
-                self._stop(queue).collect()
+                # settled here where the thread has actually gone, and kept where it has not:
+                # this is a queue that went away while the container runs, so nothing later
+                # would collect for it -- but `collect` on a consumer whose thread is still
+                # inside `run` would be two threads settling one in-flight list and calling
+                # one transport
+                self._stopped.append((queue, *self._stop(queue)))
+            self._settle_what_has_stopped()
             for queue in asked:
                 if queue in self.running:
                     continue
@@ -110,7 +114,7 @@ class Consumers:
         with self._lock:
             self._done = True
             for queue in list(self.running):
-                self._stopped[queue] = self._stop(queue)
+                self._stopped.append((queue, *self._stop(queue)))
             for consumer in self._ready.values():
                 consumer.stop()
 
@@ -118,20 +122,46 @@ class Consumers:
         """Let every consumer settle what its sends finished, after the bot has been closed.
 
         Including the ones never started, for the reason :meth:`stop` gives: what a built
-        consumer reclaimed is in its in-flight list, and only it can settle it.
+        consumer reclaimed is in its in-flight list, and only it can settle it. A consumer
+        whose thread is *still running* is not settled from here -- see
+        :meth:`_settle_what_has_stopped`.
         """
         with self._lock:
             for consumer, _ in self.running.values():
                 consumer.collect()
-            for consumer in (*self._stopped.values(), *self._ready.values()):
+            for consumer in self._ready.values():
                 consumer.collect()
+            self._settle_what_has_stopped()
 
-    def _stop(self, queue: str) -> 'Delivery':
-        """Stop one consumer, wait out its thread, and hand it back for settling.
+    def _settle_what_has_stopped(self) -> None:
+        """Settle every stopped consumer whose thread has actually exited, and forget it.
 
-        Dropped even where the thread outlives the join: a consumer this container believes it
-        is running and is not is the state nothing recovers from without a restart, and the
-        warning is what an operator has instead.
+        The aliveness check is the whole of this. `Delivery.collect` drains the queue its own
+        consumer thread writes to and touches the transport, so calling it while that thread
+        is still inside ``run`` is two threads settling one in-flight list -- a count that
+        drifts, and two callers on one connection. A thread that outlived its join is left
+        with its consumer and tried again by the next pass; on the way out it is what the
+        warning in :meth:`_stop` is about.
+
+        Held under the caller's lock.
+        """
+        for entry in list(self._stopped):
+            queue, consumer, thread = entry
+            if thread.is_alive():
+                continue
+            self._stopped.remove(entry)
+            try:
+                consumer.collect()
+            except Exception:
+                logger.exception('could not settle a stopped consumer', extra={'tg_queue': queue})
+
+    def _stop(self, queue: str) -> 'tuple[Delivery, threading.Thread]':
+        """Stop one consumer, wait out its thread, and hand both back for settling.
+
+        Dropped from the running set even where the thread outlives the join: a consumer this
+        container believes it is running and is not is the state nothing recovers from without
+        a restart, and the warning is what an operator has instead. The thread comes back with
+        it because whether it is still turning decides whether anything may settle it.
         """
         consumer, thread = self.running.pop(queue)
         consumer.stop()
@@ -143,7 +173,7 @@ class Consumers:
                 'the delivery consumer did not stop in time',
                 extra={'tg_queue': queue, 'tg_timeout': self.join_timeout},
             )
-        return consumer
+        return consumer, thread
 
     def consumers(self) -> 'tuple[Delivery, ...]':
         """Every consumer running now, for a caller that has to reach all of them."""

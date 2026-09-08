@@ -262,3 +262,54 @@ def test_a_startup_that_fails_part_way_settles_what_it_had_already_built():
             command_module.get_delivery = original
 
     assert log == [('stopped', 'client-1'), ('collected', 'client-1')], log
+
+
+def test_a_consumer_whose_thread_outlived_the_join_is_not_settled_from_here(caplog):
+    """`collect` drains the queue that consumer's own thread writes to, and calls the transport.
+
+    Called while the thread is still inside `run`, that is two threads settling one in-flight
+    list and two callers on one connection: the count drifts and the broker is reached across
+    the boundary every Redis call in this package is kept on one side of.
+    """
+    log = []
+
+    class StillTurning(Fake):
+        """A consumer whose thread does not stop when it is asked to."""
+
+        def start_thread(self):
+            """Hand back a thread that never finishes."""
+            self.log.append(('started', self.queue))
+            self.thread = _Alive()
+            return self.thread
+
+    stuck = StillTurning('vip', log)
+    consumers = Consumers(build=lambda queue: stuck, join_timeout=0.01)
+    consumers.reconcile(['vip'])
+
+    with caplog.at_level('WARNING', logger='django_aiogram'):
+        consumers.reconcile([])
+
+    assert log == [('started', 'vip'), ('stopped', 'vip')], 'the live thread was collected anyway'
+    assert 'the delivery consumer did not stop in time' in caplog.text
+
+    # and once that thread has gone, the next reach settles it: nothing else in this process
+    # would, so the consumer is kept rather than dropped
+    stuck.thread.alive = False
+    consumers.collect()
+
+    assert ('collected', 'vip') in log, 'what it held was never settled once its thread had gone'
+
+
+class _Alive:
+    """A thread that never finishes until a case says it has."""
+
+    def __init__(self):
+        """Start out still turning, which is what a blocking read looks like."""
+        self.alive = True
+
+    def join(self, timeout=None):
+        """Return without waiting; whether it ended is `alive`'s answer."""
+
+    def is_alive(self):
+        """Say whether this thread is still turning."""
+        return self.alive
