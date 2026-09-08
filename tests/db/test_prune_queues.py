@@ -12,6 +12,7 @@ from django.test import override_settings
 
 from django_aiogram.models import TelegramBot, TelegramQueue
 from django_aiogram.runtime import groups
+from django_aiogram.testing import InMemoryBroker
 
 pytestmark = pytest.mark.django_db
 
@@ -171,12 +172,24 @@ def test_a_bot_pointed_at_the_queue_while_the_run_was_going_is_the_answer():
     assert broker_for('gone').depth() == 1, "a live client's messages were thrown away"
 
 
+class KeepsItsQueues(InMemoryBroker):
+    """A transport that cannot remove its own queues, which is what Kafka is.
+
+    Stood in for rather than named, because Kafka's driver is an extra and the database legs
+    of CI do not install it -- and what is being tested is the *capability*, which is answered
+    without reaching anything.
+    """
+
+    @property
+    def removes_queues(self) -> bool:
+        """Say it cannot, the way the base contract does."""
+        return False
+
+
 @override_settings(
     TELEGRAM_BOT_DEFAULTS={
-        'BROKER': 'django_aiogram.broker.kafka.KafkaBroker',
-        'KAFKA_BOOTSTRAP': 'localhost:9092',
-        'KAFKA_TOPIC': 'gone',
-        'TOKEN': '123456:AAaa',
+        **MEMORY,
+        'BROKER': 'tests.db.test_prune_queues.KeepsItsQueues',
         'QUEUES': ('gone',),
     }
 )
