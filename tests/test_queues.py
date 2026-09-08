@@ -239,3 +239,32 @@ def test_naming_the_queue_the_settings_already_name_asks_nothing_of_a_consumer()
     # read as text rather than as pools, ' , ' is a pool nobody asked for: the flag is split
     # the same way everywhere it is read, so an empty one is empty here too
     assert _only_its_own_queue(('vip',), ' , ')
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={
+        'BROKER': 'django_aiogram.broker.kafka.KafkaBroker',
+        'KAFKA_BOOTSTRAP': 'kafka:9092',
+        'KAFKA_TOPIC': 'everybody',
+        'KAFKA_GROUP': 'ours',
+        'QUEUES': ('vip',),
+    }
+)
+def test_a_consumer_for_one_queue_is_given_the_transport_own_options_too():
+    """A transport's options are not in `DEFAULTS`, and a broker without them cannot be built.
+
+    `KAFKA_BOOTSTRAP` has no default -- it is `REQUIRED` -- so a mapping that dropped it makes
+    the first call raise rather than reach a cluster: a container told `--queues vip` on Kafka,
+    RabbitMQ or Redis Streams could not serve that queue at all. Measured while writing the
+    prune command, which reaches for the same mapping.
+    """
+    from django_aiogram.broker.kafka import KafkaBroker
+    from django_aiogram.runtime.queues import settings_for
+
+    served = settings_for('vip')
+
+    assert served['KAFKA_BOOTSTRAP'] == 'kafka:9092'
+    assert served['KAFKA_GROUP'] == 'ours'
+    built = KafkaBroker.configured(served)
+    assert built.addressed() == 'vip', 'the queue asked for did not reach the transport'
+    assert built.opt('KAFKA_BOOTSTRAP') == 'kafka:9092'

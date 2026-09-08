@@ -442,6 +442,76 @@ class RedisStreamsBroker(Broker):
 
     # ---------------------------------------------------------------- operations
 
+    @property
+    def removes_queues(self) -> bool:
+        """A stream and its group are this package's own, so it can remove them."""
+        return True
+
+    def discard(self, *, if_empty: bool = False) -> bool:
+        """Delete this stream, which takes its consumer group and every pending entry with it.
+
+        One key rather than a group teardown followed by a delete: a group belongs to its
+        stream, so `DEL` is what removes both -- and doing it the other way round leaves a
+        window where the stream exists with nothing able to read it.
+
+        Under ``if_empty`` the length *and* the group's pending list are read under ``WATCH``
+        and the delete runs in a transaction: an entry that was added or claimed in between
+        aborts it, and the answer is that the stream was not empty. Pending matters as much as
+        length -- an entry a consumer holds and has not acknowledged is a message somebody is
+        still sending.
+        """
+        if not if_empty:
+            self._forget_local_state()
+            self._redis().delete(self._key())
+            return True
+        return self._discarded_if_empty()
+
+    @staticmethod
+    def _watch_error() -> type[Exception]:
+        """Return the driver's class for a watched key that changed, when it is needed."""
+        from redis import WatchError  # noqa: PLC0415 - the driver is an extra, imported on use
+
+        return WatchError
+
+    def _discarded_if_empty(self) -> bool:
+        """Delete the stream only while it holds nothing, waiting or pending."""
+        key = self._key()
+        with self._redis().pipeline() as pipe:
+            try:
+                # untyped in redis-py's stubs, and the call is the whole mechanism here
+                pipe.watch(key)  # type: ignore[no-untyped-call]
+                if pipe.xlen(key) or self._pending_count(pipe, key):
+                    return False
+                pipe.multi()
+                pipe.delete(key)
+                pipe.execute()
+            except self._watch_error():
+                # an entry arrived or was claimed while this was deciding, so the stream was
+                # not empty after all -- which is what the caller is told
+                return False
+        self._forget_local_state()
+        return True
+
+    def _pending_count(self, connection: 'Redis', key: str) -> int:
+        """How many entries this stream's group has handed out and not had acknowledged."""
+        try:
+            summary = connection.xpending(key, self._group())
+        except Exception:  # noqa: BLE001 - no group is no pending, and every other failure too
+            return 0
+        return int(summary['pending']) if isinstance(summary, dict) else int(summary[0] or 0)
+
+    def _forget_local_state(self) -> None:
+        """Forget what this instance knew about a stream that no longer exists.
+
+        A group is cached per profile, so the same broker object outlives the stream: left
+        alone, `_ready` still says the group was created and the next `take` sends
+        ``XREADGROUP`` against a group that is gone -- `NOGROUP`, on every read, for the life
+        of the process.
+        """
+        self._ready = False
+        self._recovered_upto = '0'
+        self._unsettled.clear()
+
     def reclaim(self) -> int | None:
         """Claim every entry idle longer than the liveness TTL, and say how many.
 

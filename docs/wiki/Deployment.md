@@ -224,6 +224,40 @@ a person, after an incident, with `--dry-run` first — see
 **[Troubleshooting](Troubleshooting.md#telegram-was-down-what-did-we-lose-and-can-it-be-sent-again)**.
 Scheduling it would mean re-sending failures nobody has looked at.
 
+`manage.py tgbot_prune_queues` is the fourth, and it is on neither list because that depends
+on your `REMOVED_QUEUE_POLICY`. A queue per client is what keeps one client's backlog off
+another's, and it is also how a deployment leaks: a client goes, their bot's row goes, and a
+Redis key, an AMQP queue or a consumer group stays for ever. The command finds the queues no
+bot points at and does what the policy says:
+
+| policy | what happens |
+| --- | --- |
+| `park` (default) | the queue is reported and nothing is removed. An operator decides, which is right where a client may come back and the messages may still be worth reading |
+| `hold` | the queue is removed once it is empty, and reported while it is not |
+| `drop` | the queue is removed, with whatever is still in it |
+
+Under `park` it is safe to schedule and tells you what is accumulating; under `drop` it
+deletes, so run it by hand or schedule it knowing that. `--dry-run` says what would happen,
+`--queue` bounds a run to the queues you name — and a name is refused rather than skipped
+where a bot still points at it *or* where no row has it at all: filtered out, a typo would
+look like a cleanup that completed while the queue you meant is still there. A bot that is merely **switched off still counts**: a client paused for a
+month has not given up their backlog.
+
+Under `hold` the transport decides emptiness in **one step** — the read and the delete
+together — because a producer can publish between a depth read and a delete, and a caller
+that checked for itself would delete the message it had just been told about. A message a
+consumer has *taken and not settled* counts as held: somebody is still sending it.
+
+Two transports say they cannot prove that, and say so rather than guessing:
+
+- **Kafka** cannot remove a queue at all. Deleting a topic is an administrative act against
+  the cluster, not something a producer may take, so the line names the topic for whoever owns
+  it — under every policy, and without reaching the cluster to find out.
+- **RabbitMQ** refuses `hold` only. AMQP's own `if_empty` counts *ready* messages, so a queue
+  whose one message is an unacknowledged delivery in another container reads as empty and
+  would be deleted with the message; nothing here can see that delivery. Use `drop` when you
+  know what is sending.
+
 From cron, or as a container of its own:
 
 ```yaml

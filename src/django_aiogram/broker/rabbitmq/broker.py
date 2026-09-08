@@ -287,6 +287,30 @@ class RabbitMQBroker(Broker):
 
     # ---------------------------------------------------------------- operations
 
+    @property
+    def removes_queues(self) -> bool:
+        """An AMQP queue is a server object this package declared, so it can delete it."""
+        return True
+
+    def discard(self, *, if_empty: bool = False) -> bool:
+        """Delete this queue on the server, with whatever is still in it.
+
+        Unconditionally under `drop`, because the caller has already decided:
+        `tgbot_prune_queues` names the policy that got here, and a queue nothing publishes to
+        is not made safer by keeping the messages nobody will read.
+
+        **Refused under ``if_empty``**, and that refusal is the honest answer rather than a
+        gap. AMQP's own ``if_empty`` counts *ready* messages, so a queue whose only message is
+        an unacknowledged delivery in another container reads as empty and is deleted -- the
+        message going with it. Nothing here can see that delivery: it belongs to another
+        connection, and the broker reports no unacked count per queue. So `hold` reports the
+        queue as still held and an operator uses `drop` when they know what is sending.
+        """
+        if if_empty:
+            return False
+        self._channel().queue_delete(queue=self._queue())
+        return True
+
     def reclaim(self) -> int | None:
         """``None``: the broker does this itself, so there is nothing for a restart to do.
 

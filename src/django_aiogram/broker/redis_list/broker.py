@@ -15,13 +15,28 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from django_aiogram.broker.base import Broker
 from django_aiogram.broker.models import Liveness, Taken
 from django_aiogram.eventlog.events import worker_identity
-from django_aiogram.redis import aget_redis, as_bytes, as_command_argument, get_redis, heartbeat_key, heartbeat_ttl
+from django_aiogram.redis import (
+    _escaped,
+    aget_redis,
+    as_bytes,
+    as_command_argument,
+    get_redis,
+    heartbeat_key,
+    heartbeat_ttl,
+)
 
 if TYPE_CHECKING:
     from redis import Redis
     from redis.asyncio import Redis as AsyncRedis
 
 logger = logging.getLogger('django_aiogram')
+
+
+def _watch_error() -> type[Exception]:
+    """Return the driver's class for a watched key that changed, fetched when it is needed."""
+    from redis import WatchError  # noqa: PLC0415 - the driver is an extra; see the note above
+
+    return WatchError
 
 
 def _response_error() -> type[Exception]:
@@ -190,6 +205,66 @@ class RedisListBroker(Broker):
         send, and inventing one would mean pushing the payload back and creating a second
         copy of a message that never left.
         """
+
+    @property
+    def removes_queues(self) -> bool:
+        """A list and its derived keys are this package's own, so it can remove them."""
+        return True
+
+    def discard(self, *, if_empty: bool = False) -> bool:
+        """Delete this queue, every worker's in-flight list for it, and their heartbeats.
+
+        All of them, because each is derived from the queue's own name: leaving the in-flight
+        lists behind would leave the messages a dead worker held, which is the state
+        `tgbot_reclaim` exists for and nothing will ever reclaim for a queue nobody serves.
+
+        **The two derived shapes by name, not everything under the prefix.** A queue name may
+        contain a colon, so `client` and `client:archive` can both be declared -- and Redis
+        reads a colon as ordinary text, so a scan for `client:*` matches the *other queue's
+        own list*. Deleting that would destroy a live client's messages, which is why this
+        asks for `:processing:*` and `:heartbeat:*` and nothing wider.
+
+        Under ``if_empty`` the read and the delete are one step: ``WATCH`` on every key, the
+        lengths read inside it, and the delete in a transaction that fails if anything
+        changed -- so a message published or taken in between costs a retry rather than the
+        message.
+        """
+        connection = self._redis()
+        queue = self._queue()
+        pattern = _escaped(queue)
+        derived = [
+            *connection.scan_iter(match=f'{pattern}:processing:*', count=100),
+            *connection.scan_iter(match=f'{pattern}:heartbeat:*', count=100),
+        ]
+        if not if_empty:
+            connection.delete(queue, *derived)
+            return True
+        return self._discarded_if_empty(connection, queue, derived)
+
+    @staticmethod
+    def _discarded_if_empty(connection: 'Redis', queue: str, derived: list[Any]) -> bool:
+        """Delete the queue and its derived keys only while every one of them is empty.
+
+        The lists are watched, so a publish or a take between the read and the delete aborts
+        the transaction: the answer is then "not empty", which is the truth by the time it is
+        given. A heartbeat is not a message and is not counted -- it is a key a live consumer
+        keeps warm, and a queue nothing publishes to has none for long.
+        """
+        holding = [queue, *[key for key in derived if b':processing:' in as_bytes(key)]]
+        with connection.pipeline() as pipe:
+            try:
+                # untyped in redis-py's stubs, and the call is the whole mechanism here
+                pipe.watch(*holding)  # type: ignore[no-untyped-call]
+                if any(pipe.llen(key) for key in holding):
+                    return False
+                pipe.multi()
+                pipe.delete(queue, *derived)
+                pipe.execute()
+            except _watch_error():
+                # somebody published or took a message while this was deciding, so the queue
+                # was not empty after all -- which is what the caller is told
+                return False
+            return True
 
     # ---------------------------------------------------------------- operations
 

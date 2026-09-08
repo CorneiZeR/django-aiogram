@@ -449,6 +449,41 @@ class Broker(ABC):
         """
         return False
 
+    @property
+    def removes_queues(self) -> bool:
+        """Whether this transport can remove the queue it addresses, without doing it.
+
+        Asked before anything is decided -- by a dry run, which has to say what a real one
+        would do, and by the reporting either side of it. `discard` answering ``False`` is the
+        same fact discovered the expensive way, and a dry run may not discover anything.
+        """
+        return False
+
+    def discard(self, *, if_empty: bool = False) -> bool:  # noqa: ARG002 - the contract's, see below
+        """Remove the queue this broker addresses, and say whether it was removed.
+
+        ``if_empty`` asks for it to be removed **only if nothing is in it**, waiting or taken,
+        and to be a single step: a producer can publish between a depth read and a delete, so
+        a caller that checked first would delete the message it had just been told about. A
+        transport that cannot make that one step says ``False`` rather than guessing, and the
+        queue is reported as still held.
+
+        For a queue nothing publishes to any more: a client's bot was deleted, their queue
+        went with it, and what it leaves behind is a Redis key, an AMQP queue or a consumer
+        group that nothing will ever read. Left alone, that is how a deployment serving a
+        client per queue leaks -- one artefact per client that ever existed.
+
+        **Only what this package created**, and only where the transport can say so. A broker
+        that cannot -- Kafka, where deleting a topic is an administrative act against the
+        cluster and not a producer's to take -- answers ``False`` and leaves it to whoever
+        owns that cluster. ``False`` is not a failure: it is *this transport does not do
+        this*, and the caller reports it as a queue an operator has to remove by hand.
+
+        Nothing calls this on its own. `manage.py tgbot_prune_queues` does, because removing a
+        queue is not something a signal handler in a web request may decide.
+        """
+        return False
+
     def close(self) -> None:
         """Release whatever this broker holds.
 

@@ -164,6 +164,30 @@ class InMemoryBroker(Broker):
                 self._ready.notify_all()
             return count
 
+    @property
+    def removes_queues(self) -> bool:
+        """It can: a memory queue is its contents, and it owns them."""
+        return True
+
+    def discard(self, *, if_empty: bool = False) -> bool:
+        """Throw away everything this queue holds, waiting and taken alike.
+
+        A memory queue *is* its contents, so removing it is emptying it -- there is no key to
+        delete and nothing outside this instance to tell. Answering ``True`` is what lets a
+        project's own tests exercise `manage.py tgbot_prune_queues` at all.
+
+        ``if_empty`` is exact here and needs no transaction: the lock this holds is the same
+        one a publish and a take take, so nothing can arrive between the read and the throwing
+        away. **Taken counts as held** -- a message somebody is still sending is not an empty
+        queue, which is the distinction the Redis transports go to a ``WATCH`` for.
+        """
+        with self._ready:
+            if if_empty and (self._waiting or self._inflight):
+                return False
+            self._waiting.clear()
+            self._inflight.clear()
+        return True
+
     def depth(self) -> int:
         """How many are waiting to be taken."""
         with self._ready:

@@ -29,6 +29,7 @@ from django_aiogram.config.bots import defaults_record, records
 from django_aiogram.config.checks.bot import (
     MODE_CHOICES,
     PAYLOAD_CHOICES,
+    QUEUE_POLICY_CHOICES,
     SERIALIZER_CHOICES,
     _a_declared_queue,
     _a_lease_a_pass_can_renew,
@@ -152,6 +153,7 @@ CHECKS: tuple[Check, ...] = (
     Check('E044', 'DRAIN_TIMEOUT', partial(_a_number, minimum=0)),
     Check('E045', 'MAX_IN_FLIGHT', partial(_an_integer, minimum=0)),
     Check('E060', 'MAX_IN_FLIGHT_PER_BOT', partial(_an_integer, minimum=0)),
+    Check('E061', 'REMOVED_QUEUE_POLICY', partial(_a_string, allowed=QUEUE_POLICY_CHOICES), process=True),
     Check('W012', 'MAX_IN_FLIGHT_PER_BOT', _a_bound_on_what_is_held),
     Check('E046', 'REQUIRE_CRASH_SAFE', _a_readable_boolean),
     Check('W005', 'EVENT_LOG', _somewhere_to_write_the_log),

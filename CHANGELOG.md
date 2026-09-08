@@ -124,6 +124,31 @@
   down, or not migrated here -- declares nothing and refuses nothing; no table at all is a
   different state, where the settings are the whole declaration.
 
+- **`manage.py tgbot_prune_queues`, for the queues a client leaves behind.** A queue per
+  client keeps one backlog off another's, and it is also how a deployment leaks: the client
+  goes, their bot's row goes, and a Redis key, an AMQP queue or a consumer group stays for
+  ever -- one per client that ever existed. The command finds the queues no bot points at and
+  obeys `REMOVED_QUEUE_POLICY`: `park` (the default) reports and removes nothing, `hold`
+  removes once empty, `drop` removes with whatever is still in it. `--dry-run` and `--queue`
+  bound a run, and a queue a bot still points at is refused rather than skipped -- a bot
+  switched off still counts, because a client paused for a month has not given up their
+  backlog.
+
+  Under `hold` the transport decides emptiness in one step -- the Redis transports watch their
+  keys and delete in a transaction, the memory one holds the lock a publish would need -- and a
+  taken-but-unsettled message counts as held. RabbitMQ refuses `hold` and says why: AMQP's own
+  `if_empty` counts ready messages only, so a queue whose one message is an unacknowledged
+  delivery elsewhere would be deleted with it. The row is locked and its bots re-read in the
+  transaction that deletes, because a client's bot can be pointed at the queue in the seconds
+  since the candidates were chosen.
+
+  A command rather than a signal: removing a queue is destructive, and a `post_delete`
+  receiver in a web request is the wrong place to decide it. `Broker.discard()` is the seam --
+  implemented for the Redis list (with every worker's in-flight list and heartbeat for that
+  queue), Redis Streams and RabbitMQ, and answering `False` on Kafka, where dropping a topic
+  is the cluster's decision rather than a producer's. A transport of your own inherits `False`
+  and is never removed by accident.
+
 - **Two containers over one set of bots split them, and neither polls the other's.**
   `getUpdates` is exclusive -- two processes calling it for one token get a 409 and half the
   updates each -- and with bots arriving at run time there is no deploy-time list to divide
@@ -174,7 +199,7 @@
 
   Settings the process owns rather than a bot -- `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`,
   `FSM_STORAGE`, `BOT_PROVIDERS`, `BOT_REFRESH_INTERVAL`, `MAX_BOTS_PER_WORKER`,
-  `BOT_LEASE_SECONDS`, `QUEUES`, `EVENT_LOG` and every `EVENT_LOG_*` one -- may not be set per bot. `ENABLED` is not one of
+  `BOT_LEASE_SECONDS`, `QUEUES`, `REMOVED_QUEUE_POLICY`, `EVENT_LOG` and every `EVENT_LOG_*` one -- may not be set per bot. `ENABLED` is not one of
   them: a bot may be switched off on its own. There is one writer thread and one
   in-flight list per process, so a per-bot value could only mean whichever bot resolved last
   wins. `E053` reports the attempt.

@@ -36,6 +36,24 @@ class UpdateMode(str, Enum):
 
 
 @unique
+class RemovedQueuePolicy(str, Enum):
+    """What becomes of a queue no bot publishes to any more.
+
+    A queue per client is what keeps one client's backlog off another's, and it is also how a
+    deployment leaks: one Redis key, AMQP queue or consumer group per client that ever
+    existed. These are the three answers, and the default is the one that destroys nothing.
+    """
+
+    #: leave it, and report it. An operator decides -- which is right where a client may come
+    #: back, and where the messages in it may still be worth reading
+    PARK = 'park'
+    #: remove it once it is empty, and report it while it is not
+    HOLD = 'hold'
+    #: remove it, with whatever is still in it
+    DROP = 'drop'
+
+
+@unique
 class SerializationTag(str, Enum):
     """Keys that mark a decoded JSON object as something richer than a mapping."""
 
