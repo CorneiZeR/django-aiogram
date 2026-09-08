@@ -606,7 +606,50 @@ acknowledged and logged either way, never redelivered for ever. See
 
 Do not run two containers polling the **same token**, though. Telegram allows
 only one `getUpdates` consumer per bot, and the second will fight the first for
-updates.
+updates — which is what the polling lease is for: containers agree through a row,
+and `MAX_BOTS_PER_WORKER` is what splits the bots between them.
+
+### One container, several queues
+
+A queue is the isolation boundary: give a client one of their own and their
+backlog is theirs. A container is then told which queues to consume, the way
+Celery's worker is told with `-Q`:
+
+```shell
+manage.py start_tgbot --queues default,vip
+manage.py start_tgbot --pools vip
+```
+
+- **`--queues`** names them. Each has to be declared, in
+  `TELEGRAM_BOT_DEFAULTS['QUEUES']` or as a `TelegramQueue` row; a name that is
+  not is refused rather than consumed, because a container reading a queue
+  nobody publishes to looks healthy and delivers nothing. The exception is a
+  database that could not be *read* — down, or not migrated here: the table's
+  answer is then unknown, so nothing is refused and the container serves what it
+  was told. A deployment with no database at all is not that case, and its
+  settings are the whole declaration.
+- **`--pools`** names the *labels* on those rows instead, and that is the one
+  Celery has no equivalent for: a queue created after this container started is
+  served with no redeploy, which is what enumeration cannot do when clients
+  arrive at run time. No globs — a glob would include a queue by the accident of
+  its name. A pool that holds no queues refuses the run.
+
+  Re-read every `BOT_REFRESH_INTERVAL` while the container runs, which is what
+  makes "no redeploy" true: a queue added to a pool starts being consumed within
+  that interval, and one moved out of it stops. A pass that could not read the
+  table leaves the consumers as they are, and one queue that cannot be consumed
+  is one queue — the container keeps serving the rest, and the next pass tries it
+  again.
+- Given both, the container serves the union, each queue once.
+- Given neither, it serves the one queue its settings name, which is every
+  deployment before 5.0.
+
+**One consumer per queue, each with its own transport and its own
+`MAX_IN_FLIGHT`.** That is the point rather than an implementation detail: a
+backlog on one queue is a backlog on one queue. The cost is a connection and a
+thread per queue — the transports that could multiplex several queues over one
+connection do not do so yet, so a container serving twenty queues holds twenty
+connections. Serve them from a few containers by pool rather than all from one.
 
 ## Not using containers
 

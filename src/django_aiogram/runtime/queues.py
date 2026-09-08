@@ -27,12 +27,14 @@ from typing import TYPE_CHECKING
 from django.core.exceptions import ImproperlyConfigured
 from django.db import DatabaseError
 
+from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.settings import SETTINGS_NAME, conf
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterable, Mapping
+    from typing import Any
 
-__all__ = ('declaration', 'declared', 'named', 'refuse_undeclared')
+__all__ = ('declaration', 'declared', 'named', 'refuse_undeclared', 'served_by', 'settings_for')
 
 logger = logging.getLogger('django_aiogram')
 
@@ -119,3 +121,76 @@ def refuse_undeclared(settings: 'Mapping[str, object] | None' = None) -> None:
         'declares is one nothing consumes, and a message published to it is lost quietly.'
     )
     raise ImproperlyConfigured(msg)
+
+
+def in_pools(pools: 'Iterable[str]') -> tuple[str, ...]:
+    """Return the declared queues whose pool is one of these, in a stable order.
+
+    A pool is the label a queue is *served* by, and selecting on it is what a deployment with
+    clients arriving at run time needs: a container started with a pool serves a queue created
+    after it started, with no redeploy and no glob -- a glob would include a queue by the
+    accident of its name.
+    """
+    wanted = {str(pool).strip() for pool in pools if str(pool).strip()}
+    if not wanted:
+        return ()
+    try:
+        from django_aiogram.models import TelegramQueue  # noqa: PLC0415 - the ORM, deferred
+
+        rows = TelegramQueue.objects.filter(pool__in=sorted(wanted)).order_by('name')
+        return tuple(rows.values_list('name', flat=True))
+    except DatabaseError:
+        # a pool is a table's answer and nothing else's, so an unreadable table means this
+        # container was asked to serve a set nobody can tell it. Raised rather than read as
+        # empty: a consumer serving no queues looks healthy and delivers nothing
+        logger.exception('could not read the queues in the pools this container was asked to serve')
+        raise
+
+
+def served_by(queues: 'Iterable[str] | None' = None, pools: 'Iterable[str] | None' = None) -> tuple[str, ...]:
+    """Return the queues one container serves, from what it was told and what is declared.
+
+    Three answers, in this order: the queues named, the queues in the pools named, and -- when
+    neither was given -- the process's own single queue, which is what every deployment before
+    this had. Named and pooled together are a union, because a container serving a pool plus
+    one queue by name is the shape a migration between pools takes.
+
+    A name nothing declares is refused here rather than consumed as an empty queue: a
+    container consuming a queue nobody publishes to is a container that looks healthy and
+    delivers nothing, which is the same failure the publish side refuses.
+    """
+    asked = [str(name).strip() for name in (queues or ()) if str(name).strip()]
+    wanted_pools = [str(pool).strip() for pool in (pools or ()) if str(pool).strip()]
+    if not asked and not wanted_pools:
+        # told nothing, which is every deployment before there were several queues
+        return (named(),)
+    # *told* nothing is not the same as *resolving* to nothing: a pool that holds no queues
+    # comes back empty here, and the caller refuses the run rather than consuming the
+    # process's own queue instead -- which would be a container serving somebody else's work
+    from_pools = in_pools(wanted_pools)
+    known, readable = declaration()
+    if readable:
+        unknown = sorted({name for name in asked if name not in known})
+        if unknown:
+            msg = (
+                f'These queues are not declared: {", ".join(unknown)}. '
+                f'Declared: {", ".join(sorted(known)) or "none"}. '
+                f'Add them to {SETTINGS_NAME}["QUEUES"] or to the TelegramQueue table -- a '
+                'container consuming a queue nothing publishes to looks healthy and delivers nothing.'
+            )
+            raise ImproperlyConfigured(msg)
+    # the order asked for first, then the pools', and each queue once: a container told
+    # `--queues vip --pools vip` serves `vip` once, not twice
+    ordered = list(dict.fromkeys([*asked, *from_pools]))
+    return tuple(ordered)
+
+
+def settings_for(queue: str) -> 'dict[str, Any]':
+    """Return the process's settings with one queue named, for a consumer of that queue.
+
+    A plain dict rather than the settings object: it is read as a mapping by the transport and
+    by the profile, and both of those are given whatever a bot's resolution produced anyway.
+    """
+    resolved = {key: conf[key] for key in DEFAULTS}
+    resolved['QUEUE'] = queue
+    return resolved

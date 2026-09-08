@@ -83,6 +83,24 @@
   the settings a client is for; both keep working with no argument, which is what every caller
   outside a transport passes. **A test double that replaces either has to accept it.**
 
+  **One container can consume several of them.** `manage.py start_tgbot --queues default,vip`
+  enumerates them as Celery's `-Q` does, and `--pools vip` selects by the label on a
+  `TelegramQueue` row instead — which enumeration cannot do when clients arrive at run time,
+  since a queue created after the container started is served with no redeploy. No globs: a
+  glob includes a queue by the accident of its name. Both together are a union; neither means
+  the one queue the settings name, which is every deployment before this.
+
+  The set is re-read every `BOT_REFRESH_INTERVAL`, which is what makes a pool worth selecting
+  on: a queue added to one starts being consumed within that interval and one moved out of it
+  stops, with no redeploy. A pass that could not read the table leaves the consumers alone, and
+  one queue that cannot be consumed does not stop the others.
+
+  One consumer per queue, each with its own transport and its own `MAX_IN_FLIGHT`, so a
+  backlog on one queue is a backlog on one queue. A `DELIVERY` of your own is told which queue
+  it serves through a third argument, `settings`, and is refused by name where it takes none
+  and a queue other than the process's own was asked for. The cost is a connection and a
+  thread per queue: the transports that could multiplex are not doing it yet.
+
   **Naming a queue means declaring it.** `QUEUES` in the settings, rows in `TelegramQueue`, or
   both; a name in neither is refused where the transport for it is built and reported at boot
   as `E059`, because the alternative has no symptom -- a message published to a queue nothing

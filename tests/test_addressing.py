@@ -289,3 +289,60 @@ def _bytes(payload):
     from django_aiogram.wire.serializers import get_serializer
 
     return get_serializer().dumps(payload)
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'DELIVERY': 'tests.test_addressing.Older'})
+def test_a_consumer_that_cannot_be_told_its_queue_is_refused_where_that_matters():
+    """The same contract as the route, one release later and for the queue.
+
+    Silently built, it would take every message from the process's own queue while the
+    container believes it is serving another — so the queue asked for is never consumed and
+    the one that is looks busier than it should.
+    """
+    with pytest.raises(DeliveryNotConfiguredError, match='takes no `settings`'):
+        get_delivery(handler=lambda **call: None, settings={**SETTINGS, 'QUEUE': 'vip'})
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'DELIVERY': 'tests.test_addressing.Older'})
+def test_a_consumer_written_before_queues_is_still_built_for_the_process_own():
+    """Which is every container that serves one queue, and it must need no edit at all."""
+    built = get_delivery(handler=lambda **call: None)
+
+    assert isinstance(built, Older)
+    assert built.settings is None
+
+
+class QueuedOnly(BlpopDelivery):
+    """A consumer that can be told its queue and has nothing to route."""
+
+    def __init__(self, handler, *, settings=None):
+        """Take the queue's settings, and no route."""
+        super().__init__(handler, None, settings)
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={
+        **SETTINGS,
+        'DELIVERY': 'tests.test_addressing.QueuedOnly',
+        # declared on the process's settings, because `QUEUES` is the deployment's word and a
+        # bot only chooses from it
+        'QUEUES': ('vip',),
+    }
+)
+def test_a_consumer_taking_only_the_queue_is_still_told_which_queue():
+    """The two arguments are separate questions, so one may be accepted and the other not.
+
+    Judged together, a class taking `settings` and not `route` fell through to the
+    one-argument call: built without the queue it was asked for, reading the process's own
+    while the container believed it was serving another. Silently, and on every message.
+    """
+    # through `settings_for`, which is what the command hands a consumer: a resolved mapping
+    # rather than a fragment, because `Delivery` reads its budget out of it
+    from django_aiogram.runtime.queues import settings_for
+
+    served = settings_for('vip')
+
+    built = get_delivery(handler=lambda **call: None, settings=served)
+
+    assert isinstance(built, QueuedOnly)
+    assert built.settings is served, 'the queue it was asked for did not reach it'

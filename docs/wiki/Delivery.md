@@ -69,6 +69,20 @@ Without it, `manage.py start_tgbot` refuses to build the consumer where more tha
 configured, and says so by name — rather than delivering every addressed message through the
 process's own bot, under a token the producer did not name.
 
+**Serving several queues asks for one more.** A container told `--queues` or `--pools` runs one
+consumer per queue, and each is told which queue it is for:
+
+```python
+class QueuedDelivery(Delivery):
+    def __init__(self, handler, route=None, settings=None):
+        super().__init__(handler, route, settings)
+```
+
+`self.settings` is that queue's resolved settings, and `self.broker` is already built from
+them — so a `run()` written against `self.broker` needs no change. A consumer that takes
+neither argument is refused the same way and for the same shape of reason: it would take every
+message from the process's own queue while the container believes it is serving another.
+
 ```python
 from django_aiogram.consumer.delivery import Delivery
 
