@@ -289,3 +289,24 @@ def _bytes(payload):
     from django_aiogram.wire.serializers import get_serializer
 
     return get_serializer().dumps(payload)
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'DELIVERY': 'tests.test_addressing.Older'})
+def test_a_consumer_that_cannot_be_told_its_queue_is_refused_where_that_matters():
+    """The same contract as the route, one release later and for the queue.
+
+    Silently built, it would take every message from the process's own queue while the
+    container believes it is serving another — so the queue asked for is never consumed and
+    the one that is looks busier than it should.
+    """
+    with pytest.raises(DeliveryNotConfiguredError, match='takes no `settings`'):
+        get_delivery(handler=lambda **call: None, settings={**SETTINGS, 'QUEUE': 'vip'})
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'DELIVERY': 'tests.test_addressing.Older'})
+def test_a_consumer_written_before_queues_is_still_built_for_the_process_own():
+    """Which is every container that serves one queue, and it must need no edit at all."""
+    built = get_delivery(handler=lambda **call: None)
+
+    assert isinstance(built, Older)
+    assert built.settings is None

@@ -35,7 +35,7 @@ import queue
 import threading
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from django.utils.module_loading import import_string
@@ -103,7 +103,9 @@ def accepts_keyword(handler: Handler, name: str) -> bool:
 class Delivery(ABC):
     """Consumes whichever transport `BROKER` names, until stopped."""
 
-    def __init__(self, handler: Handler, route: 'Route | None' = None) -> None:
+    def __init__(
+        self, handler: Handler, route: 'Route | None' = None, settings: 'Mapping[str, Any] | None' = None
+    ) -> None:
         """Take what each decoded message is handed to once it arrives.
 
         ``route`` is how a message reaches the bot it was queued for: it answers with the
@@ -115,13 +117,20 @@ class Delivery(ABC):
         ``on_refused``. Every routed handler is some bot's ``send_raw`` and they are the same
         shape, so asking one answers for all -- and a route handing back something else would
         be answered as though it were `send_raw`, which is why the contract says so out loud.
+
+        ``settings`` is which queue this consumer is *for*, and ``None`` is the process's own.
+        A container serving several queues runs one of these per queue, each with its own
+        transport and its own in-flight budget -- which is the point of them being separate: a
+        backlog on one queue is then a backlog on one queue.
         """
         self.handler = handler
         self.route = route
+        #: the resolved settings this consumer serves, or ``None`` for the process's own
+        self.settings = settings
         self._stop = threading.Event()
         # the one transport this consumer talks to, resolved once: everything below asks it
         # rather than a Redis client, which is what lets a second transport exist at all
-        self.broker = get_broker()
+        self.broker = get_broker() if settings is None else get_broker(settings)
         self._beat_at = 0.0
         #: messages whose send is over, and whether each may leave the in-flight list.
         #: `(handle, True)` is a finished send and gets acknowledged; `(handle, False)` is
@@ -138,7 +147,7 @@ class Delivery(ABC):
         # read here rather than per message: `at_capacity` runs inside `run`'s loop, where
         # an unreadable value would raise out of the consumer thread and end delivery for
         # the life of the container. `run` resolves `BLPOP_TIMEOUT` once for the same reason
-        self._limit = max(0, int(conf['MAX_IN_FLIGHT']))
+        self._limit = max(0, int((conf if settings is None else settings)['MAX_IN_FLIGHT']))
 
     @property
     def crash_safe(self) -> bool:
@@ -152,8 +161,15 @@ class Delivery(ABC):
 
     @property
     def queue_key(self) -> str:
-        """The list queued messages are written to and read from."""
-        return queue_key()
+        """The list queued messages are written to and read from.
+
+        The transport's own answer where it has one, because this consumer may be serving a
+        queue that is not the process's -- and the module-level reader answers for the
+        process. A ``DELIVERY`` a project wrote may hold a broker that predates
+        :meth:`~django_aiogram.broker.base.Broker.addressed`, and that one falls back.
+        """
+        addressed = getattr(self.broker, 'addressed', None)
+        return addressed() if callable(addressed) else queue_key()
 
     @property
     def processing_key(self) -> str:
@@ -727,7 +743,9 @@ def delivery_class() -> type[Delivery]:
     return resolved
 
 
-def get_delivery(handler: Handler, route: 'Route | None' = None) -> Delivery:
+def get_delivery(
+    handler: Handler, route: 'Route | None' = None, settings: 'Mapping[str, Any] | None' = None
+) -> Delivery:
     """Build the consumer ``DELIVERY`` names, with the handlers it delivers through.
 
     ``DELIVERY`` is a documented seam, and what it promised was a subclass implementing
@@ -738,9 +756,24 @@ def get_delivery(handler: Handler, route: 'Route | None' = None) -> Delivery:
     without a route every addressed message would be delivered through the process's own bot,
     under a token the producer did not name, silently. With one bot there is nothing to route
     and nothing to say.
+
+    ``settings`` is the same contract one release later, for the queue rather than the bot: a
+    consumer that cannot be told which queue it serves is refused where a queue other than the
+    process's own was asked for, and left alone otherwise.
     """
     resolved = delivery_class()
+    takes_settings = accepts_keyword(resolved.__init__, 'settings')
+    if settings is not None and not takes_settings:
+        named = f'{resolved.__module__}.{resolved.__qualname__}'
+        raise DeliveryNotConfiguredError(
+            named,
+            'whose __init__ takes no `settings`, and this process serves a queue that is not '
+            'its own: every message would be taken from the process-wide queue instead. Add '
+            '`settings=None` to its __init__ and hand it to `Delivery.__init__`.',
+        )
     if accepts_keyword(resolved.__init__, 'route'):
+        if takes_settings:
+            return resolved(handler, route=route, settings=settings)
         return resolved(handler, route=route)
     if route is not None:
         named = f'{resolved.__module__}.{resolved.__qualname__}'
