@@ -235,7 +235,9 @@ def _a_bound_on_what_is_held(key: str, record: BotRecord) -> list[Problem]:
         queue_bound = int(record['MAX_IN_FLIGHT'])
     except (TypeError, ValueError, OverflowError, ImproperlyConfigured):
         return []  # E045 and E060 own the type complaints
-    if per_bot <= 0 or queue_bound > 0:
+    # exactly zero, not "not positive": a negative `MAX_IN_FLIGHT` is `E045`'s finding, and
+    # this message would say it is 0 -- a second, false, report of one mistake
+    if per_bot <= 0 or queue_bound != 0:
         return []
     return [
         Problem(

@@ -420,7 +420,9 @@ def test_the_wait_ends_when_that_bot_has_room():
     took = delivery.dispatch(a_message(123456, 'after the wait'))
     reporting.join(timeout=5)
 
-    assert took is not None
+    # `Deferring` takes `on_complete`, so the second send is unsettled when the wait ends and
+    # the message is not the caller's to acknowledge
+    assert took is False
     assert [text for text, _ in handler.pending] == ['sent', 'after the wait']
     assert delivery._sending == {123456: 1}, delivery._sending
 
@@ -434,3 +436,14 @@ def test_a_per_bot_budget_without_a_queue_bound_is_reported():
 
     assert reported, 'a per-bot budget with nothing bounding the queue was not reported'
     assert 'MAX_IN_FLIGHT' in (reported[0].hint or ''), reported[0].hint
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': 1, 'MAX_IN_FLIGHT': -1})
+def test_a_negative_queue_bound_is_one_mistake_reported_once():
+    """`E045` owns it, and `W012` would say it is `0` — a second report, and a false one."""
+    from django_aiogram.config.checks import check_settings
+
+    reported = [str(message.id) for message in check_settings()]
+
+    assert any(found.endswith('E045') for found in reported), reported
+    assert not any(found.endswith('W012') for found in reported), 'a negative bound was reported as zero'
