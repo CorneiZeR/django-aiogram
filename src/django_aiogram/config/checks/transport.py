@@ -231,8 +231,8 @@ def _a_bound_on_what_is_held(key: str, record: BotRecord) -> list[Problem]:
     instead, which is the head-of-line blocking the holding was there to avoid.
     """
     try:
-        per_bot = int(_setting(key, record))
-        queue_bound = int(record['MAX_IN_FLIGHT'])
+        per_bot = _whole(_setting(key, record))
+        queue_bound = _whole(record['MAX_IN_FLIGHT'])
     except (TypeError, ValueError, OverflowError, ImproperlyConfigured):
         return []  # E045 and E060 own the type complaints
     # exactly zero, not "not positive": a negative `MAX_IN_FLIGHT` is `E045`'s finding, and
@@ -249,6 +249,20 @@ def _a_bound_on_what_is_held(key: str, record: BotRecord) -> list[Problem]:
             ),
         )
     ]
+
+
+def _whole(value: object) -> int:
+    """Read a setting as the integer it is, refusing one that only truncates to an integer.
+
+    `int()` would take ``1.5`` to ``1``, and this rule's message quotes the number: it would
+    report a budget of ``1`` that `E060` is separately reporting as not an integer at all, so
+    an operator reading the two would see one of them describe a value they never wrote.
+    """
+    number = float(value)  # type: ignore[arg-type]  # a bad value raises, which is the point
+    if number != int(number):
+        msg = f'{value!r} is not a whole number'
+        raise ValueError(msg)
+    return int(number)
 
 
 def _a_worker_that_keeps_its_name(key: str, record: BotRecord) -> list[Problem]:

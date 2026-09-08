@@ -447,3 +447,29 @@ def test_a_negative_queue_bound_is_one_mistake_reported_once():
 
     assert any(found.endswith('E045') for found in reported), reported
     assert not any(found.endswith('W012') for found in reported), 'a negative bound was reported as zero'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': 1.5, 'MAX_IN_FLIGHT': 0})
+def test_a_budget_that_is_not_a_whole_number_is_not_quoted_as_one():
+    """`int(1.5)` is 1, and `W012` quotes the number it read.
+
+    Reported that way, an operator reads `E060` saying the value is not an integer and `W012`
+    describing a budget of 1 they never wrote.
+    """
+    from django_aiogram.config.checks import check_settings
+
+    reported = [str(message.id) for message in check_settings()]
+
+    assert any(found.endswith('E060') for found in reported), reported
+    assert not any(found.endswith('W012') for found in reported), 'a fractional budget was quoted as a whole one'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': 1, 'MAX_IN_FLIGHT': 0.5})
+def test_a_queue_bound_that_is_not_a_whole_number_is_not_reported_as_zero():
+    """The other half of the same truncation: `int(0.5)` is 0, which is what `W012` is about."""
+    from django_aiogram.config.checks import check_settings
+
+    reported = [str(message.id) for message in check_settings()]
+
+    assert any(found.endswith('E045') for found in reported), reported
+    assert not any(found.endswith('W012') for found in reported), 'a fractional bound was reported as zero'
