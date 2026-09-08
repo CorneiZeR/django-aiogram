@@ -76,12 +76,19 @@ class Consumers:
             for queue in asked:
                 if queue in self.running:
                     continue
+                consumer = None
                 try:
                     consumer = self._ready.pop(queue, None) or self.build(queue)
                     self.running[queue] = (consumer, consumer.start_thread())
                 except Exception:
+                    # a consumer that was built has already reclaimed, so dropping it here
+                    # would strand whatever it took: only it can settle its own in-flight
+                    # list. Stopped and settled before the queue is left for the next pass
+                    if consumer is not None:
+                        _settled(consumer, queue)
                     logger.exception(
-                        'could not start consuming a queue; the next pass will try again', extra={'tg_queue': queue}
+                        'could not start consuming a queue; the next pass will try again',
+                        extra={'tg_queue': queue},
                     )
 
     def stop(self) -> None:
@@ -133,3 +140,19 @@ class Consumers:
         """Every consumer running now, for a caller that has to reach all of them."""
         with self._lock:
             return tuple(consumer for consumer, _ in self.running.values())
+
+
+def _settled(consumer: 'Delivery', queue: str) -> None:
+    """Stop a consumer that never ran and settle what it holds, saying nothing further.
+
+    Called where starting failed, so the failure being reported is the caller's; a stop that
+    raises on top of it would replace the reason with a second one.
+    """
+    try:
+        consumer.stop()
+    except Exception:
+        logger.exception('could not stop a consumer that failed to start', extra={'tg_queue': queue})
+    try:
+        consumer.collect()
+    except Exception:
+        logger.exception('could not settle a consumer that failed to start', extra={'tg_queue': queue})

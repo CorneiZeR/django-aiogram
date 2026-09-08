@@ -222,3 +222,20 @@ def test_the_transport_key_still_splits_bots_that_have_no_queue_named():
     theirs = {**LIST, 'REDIS_MESSAGES_KEY': 'theirs'}
 
     assert profile_of(mine) != profile_of(theirs)
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**MEMORY, 'QUEUES': ('vip',), 'QUEUE': 'vip'})
+def test_naming_the_queue_the_settings_already_name_asks_nothing_of_a_consumer():
+    """`--queues vip` where `QUEUE` is `vip` serves what it always served.
+
+    Judged on the flag being non-empty, this refused a `DELIVERY` that takes only a handler --
+    a container serving exactly its own queue, told so twice.
+    """
+    from django_aiogram.management.commands.start_tgbot import _only_its_own_queue
+
+    assert _only_its_own_queue(('vip',), '')
+    assert not _only_its_own_queue(('vip', 'bulk'), ''), 'two queues cannot be served untold'
+    assert not _only_its_own_queue(('vip',), 'vip'), 'a pool can grow a second queue by the next pass'
+    # read as text rather than as pools, ' , ' is a pool nobody asked for: the flag is split
+    # the same way everywhere it is read, so an empty one is empty here too
+    assert _only_its_own_queue(('vip',), ' , ')

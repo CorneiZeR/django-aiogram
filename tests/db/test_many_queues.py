@@ -144,3 +144,14 @@ def test_a_container_serving_two_queues_delivers_a_message_queued_on_the_second(
         groups.close_groups()
 
     assert delivered == [('bulk', 'for the second queue')]
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**MEMORY, 'QUEUES': ('vip',), 'QUEUE': 'vip'})
+def test_naming_the_queue_the_settings_already_name_is_still_one_queue():
+    """A `DELIVERY` written before there were several queues must not be refused for that.
+
+    `--queues vip` where `QUEUE` is already `vip` serves exactly what the settings say, so
+    nothing has to be told which queue it is for — and a consumer that takes no `settings`
+    would otherwise be refused by a container serving the queue it always served.
+    """
+    assert served_by(['vip'], []) == ('vip',)

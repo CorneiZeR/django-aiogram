@@ -53,6 +53,21 @@ def _split(written: str) -> list[str]:
     return [part.strip() for part in written.split(',') if part.strip()]
 
 
+def _only_its_own_queue(serving: tuple[str, ...], pools: str) -> bool:
+    """Whether this container serves exactly the queue its settings name, and only ever will.
+
+    A container that does is every deployment before there were several queues, so it is
+    handed no settings at all and a ``DELIVERY`` written then keeps working -- including where
+    the operator named that same queue on the command line, which changes nothing about what
+    is served.
+
+    A pool is the exception, and not a cautious one: a pool holding one queue today holds two
+    after the next pass, and a consumer built without settings could not be told which of them
+    it is for.
+    """
+    return serving == (named(),) and not _split(pools)
+
+
 def _consumer_for(queue: str, *, one_queue: bool) -> Delivery:
     """Build the consumer for one queue, telling it which queue only when that is news.
 
@@ -157,10 +172,7 @@ class Command(BaseCommand):
         mode = self._mode_for_this_run(options)
 
         serving = self._queues_to_serve(options)
-        # only where nothing was asked for: a container serving its own queue is every
-        # deployment before this, and it is handed no settings so a `DELIVERY` written then
-        # keeps working
-        one_queue = serving == (named(),) and not (options['queues'] or options['pools'])
+        one_queue = _only_its_own_queue(serving, options['pools'])
 
         def consumer_for(queue: str) -> Delivery:
             """Build the consumer for one queue and prove what it promises before it runs."""

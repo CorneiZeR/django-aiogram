@@ -121,8 +121,12 @@ def test_one_queue_that_cannot_be_consumed_does_not_stop_the_others(caplog):
     triggered, like every other pass in this package.
     """
     log = []
+    attempts = []
 
     def build(queue):
+        # recorded before the refusal, because the claim is that the queue is *tried* again:
+        # asserted on what started, a pass that stopped trying reads exactly the same
+        attempts.append(queue)
         if queue == 'broken':
             msg = 'this queue cannot be consumed'
             raise RuntimeError(msg)
@@ -138,7 +142,9 @@ def test_one_queue_that_cannot_be_consumed_does_not_stop_the_others(caplog):
     assert any(record.tg_queue == 'broken' for record in caplog.records if hasattr(record, 'tg_queue'))
 
     consumers.reconcile(['broken', 'fine'])
-    assert log == [('started', 'fine')], 'the failed queue was not tried again by the next pass'
+
+    assert attempts == ['broken', 'fine', 'broken'], f'the failed queue was not tried again: {attempts}'
+    assert log == [('started', 'fine')], 'the queue that was already running was built twice'
 
 
 def test_a_consumer_built_and_never_started_is_still_stopped_and_settled():
@@ -155,3 +161,26 @@ def test_a_consumer_built_and_never_started_is_still_stopped_and_settled():
     consumers.collect()
 
     assert log == [('stopped', 'vip'), ('collected', 'vip')]
+
+
+def test_a_consumer_whose_thread_will_not_start_is_settled_rather_than_dropped():
+    """It has already reclaimed, and only it can settle what it took.
+
+    Dropped on the way out of the failure, its in-flight list is unreachable: nothing in this
+    process can acknowledge those messages, and the next container sends them again.
+    """
+    log = []
+
+    class WillNotStart(Fake):
+        """A consumer whose thread refuses to start, after it has reclaimed."""
+
+        def start_thread(self):
+            """Refuse, the way a thread limit or a broken transport would."""
+            msg = 'no thread for this one'
+            raise RuntimeError(msg)
+
+    consumers = Consumers(build=lambda queue: WillNotStart(queue, log), join_timeout=1.0)
+    consumers.reconcile(['vip'])
+
+    assert log == [('stopped', 'vip'), ('collected', 'vip')], log
+    assert consumers.running == {}
