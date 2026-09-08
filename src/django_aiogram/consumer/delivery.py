@@ -153,9 +153,16 @@ class Delivery(ABC):
         # read here for the reason above, and separately from the queue's own bound: this one
         # is per bot, so one client saturating its own budget cannot fill the queue's
         self._per_bot_limit = max(0, int(resolved['MAX_IN_FLIGHT_PER_BOT']))
-        #: how many sends each bot has in flight, by identity. `None` is a payload that named
-        #: no bot, which is every 4.x one and every send by a bot whose token has no identity
-        self._per_bot: dict[int | None, int] = {}
+        #: how many sends each bot has **with the handler right now**, by identity. `None` is
+        #: a payload that named no bot, which is every 4.x one and every send by a bot whose
+        #: token has no identity.
+        #:
+        #: Active sends only, and that is the whole distinction: a parked message is *waiting*
+        #: for one of these to end, so counting it here would be a reservation nothing can
+        #: release. With a budget of two, two active sends and two parked messages would leave
+        #: this at two once both sends finished -- at the budget, with nothing running to take
+        #: it below again, and that bot stalled for the life of the process
+        self._sending: dict[int | None, int] = {}
         #: messages taken for a bot that was already at its budget: kept rather than released,
         #: because a release is a documented no-op on the transport that has an in-flight list
         #: -- there the message would sit until a restart reclaimed it. Each holds one of the
@@ -356,13 +363,17 @@ class Delivery(ABC):
     def _took_a_slot_back(self, bot_id: 'int | None') -> None:
         """One send is over: give its slot back to the queue and to its bot."""
         self._in_flight -= 1
-        held = self._per_bot.get(bot_id, 0) - 1
+        self._one_less_sending(bot_id)
+
+    def _one_less_sending(self, bot_id: 'int | None') -> None:
+        """Say one of this bot's sends has ended, without touching the queue's own count."""
+        held = self._sending.get(bot_id, 0) - 1
         if held > 0:
-            self._per_bot[bot_id] = held
+            self._sending[bot_id] = held
         else:
             # dropped rather than left at zero: a container serving a client per bot would
             # otherwise grow this dict by one entry per bot for ever
-            self._per_bot.pop(bot_id, None)
+            self._sending.pop(bot_id, None)
 
     def _at_its_own_capacity(self, bot_id: 'int | None') -> bool:
         """Whether this bot already has as many sends in flight as it may.
@@ -372,7 +383,7 @@ class Delivery(ABC):
         it and every other bot on that queue waits behind them. That is the mistake a single
         prefetch multiplier makes, and this is what makes a shared queue survivable.
         """
-        return bool(self._per_bot_limit) and self._per_bot.get(bot_id, 0) >= self._per_bot_limit
+        return bool(self._per_bot_limit) and self._sending.get(bot_id, 0) >= self._per_bot_limit
 
     def _park(self, envelope: 'Envelope', call: dict[str, Any], handle: object, handler: Handler) -> None:
         """Keep a message whose bot is at its budget, and hold a queue slot for it.
@@ -386,8 +397,9 @@ class Delivery(ABC):
         many can be parked; a queue whose budget is entirely parked stops being read until a
         send finishes, which is the backpressure it was always going to be.
         """
+        # the queue's slot, and only that: what the message is waiting for is one of *this
+        # bot's* sends to end, so a reservation here would be one nothing can release
         self._in_flight += 1
-        self._per_bot[envelope.bot_id] = self._per_bot.get(envelope.bot_id, 0) + 1
         self._parked.append((envelope, call, handle, handler))
         logger.debug(
             'holding a message for a bot at its own in-flight budget',
@@ -407,11 +419,11 @@ class Delivery(ABC):
         waiting, self._parked = self._parked, deque()
         while waiting:
             envelope, call, handle, handler = waiting.popleft()
-            if self._at_its_own_capacity(envelope.bot_id) and self._per_bot.get(envelope.bot_id, 0) > 1:
+            if self._at_its_own_capacity(envelope.bot_id):
                 self._parked.append((envelope, call, handle, handler))
                 continue
-            # the slot it has been holding is the one the send will use, so nothing is counted
-            # again -- see `_hand_over`'s `counted`
+            # the queue's slot it has been holding is the one the send will use, so that count
+            # is not touched again -- see `_hand_over`'s `counted`
             if self._hand_over(envelope, call, handle, handler, counted=True):
                 self.acknowledge(handle)
 
@@ -661,16 +673,19 @@ class Delivery(ABC):
                 # its pair, so a producer that refuses the send gives the slot back
                 call['on_refused'] = self._release_for(handle, envelope.bot_id)
             if not counted:
-                # a message handed over from the park is already holding its slots -- the
-                # ones `_park` took -- and counting it twice would leave the budget short by
-                # one for the life of the process
+                # a message handed over from the park is already holding the queue's slot --
+                # the one `_park` took -- and counting it twice would leave that budget short
+                # by one for the life of the process
                 self._in_flight += 1
-                self._per_bot[envelope.bot_id] = self._per_bot.get(envelope.bot_id, 0) + 1
+            # this bot's count moves either way: a parked message was *waiting* for a send to
+            # end, and now it is one
+            self._sending[envelope.bot_id] = self._sending.get(envelope.bot_id, 0) + 1
         try:
             handler(**call)
         except asyncio.CancelledError:
             if deferring:
                 self._took_a_slot_back(envelope.bot_id)
+                self._hand_over_parked()
             logger.warning(
                 'a queued send was cancelled; leaving it in flight',
                 extra={'tg_function': envelope.function},
@@ -679,6 +694,7 @@ class Delivery(ABC):
         except Exception:
             if deferring:
                 self._took_a_slot_back(envelope.bot_id)
+                self._hand_over_parked()
             logger.exception(
                 'handler failed for queued message',
                 extra={'tg_function': envelope.function},

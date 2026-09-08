@@ -115,7 +115,7 @@ def test_the_counts_come_back_to_nothing():
     delivery.collect()
 
     assert delivery._in_flight == 0, delivery._in_flight
-    assert delivery._per_bot == {}, delivery._per_bot
+    assert delivery._sending == {}, delivery._sending
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT': 10})
@@ -198,7 +198,7 @@ def test_a_refused_send_gives_both_slots_back_and_the_message_is_not_acknowledge
     delivery.collect()
 
     assert delivery._in_flight == 0, delivery._in_flight
-    assert delivery._per_bot == {}, delivery._per_bot
+    assert delivery._sending == {}, delivery._sending
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': -1})
@@ -213,3 +213,63 @@ def test_a_negative_per_bot_budget_is_reported_rather_than_read_as_none():
     reported = [message for message in check_settings() if str(message.id).endswith('E060')]
 
     assert reported, 'a negative per-bot budget was accepted'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': 2, 'MAX_IN_FLIGHT': 10})
+def test_two_held_messages_do_not_reserve_the_budget_they_are_waiting_for():
+    """A held message waits for one of this bot's sends to end, so it may not count as one.
+
+    Counted, a budget of two with two sends and two held messages sits at two once both sends
+    finish: at the budget, with nothing running that could take it below again. Both held
+    messages are re-held for ever and that bot is stalled for the life of the process --
+    measured before this, and it is the shape a reservation nothing can release always has.
+    """
+    handler = Deferring()
+    delivery = BlpopDelivery(handler=handler, route=routed(handler))
+
+    delivery.dispatch(a_message(123456, 'first'))
+    delivery.dispatch(a_message(123456, 'second'))
+    delivery.dispatch(a_message(123456, 'third'))
+    delivery.dispatch(a_message(123456, 'fourth'))
+    assert [text for text, _ in handler.pending] == ['first', 'second']
+
+    handler.pending[0][1]()
+    handler.pending[1][1]()
+    delivery.collect()
+
+    handed = [text for text, _ in handler.pending]
+    assert handed == ['first', 'second', 'third', 'fourth'], handed
+
+    for _, finished in handler.pending[2:]:
+        finished()
+    delivery.collect()
+
+    assert delivery._in_flight == 0, delivery._in_flight
+    assert delivery._sending == {}, delivery._sending
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': 1, 'MAX_IN_FLIGHT': 10})
+def test_a_send_that_raised_gives_its_bot_its_slot_back():
+    """A handler that raises has not deferred anything, so nothing else will report it.
+
+    The queue's slot came back already; this is the bot's, and a held message behind it is
+    handed over on the same turn rather than waiting for an unrelated send to finish.
+    """
+    calls = []
+
+    def raising(function=None, correlation_id=None, queued_at=0.0, on_complete=None, on_refused=None, **kwargs):
+        calls.append(kwargs.get('text'))
+        if kwargs.get('text') == 'raises':
+            msg = 'this handler failed'
+            raise RuntimeError(msg)
+
+    delivery = BlpopDelivery(handler=raising, route=lambda bot_id: raising)
+
+    delivery.dispatch(a_message(123456, 'raises'))
+
+    assert delivery._sending == {}, delivery._sending
+
+    delivery.dispatch(a_message(123456, 'after it'))
+
+    assert calls == ['raises', 'after it'], 'the next message waited on a send that had failed'
+    assert delivery._sending == {123456: 1}, delivery._sending
