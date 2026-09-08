@@ -106,7 +106,13 @@
   reclaimed it -- and handed over as soon as that bot has room. It is not acknowledged while
   it waits, so a crash leaves it where every other in-flight message is. Each held message
   occupies one of the queue's slots, so `MAX_IN_FLIGHT` bounds how many can wait; `0`, the
-  default, is the single-bound behaviour that shipped before. A `DELIVERY` of your own is told which queue
+  default, is the single-bound behaviour that shipped before.
+
+  **Both bounds or neither**: with `MAX_IN_FLIGHT` at zero nothing would bound what is held,
+  so a saturated bot would grow the held list and the transport's in-flight state together --
+  and on a Redis list every acknowledgement scans that state. The consumer waits for that bot
+  instead, which is bounded and is the head-of-line blocking the per-bot budget avoids; `W012`
+  is what says the better behaviour is one setting away. A `DELIVERY` of your own is told which queue
   it serves through a third argument, `settings`, and is refused by name where it takes none
   and a queue other than the process's own was asked for. The cost is a connection and a
   thread per queue: the transports that could multiplex are not doing it yet.

@@ -365,6 +365,7 @@ entry naming a retired one is dead but harmless.
 | `W001` / `W002` | `TOKEN` / `REDIS_URL` empty while the bot is enabled |
 | `W003` | `TELEGRAM_BOT_DEFAULTS` contains unknown keys |
 | `W010` | one bot's section contains unknown keys |
+| `W012` | `MAX_IN_FLIGHT_PER_BOT` is set while `MAX_IN_FLIGHT` is `0`, so nothing bounds what the consumer holds. A held message and the transport's in-flight state grow together, and on a Redis list every acknowledgement scans that state. The consumer will not do that: without the queue's bound it *waits* for the saturated bot instead, which is the head-of-line blocking the per-bot budget exists to avoid — so set both |
 | `W011` | `BOT_LEASE_SECONDS` is not at least twice `BOT_REFRESH_INTERVAL`, so the lease lapses between the renewals a pass makes and the bot is traded between containers — each trade a 409 from Telegram for whoever was polling |
 | `W004` | `BLPOP_TIMEOUT` is **above** the ceiling the consumer applies — `min(HEARTBEAT_INTERVAL, floor(<the transport timeout>) - 1)`, never below 1 — so the take is silently shortened to it. Equal to the ceiling is not warned about and is not shortened. The hint names whichever of the two binds, and the transport term is the one `BROKER` names rather than always `REDIS_TIMEOUT` |
 | `E001`–`E003`, `E017`, `E049` | a boolean setting holds something that cannot be read as true or false. `ENABLED` and `AUTODISCOVER` are read while the app loads, so in practice those two refuse the boot with the same message before `check` runs at all |

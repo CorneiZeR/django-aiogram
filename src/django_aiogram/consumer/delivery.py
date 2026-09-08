@@ -401,6 +401,31 @@ class Delivery(ABC):
         """
         return bool(self._per_bot_limit) and self._sending.get(bot_id, 0) >= self._per_bot_limit
 
+    def _waited_for_room(self, bot_id: 'int | None') -> bool:
+        """Wait until this bot has a send slot, and say whether it got one.
+
+        The degraded half of the per-bot budget, for a deployment that set no queue bound:
+        holding the message would be unbounded, so the consumer waits for one of that bot's
+        own sends to end. That is head-of-line blocking -- the messages behind this one are
+        for other bots -- which is why `W012` asks for `MAX_IN_FLIGHT` to be set.
+
+        The wait keeps writing the heartbeat and settling what finishes, for the reason
+        :meth:`hold_for_capacity` gives: a worker at its limit is busy, not dead, and held
+        silently past the key's TTL it would be restarted while healthy.
+
+        ``False`` where the shutdown arrived first, which leaves the message in flight.
+        """
+        while self._at_its_own_capacity(bot_id) and not self._stop.is_set():
+            self.heartbeat()
+            try:
+                raw, delivered, settled = self._finished.get(timeout=1)
+            except queue.Empty:
+                continue
+            self._took_a_slot_back(settled)
+            if delivered:
+                self.acknowledge(raw)
+        return not self._stop.is_set()
+
     def _park(self, envelope: 'Envelope', call: dict[str, Any], handle: object, handler: Handler) -> None:
         """Keep a message whose bot is at its budget, and hold a queue slot for it.
 
@@ -625,10 +650,21 @@ class Delivery(ABC):
             'queued_at': envelope.queued_at,
         }
         if self._at_its_own_capacity(envelope.bot_id):
-            # not acknowledged and not released: it is held here until this bot has room, and
-            # a crash in between leaves it where every other in-flight message is
-            self._park(envelope, call, handle, handler)
-            return False
+            if not self._limit:
+                # nothing bounds the queue, so nothing would bound the holding either: a
+                # saturated bot would grow the held list, and the transport's in-flight state
+                # with it, until the process ran out of memory -- and on a Redis list every
+                # acknowledgement scans that state. So this waits for the bot instead, which
+                # costs the head-of-line blocking the holding avoids and costs nothing
+                # unbounded. `W012` is what tells an operator to set `MAX_IN_FLIGHT` and get
+                # the better behaviour
+                if not self._waited_for_room(envelope.bot_id):
+                    return False
+            else:
+                # not acknowledged and not released: it is held here until this bot has room,
+                # and a crash in between leaves it where every other in-flight message is
+                self._park(envelope, call, handle, handler)
+                return False
         return self._hand_over(envelope, call, handle, handler)
 
     def _handler_for(self, envelope: Envelope) -> Handler:

@@ -375,3 +375,62 @@ def test_a_handler_that_refused_before_raising_does_not_acknowledge_at_all():
     assert took is False, 'a message the handler refused was acknowledged by the caller'
     assert acknowledged == [], acknowledged
     assert delivery._in_flight == 0, delivery._in_flight
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': 1, 'MAX_IN_FLIGHT': 0})
+def test_nothing_is_held_where_nothing_bounds_how_much_could_be():
+    """`MAX_IN_FLIGHT` is zero by default, and holding without it is holding without a bound.
+
+    A saturated bot would grow the held list and the transport's in-flight state together
+    until the process ran out of memory -- and on a Redis list every acknowledgement scans
+    that state, so it gets slower as it grows. The consumer waits for the bot instead, which
+    is worse behaviour and bounded memory; `W012` asks for the bound.
+    """
+    handler = Deferring()
+    delivery = BlpopDelivery(handler=handler, route=routed(handler))
+    delivery.dispatch(a_message(123456, 'sent'))
+
+    # the shutdown is what ends the wait here, since nothing is going to finish that send
+    delivery.stop()
+    took = delivery.dispatch(a_message(123456, 'would have been held'))
+
+    assert took is False, 'a message nothing sent was acknowledged'
+    assert not delivery._parked, 'a message was held with no bound on how many could be'
+    assert [text for text, _ in handler.pending] == ['sent']
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': 1, 'MAX_IN_FLIGHT': 0})
+def test_the_wait_ends_when_that_bot_has_room():
+    """And it is the bot's own send that ends it, not a timer and not another bot's."""
+    handler = Deferring()
+    delivery = BlpopDelivery(handler=handler, route=routed(handler))
+    delivery.dispatch(a_message(123456, 'sent'))
+
+    # reported from another thread, which is where a completion comes from: the consumer is
+    # inside the wait by then
+    import threading
+
+    def finish():
+        while not handler.pending:
+            pass
+        handler.pending[0][1]()
+
+    reporting = threading.Thread(target=finish, daemon=True)
+    reporting.start()
+    took = delivery.dispatch(a_message(123456, 'after the wait'))
+    reporting.join(timeout=5)
+
+    assert took is not None
+    assert [text for text, _ in handler.pending] == ['sent', 'after the wait']
+    assert delivery._sending == {123456: 1}, delivery._sending
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': 1, 'MAX_IN_FLIGHT': 0})
+def test_a_per_bot_budget_without_a_queue_bound_is_reported():
+    """The check is what tells an operator the good behaviour is one setting away."""
+    from django_aiogram.config.checks import check_settings
+
+    reported = [message for message in check_settings() if str(message.id).endswith('W012')]
+
+    assert reported, 'a per-bot budget with nothing bounding the queue was not reported'
+    assert 'MAX_IN_FLIGHT' in (reported[0].hint or ''), reported[0].hint
