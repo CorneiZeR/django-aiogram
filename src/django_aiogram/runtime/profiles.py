@@ -113,21 +113,38 @@ def profile_of(settings: 'Mapping[str, Any]') -> Profile:
     no profile, and the refusal is `E047`'s own -- raised here rather than swallowed, because a
     group built from a transport nobody could name would be a group nothing can deliver on.
     """
-    options = broker_class(settings, verify_driver=False).OPTIONS
-    named = sorted({*SHARED, *options})
-    return Profile(settings=tuple((key, _value_of(key, settings)) for key in named))
+    transport = broker_class(settings, verify_driver=False)
+    keys = sorted({*SHARED, *transport.OPTIONS})
+    return Profile(settings=tuple((key, _value_of(key, settings, transport.QUEUE_OPTION)) for key in keys))
 
 
-def _value_of(key: str, settings: 'Mapping[str, Any]') -> object:
+#: what a key contributes when nothing reads it, distinct from every value a project can write.
+#: A profile is only as good as the equalities it makes, and `None` is a legal setting
+IGNORED = object()
+
+
+def _value_of(key: str, settings: 'Mapping[str, Any]', queue_option: str) -> object:
     """Return what this key contributes to a profile, as whoever reads it will read it.
 
-    ``QUEUE`` is the one that needs saying: `Broker.queue` and `queues.named` both strip it, so
-    ' vip ' and 'vip' address one queue -- and hashed raw they would build a runtime group and
-    a transport each for it, each consuming the other's messages.
-    """
-    if key == 'QUEUE':
-        # deferred: `runtime.queues` reaches the ORM in the functions this does not call
-        from django_aiogram.runtime.queues import named  # noqa: PLC0415 - as above
+    Two keys are not their raw value, and both for the same reason -- a profile groups bots
+    that *behave* the same, so what it hashes has to be what the code reads:
 
-        return _hashable(named(settings))
+    ``QUEUE`` is stripped, because `Broker.queue`, `queues.named` and the declaration check
+    all strip it: ' vip ' and 'vip' address one queue, and hashed raw they would build a
+    runtime group and a transport each for it, each consuming the other's messages.
+
+    And the transport's own queue option contributes **nothing** while ``QUEUE`` is set,
+    because `Broker.queue` does not read it then: two bots addressed at one queue would
+    otherwise be split by a leftover `REDIS_MESSAGES_KEY` neither of them uses -- a connection
+    and a consumer each, for identical behaviour, which is the cost this whole mechanism
+    exists to avoid.
+    """
+    # deferred: `runtime.queues` reaches the ORM in the functions this does not call
+    from django_aiogram.runtime.queues import named  # noqa: PLC0415 - as above
+
+    addressed = named(settings)
+    if key == 'QUEUE':
+        return _hashable(addressed)
+    if key == queue_option and addressed:
+        return IGNORED
     return _hashable(settings.get(key))

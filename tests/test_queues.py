@@ -18,6 +18,8 @@ from django_aiogram.runtime import groups
 from django_aiogram.runtime.queues import declared, refuse_undeclared
 
 MEMORY = {'BROKER': 'django_aiogram.testing.InMemoryBroker', 'FSM_STORAGE': 'memory'}
+#: the shipped Redis list, whose own queue option is the one `QUEUE` overrides
+LIST = {'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker', 'REDIS_URL': 'redis://localhost:6379/0'}
 
 #: every shipped transport with the option it addresses a queue by, and a value for it
 ADDRESSED = [
@@ -194,3 +196,29 @@ def test_a_section_may_not_declare_the_deployment_queues():
 
     assert reported, 'a section declaring the deployment queues was accepted'
     assert 'QUEUES' in reported[0].msg
+
+
+def test_a_leftover_transport_key_does_not_split_bots_addressed_at_one_queue():
+    """`Broker.queue` stops reading the transport's own option once `QUEUE` is set.
+
+    So two bots on one queue with different leftover values for it behave identically — and
+    split by it, each would get a connection and a consumer of its own for nothing, which is
+    the cost profiles exist to avoid.
+    """
+    from django_aiogram.runtime.profiles import profile_of
+
+    settings = {**LIST, 'QUEUES': ('vip',), 'QUEUE': 'vip'}
+    mine = {**settings, 'REDIS_MESSAGES_KEY': 'left-over'}
+    theirs = {**settings, 'REDIS_MESSAGES_KEY': 'something-else'}
+
+    assert profile_of(mine) == profile_of(theirs)
+
+
+def test_the_transport_key_still_splits_bots_that_have_no_queue_named():
+    """The other half: with `QUEUE` empty it is what addresses the queue, so it decides."""
+    from django_aiogram.runtime.profiles import profile_of
+
+    mine = {**LIST, 'REDIS_MESSAGES_KEY': 'mine'}
+    theirs = {**LIST, 'REDIS_MESSAGES_KEY': 'theirs'}
+
+    assert profile_of(mine) != profile_of(theirs)

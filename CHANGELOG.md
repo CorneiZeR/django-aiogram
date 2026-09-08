@@ -70,6 +70,9 @@
 
   Two bots naming different queues resolve to different profiles, so they get a transport
   each: sharing one, each would take the other's messages off the queue it was addressed to.
+  Two bots on the *same* queue stay one profile even where the transport's own queue option
+  still holds different leftovers, because nothing reads it once `QUEUE` is set -- a split
+  there would be a connection and a consumer each for identical behaviour.
   That works because a broker is now built **with** the settings it is for -- `Broker.settings`,
   set by the group -- rather than merely chosen by them and left reading the shared defaults.
   A transport a project writes needs no change: the constructor still takes nothing.
