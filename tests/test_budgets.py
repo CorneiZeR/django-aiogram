@@ -141,9 +141,13 @@ def test_a_held_message_is_not_acknowledged_while_it_waits():
     handler = Deferring()
     delivery = BlpopDelivery(handler=handler, route=routed(handler))
 
+    acknowledged = []
+    delivery.acknowledge = acknowledged.append
     delivery.dispatch(a_message(123456, 'sent'))
 
     assert delivery.dispatch(a_message(123456, 'waiting')) is False
+    # and the return value is not the whole of it: parking must not acknowledge on the way
+    assert acknowledged == [], 'a message nothing has sent yet was acknowledged'
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': 1, 'MAX_IN_FLIGHT': 10})
@@ -273,3 +277,49 @@ def test_a_send_that_raised_gives_its_bot_its_slot_back():
 
     assert calls == ['raises', 'after it'], 'the next message waited on a send that had failed'
     assert delivery._sending == {123456: 1}, delivery._sending
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': 1, 'MAX_IN_FLIGHT': 10})
+def test_a_handler_that_reports_and_then_raises_settles_its_message_once():
+    """Two settlements for one message put the count below where it belongs.
+
+    The completion queues one and the exception path used to add another, so the bot's budget
+    was over by one for every such send and the queue's count went negative -- which reads as
+    *room* and lets the consumer take past the bound both budgets exist to hold.
+    """
+    calls = []
+
+    def reports_then_raises(function=None, correlation_id=None, queued_at=0.0, on_complete=None, **kwargs):
+        calls.append(kwargs.get('text'))
+        if on_complete is not None:
+            on_complete()
+        msg = 'the handler failed after reporting'
+        raise RuntimeError(msg)
+
+    delivery = BlpopDelivery(handler=reports_then_raises, route=lambda bot_id: reports_then_raises)
+
+    delivery.dispatch(a_message(123456, 'reports then raises'))
+    delivery.collect()
+
+    assert calls == ['reports then raises']
+    assert delivery._in_flight == 0, delivery._in_flight
+    assert delivery._sending == {}, delivery._sending
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': 1, 'MAX_IN_FLIGHT': 10})
+def test_a_handler_that_reports_both_ways_settles_its_message_once():
+    """`on_complete` and `on_refused` are one claim, not one each.
+
+    Nothing in this package calls both, and the contract does not say a handler may not: with
+    a latch each, one that did would return the slots twice.
+    """
+    handler = Deferring()
+    delivery = BlpopDelivery(handler=handler, route=routed(handler))
+
+    delivery.dispatch(a_message(123456, 'both'))
+    handler.pending[0][1]()
+    handler.refusals['both']()
+    delivery.collect()
+
+    assert delivery._in_flight == 0, delivery._in_flight
+    assert delivery._sending == {}, delivery._sending

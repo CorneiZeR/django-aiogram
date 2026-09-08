@@ -317,7 +317,34 @@ class Delivery(ABC):
             if delivered:
                 self.acknowledge(raw)
 
-    def _release_for(self, handle: object, bot_id: 'int | None' = None) -> Callable[[], None]:
+    @staticmethod
+    def _settlement() -> 'Callable[[], bool]':
+        """Return the claim on settling one message, which exactly one caller may win.
+
+        Three callers race for it and each does something different with the win: the
+        handler's ``on_complete``, its ``on_refused``, and the exception paths in
+        :meth:`_hand_over`. Each has to be able to give the slots back and none of them may
+        do it twice -- a second report takes another message's place in the count, drives it
+        below zero and quietly widens the bound ``MAX_IN_FLIGHT`` exists to hold.
+
+        **One claim for all three**, not one per callback, and the reason is a handler that
+        reports and *then* raises: with a latch each, the completion queued a settlement and
+        the exception path returned the slots again -- the per-bot budget was then over by one
+        for every such send, and `_in_flight` went negative.
+
+        A latch rather than a flag: two threads can both read an unset flag and both report.
+        The acquire is never released; the lock is a one-way latch here, not a critical
+        section.
+        """
+        latch = threading.Lock()
+
+        def claim() -> bool:
+            """Whether this caller is the one that settles the message."""
+            return latch.acquire(blocking=False)
+
+        return claim
+
+    def _release_for(self, handle: object, bot_id: 'int | None', claim: 'Callable[[], bool]') -> Callable[[], None]:
         """Give back the slot a refused send took, without acknowledging the message.
 
         The slot has to come back — `_hand_over` took one before the handler ran — but
@@ -325,37 +352,26 @@ class Delivery(ABC):
         in-flight list is what lets the next start pick it up. Without this a refusal
         held its slot for the life of the process, and under ``MAX_IN_FLIGHT`` the
         consumer stopped taking messages entirely once enough had piled up.
-
-        Latched like its pair, and for the same reason: two reports would take another
-        message's place in the count.
         """
-        latch = threading.Lock()
 
         def once() -> None:
-            """Give the slot back, once."""
-            if latch.acquire(blocking=False):
+            """Give the slot back, once, if nothing else has settled this message."""
+            if claim():
                 self._finished.put((handle, False, bot_id))
 
         return once
 
-    def _completion_for(self, handle: object, bot_id: 'int | None' = None) -> Callable[[], None]:
-        """One report per message, however many times the send says it finished.
-
-        A latch rather than a flag: two threads can both read an unset flag and
-        both report. A second report is not harmless — it takes another message's
-        place in the in-flight count, drives it below zero and quietly widens the
-        bound ``MAX_IN_FLIGHT`` exists to hold.
-        """
-        latch = threading.Lock()
+    def _completion_for(
+        self,
+        handle: object,
+        bot_id: 'int | None',
+        claim: 'Callable[[], bool]',
+    ) -> Callable[[], None]:
+        """One report per message, however many times the send says it finished."""
 
         def once() -> None:
-            """Report the first finish and drop every later one.
-
-            The acquire is never released: the lock is a one-way latch here, not a
-            critical section, and the first caller through it is the only one that
-            should reach the in-flight count.
-            """
-            if latch.acquire(blocking=False):
+            """Report the first finish and drop every later one."""
+            if claim():
                 self._finished.put((handle, True, bot_id))
 
         return once
@@ -662,16 +678,19 @@ class Delivery(ABC):
         keep reading either way.
         """
         deferring = self._defers
+        # one claim for the callbacks and for the two exception paths below: whoever settles
+        # this message first is the only one that may give its slots back
+        settling = self._settlement()
         if deferring:
             # into the dict, never alongside it as a second keyword. The queue is
             # a trust boundary and send() forwards whatever it was given, so a
             # payload can carry this name — as a keyword that is "got multiple
             # values", a TypeError landing in the failure branch below, which
             # acknowledges a message nothing sent. Assigning simply wins
-            call['on_complete'] = self._completion_for(handle, envelope.bot_id)
+            call['on_complete'] = self._completion_for(handle, envelope.bot_id, settling)
             if self._releases:
                 # its pair, so a producer that refuses the send gives the slot back
-                call['on_refused'] = self._release_for(handle, envelope.bot_id)
+                call['on_refused'] = self._release_for(handle, envelope.bot_id, settling)
             if not counted:
                 # a message handed over from the park is already holding the queue's slot --
                 # the one `_park` took -- and counting it twice would leave that budget short
@@ -683,7 +702,9 @@ class Delivery(ABC):
         try:
             handler(**call)
         except asyncio.CancelledError:
-            if deferring:
+            if deferring and settling():
+                # only where nothing has settled it: a handler that reported and *then* was
+                # cancelled has already put its settlement on the queue
                 self._took_a_slot_back(envelope.bot_id)
                 self._hand_over_parked()
             logger.warning(
@@ -692,7 +713,9 @@ class Delivery(ABC):
             )
             return False
         except Exception:
-            if deferring:
+            if deferring and settling():
+                # as above: a handler that reported and then raised has settled this message
+                # already, and returning the slots a second time is what makes the count drift
                 self._took_a_slot_back(envelope.bot_id)
                 self._hand_over_parked()
             logger.exception(
