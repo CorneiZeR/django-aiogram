@@ -713,16 +713,22 @@ class Delivery(ABC):
             )
             return False
         except Exception:
-            if deferring and settling():
-                # as above: a handler that reported and then raised has settled this message
-                # already, and returning the slots a second time is what makes the count drift
+            # as above: a handler that reported and then raised has settled this message
+            # already, and returning the slots a second time is what makes the count drift
+            ours = not deferring or settling()
+            if deferring and ours:
                 self._took_a_slot_back(envelope.bot_id)
                 self._hand_over_parked()
             logger.exception(
                 'handler failed for queued message',
                 extra={'tg_function': envelope.function},
             )
-            return True
+            # and the acknowledgement belongs to whoever settled it. A handler that reported
+            # through `on_complete` before raising has a settlement on the queue and `collect`
+            # will acknowledge from it, so saying yes here acknowledges the same message
+            # twice; one that reported through `on_refused` said *nothing sent this*, and
+            # acknowledging it would destroy a message a later start could deliver
+            return ours
         # a deferring handler decides when this message is done. Returning True
         # here is what made the at-least-once promise false: send_raw returns as
         # soon as the coroutine is scheduled, long before Telegram has seen it

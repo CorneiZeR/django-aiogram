@@ -97,7 +97,9 @@ class BatchedDelivery(Delivery):
             self.hold_for_capacity()  # MAX_IN_FLIGHT, if the project set one
             # `dispatch` applies MAX_IN_FLIGHT_PER_BOT itself: a message for a bot at its
             # budget is held and handed over from `collect`, so a run() of your own needs
-            # nothing for it beyond calling both of these
+            # nothing for it beyond calling both of these. It also acknowledges only what
+            # `dispatch` says to: a handler that reported through `on_complete` and then
+            # raised has settled its own message, and `dispatch` answers False for it
 
             if self.stopping:  # the gate above releases on shutdown as well as on capacity
                 break

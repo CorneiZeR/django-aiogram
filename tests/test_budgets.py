@@ -323,3 +323,55 @@ def test_a_handler_that_reports_both_ways_settles_its_message_once():
 
     assert delivery._in_flight == 0, delivery._in_flight
     assert delivery._sending == {}, delivery._sending
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT': 10})
+def test_a_handler_that_reported_before_raising_leaves_the_acknowledgement_to_its_report():
+    """Whoever settled the message decides its fate, and only one of them may.
+
+    A completion queues a settlement that `collect` acknowledges from, so a `True` from the
+    exception path acknowledges the same message a second time.
+    """
+    handler = Deferring()
+
+    def reports_then_raises(**call):
+        handler(**call)
+        # reported *before* raising, which is the whole case: the completion is on the queue
+        # and `collect` will acknowledge from it
+        call['on_complete']()
+        msg = 'the handler failed after reporting'
+        raise RuntimeError(msg)
+
+    delivery = BlpopDelivery(handler=handler, route=lambda bot_id: reports_then_raises)
+    acknowledged = []
+    delivery.acknowledge = acknowledged.append
+
+    took = delivery.dispatch(a_message(123456, 'reported'))
+    delivery.collect()
+
+    assert took is False, 'the caller acknowledged a message its handler had already settled'
+
+    assert len(acknowledged) == 1, f'the message was acknowledged {len(acknowledged)} times'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT': 10})
+def test_a_handler_that_refused_before_raising_does_not_acknowledge_at_all():
+    """`on_refused` says nothing sent this, so acknowledging would destroy a live message."""
+    handler = Deferring()
+
+    def refuses_then_raises(**call):
+        handler(**call)
+        handler.refusals[call.get('text')]()
+        msg = 'the handler failed after refusing'
+        raise RuntimeError(msg)
+
+    delivery = BlpopDelivery(handler=handler, route=lambda bot_id: refuses_then_raises)
+    acknowledged = []
+    delivery.acknowledge = acknowledged.append
+
+    took = delivery.dispatch(a_message(123456, 'refused'))
+    delivery.collect()
+
+    assert took is False, 'a message the handler refused was acknowledged by the caller'
+    assert acknowledged == [], acknowledged
+    assert delivery._in_flight == 0, delivery._in_flight
