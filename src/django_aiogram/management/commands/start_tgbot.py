@@ -53,6 +53,28 @@ def _split(written: str) -> list[str]:
     return [part.strip() for part in written.split(',') if part.strip()]
 
 
+def _built_for(serving: 'tuple[str, ...]', build: 'Callable[[str], Delivery]') -> dict[str, 'Delivery']:
+    """Build the startup set, settling what was already built if one of them refuses.
+
+    The whole set is built before anything is started, so a refusal -- `REQUIRE_CRASH_SAFE` on
+    a transport that cannot promise crash safety -- reaches the operator as a command that
+    would not start rather than a warning per queue from a thread.
+
+    One at a time, and settled on the way out, because a consumer that was built has already
+    reclaimed: a refusal on the third queue would otherwise strand what the first two took,
+    and nothing in this process could acknowledge those messages again.
+    """
+    ready: dict[str, Delivery] = {}
+    try:
+        for queue in serving:
+            ready[queue] = build(queue)
+    except BaseException:
+        for queue, built in ready.items():
+            settle(built, queue)
+        raise
+    return ready
+
+
 def _only_its_own_queue(serving: tuple[str, ...], pools: str) -> bool:
     """Whether this container serves exactly the queue its settings name, and only ever will.
 
@@ -175,26 +197,21 @@ class Command(BaseCommand):
         one_queue = _only_its_own_queue(serving, options['pools'])
 
         def consumer_for(queue: str) -> Delivery:
-            """Build the consumer for one queue and prove what it promises before it runs."""
+            """Build the consumer for one queue and prove what it promises before it runs.
+
+            A refusal from the preflight settles the consumer it was proving: `reclaim` has
+            already run by then, so a consumer dropped here takes what it reclaimed with it --
+            and nothing else in this process can acknowledge those messages.
+            """
             built = _consumer_for(queue, one_queue=one_queue)
-            self._preflight(built)
+            try:
+                self._preflight(built)
+            except BaseException:
+                settle(built, queue)
+                raise
             return built
 
-        # the startup set is built here rather than by the first pass, so a refusal reaches
-        # the operator as a command that would not start -- `REQUIRE_CRASH_SAFE` is the one
-        # that does that -- instead of a warning per queue from a thread.
-        #
-        # Built one at a time and settled on the way out, because a consumer that was built
-        # has already reclaimed: a refusal on the third queue would otherwise strand what the
-        # first two took, and nothing in this process could acknowledge those messages again
-        ready: dict[str, Delivery] = {}
-        try:
-            for name in serving:
-                ready[name] = consumer_for(name)
-        except BaseException:
-            for name, built in ready.items():
-                settle(built, name)
-            raise
+        ready = _built_for(serving, consumer_for)
         # the transport's own deadline, not `REDIS_TIMEOUT`: this bounds the thread being
         # joined below, and reading it from one transport's setting meant a consumer could be
         # inside a call the join had already given up on. Measured: at `KAFKA_TIMEOUT = 45`

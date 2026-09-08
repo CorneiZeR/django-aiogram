@@ -450,7 +450,11 @@ def test_a_server_without_lmove_is_refused_when_crash_safety_is_required(monkeyp
     with pytest.raises(CommandError, match='LMOVE'):
         call_command('start_tgbot')
 
-    assert started == [], f'the refusal came too late: {started}'
+    assert 'polling-started' not in started, f'the refusal came too late: {started}'
+    assert 'consumer-started' not in started, f'the consumer ran anyway: {started}'
+    # and the consumer the probe refused is settled rather than dropped: `reclaim` had
+    # already run, so what it took is in its in-flight list and only it can acknowledge that
+    assert started == ['stopped', 'collected'], started
 
 
 @override_settings(

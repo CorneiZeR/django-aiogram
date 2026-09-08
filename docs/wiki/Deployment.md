@@ -623,7 +623,11 @@ manage.py start_tgbot --pools vip
 - **`--queues`** names them. Each has to be declared, in
   `TELEGRAM_BOT_DEFAULTS['QUEUES']` or as a `TelegramQueue` row; a name that is
   not is refused rather than consumed, because a container reading a queue
-  nobody publishes to looks healthy and delivers nothing.
+  nobody publishes to looks healthy and delivers nothing. The exception is a
+  database that could not be *read* — down, or not migrated here: the table's
+  answer is then unknown, so nothing is refused and the container serves what it
+  was told. A deployment with no database at all is not that case, and its
+  settings are the whole declaration.
 - **`--pools`** names the *labels* on those rows instead, and that is the one
   Celery has no equivalent for: a queue created after this container started is
   served with no redeploy, which is what enumeration cannot do when clients

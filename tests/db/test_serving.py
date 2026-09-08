@@ -273,15 +273,6 @@ def test_a_consumer_whose_thread_outlived_the_join_is_not_settled_from_here(capl
     """
     log = []
 
-    class StillTurning(Fake):
-        """A consumer whose thread does not stop when it is asked to."""
-
-        def start_thread(self):
-            """Hand back a thread that never finishes."""
-            self.log.append(('started', self.queue))
-            self.thread = _Alive()
-            return self.thread
-
     stuck = StillTurning('vip', log)
     consumers = Consumers(build=lambda queue: stuck, join_timeout=0.01)
     consumers.reconcile(['vip'])
@@ -313,3 +304,43 @@ class _Alive:
     def is_alive(self):
         """Say whether this thread is still turning."""
         return self.alive
+
+
+def test_a_queue_that_comes_back_before_its_old_consumer_has_gone_waits(caplog):
+    """Two consumers on one queue would both take from it and both settle it.
+
+    The shape is a queue leaving the set, its stop timing out, and the queue coming back on
+    the next pass: absent from the running set, it looks like a queue that needs starting.
+    """
+    log = []
+    stuck = None
+
+    def build(queue):
+        nonlocal stuck
+        stuck = StillTurning(queue, log)
+        return stuck
+
+    consumers = Consumers(build=build, join_timeout=0.01)
+    consumers.reconcile(['vip'])
+    consumers.reconcile([])
+
+    with caplog.at_level('WARNING', logger='django_aiogram'):
+        consumers.reconcile(['vip'])
+
+    assert log == [('started', 'vip'), ('stopped', 'vip')], 'a second consumer was started for one queue'
+    assert 'not starting a queue whose previous consumer is still running' in caplog.text
+
+    stuck.thread.alive = False
+    consumers.reconcile(['vip'])
+
+    assert log[-1] == ('started', 'vip'), 'the replacement never started once the old thread had gone'
+
+
+class StillTurning(Fake):
+    """A consumer whose thread does not stop when it is asked to."""
+
+    def start_thread(self):
+        """Hand back a thread that never finishes until a case says it has."""
+        self.log.append(('started', self.queue))
+        self.thread = _Alive()
+        return self.thread

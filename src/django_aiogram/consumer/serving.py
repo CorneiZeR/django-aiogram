@@ -88,6 +88,16 @@ class Consumers:
             for queue in asked:
                 if queue in self.running:
                     continue
+                if self._still_turning(queue):
+                    # left the set, its stop timed out, and now it is back: starting a
+                    # replacement while the old thread is inside `run` puts two consumers on
+                    # one queue, both taking and both settling. It starts on the pass after
+                    # the old thread has gone, which is one interval later at worst
+                    logger.warning(
+                        'not starting a queue whose previous consumer is still running',
+                        extra={'tg_queue': queue},
+                    )
+                    continue
                 consumer = None
                 try:
                     consumer = self._ready.pop(queue, None) or self.build(queue)
@@ -132,6 +142,13 @@ class Consumers:
             for consumer in self._ready.values():
                 consumer.collect()
             self._settle_what_has_stopped()
+
+    def _still_turning(self, queue: str) -> bool:
+        """Whether a consumer this container stopped for that queue is still inside ``run``.
+
+        Held under the caller's lock.
+        """
+        return any(name == queue and thread.is_alive() for name, _, thread in self._stopped)
 
     def _settle_what_has_stopped(self) -> None:
         """Settle every stopped consumer whose thread has actually exited, and forget it.
