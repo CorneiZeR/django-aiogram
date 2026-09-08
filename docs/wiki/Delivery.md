@@ -47,6 +47,18 @@ its expiry event — was removed in 3.0: it needed `CONFIG SET notify-keyspace-e
 managed providers refuse, and nothing could be delivered before the TTL elapsed. `E009` names
 both old words against what to write instead.
 
+### Removing a queue
+
+`Broker.discard()` is how a transport removes the queue it addresses, and it is what
+`manage.py tgbot_prune_queues` calls. The shipped transports differ, and the contract says
+so rather than pretending: the Redis list deletes its queue and every worker's in-flight list
+and heartbeat derived from its name, Redis Streams deletes the stream (which takes its group
+and pending entries with it), RabbitMQ deletes the queue on the server, and **Kafka answers
+`False`** — deleting a topic is the cluster's decision and not a producer's. `False` is not a
+failure; the command reports it as a queue somebody has to remove by hand.
+
+A transport of your own inherits `False`, so it is never removed by accident.
+
 ### Writing your own
 
 Subclass `Delivery` and implement `run()`. Everything else is provided, and the provided parts

@@ -164,6 +164,18 @@ class InMemoryBroker(Broker):
                 self._ready.notify_all()
             return count
 
+    def discard(self) -> bool:
+        """Throw away everything this queue holds, waiting and taken alike.
+
+        A memory queue *is* its contents, so removing it is emptying it -- there is no key to
+        delete and nothing outside this instance to tell. Answering ``True`` is what lets a
+        project's own tests exercise `manage.py tgbot_prune_queues` at all.
+        """
+        with self._ready:
+            self._waiting.clear()
+            self._inflight.clear()
+        return True
+
     def depth(self) -> int:
         """How many are waiting to be taken."""
         with self._ready:

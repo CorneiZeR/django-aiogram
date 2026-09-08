@@ -442,6 +442,16 @@ class RedisStreamsBroker(Broker):
 
     # ---------------------------------------------------------------- operations
 
+    def discard(self) -> bool:
+        """Delete this stream, which takes its consumer group and every pending entry with it.
+
+        One key rather than a group teardown followed by a delete: a group belongs to its
+        stream, so `DEL` is what removes both -- and doing it the other way round leaves a
+        window where the stream exists with nothing able to read it.
+        """
+        self._redis().delete(self._key())
+        return True
+
     def reclaim(self) -> int | None:
         """Claim every entry idle longer than the liveness TTL, and say how many.
 

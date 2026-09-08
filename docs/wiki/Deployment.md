@@ -224,6 +224,28 @@ a person, after an incident, with `--dry-run` first — see
 **[Troubleshooting](Troubleshooting.md#telegram-was-down-what-did-we-lose-and-can-it-be-sent-again)**.
 Scheduling it would mean re-sending failures nobody has looked at.
 
+`manage.py tgbot_prune_queues` is the fourth, and it is on neither list because that depends
+on your `REMOVED_QUEUE_POLICY`. A queue per client is what keeps one client's backlog off
+another's, and it is also how a deployment leaks: a client goes, their bot's row goes, and a
+Redis key, an AMQP queue or a consumer group stays for ever. The command finds the queues no
+bot points at and does what the policy says:
+
+| policy | what happens |
+| --- | --- |
+| `park` (default) | the queue is reported and nothing is removed. An operator decides, which is right where a client may come back and the messages may still be worth reading |
+| `hold` | the queue is removed once it is empty, and reported while it is not |
+| `drop` | the queue is removed, with whatever is still in it |
+
+Under `park` it is safe to schedule and tells you what is accumulating; under `drop` it
+deletes, so run it by hand or schedule it knowing that. `--dry-run` says what would happen,
+`--queue` bounds a run to the queues you name — and a name a bot still points at is refused
+rather than skipped. A bot that is merely **switched off still counts**: a client paused for a
+month has not given up their backlog.
+
+Kafka answers that it cannot remove a queue, and says so per queue rather than failing:
+deleting a topic is an administrative act against the cluster, not something a producer may
+take. The line names the topic for whoever owns that cluster.
+
 From cron, or as a container of its own:
 
 ```yaml

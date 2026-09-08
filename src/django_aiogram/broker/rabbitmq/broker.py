@@ -287,6 +287,16 @@ class RabbitMQBroker(Broker):
 
     # ---------------------------------------------------------------- operations
 
+    def discard(self) -> bool:
+        """Delete this queue on the server, with whatever is still in it.
+
+        Unconditionally, because the caller has already decided: `tgbot_prune_queues` names
+        the policy that got here, and a queue nothing publishes to is not made safer by
+        keeping the messages nobody will read.
+        """
+        self._channel().queue_delete(queue=self._queue())
+        return True
+
     def reclaim(self) -> int | None:
         """``None``: the broker does this itself, so there is nothing for a restart to do.
 

@@ -124,6 +124,23 @@
   down, or not migrated here -- declares nothing and refuses nothing; no table at all is a
   different state, where the settings are the whole declaration.
 
+- **`manage.py tgbot_prune_queues`, for the queues a client leaves behind.** A queue per
+  client keeps one backlog off another's, and it is also how a deployment leaks: the client
+  goes, their bot's row goes, and a Redis key, an AMQP queue or a consumer group stays for
+  ever -- one per client that ever existed. The command finds the queues no bot points at and
+  obeys `REMOVED_QUEUE_POLICY`: `park` (the default) reports and removes nothing, `hold`
+  removes once empty, `drop` removes with whatever is still in it. `--dry-run` and `--queue`
+  bound a run, and a queue a bot still points at is refused rather than skipped -- a bot
+  switched off still counts, because a client paused for a month has not given up their
+  backlog.
+
+  A command rather than a signal: removing a queue is destructive, and a `post_delete`
+  receiver in a web request is the wrong place to decide it. `Broker.discard()` is the seam --
+  implemented for the Redis list (with every worker's in-flight list and heartbeat for that
+  queue), Redis Streams and RabbitMQ, and answering `False` on Kafka, where dropping a topic
+  is the cluster's decision rather than a producer's. A transport of your own inherits `False`
+  and is never removed by accident.
+
 - **Two containers over one set of bots split them, and neither polls the other's.**
   `getUpdates` is exclusive -- two processes calling it for one token get a 409 and half the
   updates each -- and with bots arriving at run time there is no deploy-time list to divide

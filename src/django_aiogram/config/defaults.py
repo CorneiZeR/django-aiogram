@@ -124,6 +124,10 @@ DEFAULTS: dict[str, Any] = {
     # the queues this deployment has: a name in `QUEUE` that is not one of these, or a row in
     # `TelegramQueue`, is refused where it was written. Naming a queue means declaring it,
     # because the alternative is a typo creating a queue nobody reads
+    # what `manage.py tgbot_prune_queues` does with a queue no bot publishes to: 'park'
+    # (leave it and report it), 'hold' (remove it once empty) or 'drop' (remove it now).
+    # Nothing acts on this on its own -- removing a queue is not a signal handler's decision
+    'REMOVED_QUEUE_POLICY': 'park',
     'QUEUES': (),
     'BOT_PROVIDERS': ('django_aiogram.runtime.providers.from_settings',),
     # how often a supervisor re-reads them. The push through the transport is what makes a

@@ -15,7 +15,15 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from django_aiogram.broker.base import Broker
 from django_aiogram.broker.models import Liveness, Taken
 from django_aiogram.eventlog.events import worker_identity
-from django_aiogram.redis import aget_redis, as_bytes, as_command_argument, get_redis, heartbeat_key, heartbeat_ttl
+from django_aiogram.redis import (
+    _escaped,
+    aget_redis,
+    as_bytes,
+    as_command_argument,
+    get_redis,
+    heartbeat_key,
+    heartbeat_ttl,
+)
 
 if TYPE_CHECKING:
     from redis import Redis
@@ -190,6 +198,22 @@ class RedisListBroker(Broker):
         send, and inventing one would mean pushing the payload back and creating a second
         copy of a message that never left.
         """
+
+    def discard(self) -> bool:
+        """Delete this queue, every worker's in-flight list for it, and their heartbeats.
+
+        All of them, because each is derived from the queue's own name: leaving the in-flight
+        lists behind would leave the messages a dead worker held, which is the state
+        `tgbot_reclaim` exists for and nothing will ever reclaim for a queue nobody serves.
+
+        Scanned rather than guessed, since the names carry a worker's identity and a queue
+        outlives the workers that served it.
+        """
+        connection = self._redis()
+        queue = self._queue()
+        keys = [queue, *connection.scan_iter(match=f'{_escaped(queue)}:*', count=100)]
+        connection.delete(*keys)
+        return True
 
     # ---------------------------------------------------------------- operations
 

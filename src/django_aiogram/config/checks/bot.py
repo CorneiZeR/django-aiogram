@@ -22,6 +22,7 @@ from django_aiogram.config.defaults import PROCESS_SCOPED
 from django_aiogram.config.enums import (
     KNOWN_RATE_LIMIT_KEYS,
     PayloadDetail,
+    RemovedQueuePolicy,
     SerializerKind,
     StorageKind,
     UpdateMode,
@@ -31,6 +32,8 @@ from django_aiogram.config.settings import REMOVED_SETTINGS_NAME, SETTINGS_NAME,
 from django_aiogram.runtime.queues import declaration
 
 MODE_CHOICES = choices(UpdateMode)
+#: what `REMOVED_QUEUE_POLICY` may say, from the enum rather than a list written twice
+QUEUE_POLICY_CHOICES = choices(RemovedQueuePolicy)
 
 
 SERIALIZER_CHOICES = choices(SerializerKind)
