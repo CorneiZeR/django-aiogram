@@ -50,7 +50,8 @@ def decoded_server(monkeypatch):
         'django_aiogram.redis.get_redis',
         'django_aiogram.broker.redis_list.broker.get_redis',
     ):
-        monkeypatch.setattr(target, lambda server=server: server)
+        # `*args`: the accessors take the settings a client is for since 5.0
+        monkeypatch.setattr(target, lambda *args, server=server, **kwargs: server)
     return server
 
 
@@ -181,30 +182,33 @@ def test_the_connection_is_built_once_and_reused(monkeypatch):
     assert all(kwargs['socket_timeout'] and kwargs['socket_connect_timeout'] for kwargs in deadlines), deadlines
 
 
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0'})
 def test_get_reads_the_slot_exactly_once_on_the_fast_path():
-    """A reset between two reads of the attribute used to hand the caller None.
+    """A reset between two reads of the mapping used to hand the caller None.
 
-    Deterministic where a stress test is not: the second read of the slot
+    Deterministic where a stress test is not: the second read of the entry
     answers None, exactly what a concurrent reset() makes it. Code that keeps
     one local read never performs a second one.
+
+    The slot is one entry of a mapping since 5.0, because a client is cached per server: the
+    property being pinned is the same, and the second read is now a second lookup.
     """
     from django_aiogram.redis import _SharedConnection
 
     sentinel = object()
     reads = {'count': 0}
 
-    class SecondReadIsReset(_SharedConnection):
-        def __getattribute__(self, name: str):
-            if name == '_client':
-                reads['count'] += 1
-                if reads['count'] > 1:
-                    return None
-            return super().__getattribute__(name)
+    class SecondLookupIsReset(dict):
+        def get(self, key, default=None):
+            reads['count'] += 1
+            if reads['count'] > 1:
+                return None
+            return super().get(key, default)
 
-    holder = SecondReadIsReset()
-    object.__setattr__(holder, '_client', sentinel)
+    holder = _SharedConnection()
+    object.__setattr__(holder, '_clients', SecondLookupIsReset({'redis://localhost:6379/0': sentinel}))
 
-    assert holder.get() is sentinel, 'get() re-read the slot and met the reset'
+    assert holder.get() is sentinel, 'get() re-read the mapping and met the reset'
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0', 'REDIS_TIMEOUT': 7})

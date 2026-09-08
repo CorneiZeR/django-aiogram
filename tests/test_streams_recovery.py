@@ -170,7 +170,7 @@ def test_a_url_that_asks_for_decoding_still_delivers(monkeypatch):
     decoding one answers `'payload'`.
     """
     decoding = fakeredis.FakeRedis(server=fakeredis.FakeServer(), decode_responses=True)
-    monkeypatch.setattr('django_aiogram.broker.redis_streams.broker.get_redis', lambda: decoding)
+    monkeypatch.setattr('django_aiogram.broker.redis_streams.broker.get_redis', lambda *args, **kwargs: decoding)
     broker = RedisStreamsBroker()
 
     broker.publish([payload(5)])

@@ -102,8 +102,10 @@ def redis_server(monkeypatch):
     for target in PATCH_TARGETS:
         monkeypatch.setattr(target, lambda *args, client=client, **kwargs: client)
     monkeypatch.setattr(
+        # `*args` because the accessors take the settings a client is for since 5.0: bound to
+        # `server` positionally, a bot's settings arrived where the fake server goes
         'django_aiogram.redis.build_async_client',
-        lambda server=server: fakeredis.aioredis.FakeRedis(server=server),
+        lambda *args, server=server, **kwargs: fakeredis.aioredis.FakeRedis(server=server),
     )
     return client
 

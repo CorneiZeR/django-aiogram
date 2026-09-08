@@ -49,7 +49,7 @@ def test_the_fakeredis_queue_assertion(monkeypatch):
     going through the seam the producer has no such name at all.
     """
     server = fakeredis.FakeRedis()
-    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', lambda: server)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', lambda *args, **kwargs: server)
 
     approve({'reviewer': 42})
 

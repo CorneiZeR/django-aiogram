@@ -404,6 +404,9 @@ def test_a_zero_blpop_timeout_is_clamped(redis_server, monkeypatch):
     timeouts = []
 
     class Spy:
+        def __init__(self, *args, **kwargs):
+            """Take what the accessor takes: it is handed the settings a client is for."""
+
         def blmove(self, source, destination, timeout, *args, **kwargs):
             timeouts.append(timeout)
             return redis_server.lmove(source, destination, *args, **kwargs)

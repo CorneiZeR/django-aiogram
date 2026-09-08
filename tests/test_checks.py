@@ -2130,3 +2130,9 @@ def test_one_polling_bot_among_webhook_ones_is_enough_to_report_the_lease():
     reported = [message for message in check_settings() if str(message.id).endswith('W011')]
 
     assert len(reported) == 1, f'expected one finding for the process, got {len(reported)}'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'QUEUES': 'vip'})
+def test_a_bare_string_of_queues_is_reported():
+    """It is a collection of its characters, so read as one it declares `v`, `i` and `p`."""
+    assert [message for message in check_settings() if str(message.id).endswith('E058')]

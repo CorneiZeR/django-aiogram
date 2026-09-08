@@ -28,6 +28,7 @@ from django_aiogram.config.enums import (
     choices,
 )
 from django_aiogram.config.settings import REMOVED_SETTINGS_NAME, SETTINGS_NAME, coerce_bool
+from django_aiogram.runtime.queues import declaration
 
 MODE_CHOICES = choices(UpdateMode)
 
@@ -343,6 +344,37 @@ def _a_lease_a_pass_can_renew(key: str, record: BotRecord) -> list[Problem]:
                 f'Raise it above twice {SETTINGS_NAME}["BOT_REFRESH_INTERVAL"], or lower that: '
                 'a lease that lapses between renewals moves the bot to another container, and '
                 'both of them poll it until it settles.'
+            ),
+        )
+    ]
+
+
+def _a_declared_queue(key: str, record: BotRecord) -> list[Problem]:
+    """Refuse a bot whose queue nothing declares, which is a typo with no other symptom.
+
+    A message published to an undeclared name is a send that succeeds and arrives nowhere:
+    nothing consumes that queue, so the message waits in it and the feed says it was queued.
+    Reported here as well as refused at run time, because boot is where a typo is cheap.
+
+    A table that cannot be read declares nothing and this reports nothing: `manage.py check`
+    runs where a database may be unreachable or unmigrated, and a check that fails then would
+    make an outage look like a configuration error.
+    """
+    wanted = str(_setting(key, record) or '').strip()
+    if not wanted:
+        return []
+    # one read for both answers: two would let the first fail and the second succeed, and
+    # `E059` would then report a queue the table declares as one nothing does
+    known, readable = declaration()
+    if wanted in known or not readable:
+        return []
+    return [
+        Problem(
+            f'is {wanted!r}, which this deployment has not declared.',
+            hint=(
+                f'Declared: {", ".join(sorted(known)) or "none"}. Add it to '
+                f'{SETTINGS_NAME}["QUEUES"] or to the TelegramQueue table -- a queue nothing '
+                'declares is one nothing consumes, and a message published to it is lost quietly.'
             ),
         )
     ]

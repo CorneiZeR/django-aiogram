@@ -63,6 +63,7 @@ class RabbitMQBroker(Broker):
     #: this transport's own settings. Both names are required: a URL carries credentials and
     #: a host, and neither has a default worth baking in, while the queue is where messages
     #: go — the same reason the stream key has none
+    QUEUE_OPTION: ClassVar[str] = 'RABBITMQ_QUEUE'
     CALL_TIMEOUT_OPTION: ClassVar[str] = 'RABBITMQ_TIMEOUT'
 
     OPTIONS: ClassVar[Mapping[str, Any]] = {
@@ -89,7 +90,7 @@ class RabbitMQBroker(Broker):
 
     def _queue(self) -> str:
         """Name the queue this broker publishes to and consumes from."""
-        return str(self.option('RABBITMQ_QUEUE'))
+        return self.addressed()
 
     def _channel(self) -> 'BlockingChannel':
         """Reach this thread's channel, declaring the queue on first use.
@@ -101,14 +102,14 @@ class RabbitMQBroker(Broker):
         from a deadline no publish, get or confirm on this channel ever carried.
         """
         return channel_for_thread(
-            str(self.option('RABBITMQ_URL')),
+            str(self.opt('RABBITMQ_URL')),
             self._queue(),
             # the same `or` idiom the deadline no longer uses, and kept on purpose: 0 *is* this
             # option's declared default and its meaning, so nothing a project writes changes hands
             # here except a value `int` would refuse outright. Refusing it by name needs a rule per
             # transport option, which is #23 rather than this line
-            int(str(self.option('RABBITMQ_PREFETCH') or 0)),
-            type(self).call_timeout(),
+            int(str(self.opt('RABBITMQ_PREFETCH') or 0)),
+            self.deadline(),
         )
 
     # ------------------------------------------------------------------ producer
@@ -333,7 +334,7 @@ class RabbitMQBroker(Broker):
     @property
     def call_ceiling(self) -> float:
         """``RABBITMQ_TIMEOUT``, which bounds a publish, a get and the confirm it waits for."""
-        return type(self).call_timeout()
+        return self.deadline()
 
     @property
     def crash_safe(self) -> bool:

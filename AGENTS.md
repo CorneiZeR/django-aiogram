@@ -42,6 +42,7 @@ src/django_aiogram/
         supervisor.py   the pass that makes what is running match what is configured
         lifecycle.py    what a bot's failure was, and who is told about it
         leases.py       which process polls which bot, when several of them could
+        queues.py       which queues a deployment has, and why naming one declares it
         control.py      the notice that says "read again", and what it may not cost a save
         profiles.py     what two bots must agree on before they share anything
         groups.py       the objects a profile owns: the transport, and what drains it

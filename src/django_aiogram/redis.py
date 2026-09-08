@@ -1,9 +1,15 @@
-"""The one Redis connection this package shares.
+"""The Redis connections this package shares, one per server it is pointed at.
 
 Senders, consumers, the FSM heartbeat and the management commands all go through
-:func:`get_redis`, so a process opens a single connection pool however many of
-them are running. The connection is built on first use rather than at import,
-because Django settings are not readable while the app registry is loading.
+:func:`get_redis`, so a process opens a single connection pool per ``REDIS_URL`` however many
+of them are running. The connection is built on first use rather than at import, because
+Django settings are not readable while the app registry is loading.
+
+**Per URL rather than per process**, because ``REDIS_URL`` is a bot's setting like the rest of
+a transport's: a client cached for the process would give one bot's queue key to another bot's
+server, which is the failure nobody looks for -- the key is right, the data is somewhere else.
+A deployment with one Redis, which is most of them, has one entry and pays a dictionary lookup
+for it.
 """
 
 from __future__ import annotations
@@ -21,7 +27,7 @@ from django_aiogram.config.settings import SETTINGS_NAME, conf
 from django_aiogram.eventlog.events import worker_identity
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     from redis import Redis
     from redis.asyncio import Redis as AsyncRedis
@@ -38,7 +44,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger('django_aiogram')
 
 
-def read_timeout() -> int:
+def read_timeout(settings: Mapping[str, Any] | None = None) -> int:
     """How long any single Redis call may take before the server is dead to us.
 
     Not the Redis transports' reader of `REDIS_TIMEOUT` — that is `call_timeout()` on the broker,
@@ -46,10 +52,11 @@ def read_timeout() -> int:
     included. The two can only disagree on a value `E030` reports, since it requires an integer of
     at least two, and unifying them waits on `REDIS_TIMEOUT` leaving the package-wide table (#23).
     """
-    return max(1, int(conf['REDIS_TIMEOUT']))
+    resolved = conf if settings is None else settings
+    return max(1, int(resolved['REDIS_TIMEOUT']))
 
 
-def connection_kwargs() -> dict[str, Any]:
+def connection_kwargs(settings: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """How every client this package builds is configured.
 
     Its own, rather than a detail of :func:`build_client`, because the FSM storage
@@ -60,7 +67,7 @@ def connection_kwargs() -> dict[str, Any]:
     "querystring arguments always win", so anything here is a default a project can
     still override with a query string on ``REDIS_URL``.
     """
-    timeout = read_timeout()
+    timeout = read_timeout(settings)
     return {'socket_connect_timeout': timeout, 'socket_timeout': timeout}
 
 
@@ -78,7 +85,7 @@ def queue_key() -> str:
     """
     from django_aiogram.broker.redis_list import RedisListBroker  # noqa: PLC0415 - it imports this module
 
-    return str(RedisListBroker.option('REDIS_MESSAGES_KEY'))
+    return RedisListBroker.queue()
 
 
 def processing_key(worker: str | None = None) -> str:
@@ -126,9 +133,15 @@ def _escaped(literal: str) -> str:
     return ''.join(f'\\{character}' if character in '*?[]^\\' else character for character in literal)
 
 
-def heartbeat_key(worker: str | None = None) -> str:
-    """Where one worker says it is still turning. Per worker, like the list above."""
-    return f'{queue_key()}:heartbeat:{worker or worker_identity()}'
+def heartbeat_key(worker: str | None = None, queue: str | None = None) -> str:
+    """Where one worker says it is still turning. Per worker *and* per queue.
+
+    Both, because one process can serve two queues on one Redis under one name: keyed on the
+    worker alone, the consumer of the busy queue would keep the key warm and the stopped
+    consumer of the quiet one would read as healthy off it. ``queue`` defaults to the
+    process's, which is what a deployment with one queue has.
+    """
+    return f'{queue or queue_key()}:heartbeat:{worker or worker_identity()}'
 
 
 def heartbeat_interval() -> int:
@@ -148,7 +161,38 @@ def heartbeat_ttl(interval: int | None = None) -> int:
     return (heartbeat_interval() if interval is None else interval) * 3
 
 
-def build_client() -> Redis:
+def url_for(settings: Mapping[str, Any] | None = None) -> str:
+    """Return the Redis one bot talks to, which is not always the one the process does.
+
+    ``REDIS_URL`` is resolved per bot like every other transport setting, so a client cached
+    for the process would connect one bot's queue key to another bot's server -- the queue
+    would be right and the server wrong, which is the shape of failure nobody looks for. The
+    accessors below key their caches on what this returns.
+    """
+    resolved = conf if settings is None else settings
+    url = str(resolved['REDIS_URL'] or '')
+    if not url:
+        msg = f"{SETTINGS_NAME}['REDIS_URL'] is required to talk to Redis."
+        raise ImproperlyConfigured(msg)
+    return url
+
+
+def _server(settings: Mapping[str, Any] | None = None) -> str:
+    """Return what a client for these settings is cached under, refusing nothing.
+
+    :func:`url_for` is where an empty or unreadable ``REDIS_URL`` is refused, and it has to
+    stay there: a cache lookup happens before every call, and a setting nobody has read yet is
+    not the lookup's business. An unreadable one keys the same entry as an empty one, and the
+    build behind it raises the same way it always did.
+    """
+    resolved = conf if settings is None else settings
+    try:
+        return str(resolved['REDIS_URL'] or '')
+    except Exception:  # noqa: BLE001 - `url_for` reports it, and a lookup may not raise
+        return ''
+
+
+def build_client(settings: Mapping[str, Any] | None = None) -> Redis:
     """Build a client bounded in time, so no call can hang for ever.
 
     redis-py only started defaulting to a read deadline in 8.0; on the 6.2 floor
@@ -175,14 +219,10 @@ def build_client() -> Redis:
     """
     from redis import Redis  # noqa: PLC0415 - the driver is an extra; see the note above
 
-    url = conf['REDIS_URL']
-    if not url:
-        msg = f"{SETTINGS_NAME}['REDIS_URL'] is required to talk to Redis."
-        raise ImproperlyConfigured(msg)
-    return Redis.from_url(url, **connection_kwargs())
+    return Redis.from_url(url_for(settings), **connection_kwargs(settings))
 
 
-def build_async_client() -> AsyncRedis:
+def build_async_client(settings: Mapping[str, Any] | None = None) -> AsyncRedis:
     """Build the same client for a caller that is already on an event loop.
 
     Same URL, same deadlines from :func:`connection_kwargs`, same deliberate lack
@@ -195,11 +235,7 @@ def build_async_client() -> AsyncRedis:
     """
     from redis.asyncio import Redis as AsyncRedis  # noqa: PLC0415 - as build_client
 
-    url = conf['REDIS_URL']
-    if not url:
-        msg = f"{SETTINGS_NAME}['REDIS_URL'] is required to talk to Redis."
-        raise ImproperlyConfigured(msg)
-    return AsyncRedis.from_url(url, **connection_kwargs())
+    return AsyncRedis.from_url(url_for(settings), **connection_kwargs(settings))
 
 
 def url_decodes_responses(url: str) -> bool:
@@ -244,35 +280,36 @@ def url_decodes_responses(url: str) -> bool:
 
 
 class _SharedConnection:
-    """Holds the shared client, together with the lock that keeps it single."""
+    """Holds one client per server, together with the lock that keeps each single."""
 
     def __init__(self) -> None:
-        """Start with an empty slot; nothing connects until someone asks."""
+        """Start with nothing; nothing connects until someone asks."""
         self._lock = threading.Lock()
-        self._client: Redis | None = None
+        self._clients: dict[str, Redis] = {}
 
     @property
     def is_open(self) -> bool:
-        """Whether a client has been built and not reset since."""
-        return self._client is not None
+        """Whether any client has been built and not reset since."""
+        return bool(self._clients)
 
-    def get(self) -> Redis:
-        """Return the client, building it at most once."""
-        # one read, kept local: a reset() between two reads of the attribute
-        # would otherwise let this return None
-        client = self._client
+    def get(self, settings: Mapping[str, Any] | None = None) -> Redis:
+        """Return the client for these settings' server, building it at most once."""
+        url = _server(settings)
+        # one read, kept local: a reset() between two reads of the mapping would
+        # otherwise let this return None
+        client = self._clients.get(url)
         if client is None:
             with self._lock:
-                client = self._client
+                client = self._clients.get(url)
                 if client is None:
-                    client = self._client = build_client()
+                    client = self._clients[url] = build_client(settings)
         return client
 
     def reset(self) -> None:
-        """Empty the slot, then close whatever was in it."""
+        """Empty every slot, then close whatever was in them."""
         with self._lock:
-            client, self._client = self._client, None
-        if client is not None:
+            held, self._clients = list(self._clients.values()), {}
+        for client in held:
             # closing talks to the socket: a caller waiting to build a
             # replacement should not be held up by it
             client.close()
@@ -308,7 +345,10 @@ class _LoopConnections:
     def __init__(self) -> None:
         """Start empty, at generation zero."""
         self._guard = threading.Lock()
-        self._clients: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, tuple[int, AsyncRedis]]
+        self._clients: weakref.WeakKeyDictionary[
+            asyncio.AbstractEventLoop,
+            dict[str, tuple[int, AsyncRedis]],
+        ]
         self._clients = weakref.WeakKeyDictionary()
         self._generation = 0
 
@@ -323,49 +363,62 @@ class _LoopConnections:
         is what would have happened anyway had this registry never held them.
         """
         closed = [loop for loop in list(self._clients.keys()) if loop.is_closed()]
-        return [self._clients.pop(loop)[1] for loop in closed]
+        return [client for loop in closed for _, client in self._clients.pop(loop).values()]
 
-    async def get(self) -> AsyncRedis:
-        """Return this loop's client, building or replacing it as needed."""
+    async def get(self, settings: Mapping[str, Any] | None = None) -> AsyncRedis:
+        """Return this loop's client for these settings' server, building or replacing it."""
         loop = _running_loop()
+        url = _server(settings)
         # no await inside the lock, so a coroutine cannot be suspended holding it
         # and another thread's loop is only ever held off for a dict lookup
         with self._guard:
             abandoned = self._forget_closed()
-            entry = self._clients.get(loop)
-            if entry is not None and entry[0] == self._generation:
-                stale, client = None, entry[1]
+            held = self._clients.setdefault(loop, {})
+            # every entry a settings change left behind, not only the one being asked for: a
+            # process pointed at two servers keeps a client per server on this loop, and one
+            # that is never asked for again would otherwise hold its sockets until the loop
+            # itself went. This is the only thread that may close them
+            stale = [client for at, (generation, client) in held.items() if generation != self._generation]
+            for at in [at for at, (generation, _) in held.items() if generation != self._generation]:
+                del held[at]
+            entry = held.get(url)
+            if entry is not None:
+                client = entry[1]
             else:
-                stale = None if entry is None else entry[1]
-                client = build_async_client()
-                self._clients[loop] = (self._generation, client)
+                client = build_async_client(settings)
+                held[url] = (self._generation, client)
         # outside the guard: letting go of the abandoned clients runs whatever
         # their collection runs, and no other loop should wait behind it
         abandoned.clear()
-        if stale is not None:
-            # on its own loop, which is the only place it may be closed. Contained,
-            # because the replacement is already cached and healthy: a client whose socket
-            # is broken can raise on close, and this path runs right after a settings
-            # change — so letting it out would fail the first `asend` after every reset
-            # for something that has already been replaced
-            try:
-                await stale.aclose()
-            except Exception:
-                logger.exception('could not close the client a settings change replaced')
+        for outgoing in stale:
+            await _closed_quietly(outgoing)
         return client
 
     async def close(self) -> None:
-        """Close and forget this loop's client, if it has one."""
+        """Close and forget every client this loop has, if it has any."""
         loop = _running_loop('aclose_redis()')
         with self._guard:
-            entry = self._clients.pop(loop, None)
-        if entry is not None:
-            await entry[1].aclose()
+            held = self._clients.pop(loop, {})
+        for _, client in held.values():
+            await client.aclose()
 
     def invalidate(self) -> None:
         """Mark every client stale without touching any of them."""
         with self._guard:
             self._generation += 1
+
+
+async def _closed_quietly(client: AsyncRedis) -> None:
+    """Close one stale client on its own loop, which is the only place it may be closed.
+
+    Contained, because the replacement is already cached and healthy: a client whose socket is
+    broken can raise on close, and this runs right after a settings change -- so letting it out
+    would fail the first ``asend`` after every reset, for something already replaced.
+    """
+    try:
+        await client.aclose()
+    except Exception:
+        logger.exception('could not close the client a settings change replaced')
 
 
 def _running_loop(caller: str = 'aget_redis()') -> asyncio.AbstractEventLoop:
@@ -385,9 +438,9 @@ def _running_loop(caller: str = 'aget_redis()') -> asyncio.AbstractEventLoop:
 _loops = _LoopConnections()
 
 
-async def aget_redis() -> AsyncRedis:
-    """Return the async client for the loop this coroutine is running on."""
-    return await _loops.get()
+async def aget_redis(settings: Mapping[str, Any] | None = None) -> AsyncRedis:
+    """Return the async client for this loop and for the server ``settings`` names."""
+    return await _loops.get(settings)
 
 
 async def aclose_redis() -> None:
@@ -398,13 +451,13 @@ async def aclose_redis() -> None:
 _shared = _SharedConnection()
 
 
-def get_redis() -> Redis:
-    """Return the shared connection, creating it on first use."""
-    return _shared.get()
+def get_redis(settings: Mapping[str, Any] | None = None) -> Redis:
+    """Return the connection for the server ``settings`` names, creating it on first use."""
+    return _shared.get(settings)
 
 
 def reset_redis() -> None:
-    """Drop the shared connection so the next call reconnects."""
+    """Drop every connection so the next call reconnects."""
     _shared.reset()
 
 

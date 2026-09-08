@@ -61,6 +61,13 @@ class Broker(ABC):
     #: `REDIS_MESSAGES_KEY` means nothing to Kafka, and a topic means nothing to a list.
     OPTIONS: ClassVar[Mapping[str, Any]] = {}
 
+    #: which of this broker's own options names the queue this transport reads and writes:
+    #: a list key, a stream, an AMQP queue, a topic. The name rather than the value, for the
+    #: reason :attr:`CALL_TIMEOUT_OPTION` gives -- and because :meth:`queue` is what makes one
+    #: transport-neutral ``QUEUE`` reach all four of them. Held to the value by
+    #: `test_every_broker_addresses_the_queue_it_is_given`
+    QUEUE_OPTION: ClassVar[str] = ''
+
     #: which of this broker's own options bounds a single call, by name. The number is
     #: :attr:`call_ceiling`; this is the *name*, and it exists because two things outside any
     #: instance need it: `W004`'s hint has to tell an operator which setting to raise, and a check
@@ -112,6 +119,66 @@ class Broker(ABC):
 
     #: importable module name, and the extra that installs it. Empty means no driver.
     REQUIRES: ClassVar[tuple[str, str] | None] = None
+
+    #: the resolved settings this *instance* was built from, or ``None`` for the shared
+    #: defaults. Set by :meth:`configured`, which is how a group hands its bots' settings to
+    #: the transport it built for them -- without it every instance in the process would read
+    #: `conf`, and a bot's own queue, URL or deadline would reach the class that was chosen
+    #: and nothing that was built. A classmethod cannot read it, which is deliberate: the
+    #: checks ask a *class* what a setting says, and they pass the record they are checking
+    settings: 'Mapping[str, Any] | None' = None
+
+    @classmethod
+    def configured(cls, settings: 'Mapping[str, Any] | None' = None) -> 'Broker':
+        """Build one and stamp it with the settings it is for.
+
+        A classmethod rather than an ``__init__`` argument, because a broker's constructor is
+        part of what a project may write: `BROKER` names a class, and four of the shipped ones
+        take nothing. Stamping after the build keeps that promise and still gives the instance
+        its own configuration.
+        """
+        built: Broker = cls()
+        built.settings = settings
+        return built
+
+    def opt(self, key: str) -> object:
+        """Read one of this broker's own options as *this instance* was configured.
+
+        The instance-side twin of :meth:`option`: same resolution, against the settings this
+        broker was built for rather than the process's shared ones.
+        """
+        return type(self).option(key, self.settings)
+
+    def deadline(self) -> float:
+        """Return this instance's call deadline, from the settings it was built for."""
+        return type(self).call_timeout(self.settings)
+
+    def addressed(self) -> str:
+        """Return the queue this instance addresses, from the settings it was built for."""
+        return type(self).queue(self.settings)
+
+    @classmethod
+    def queue(cls, settings: Mapping[str, Any] | None = None) -> str:
+        """Name the queue this broker reads and writes, which is one setting for all four.
+
+        ``QUEUE`` is transport-neutral: a project isolating a client onto its own queue says
+        so once, and each transport reads it as whatever it addresses -- a list key, a stream,
+        an AMQP queue, a topic. Left empty, the transport's own option decides, which is what
+        every 4.x deployment already has set.
+
+        It is a *bot's* setting rather than the process's, and that is the point of it: two
+        bots naming different queues resolve to different profiles, so they get a broker each
+        rather than sharing one and reading each other's messages. `runtime.profiles` is where
+        that arithmetic happens, and ``QUEUE`` is in the settings it is computed from.
+        """
+        # read off the settings rather than through `option`: ``QUEUE`` is package-wide and
+        # means the same thing to every transport, which is the opposite of what `OPTIONS` is
+        # for -- and `option` refuses a key a broker does not declare
+        resolved = conf if settings is None else settings
+        named = str(resolved.get('QUEUE', '') or '').strip()
+        if named:
+            return named
+        return str(cls.option(cls.QUEUE_OPTION, settings) or '')
 
     @classmethod
     def option(cls, key: str, settings: Mapping[str, Any] | None = None) -> object:
