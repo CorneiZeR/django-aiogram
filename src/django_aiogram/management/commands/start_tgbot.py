@@ -23,7 +23,7 @@ from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import UpdateMode
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 from django_aiogram.consumer.delivery import Delivery, get_delivery
-from django_aiogram.consumer.serving import Consumers
+from django_aiogram.consumer.serving import Consumers, settle
 from django_aiogram.consumer.webhook import MODES, current_mode
 from django_aiogram.eventlog.events import worker_identity
 from django_aiogram.eventlog.recorder import recorder
@@ -182,8 +182,19 @@ class Command(BaseCommand):
 
         # the startup set is built here rather than by the first pass, so a refusal reaches
         # the operator as a command that would not start -- `REQUIRE_CRASH_SAFE` is the one
-        # that does that -- instead of a warning per queue from a thread
-        ready = {name: consumer_for(name) for name in serving}
+        # that does that -- instead of a warning per queue from a thread.
+        #
+        # Built one at a time and settled on the way out, because a consumer that was built
+        # has already reclaimed: a refusal on the third queue would otherwise strand what the
+        # first two took, and nothing in this process could acknowledge those messages again
+        ready: dict[str, Delivery] = {}
+        try:
+            for name in serving:
+                ready[name] = consumer_for(name)
+        except BaseException:
+            for name, built in ready.items():
+                settle(built, name)
+            raise
         # the transport's own deadline, not `REDIS_TIMEOUT`: this bounds the thread being
         # joined below, and reading it from one transport's setting meant a consumer could be
         # inside a call the join had already given up on. Measured: at `KAFKA_TIMEOUT = 45`

@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
     from django_aiogram.consumer.delivery import Delivery
 
-__all__ = ('Consumers',)
+__all__ = ('Consumers', 'settle')
 
 logger = logging.getLogger('django_aiogram')
 
@@ -56,6 +56,11 @@ class Consumers:
         #: their own consumer reads, and a consumer dropped at `stop` takes those with it --
         #: every message the drain delivered would be sent again by the next container
         self._stopped: dict[str, Delivery] = {}
+        #: set by `stop`, and never cleared: a pass can be inside a database read when the
+        #: shutdown begins, and one that came back afterwards would start a daemon consumer
+        #: behind the joins -- doing transport work while `bot.close()` runs, with nothing
+        #: left to stop it
+        self._done = False
         #: the consumer and the thread serving each queue, by queue name
         self.running: dict[str, tuple[Delivery, threading.Thread]] = {}
         self._lock = threading.Lock()
@@ -69,6 +74,9 @@ class Consumers:
         """
         asked = list(dict.fromkeys(wanted))
         with self._lock:
+            if self._done:
+                logger.info('not reconciling the queues: the shutdown had already begun')
+                return
             for queue in [held for held in self.running if held not in asked]:
                 # settled here rather than kept: this is a queue that went away while the
                 # container runs, so nothing later in this process will collect for it
@@ -85,7 +93,7 @@ class Consumers:
                     # would strand whatever it took: only it can settle its own in-flight
                     # list. Stopped and settled before the queue is left for the next pass
                     if consumer is not None:
-                        _settled(consumer, queue)
+                        settle(consumer, queue)
                     logger.exception(
                         'could not start consuming a queue; the next pass will try again',
                         extra={'tg_queue': queue},
@@ -100,6 +108,7 @@ class Consumers:
         took, and it is exactly the case a container killed during startup is.
         """
         with self._lock:
+            self._done = True
             for queue in list(self.running):
                 self._stopped[queue] = self._stop(queue)
             for consumer in self._ready.values():
@@ -142,11 +151,13 @@ class Consumers:
             return tuple(consumer for consumer, _ in self.running.values())
 
 
-def _settled(consumer: 'Delivery', queue: str) -> None:
+def settle(consumer: 'Delivery', queue: str) -> None:
     """Stop a consumer that never ran and settle what it holds, saying nothing further.
 
-    Called where starting failed, so the failure being reported is the caller's; a stop that
-    raises on top of it would replace the reason with a second one.
+    Called where starting -- or a startup that had already built others -- failed, so the
+    failure being reported is the caller's: a stop that raises on top of it would replace the
+    reason with a second one. A built consumer has already reclaimed, and only it can
+    acknowledge what it took.
     """
     try:
         consumer.stop()

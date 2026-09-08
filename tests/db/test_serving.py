@@ -5,6 +5,8 @@ changes while the container runs. Read once, a queue created for a client an hou
 deploy would wait for a redeploy — which is what selecting by pool exists to avoid.
 """
 
+import threading
+
 import pytest
 from django.db import OperationalError
 from django.test import override_settings
@@ -94,24 +96,48 @@ def test_a_queue_that_left_the_pool_stops_being_consumed():
     assert list(consumers.running) == ['client-2']
 
 
-def test_a_pass_that_cannot_read_the_queues_changes_nothing(monkeypatch):
-    """A database blinking must not stop a container consuming, as with the bot providers."""
+def test_a_pass_that_cannot_read_the_queues_changes_nothing(monkeypatch, caplog):
+    """A database blinking must not stop a container consuming, as with the bot providers.
+
+    Through the watcher rather than through `served_by` alone: what is being tested is what
+    the *thread* does with the failure, and a case that only proves the read raises passes
+    just as well if the thread goes on to reconcile an empty set.
+    """
+    from django_aiogram.management.commands.start_tgbot import Command
+
     TelegramQueue.objects.create(name='client-1', pool='vip')
     consumers, log = watching()
+    reads = []
+
+    def refuse(*args, **kwargs):
+        reads.append('asked')
+        msg = 'the database is not reachable'
+        raise OperationalError(msg)
 
     with override_settings(TELEGRAM_BOT_DEFAULTS=MEMORY):
         consumers.reconcile(served_by([], ['vip']))
+        monkeypatch.setattr('django_aiogram.management.commands.start_tgbot.served_by', refuse)
+        monkeypatch.setattr(Command, '_refresh_interval', staticmethod(lambda: 0.01))
 
-        def refuse(*args, **kwargs):
-            msg = 'the database is not reachable'
-            raise OperationalError(msg)
+        shutting_down = threading.Event()
+        watcher = threading.Thread(
+            target=Command()._watch_the_queues,
+            args=(consumers, {'queues': '', 'pools': 'vip'}, shutting_down),
+            daemon=True,
+        )
+        with caplog.at_level('ERROR', logger='django_aiogram'):
+            watcher.start()
+            for _ in range(200):
+                if reads:
+                    break
+                watcher.join(0.01)
+            shutting_down.set()
+            watcher.join(timeout=2)
 
-        monkeypatch.setattr(TelegramQueue.objects, 'filter', refuse)
-        with pytest.raises(OperationalError):
-            served_by([], ['vip'])
-
+    assert reads, 'the watcher never read the queues'
     assert list(consumers.running) == ['client-1'], 'a failed read took the consumer down'
     assert log == [('started', 'client-1')]
+    assert 'could not re-read the queues to serve' in caplog.text
 
 
 def test_one_queue_that_cannot_be_consumed_does_not_stop_the_others(caplog):
@@ -184,3 +210,55 @@ def test_a_consumer_whose_thread_will_not_start_is_settled_rather_than_dropped()
 
     assert log == [('stopped', 'vip'), ('collected', 'vip')], log
     assert consumers.running == {}
+
+
+def test_a_pass_that_finishes_after_the_shutdown_starts_nothing():
+    """A pass can be inside a database read when the shutdown begins.
+
+    Coming back afterwards, it would start a daemon consumer behind the joins -- doing
+    transport work while `bot.close()` runs, with nothing left to stop it. So a stop is
+    terminal: every later pass returns without building anything.
+    """
+    consumers, log = watching()
+
+    consumers.reconcile(['client-1'])
+    consumers.stop()
+    consumers.reconcile(['client-1', 'client-2'])
+
+    assert log == [('started', 'client-1'), ('stopped', 'client-1')], log
+    assert consumers.running == {}
+
+
+def test_a_startup_that_fails_part_way_settles_what_it_had_already_built():
+    """A refusal on the second queue must not strand what the first one reclaimed.
+
+    `REQUIRE_CRASH_SAFE` is the refusal that does this, and it is meant to stop the container
+    — but a consumer that was built has already reclaimed, and only it can acknowledge what it
+    took. Asserted on the command's own startup path, since that is where the building is.
+    """
+    from django.core.management import call_command
+
+    log = []
+
+    def refusing_delivery(handler, route=None, settings=None):
+        queue = (settings or {}).get('QUEUE', '')
+        if queue == 'client-2':
+            msg = 'this queue refuses to be served'
+            raise RuntimeError(msg)
+        return Fake(queue, log)
+
+    TelegramQueue.objects.create(name='client-1', pool='vip')
+    TelegramQueue.objects.create(name='client-2', pool='vip')
+
+    with override_settings(TELEGRAM_BOT_DEFAULTS=MEMORY):
+        import django_aiogram.management.commands.start_tgbot as command_module
+
+        original = command_module.get_delivery
+        command_module.get_delivery = refusing_delivery
+        try:
+            with pytest.raises(RuntimeError, match='refuses to be served'):
+                call_command('start_tgbot', '--pools', 'vip')
+        finally:
+            command_module.get_delivery = original
+
+    assert log == [('stopped', 'client-1'), ('collected', 'client-1')], log
