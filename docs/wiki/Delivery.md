@@ -57,7 +57,15 @@ and pending entries with it), RabbitMQ deletes the queue on the server, and **Ka
 `False`** — deleting a topic is the cluster's decision and not a producer's. `False` is not a
 failure; the command reports it as a queue somebody has to remove by hand.
 
-A transport of your own inherits `False`, so it is never removed by accident.
+A transport of your own inherits `False`, so it is never removed by accident, and
+`removes_queues` is how a caller asks *before* deciding — a dry run has to say what a real run
+would do, and it may not find out by trying.
+
+`discard(if_empty=True)` is the same removal with the emptiness read **in the same step**: the
+Redis transports watch their keys and delete in a transaction, the memory one holds the lock a
+publish would need, and RabbitMQ answers `False` because AMQP's own `if_empty` cannot see
+another container's unacknowledged delivery. A taken-but-unsettled message counts as held
+everywhere: somebody is still sending it.
 
 ### Writing your own
 

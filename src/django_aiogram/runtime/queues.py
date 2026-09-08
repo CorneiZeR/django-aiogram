@@ -190,7 +190,16 @@ def settings_for(queue: str) -> 'dict[str, Any]':
 
     A plain dict rather than the settings object: it is read as a mapping by the transport and
     by the profile, and both of those are given whatever a bot's resolution produced anyway.
+
+    **Everything the process resolved, not only the package's own keys.** A transport's
+    options -- ``KAFKA_BOOTSTRAP``, ``RABBITMQ_URL``, ``REDIS_STREAM_KEY`` -- are not in
+    `DEFAULTS`, and a broker built from a mapping without them falls back to its own defaults:
+    for a required one that is a refusal, so a container serving a named queue on Kafka,
+    RabbitMQ or Redis Streams could not build its transport at all. Measured -- the Kafka case
+    in `tests/db/test_prune_queues.py` is what found it.
     """
-    resolved = {key: conf[key] for key in DEFAULTS}
+    resolved = dict(conf.resolved)
+    for key, default in DEFAULTS.items():
+        resolved.setdefault(key, default)
     resolved['QUEUE'] = queue
     return resolved

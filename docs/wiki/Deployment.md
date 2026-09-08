@@ -242,9 +242,20 @@ deletes, so run it by hand or schedule it knowing that. `--dry-run` says what wo
 rather than skipped. A bot that is merely **switched off still counts**: a client paused for a
 month has not given up their backlog.
 
-Kafka answers that it cannot remove a queue, and says so per queue rather than failing:
-deleting a topic is an administrative act against the cluster, not something a producer may
-take. The line names the topic for whoever owns that cluster.
+Under `hold` the transport decides emptiness in **one step** — the read and the delete
+together — because a producer can publish between a depth read and a delete, and a caller
+that checked for itself would delete the message it had just been told about. A message a
+consumer has *taken and not settled* counts as held: somebody is still sending it.
+
+Two transports say they cannot prove that, and say so rather than guessing:
+
+- **Kafka** cannot remove a queue at all. Deleting a topic is an administrative act against
+  the cluster, not something a producer may take, so the line names the topic for whoever owns
+  it — under every policy, and without reaching the cluster to find out.
+- **RabbitMQ** refuses `hold` only. AMQP's own `if_empty` counts *ready* messages, so a queue
+  whose one message is an unacknowledged delivery in another container reads as empty and
+  would be deleted with the message; nothing here can see that delivery. Use `drop` when you
+  know what is sending.
 
 From cron, or as a container of its own:
 

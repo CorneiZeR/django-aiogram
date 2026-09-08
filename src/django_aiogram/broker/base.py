@@ -449,8 +449,24 @@ class Broker(ABC):
         """
         return False
 
-    def discard(self) -> bool:
+    @property
+    def removes_queues(self) -> bool:
+        """Whether this transport can remove the queue it addresses, without doing it.
+
+        Asked before anything is decided -- by a dry run, which has to say what a real one
+        would do, and by the reporting either side of it. `discard` answering ``False`` is the
+        same fact discovered the expensive way, and a dry run may not discover anything.
+        """
+        return False
+
+    def discard(self, *, if_empty: bool = False) -> bool:  # noqa: ARG002 - the contract's, see below
         """Remove the queue this broker addresses, and say whether it was removed.
+
+        ``if_empty`` asks for it to be removed **only if nothing is in it**, waiting or taken,
+        and to be a single step: a producer can publish between a depth read and a delete, so
+        a caller that checked first would delete the message it had just been told about. A
+        transport that cannot make that one step says ``False`` rather than guessing, and the
+        queue is reported as still held.
 
         For a queue nothing publishes to any more: a client's bot was deleted, their queue
         went with it, and what it leaves behind is a Redis key, an AMQP queue or a consumer

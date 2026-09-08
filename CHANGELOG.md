@@ -134,6 +134,14 @@
   switched off still counts, because a client paused for a month has not given up their
   backlog.
 
+  Under `hold` the transport decides emptiness in one step -- the Redis transports watch their
+  keys and delete in a transaction, the memory one holds the lock a publish would need -- and a
+  taken-but-unsettled message counts as held. RabbitMQ refuses `hold` and says why: AMQP's own
+  `if_empty` counts ready messages only, so a queue whose one message is an unacknowledged
+  delivery elsewhere would be deleted with it. The row is locked and its bots re-read in the
+  transaction that deletes, because a client's bot can be pointed at the queue in the seconds
+  since the candidates were chosen.
+
   A command rather than a signal: removing a queue is destructive, and a `post_delete`
   receiver in a web request is the wrong place to decide it. `Broker.discard()` is the seam --
   implemented for the Redis list (with every worker's in-flight list and heartbeat for that
@@ -191,7 +199,7 @@
 
   Settings the process owns rather than a bot -- `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`,
   `FSM_STORAGE`, `BOT_PROVIDERS`, `BOT_REFRESH_INTERVAL`, `MAX_BOTS_PER_WORKER`,
-  `BOT_LEASE_SECONDS`, `QUEUES`, `EVENT_LOG` and every `EVENT_LOG_*` one -- may not be set per bot. `ENABLED` is not one of
+  `BOT_LEASE_SECONDS`, `QUEUES`, `REMOVED_QUEUE_POLICY`, `EVENT_LOG` and every `EVENT_LOG_*` one -- may not be set per bot. `ENABLED` is not one of
   them: a bot may be switched off on its own. There is one writer thread and one
   in-flight list per process, so a per-bot value could only mean whichever bot resolved last
   wins. `E053` reports the attempt.
