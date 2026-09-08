@@ -1,0 +1,156 @@
+"""Two in-flight budgets: one over the queue, one over each bot on it.
+
+One bound over the whole queue is what turns a single slow client into everybody's outage --
+their sends fill it and every other bot waits behind them. So a bot has a bound of its own,
+and a message taken for a bot already at it is held by the consumer rather than blocking the
+read or being released to a transport that would strand it.
+"""
+
+import uuid
+
+from django.test import override_settings
+
+from django_aiogram.consumer.delivery import BlpopDelivery
+from django_aiogram.wire.envelope import pack
+from django_aiogram.wire.serializers import get_serializer
+
+SETTINGS = {'BROKER': 'django_aiogram.testing.InMemoryBroker', 'FSM_STORAGE': 'memory'}
+
+
+class Deferring:
+    """A handler that takes `on_complete`, so its sends stay in flight until it says so."""
+
+    def __init__(self):
+        """Hold the completions nobody has called yet, with the bot each belongs to."""
+        self.pending = []
+
+    def __call__(self, function=None, correlation_id=None, queued_at=0.0, on_complete=None, **kwargs):
+        """Record the send and keep its completion for the case to call."""
+        self.pending.append((kwargs.get('text'), on_complete))
+
+
+def a_message(bot_id, text):
+    """One serialized send for one bot."""
+    return get_serializer().dumps(pack('send_message', {'chat_id': 1, 'text': text}, uuid.uuid4(), 0.0, bot_id))
+
+
+def routed(handler):
+    """A route that hands every bot the same handler, which is what a container does."""
+    return lambda bot_id: handler
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': 1, 'MAX_IN_FLIGHT': 10})
+def test_a_bot_at_its_own_budget_does_not_hold_up_the_others():
+    """The claim the second budget exists for, and the one a single bound cannot make."""
+    handler = Deferring()
+    delivery = BlpopDelivery(handler=handler, route=routed(handler))
+
+    assert delivery.dispatch(a_message(123456, 'first for the slow bot')) is False
+    assert delivery.dispatch(a_message(123456, 'second for the slow bot')) is False
+    assert delivery.dispatch(a_message(654321, 'for the other bot')) is False
+
+    handed = [text for text, _ in handler.pending]
+    assert handed == ['first for the slow bot', 'for the other bot'], handed
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': 1, 'MAX_IN_FLIGHT': 10})
+def test_a_held_message_is_handed_over_when_that_bot_has_room():
+    """Held, not dropped and not released: the send happens as soon as a slot comes back."""
+    handler = Deferring()
+    delivery = BlpopDelivery(handler=handler, route=routed(handler))
+
+    delivery.dispatch(a_message(123456, 'first'))
+    delivery.dispatch(a_message(123456, 'waiting'))
+    assert [text for text, _ in handler.pending] == ['first']
+
+    # the first send finishes, which is the only thing that gives that bot a slot back
+    handler.pending[0][1]()
+    delivery.collect()
+
+    assert [text for text, _ in handler.pending] == ['first', 'waiting']
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': 1, 'MAX_IN_FLIGHT': 10})
+def test_a_held_message_occupies_one_of_the_queue_slots():
+    """So `MAX_IN_FLIGHT` bounds how many can wait, rather than nothing bounding it."""
+    handler = Deferring()
+    delivery = BlpopDelivery(handler=handler, route=routed(handler))
+
+    delivery.dispatch(a_message(123456, 'sent'))
+    delivery.dispatch(a_message(123456, 'waiting'))
+
+    assert delivery._in_flight == 2, delivery._in_flight
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': 1, 'MAX_IN_FLIGHT': 10})
+def test_the_counts_come_back_to_nothing():
+    """A budget that drifts is a consumer that stops reading while nothing is in flight.
+
+    Both counts, and both directions: what is taken has to be given back exactly once,
+    whether the send finished or the producer refused it.
+    """
+    handler = Deferring()
+    delivery = BlpopDelivery(handler=handler, route=routed(handler))
+
+    delivery.dispatch(a_message(123456, 'sent'))
+    delivery.dispatch(a_message(123456, 'waiting'))
+    handler.pending[0][1]()
+    delivery.collect()
+    handler.pending[1][1]()
+    delivery.collect()
+
+    assert delivery._in_flight == 0, delivery._in_flight
+    assert delivery._per_bot == {}, delivery._per_bot
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT': 10})
+def test_no_per_bot_budget_is_the_behaviour_that_shipped_before():
+    """Zero is the default, and it has to mean what it always meant: only the queue's bound."""
+    handler = Deferring()
+    delivery = BlpopDelivery(handler=handler, route=routed(handler))
+
+    for number in range(5):
+        delivery.dispatch(a_message(123456, f'number {number}'))
+
+    assert len(handler.pending) == 5
+    assert not delivery._parked, 'a message was held with no per-bot budget set'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': 1, 'MAX_IN_FLIGHT': 10})
+def test_a_held_message_is_not_acknowledged_while_it_waits():
+    """A crash while it waits has to leave it where every other in-flight message is.
+
+    Acknowledged on being parked, it would be gone: nothing sent it. `dispatch` says `False`,
+    which is the same answer it gives a message for a bot this process does not serve.
+    """
+    handler = Deferring()
+    delivery = BlpopDelivery(handler=handler, route=routed(handler))
+
+    delivery.dispatch(a_message(123456, 'sent'))
+
+    assert delivery.dispatch(a_message(123456, 'waiting')) is False
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': 1, 'MAX_IN_FLIGHT': 10})
+def test_a_bot_still_at_its_budget_stays_held_and_the_walk_carries_on():
+    """The park is one queue, so stopping at the first saturated bot would be the blocking
+    the per-bot budget exists to prevent — the messages behind it are for other bots.
+    """
+    handler = Deferring()
+    delivery = BlpopDelivery(handler=handler, route=routed(handler))
+
+    delivery.dispatch(a_message(123456, 'slow one: sent'))
+    delivery.dispatch(a_message(123456, 'slow one: waiting'))
+    delivery.dispatch(a_message(654321, 'other one: sent'))
+    delivery.dispatch(a_message(654321, 'other one: waiting'))
+
+    # only the other bot's send finishes, so the slow bot is still at its budget
+    handler.pending[1][1]()
+    delivery.collect()
+
+    handed = [text for text, _ in handler.pending]
+    assert handed == [
+        'slow one: sent',
+        'other one: sent',
+        'other one: waiting',
+    ], handed

@@ -96,7 +96,17 @@
   one queue that cannot be consumed does not stop the others.
 
   One consumer per queue, each with its own transport and its own `MAX_IN_FLIGHT`, so a
-  backlog on one queue is a backlog on one queue. A `DELIVERY` of your own is told which queue
+  backlog on one queue is a backlog on one queue.
+
+  **And a bound per bot inside that**, `MAX_IN_FLIGHT_PER_BOT`, because a single bound over a
+  shared queue is what turns one slow client into everybody's outage: their sends fill it and
+  every other bot on that queue waits behind them. A message taken for a bot already at its
+  budget is held by the consumer -- not released, since `release` is a documented no-op on the
+  transport that has an in-flight list and the message would sit there until a restart
+  reclaimed it -- and handed over as soon as that bot has room. It is not acknowledged while
+  it waits, so a crash leaves it where every other in-flight message is. Each held message
+  occupies one of the queue's slots, so `MAX_IN_FLIGHT` bounds how many can wait; `0`, the
+  default, is the single-bound behaviour that shipped before. A `DELIVERY` of your own is told which queue
   it serves through a third argument, `settings`, and is refused by name where it takes none
   and a queue other than the process's own was asked for. The cost is a connection and a
   thread per queue: the transports that could multiplex are not doing it yet.

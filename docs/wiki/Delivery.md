@@ -95,6 +95,10 @@ class BatchedDelivery(Delivery):
             self.heartbeat()
             self.collect()  # settle what finished while we blocked
             self.hold_for_capacity()  # MAX_IN_FLIGHT, if the project set one
+            # `dispatch` applies MAX_IN_FLIGHT_PER_BOT itself: a message for a bot at its
+            # budget is held and handed over from `collect`, so a run() of your own needs
+            # nothing for it beyond calling both of these
+
             if self.stopping:  # the gate above releases on shutdown as well as on capacity
                 break
             taken = self.broker.take(self.read_timeout)  # never a number of your own: see below
