@@ -21,7 +21,7 @@ from django_aiogram.config.checks.conditions import _bot_is_enabled, _identity_m
 from django_aiogram.config.checks.problems import Problem
 from django_aiogram.config.checks.shapes import _reads_as_a_dotted_path, _setting
 from django_aiogram.config.defaults import DEFAULTS
-from django_aiogram.config.settings import coerce_bool, take_ceiling
+from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, take_ceiling
 
 if TYPE_CHECKING:  # the seam is a type here and nothing more: importing it at run time would
     # pull the broker package into every process that only runs the checks
@@ -218,6 +218,51 @@ def _a_url_pickle_can_survive(key: str, record: BotRecord) -> list[Problem]:
             ),
         )
     ]
+
+
+def _a_bound_on_what_is_held(key: str, record: BotRecord) -> list[Problem]:
+    """Warn where a per-bot budget is set and nothing bounds the queue's own.
+
+    A message taken for a bot at its budget is held by the consumer, and what bounds how many
+    can be held is `MAX_IN_FLIGHT`. With that at zero -- the default -- nothing would, so the
+    held list and the transport's in-flight state grow together until the process runs out of
+    memory; on a Redis list every acknowledgement scans that state, so it gets slower as it
+    grows. The consumer refuses to do that: without the queue's bound it *waits* for the bot
+    instead, which is the head-of-line blocking the holding was there to avoid.
+    """
+    try:
+        per_bot = _whole(_setting(key, record))
+        queue_bound = _whole(record['MAX_IN_FLIGHT'])
+    except (TypeError, ValueError, OverflowError, ImproperlyConfigured):
+        return []  # E045 and E060 own the type complaints
+    # exactly zero, not "not positive": a negative `MAX_IN_FLIGHT` is `E045`'s finding, and
+    # this message would say it is 0 -- a second, false, report of one mistake
+    if per_bot <= 0 or queue_bound != 0:
+        return []
+    return [
+        Problem(
+            f'is {per_bot} while MAX_IN_FLIGHT is 0, so nothing bounds what the consumer holds.',
+            hint=(
+                f'Set {SETTINGS_NAME}["MAX_IN_FLIGHT"] as well. Until it is set, a message for '
+                'a bot at its budget is waited on rather than held -- correct, and it blocks '
+                'the messages behind it, which is what the per-bot budget exists to avoid.'
+            ),
+        )
+    ]
+
+
+def _whole(value: object) -> int:
+    """Read a setting as the integer it is, refusing one that only truncates to an integer.
+
+    `int()` would take ``1.5`` to ``1``, and this rule's message quotes the number: it would
+    report a budget of ``1`` that `E060` is separately reporting as not an integer at all, so
+    an operator reading the two would see one of them describe a value they never wrote.
+    """
+    number = float(value)  # type: ignore[arg-type]  # a bad value raises, which is the point
+    if number != int(number):
+        msg = f'{value!r} is not a whole number'
+        raise ValueError(msg)
+    return int(number)
 
 
 def _a_worker_that_keeps_its_name(key: str, record: BotRecord) -> list[Problem]:

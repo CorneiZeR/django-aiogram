@@ -35,6 +35,7 @@ import queue
 import threading
 import time
 from abc import ABC, abstractmethod
+from collections import deque
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -137,7 +138,7 @@ class Delivery(ABC):
         #: one the producer refused outright, which releases the slot and leaves the
         #: message for a redelivery. Filled from the bot's event loop, drained on this
         #: thread, because every Redis call in this class belongs to the consumer
-        self._finished: queue.SimpleQueue[tuple[object, bool]] = queue.SimpleQueue()
+        self._finished: queue.SimpleQueue[tuple[object, bool, int | None]] = queue.SimpleQueue()
         self._in_flight = 0
         # asked once: a handler that cannot take the callback is acknowledged the
         # moment it returns, which is the behavior every existing caller has
@@ -147,7 +148,26 @@ class Delivery(ABC):
         # read here rather than per message: `at_capacity` runs inside `run`'s loop, where
         # an unreadable value would raise out of the consumer thread and end delivery for
         # the life of the container. `run` resolves `BLPOP_TIMEOUT` once for the same reason
-        self._limit = max(0, int((conf if settings is None else settings)['MAX_IN_FLIGHT']))
+        resolved = conf if settings is None else settings
+        self._limit = max(0, int(resolved['MAX_IN_FLIGHT']))
+        # read here for the reason above, and separately from the queue's own bound: this one
+        # is per bot, so one client saturating its own budget cannot fill the queue's
+        self._per_bot_limit = max(0, int(resolved['MAX_IN_FLIGHT_PER_BOT']))
+        #: how many sends each bot has **with the handler right now**, by identity. `None` is
+        #: a payload that named no bot, which is every 4.x one and every send by a bot whose
+        #: token has no identity.
+        #:
+        #: Active sends only, and that is the whole distinction: a parked message is *waiting*
+        #: for one of these to end, so counting it here would be a reservation nothing can
+        #: release. With a budget of two, two active sends and two parked messages would leave
+        #: this at two once both sends finished -- at the budget, with nothing running to take
+        #: it below again, and that bot stalled for the life of the process
+        self._sending: dict[int | None, int] = {}
+        #: messages taken for a bot that was already at its budget: kept rather than released,
+        #: because a release is a documented no-op on the transport that has an in-flight list
+        #: -- there the message would sit until a restart reclaimed it. Each holds one of the
+        #: queue's slots, so `MAX_IN_FLIGHT` bounds this as well
+        self._parked: deque[tuple[Envelope, dict[str, Any], object, Handler]] = deque()
 
     @property
     def crash_safe(self) -> bool:
@@ -289,14 +309,42 @@ class Delivery(ABC):
         """
         while True:
             try:
-                raw, delivered = self._finished.get_nowait()
+                raw, delivered, bot_id = self._finished.get_nowait()
             except queue.Empty:
+                self._hand_over_parked()
                 return
-            self._in_flight -= 1
+            self._took_a_slot_back(bot_id)
             if delivered:
                 self.acknowledge(raw)
 
-    def _release_for(self, handle: object) -> Callable[[], None]:
+    @staticmethod
+    def _settlement() -> 'Callable[[], bool]':
+        """Return the claim on settling one message, which exactly one caller may win.
+
+        Three callers race for it and each does something different with the win: the
+        handler's ``on_complete``, its ``on_refused``, and the exception paths in
+        :meth:`_hand_over`. Each has to be able to give the slots back and none of them may
+        do it twice -- a second report takes another message's place in the count, drives it
+        below zero and quietly widens the bound ``MAX_IN_FLIGHT`` exists to hold.
+
+        **One claim for all three**, not one per callback, and the reason is a handler that
+        reports and *then* raises: with a latch each, the completion queued a settlement and
+        the exception path returned the slots again -- the per-bot budget was then over by one
+        for every such send, and `_in_flight` went negative.
+
+        A latch rather than a flag: two threads can both read an unset flag and both report.
+        The acquire is never released; the lock is a one-way latch here, not a critical
+        section.
+        """
+        latch = threading.Lock()
+
+        def claim() -> bool:
+            """Whether this caller is the one that settles the message."""
+            return latch.acquire(blocking=False)
+
+        return claim
+
+    def _release_for(self, handle: object, bot_id: 'int | None', claim: 'Callable[[], bool]') -> Callable[[], None]:
         """Give back the slot a refused send took, without acknowledging the message.
 
         The slot has to come back — `_hand_over` took one before the handler ran — but
@@ -304,40 +352,121 @@ class Delivery(ABC):
         in-flight list is what lets the next start pick it up. Without this a refusal
         held its slot for the life of the process, and under ``MAX_IN_FLIGHT`` the
         consumer stopped taking messages entirely once enough had piled up.
-
-        Latched like its pair, and for the same reason: two reports would take another
-        message's place in the count.
         """
-        latch = threading.Lock()
 
         def once() -> None:
-            """Give the slot back, once."""
-            if latch.acquire(blocking=False):
-                self._finished.put((handle, False))
+            """Give the slot back, once, if nothing else has settled this message."""
+            if claim():
+                self._finished.put((handle, False, bot_id))
 
         return once
 
-    def _completion_for(self, handle: object) -> Callable[[], None]:
-        """One report per message, however many times the send says it finished.
-
-        A latch rather than a flag: two threads can both read an unset flag and
-        both report. A second report is not harmless — it takes another message's
-        place in the in-flight count, drives it below zero and quietly widens the
-        bound ``MAX_IN_FLIGHT`` exists to hold.
-        """
-        latch = threading.Lock()
+    def _completion_for(
+        self,
+        handle: object,
+        bot_id: 'int | None',
+        claim: 'Callable[[], bool]',
+    ) -> Callable[[], None]:
+        """One report per message, however many times the send says it finished."""
 
         def once() -> None:
-            """Report the first finish and drop every later one.
-
-            The acquire is never released: the lock is a one-way latch here, not a
-            critical section, and the first caller through it is the only one that
-            should reach the in-flight count.
-            """
-            if latch.acquire(blocking=False):
-                self._finished.put((handle, True))
+            """Report the first finish and drop every later one."""
+            if claim():
+                self._finished.put((handle, True, bot_id))
 
         return once
+
+    def _took_a_slot_back(self, bot_id: 'int | None') -> None:
+        """One send is over: give its slot back to the queue and to its bot."""
+        self._in_flight -= 1
+        self._one_less_sending(bot_id)
+
+    def _one_less_sending(self, bot_id: 'int | None') -> None:
+        """Say one of this bot's sends has ended, without touching the queue's own count."""
+        held = self._sending.get(bot_id, 0) - 1
+        if held > 0:
+            self._sending[bot_id] = held
+        else:
+            # dropped rather than left at zero: a container serving a client per bot would
+            # otherwise grow this dict by one entry per bot for ever
+            self._sending.pop(bot_id, None)
+
+    def _at_its_own_capacity(self, bot_id: 'int | None') -> bool:
+        """Whether this bot already has as many sends in flight as it may.
+
+        The second of the two budgets, and the reason there are two: one bound over the whole
+        queue means a client whose sends are slow -- rate limited, or simply chatty -- fills
+        it and every other bot on that queue waits behind them. That is the mistake a single
+        prefetch multiplier makes, and this is what makes a shared queue survivable.
+        """
+        return bool(self._per_bot_limit) and self._sending.get(bot_id, 0) >= self._per_bot_limit
+
+    def _waited_for_room(self, bot_id: 'int | None') -> bool:
+        """Wait until this bot has a send slot, and say whether it got one.
+
+        The degraded half of the per-bot budget, for a deployment that set no queue bound:
+        holding the message would be unbounded, so the consumer waits for one of that bot's
+        own sends to end. That is head-of-line blocking -- the messages behind this one are
+        for other bots -- which is why `W012` asks for `MAX_IN_FLIGHT` to be set.
+
+        The wait keeps writing the heartbeat and settling what finishes, for the reason
+        :meth:`hold_for_capacity` gives: a worker at its limit is busy, not dead, and held
+        silently past the key's TTL it would be restarted while healthy.
+
+        ``False`` where the shutdown arrived first, which leaves the message in flight.
+        """
+        while self._at_its_own_capacity(bot_id) and not self._stop.is_set():
+            self.heartbeat()
+            try:
+                raw, delivered, settled = self._finished.get(timeout=1)
+            except queue.Empty:
+                continue
+            self._took_a_slot_back(settled)
+            if delivered:
+                self.acknowledge(raw)
+        return not self._stop.is_set()
+
+    def _park(self, envelope: 'Envelope', call: dict[str, Any], handle: object, handler: Handler) -> None:
+        """Keep a message whose bot is at its budget, and hold a queue slot for it.
+
+        Kept rather than released, because `release` is a documented no-op on the transport
+        that has an in-flight list: the message would sit there until a restart reclaimed it.
+        Kept rather than waited on, because waiting is the head-of-line blocking the per-bot
+        budget exists to prevent -- the messages behind it are for other bots.
+
+        It holds one of the queue's own slots while it waits, so ``MAX_IN_FLIGHT`` bounds how
+        many can be parked; a queue whose budget is entirely parked stops being read until a
+        send finishes, which is the backpressure it was always going to be.
+        """
+        # the queue's slot, and only that: what the message is waiting for is one of *this
+        # bot's* sends to end, so a reservation here would be one nothing can release
+        self._in_flight += 1
+        self._parked.append((envelope, call, handle, handler))
+        logger.debug(
+            'holding a message for a bot at its own in-flight budget',
+            extra={'tg_bot_id': envelope.bot_id, 'tg_queue': self.queue_key},
+        )
+
+    def _hand_over_parked(self) -> None:
+        """Hand over every parked message whose bot now has room, oldest first.
+
+        Called wherever a slot comes back, on the consumer's own thread like every other
+        transport call this class makes. A message whose bot is *still* at its budget stays
+        parked and the walk carries on: the queue is one deque, and stopping at the first
+        saturated bot would be the blocking this exists to avoid.
+        """
+        if not self._parked:
+            return
+        waiting, self._parked = self._parked, deque()
+        while waiting:
+            envelope, call, handle, handler = waiting.popleft()
+            if self._at_its_own_capacity(envelope.bot_id):
+                self._parked.append((envelope, call, handle, handler))
+                continue
+            # the queue's slot it has been holding is the one the send will use, so that count
+            # is not touched again -- see `_hand_over`'s `counted`
+            if self._hand_over(envelope, call, handle, handler, counted=True):
+                self.acknowledge(handle)
 
     def at_capacity(self) -> bool:
         """Whether this consumer is already holding as many sends as it may."""
@@ -360,12 +489,13 @@ class Delivery(ABC):
         while self.at_capacity() and not self._stop.is_set():
             self.heartbeat()
             try:
-                raw, delivered = self._finished.get(timeout=1)
+                raw, delivered, bot_id = self._finished.get(timeout=1)
             except queue.Empty:
                 continue
-            self._in_flight -= 1
+            self._took_a_slot_back(bot_id)
             if delivered:
                 self.acknowledge(raw)
+            self._hand_over_parked()
 
     def acknowledge(self, handle: object) -> None:
         """Settle a delivered message, however this transport spells that.
@@ -519,6 +649,22 @@ class Delivery(ABC):
             'correlation_id': envelope.correlation_id,
             'queued_at': envelope.queued_at,
         }
+        if self._at_its_own_capacity(envelope.bot_id):
+            if not self._limit:
+                # nothing bounds the queue, so nothing would bound the holding either: a
+                # saturated bot would grow the held list, and the transport's in-flight state
+                # with it, until the process ran out of memory -- and on a Redis list every
+                # acknowledgement scans that state. So this waits for the bot instead, which
+                # costs the head-of-line blocking the holding avoids and costs nothing
+                # unbounded. `W012` is what tells an operator to set `MAX_IN_FLIGHT` and get
+                # the better behaviour
+                if not self._waited_for_room(envelope.bot_id):
+                    return False
+            else:
+                # not acknowledged and not released: it is held here until this bot has room,
+                # and a crash in between leaves it where every other in-flight message is
+                self._park(envelope, call, handle, handler)
+                return False
         return self._hand_over(envelope, call, handle, handler)
 
     def _handler_for(self, envelope: Envelope) -> Handler:
@@ -549,7 +695,15 @@ class Delivery(ABC):
             raise LookupError(msg)
         return self.handler
 
-    def _hand_over(self, envelope: Envelope, call: dict[str, Any], handle: object, handler: Handler) -> bool:
+    def _hand_over(
+        self,
+        envelope: Envelope,
+        call: dict[str, Any],
+        handle: object,
+        handler: Handler,
+        *,
+        counted: bool = False,
+    ) -> bool:
         """Call the handler, and say whether the message may be acknowledged.
 
         Cancellation is the reason this is not one ``except``: it is a
@@ -560,35 +714,57 @@ class Delivery(ABC):
         keep reading either way.
         """
         deferring = self._defers
+        # one claim for the callbacks and for the two exception paths below: whoever settles
+        # this message first is the only one that may give its slots back
+        settling = self._settlement()
         if deferring:
             # into the dict, never alongside it as a second keyword. The queue is
             # a trust boundary and send() forwards whatever it was given, so a
             # payload can carry this name — as a keyword that is "got multiple
             # values", a TypeError landing in the failure branch below, which
             # acknowledges a message nothing sent. Assigning simply wins
-            call['on_complete'] = self._completion_for(handle)
+            call['on_complete'] = self._completion_for(handle, envelope.bot_id, settling)
             if self._releases:
                 # its pair, so a producer that refuses the send gives the slot back
-                call['on_refused'] = self._release_for(handle)
-            self._in_flight += 1
+                call['on_refused'] = self._release_for(handle, envelope.bot_id, settling)
+            if not counted:
+                # a message handed over from the park is already holding the queue's slot --
+                # the one `_park` took -- and counting it twice would leave that budget short
+                # by one for the life of the process
+                self._in_flight += 1
+            # this bot's count moves either way: a parked message was *waiting* for a send to
+            # end, and now it is one
+            self._sending[envelope.bot_id] = self._sending.get(envelope.bot_id, 0) + 1
         try:
             handler(**call)
         except asyncio.CancelledError:
-            if deferring:
-                self._in_flight -= 1
+            if deferring and settling():
+                # only where nothing has settled it: a handler that reported and *then* was
+                # cancelled has already put its settlement on the queue
+                self._took_a_slot_back(envelope.bot_id)
+                self._hand_over_parked()
             logger.warning(
                 'a queued send was cancelled; leaving it in flight',
                 extra={'tg_function': envelope.function},
             )
             return False
         except Exception:
-            if deferring:
-                self._in_flight -= 1
+            # as above: a handler that reported and then raised has settled this message
+            # already, and returning the slots a second time is what makes the count drift
+            ours = not deferring or settling()
+            if deferring and ours:
+                self._took_a_slot_back(envelope.bot_id)
+                self._hand_over_parked()
             logger.exception(
                 'handler failed for queued message',
                 extra={'tg_function': envelope.function},
             )
-            return True
+            # and the acknowledgement belongs to whoever settled it. A handler that reported
+            # through `on_complete` before raising has a settlement on the queue and `collect`
+            # will acknowledge from it, so saying yes here acknowledges the same message
+            # twice; one that reported through `on_refused` said *nothing sent this*, and
+            # acknowledging it would destroy a message a later start could deliver
+            return ours
         # a deferring handler decides when this message is done. Returning True
         # here is what made the at-least-once promise false: send_raw returns as
         # soon as the coroutine is scheduled, long before Telegram has seen it

@@ -178,6 +178,12 @@ class Broker(ABC):
         named = str(resolved.get('QUEUE', '') or '').strip()
         if named:
             return named
+        if not cls.QUEUE_OPTION:
+            # a transport that addresses nothing by name -- the in-memory one every test
+            # suite uses, and any transport a project writes without declaring the option.
+            # `option('')` would raise here, and a queue name is not what such a broker is
+            # short of
+            return ''
         return str(cls.option(cls.QUEUE_OPTION, settings) or '')
 
     @classmethod

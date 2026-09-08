@@ -116,6 +116,10 @@ DEFAULTS: dict[str, Any] = {
     # which queue a bot's messages go to, whatever the transport calls one. Empty means the
     # transport's own option decides, which is what every 4.x deployment has set. A bot's
     # setting rather than the process's: two bots on different queues get a broker each
+    # how many sends one bot may have in flight on one queue; 0 is as many as the queue's own
+    # budget allows. The second of two bounds, and the reason there are two: one bound over
+    # the whole queue lets a single chatty or rate-limited client fill it
+    'MAX_IN_FLIGHT_PER_BOT': 0,
     'QUEUE': '',
     # the queues this deployment has: a name in `QUEUE` that is not one of these, or a row in
     # `TelegramQueue`, is refused where it was written. Naming a queue means declaring it,
