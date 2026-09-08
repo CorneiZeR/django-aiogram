@@ -150,6 +150,7 @@ CHECKS: tuple[Check, ...] = (
     Check('E043', 'REDIS_URL', _a_url_pickle_can_survive),
     Check('E044', 'DRAIN_TIMEOUT', partial(_a_number, minimum=0)),
     Check('E045', 'MAX_IN_FLIGHT', partial(_an_integer, minimum=0)),
+    Check('E060', 'MAX_IN_FLIGHT_PER_BOT', partial(_an_integer, minimum=0)),
     Check('E046', 'REQUIRE_CRASH_SAFE', _a_readable_boolean),
     Check('W005', 'EVENT_LOG', _somewhere_to_write_the_log),
     Check('W006', 'EVENT_LOG_RETENTION_DAYS', _a_log_that_is_pruned),

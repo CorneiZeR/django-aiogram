@@ -18,15 +18,30 @@ SETTINGS = {'BROKER': 'django_aiogram.testing.InMemoryBroker', 'FSM_STORAGE': 'm
 
 
 class Deferring:
-    """A handler that takes `on_complete`, so its sends stay in flight until it says so."""
+    """A handler that takes `on_complete` and `on_refused`, like `send_raw` does.
+
+    Both, because the two give the slot back through different paths: a send that finished and
+    a send the producer would not take. A fake taking only the first leaves the second's
+    accounting untested, and it is the one nothing else in the suite reaches.
+    """
 
     def __init__(self):
-        """Hold the completions nobody has called yet, with the bot each belongs to."""
+        """Hold the callbacks nobody has called yet, with the text each belongs to."""
         self.pending = []
+        self.refusals = {}
 
-    def __call__(self, function=None, correlation_id=None, queued_at=0.0, on_complete=None, **kwargs):
-        """Record the send and keep its completion for the case to call."""
+    def __call__(
+        self,
+        function=None,
+        correlation_id=None,
+        queued_at=0.0,
+        on_complete=None,
+        on_refused=None,
+        **kwargs,
+    ):
+        """Record the send and keep both of its callbacks for the case to call."""
         self.pending.append((kwargs.get('text'), on_complete))
+        self.refusals[kwargs.get('text')] = on_refused
 
 
 def a_message(bot_id, text):
@@ -154,3 +169,47 @@ def test_a_bot_still_at_its_budget_stays_held_and_the_walk_carries_on():
         'other one: sent',
         'other one: waiting',
     ], handed
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': 1, 'MAX_IN_FLIGHT': 10})
+def test_a_refused_send_gives_both_slots_back_and_the_message_is_not_acknowledged():
+    """The other way a slot comes back, and the one nothing else reaches.
+
+    A producer that refuses the send outright -- shutting down, or over its own bound -- has
+    not sent anything, so the message must stay for a redelivery while the budget it was
+    holding comes back. Held per bot as well as per queue, or that bot's budget would leak a
+    slot per refusal until it could serve nobody.
+    """
+    handler = Deferring()
+    delivery = BlpopDelivery(handler=handler, route=routed(handler))
+
+    delivery.dispatch(a_message(123456, 'refused'))
+    delivery.dispatch(a_message(123456, 'waiting'))
+
+    acknowledged = []
+    delivery.acknowledge = acknowledged.append
+    handler.refusals['refused']()
+    delivery.collect()
+
+    assert [text for text, _ in handler.pending] == ['refused', 'waiting'], 'the held message never went'
+    assert acknowledged == [], 'a message nothing sent was acknowledged'
+
+    handler.refusals['waiting']()
+    delivery.collect()
+
+    assert delivery._in_flight == 0, delivery._in_flight
+    assert delivery._per_bot == {}, delivery._per_bot
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': -1})
+def test_a_negative_per_bot_budget_is_reported_rather_than_read_as_none():
+    """`max(0, ...)` in the consumer reads it as *no bound*, which is the opposite of asking.
+
+    So the check has to be the thing that says so: silently, the setting a project added to
+    stop one client filling the queue would be the behaviour it was added to leave.
+    """
+    from django_aiogram.config.checks import check_settings
+
+    reported = [message for message in check_settings() if str(message.id).endswith('E060')]
+
+    assert reported, 'a negative per-bot budget was accepted'
