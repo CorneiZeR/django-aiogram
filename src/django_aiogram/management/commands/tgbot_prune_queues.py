@@ -91,8 +91,15 @@ class Command(BaseCommand):
         rows = TelegramQueue.objects.filter(bots__isnull=True).order_by('name')
         if only:
             wanted = {name.strip() for name in only if name.strip()}
-            claimed = TelegramQueue.objects.filter(name__in=sorted(wanted), bots__isnull=False)
-            still_used = sorted(claimed.values_list('name', flat=True))
+            named = TelegramQueue.objects.filter(name__in=sorted(wanted))
+            missing = sorted(wanted - set(named.values_list('name', flat=True)))
+            if missing:
+                # refused rather than filtered out: a typo would otherwise look like a
+                # bounded cleanup that completed, and the queue the operator meant is still
+                # there
+                msg = f'These queues are not declared as rows: {", ".join(missing)}.'
+                raise CommandError(msg)
+            still_used = sorted(named.filter(bots__isnull=False).values_list('name', flat=True))
             if still_used:
                 msg = f'These queues still have bots publishing to them: {", ".join(still_used)}.'
                 raise CommandError(msg)

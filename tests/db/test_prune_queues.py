@@ -207,3 +207,34 @@ def test_a_queue_holding_a_taken_message_is_held_rather_than_removed():
     assert 'held' in written, written
     assert TelegramQueue.objects.filter(name='gone').exists()
     assert broker.inflight_depth() == 1, 'a message a consumer was sending was thrown away'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**MEMORY, 'QUEUES': ('gone',)})
+def test_a_queue_named_that_has_no_row_is_refused():
+    """Filtered out, a typo looks like a bounded cleanup that completed.
+
+    And the queue the operator meant is still there, still holding whatever it holds, with
+    nothing said about it.
+    """
+    TelegramQueue.objects.create(name='gone')
+
+    with pytest.raises(CommandError, match='not declared as rows'):
+        out('--queue', 'gon', '--policy', 'drop')
+
+    assert TelegramQueue.objects.filter(name='gone').exists()
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**MEMORY, 'QUEUES': ('gone',)})
+def test_holding_removes_the_queue_once_it_is_empty():
+    """The other side of `hold`, and the one a regression that always holds would pass."""
+    TelegramQueue.objects.create(name='gone')
+    broker = broker_for('gone')
+    broker.publish([b'{}'])
+    taken = broker.take_nowait()
+    broker.ack(taken.handle)
+    assert broker.depth() == 0, 'the case needs an empty queue'
+
+    written = out('--policy', 'hold')
+
+    assert 'removed' in written, written
+    assert not TelegramQueue.objects.filter(name='gone').exists()

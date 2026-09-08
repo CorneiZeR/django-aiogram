@@ -238,8 +238,9 @@ bot points at and does what the policy says:
 
 Under `park` it is safe to schedule and tells you what is accumulating; under `drop` it
 deletes, so run it by hand or schedule it knowing that. `--dry-run` says what would happen,
-`--queue` bounds a run to the queues you name — and a name a bot still points at is refused
-rather than skipped. A bot that is merely **switched off still counts**: a client paused for a
+`--queue` bounds a run to the queues you name — and a name is refused rather than skipped
+where a bot still points at it *or* where no row has it at all: filtered out, a typo would
+look like a cleanup that completed while the queue you meant is still there. A bot that is merely **switched off still counts**: a client paused for a
 month has not given up their backlog.
 
 Under `hold` the transport decides emptiness in **one step** — the read and the delete
