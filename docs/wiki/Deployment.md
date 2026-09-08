@@ -629,6 +629,13 @@ manage.py start_tgbot --pools vip
   served with no redeploy, which is what enumeration cannot do when clients
   arrive at run time. No globs — a glob would include a queue by the accident of
   its name. A pool that holds no queues refuses the run.
+
+  Re-read every `BOT_REFRESH_INTERVAL` while the container runs, which is what
+  makes "no redeploy" true: a queue added to a pool starts being consumed within
+  that interval, and one moved out of it stops. A pass that could not read the
+  table leaves the consumers as they are, and one queue that cannot be consumed
+  is one queue — the container keeps serving the rest, and the next pass tries it
+  again.
 - Given both, the container serves the union, each queue once.
 - Given neither, it serves the one queue its settings name, which is every
   deployment before 5.0.

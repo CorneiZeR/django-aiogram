@@ -14,13 +14,16 @@ from collections.abc import Callable
 from types import FrameType
 from typing import TYPE_CHECKING, Any
 
+from django.core.exceptions import ImproperlyConfigured
 from django.core.management import BaseCommand, CommandError
 
 from django_aiogram import bot
 from django_aiogram.broker.registry import get_broker
+from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import UpdateMode
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 from django_aiogram.consumer.delivery import Delivery, get_delivery
+from django_aiogram.consumer.serving import Consumers
 from django_aiogram.consumer.webhook import MODES, current_mode
 from django_aiogram.eventlog.events import worker_identity
 from django_aiogram.eventlog.recorder import recorder
@@ -154,9 +157,21 @@ class Command(BaseCommand):
         mode = self._mode_for_this_run(options)
 
         serving = self._queues_to_serve(options)
-        deliveries = [_consumer_for(name, one_queue=serving == (named(),)) for name in serving]
-        for delivery in deliveries:
-            self._preflight(delivery)
+        # only where nothing was asked for: a container serving its own queue is every
+        # deployment before this, and it is handed no settings so a `DELIVERY` written then
+        # keeps working
+        one_queue = serving == (named(),) and not (options['queues'] or options['pools'])
+
+        def consumer_for(queue: str) -> Delivery:
+            """Build the consumer for one queue and prove what it promises before it runs."""
+            built = _consumer_for(queue, one_queue=one_queue)
+            self._preflight(built)
+            return built
+
+        # the startup set is built here rather than by the first pass, so a refusal reaches
+        # the operator as a command that would not start -- `REQUIRE_CRASH_SAFE` is the one
+        # that does that -- instead of a warning per queue from a thread
+        ready = {name: consumer_for(name) for name in serving}
         # the transport's own deadline, not `REDIS_TIMEOUT`: this bounds the thread being
         # joined below, and reading it from one transport's setting meant a consumer could be
         # inside a call the join had already given up on. Measured: at `KAFKA_TIMEOUT = 45`
@@ -174,7 +189,7 @@ class Command(BaseCommand):
         # not have run. The registry is asked once per queue with that queue's settings, which
         # is the same instance each delivery holds when it has one
         join_timeout = max(_transport_for(name).call_ceiling for name in serving) + 1
-        threads: list[threading.Thread] = []
+        consumers = Consumers(build=consumer_for, join_timeout=join_timeout, ready=ready)
 
         # Both modes: starting the consumer before the loop runs would let a
         # backlog reach send_raw while loop.is_running() is still False, so the
@@ -200,7 +215,18 @@ class Command(BaseCommand):
             if shutting_down.is_set():
                 logger.info('not starting the consumer: the shutdown had already begun')
                 return
-            threads.extend(delivery.start_thread() for delivery in deliveries)
+            consumers.reconcile(serving)
+            watch.start()
+
+        # the queues are re-read while the container runs, and that is what selecting by pool
+        # is *for*: a queue created for a client an hour after the deploy is served without one.
+        # A pass that could not read the table leaves the set alone, like the bot providers'
+        watch = threading.Thread(
+            target=self._watch_the_queues,
+            args=(consumers, options, shutting_down),
+            name='django-aiogram-queues',
+            daemon=True,
+        )
 
         bot.loop.call_soon(start_consuming)
         previous = self._install_sigterm_handler()
@@ -213,13 +239,49 @@ class Command(BaseCommand):
                 else:
                     bot.start_polling()
         finally:
-            self._unwind(deliveries, threads, join_timeout, shutting_down, previous)
+            self._unwind(consumers, shutting_down, previous)
+
+    def _watch_the_queues(
+        self,
+        consumers: Consumers,
+        options: dict[str, Any],
+        shutting_down: threading.Event,
+    ) -> None:
+        """Re-read the queues this container serves until the shutdown begins.
+
+        A daemon thread and a poll rather than a signal, for the reason the bot supervisor
+        gives: the push arrives on one queue and the poll is what makes a change arrive at
+        all. `BOT_REFRESH_INTERVAL` is the interval, because it is the same question about a
+        different table.
+        """
+        asked = (_split(options['queues']), _split(options['pools']))
+        if not any(asked):
+            # nothing to re-read: the queue was the process's own and settings do not change
+            # under a running container
+            return
+        while not shutting_down.wait(self._refresh_interval()):
+            try:
+                wanted = served_by(*asked)
+            except Exception:
+                # a table that could not be read has not said this container serves nothing
+                logger.exception('could not re-read the queues to serve; keeping the ones running')
+                continue
+            consumers.reconcile(wanted)
+
+    @staticmethod
+    def _refresh_interval() -> float:
+        """How long between re-reads, never below a second and never unreadable."""
+        try:
+            return max(1.0, float(conf['BOT_REFRESH_INTERVAL']))
+        except (TypeError, ValueError, ImproperlyConfigured):
+            # a container that refuses to re-read its queues because a number is unreadable
+            # serves the startup set for ever, which is the trade `Supervisor.interval` makes
+            logger.warning('BOT_REFRESH_INTERVAL is unreadable; falling back to the default')
+            return float(DEFAULTS['BOT_REFRESH_INTERVAL'])
 
     def _unwind(
         self,
-        deliveries: list[Delivery],
-        threads: list[threading.Thread],
-        join_timeout: float,
+        consumers: Consumers,
         shutting_down: threading.Event,
         previous: 'Handler | None',
     ) -> None:
@@ -233,20 +295,11 @@ class Command(BaseCommand):
         # before stop(), so the callback above cannot slip a consumer in
         # behind the joins below
         shutting_down.set()
-        for delivery in deliveries:
-            delivery.stop()
-        for thread in threads:
-            # derived from the bound that actually governs the thread, which is
-            # the transport's own call ceiling -- see where join_timeout is read.
-            # BLPOP_TIMEOUT + 1 was six seconds against a worst case of ten, so a
-            # consumer that outlived the join went on to acknowledge a message
-            # close() had already refused
-            thread.join(timeout=join_timeout)
-            if thread.is_alive():
-                logger.warning(
-                    'the delivery consumer did not stop in time',
-                    extra={'tg_timeout': join_timeout},
-                )
+        # stops each consumer and waits out its thread, on the bound that actually governs it
+        # -- the transport's own call ceiling. `BLPOP_TIMEOUT + 1` was six seconds against a
+        # worst case of ten, so a consumer that outlived the join went on to acknowledge a
+        # message close() had already refused
+        consumers.stop()
         try:
             bot.close()
         finally:
@@ -257,8 +310,7 @@ class Command(BaseCommand):
             # graceful stop duplicated whatever the drain had time to finish, which
             # is the one thing `Delivery.md` says a *kill* is needed for
             try:
-                for delivery in deliveries:
-                    delivery.collect()
+                consumers.collect()
             finally:
                 # after close(), never before: closing drains in-flight sends,
                 # and those are what produce the final rows. In its own finally

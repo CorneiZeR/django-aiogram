@@ -310,3 +310,39 @@ def test_a_consumer_written_before_queues_is_still_built_for_the_process_own():
 
     assert isinstance(built, Older)
     assert built.settings is None
+
+
+class QueuedOnly(BlpopDelivery):
+    """A consumer that can be told its queue and has nothing to route."""
+
+    def __init__(self, handler, *, settings=None):
+        """Take the queue's settings, and no route."""
+        super().__init__(handler, None, settings)
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={
+        **SETTINGS,
+        'DELIVERY': 'tests.test_addressing.QueuedOnly',
+        # declared on the process's settings, because `QUEUES` is the deployment's word and a
+        # bot only chooses from it
+        'QUEUES': ('vip',),
+    }
+)
+def test_a_consumer_taking_only_the_queue_is_still_told_which_queue():
+    """The two arguments are separate questions, so one may be accepted and the other not.
+
+    Judged together, a class taking `settings` and not `route` fell through to the
+    one-argument call: built without the queue it was asked for, reading the process's own
+    while the container believed it was serving another. Silently, and on every message.
+    """
+    # through `settings_for`, which is what the command hands a consumer: a resolved mapping
+    # rather than a fragment, because `Delivery` reads its budget out of it
+    from django_aiogram.runtime.queues import settings_for
+
+    served = settings_for('vip')
+
+    built = get_delivery(handler=lambda **call: None, settings=served)
+
+    assert isinstance(built, QueuedOnly)
+    assert built.settings is served, 'the queue it was asked for did not reach it'

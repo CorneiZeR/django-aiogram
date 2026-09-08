@@ -762,25 +762,30 @@ def get_delivery(
     process's own was asked for, and left alone otherwise.
     """
     resolved = delivery_class()
+    named = f'{resolved.__module__}.{resolved.__qualname__}'
+    # each argument judged on its own, and passed on its own: a class may take one and not the
+    # other, and a consumer built without the queue it was asked for would read the process's
+    # instead -- silently, while the container believed it was serving another
+    takes_route = accepts_keyword(resolved.__init__, 'route')
     takes_settings = accepts_keyword(resolved.__init__, 'settings')
-    if settings is not None and not takes_settings:
-        named = f'{resolved.__module__}.{resolved.__qualname__}'
-        raise DeliveryNotConfiguredError(
-            named,
-            'whose __init__ takes no `settings`, and this process serves a queue that is not '
-            'its own: every message would be taken from the process-wide queue instead. Add '
-            '`settings=None` to its __init__ and hand it to `Delivery.__init__`.',
-        )
-    if accepts_keyword(resolved.__init__, 'route'):
-        if takes_settings:
-            return resolved(handler, route=route, settings=settings)
-        return resolved(handler, route=route)
-    if route is not None:
-        named = f'{resolved.__module__}.{resolved.__qualname__}'
+    if route is not None and not takes_route:
         raise DeliveryNotConfiguredError(
             named,
             'whose __init__ takes no `route`, and this process serves more than one bot: '
             'every addressed message would be delivered through the wrong one. Add '
             '`route=None` to its __init__ and hand it to `Delivery.__init__`.',
         )
+    if settings is not None and not takes_settings:
+        raise DeliveryNotConfiguredError(
+            named,
+            'whose __init__ takes no `settings`, and this process serves a queue that is not '
+            'its own: every message would be taken from the process-wide queue instead. Add '
+            '`settings=None` to its __init__ and hand it to `Delivery.__init__`.',
+        )
+    if takes_route and takes_settings:
+        return resolved(handler, route=route, settings=settings)
+    if takes_route:
+        return resolved(handler, route=route)
+    if takes_settings:
+        return resolved(handler, settings=settings)
     return resolved(handler)

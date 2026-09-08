@@ -90,6 +90,11 @@
   glob includes a queue by the accident of its name. Both together are a union; neither means
   the one queue the settings name, which is every deployment before this.
 
+  The set is re-read every `BOT_REFRESH_INTERVAL`, which is what makes a pool worth selecting
+  on: a queue added to one starts being consumed within that interval and one moved out of it
+  stops, with no redeploy. A pass that could not read the table leaves the consumers alone, and
+  one queue that cannot be consumed does not stop the others.
+
   One consumer per queue, each with its own transport and its own `MAX_IN_FLIGHT`, so a
   backlog on one queue is a backlog on one queue. A `DELIVERY` of your own is told which queue
   it serves through a third argument, `settings`, and is refused by name where it takes none

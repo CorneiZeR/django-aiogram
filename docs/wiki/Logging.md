@@ -47,6 +47,7 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_bot` | which bot a line is about, by the alias it is configured under — the section's name, or the identity written out for a bot that came from the database |
 | `tg_other` | the second bot in a line about two of them: the one a conflict was resolved against |
 | `tg_provider` | the dotted path of the provider a line is about |
+| `tg_queue` | which queue a line is about, where a container serves several |
 | `tg_fate` | what a failure to serve a bot was: `revoked`, `conflict`, `transient` or `unknown` |
 | `tg_bots` | how many bots a held-back answer is keeping, when a provider read none |
 | `tg_bot_id` | which bot a message names, by the number in its token. Present where a message is for a bot this process does not serve, which it leaves in flight rather than acknowledging |
