@@ -7,6 +7,7 @@ shared, and a reconciliation that asks Telegram rather than assuming.
 """
 
 import json
+from io import StringIO
 
 import pytest
 from django.core.management import CommandError, call_command
@@ -289,25 +290,57 @@ def test_a_secret_rotated_in_the_settings_takes_effect_at_once():
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
-def test_a_switched_off_bot_can_still_have_its_webhook_deleted():
+def test_a_switched_off_bot_can_still_have_its_webhook_deleted(monkeypatch):
     """Disabling a row is not deregistering a webhook, and only that bot's token can do it.
 
     Unreachable, disabling would leave Telegram posting at a URL that answers 404 for ever,
-    with nothing able to tell it to stop.
+    with nothing able to tell it to stop. Through the command, because the claim is about what
+    `delete --bot` reaches: asserting that `switched_off()` reports the row proves nothing
+    about that.
     """
+    from django_aiogram.producer.client import TelegramBot as Client
+
     TelegramBot.objects.create(
         bot_id=123456,
         token='123456:AAaa',
         overrides={'WEBHOOK_SECRET': 'mine'},
         enabled=False,
     )
-    from django_aiogram.runtime.providers import desired, switched_off
+    calls = []
+    monkeypatch.setattr(Client, 'bot', property(lambda self: _Api(calls)))
 
-    assert desired() == (), 'a switched-off bot is not one to serve'
-    (found,) = switched_off()
+    written = StringIO()
+    call_command('tgbot_webhook', 'delete', '--bot', '123456', stdout=written)
 
-    assert found.bot_id == 123456
-    assert found.provided
+    assert calls == ['delete'], calls
+    assert 'switched off' in written.getvalue(), written.getvalue()
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_pass_takes_the_webhook_off_a_bot_that_was_switched_off(monkeypatch):
+    """The other direction, as far as the tokens reach: a disabled bot still has a token.
+
+    Telegram would otherwise go on posting updates that answer 404, for as long as the row
+    stays disabled -- which for a paused client is however long they are paused.
+    """
+    from django_aiogram.producer.client import TelegramBot as Client
+
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'WEBHOOK_SECRET': 'mine'})
+    TelegramBot.objects.create(
+        bot_id=654321,
+        token='654321:BBbb',
+        overrides={'WEBHOOK_SECRET': 'theirs'},
+        enabled=False,
+    )
+    calls = []
+    monkeypatch.setattr(Client, 'bot', property(lambda self: _Api(calls, url='https://example.test/tg/654321/')))
+
+    written = StringIO()
+    call_command('tgbot_webhook', 'reconcile', '--pause', '0', stdout=written)
+
+    # the served bot is registered, the switched-off one is deregistered
+    assert calls == ['get', 'set', 'get', 'delete'], calls
+    assert 'webhook deleted' in written.getvalue(), written.getvalue()
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
@@ -393,25 +426,33 @@ def test_a_pass_over_many_bots_runs_on_this_process_own_loop(monkeypatch):
 
 
 class _Api:
-    """The two Telegram calls the pass makes, without a network under them."""
+    """The three Telegram calls these cases make, without a network under them."""
 
-    def __init__(self, calls):
-        """Remember where to record what was asked."""
+    def __init__(self, calls, url=''):
+        """Remember where to record what was asked, and what Telegram says it has."""
         self._calls = calls
+        self._url = url
 
     async def get_webhook_info(self):
-        """Answer that nothing is registered, so the pass registers."""
+        """Answer with whatever this stand-in was told Telegram has."""
         self._calls.append('get')
-        return _Info()
+        return _Info(self._url)
 
     async def set_webhook(self, **arguments):
         """Record the registration and say it worked."""
         self._calls.append('set')
         return True
 
+    async def delete_webhook(self, **arguments):
+        """Record the deregistration and say it worked."""
+        self._calls.append('delete')
+        return True
+
 
 class _Info:
-    """What `getWebhookInfo` would have answered: nothing registered."""
+    """What `getWebhookInfo` answers: the URL Telegram has, and the updates it was given."""
 
-    url = ''
-    allowed_updates = None
+    def __init__(self, url=''):
+        """Take the URL this stand-in reports."""
+        self.url = url
+        self.allowed_updates = None

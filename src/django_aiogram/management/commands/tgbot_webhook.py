@@ -163,33 +163,63 @@ class Command(BaseCommand):
     def _reconcile(self, options: dict[str, Any]) -> None:
         """Compare what Telegram has against what each bot should have, and repair it.
 
-        **One direction only**, and the reason is the token: this walks the bots this
-        deployment serves and gives each the webhook it should have. A bot Telegram is still
-        posting to and this deployment no longer serves cannot be repaired from here at all --
-        deregistering needs that bot's token, and the row that held it is gone. `delete --bot
-        <id>` *before* removing the row is the other direction, and :meth:`_delete` says so.
+        **Both directions, as far as the tokens reach.** A bot this deployment serves gets
+        the webhook it should have; a bot whose row is *switched off* has its webhook deleted,
+        because a disabled bot is one nobody serves and Telegram would go on posting updates
+        that answer 404. What no pass can repair is a bot whose row was **deleted**:
+        deregistering needs that bot's token, and the row that held it is gone -- which is why
+        `delete --bot <id>` belongs before the row is removed, and :meth:`_delete` says so.
 
         One bot's failure is its own: the pass carries on and says what it could not do, for
         the reason the supervisor gives about the same shape of work. A container that gave up
         on the first refusal would leave the rest unregistered.
         """
-        from django_aiogram.runtime.providers import desired  # noqa: PLC0415 - the ORM, deferred
+        from django_aiogram.runtime.providers import desired, switched_off  # noqa: PLC0415 - the ORM
 
-        wanted = [record for record in desired() if record.bot_id is not None]
+        serving = [record for record in desired() if record.bot_id is not None]
+        disabled = [record for record in switched_off() if record.bot_id is not None]
         only = set(options['bots'])
         if only:
-            wanted = [record for record in wanted if record.bot_id in only]
-            missing = sorted(only - {record.bot_id for record in wanted})
+            serving = [record for record in serving if record.bot_id in only]
+            disabled = [record for record in disabled if record.bot_id in only]
+            known = {record.bot_id for record in [*serving, *disabled]}
+            missing = sorted(only - known)
             if missing:
                 msg = f'These bots are not configured here: {", ".join(str(found) for found in missing)}.'
                 raise CommandError(msg)
-        for number, record in enumerate(wanted):
+        for number, record in enumerate([*serving, *disabled]):
             if number:
                 self._breathe(options['pause'])
             identity = record.bot_id
             if identity is None:  # pragma: no cover - filtered above, and mypy cannot see that
                 continue
-            self._reconcile_one(identity, record, options)
+            if record in disabled:
+                self._deregister_one(identity, record, options)
+            else:
+                self._reconcile_one(identity, record, options)
+
+    def _deregister_one(self, identity: int, record: Any, options: dict[str, Any]) -> None:  # noqa: ANN401
+        """Take the webhook off a bot nobody serves, and say whether there was one.
+
+        Asked before it is deleted, so a pass over a deployment whose disabled bots were
+        cleaned up long ago costs one read each rather than a delete each -- the same reason
+        the registering half asks.
+        """
+        # deferred: the registry reaches aiogram and the providers
+        from django_aiogram.runtime.registry import bots  # noqa: PLC0415 - as above
+
+        try:
+            serving = bots.for_record(record)
+            info = bot.loop.run_until_complete(serving.bot.get_webhook_info())
+            if not str(getattr(info, 'url', '') or ''):
+                self.stdout.write(f'{identity}: switched off, and Telegram has no webhook for it')
+                return
+            bot.loop.run_until_complete(serving.bot.delete_webhook(drop_pending_updates=options['drop_pending']))
+        except Exception as refused:  # noqa: BLE001 - one bot's failure is its own, see above
+            logger.warning('could not deregister a webhook', extra={'tg_bot_id': identity})
+            self.stdout.write(self.style.WARNING(f'{identity}: failed — {type(refused).__name__}: {refused}'))
+            return
+        self.stdout.write(self.style.SUCCESS(f'{identity}: switched off, webhook deleted'))
 
     def _reconcile_one(self, identity: int, record: Any, options: dict[str, Any]) -> None:  # noqa: ANN401
         """Bring one bot's webhook into line, and say what that took.

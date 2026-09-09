@@ -174,10 +174,12 @@ python manage.py tgbot_webhook delete --bot 123456
 ```
 
 `reconcile` asks Telegram what it has — `getWebhookInfo` — compares it with what each bot
-should have, and repairs the difference. That is the only way to know: the deployment's state
-and Telegram's drift apart in both directions, and nothing local can tell you which. A bot
-already registered costs one read, so running it again is cheap and running it after every
-deploy is the intended use.
+should have, and repairs the difference in **both directions, as far as the tokens reach**: a
+bot this deployment serves gets its webhook, and a bot whose row is *switched off* has its
+webhook deleted, because a disabled bot is one nobody serves and Telegram would go on posting
+updates that answer 404. That is the only way to know which way the drift went — nothing local
+can tell you. A bot already registered costs one read, so running it again is cheap and running
+it after every deploy is the intended use.
 
 It paces itself: `--pause` between calls, jittered, so a thousand bots starting at once are
 not a thousand `setWebhook` calls arriving together — and two containers that started
@@ -187,9 +189,10 @@ could not do and carries on.
 **Telegram never reports the secret**, so a rotated one looks like no change from here:
 `--force` is how it is applied.
 
-**Switching a row off is not deregistering its webhook.** A disabled bot is one nobody
-serves, so its updates get a 404 — while Telegram goes on posting them. `delete --bot <id>`
-still reaches a switched-off bot for exactly that reason, and says so when it does.
+**Switching a row off is not deregistering its webhook**, so `reconcile` does it: a disabled
+bot is one nobody serves, and its updates would get a 404 while Telegram went on posting them.
+`delete --bot <id>` reaches a switched-off bot too, for the same reason, and says so when it
+does.
 
 **Delete before removing the row, not after.** Deleting a webhook needs that bot's token, and
 once the row is gone this deployment has none — so Telegram goes on posting to a URL that
