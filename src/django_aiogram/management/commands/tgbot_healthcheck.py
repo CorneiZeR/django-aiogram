@@ -49,6 +49,7 @@ class Command(BaseCommand):
                 max_age=options['max_age'],
                 stranded=True,
                 guarantee=True,
+                consumes=not options['no_consumer'],
             )
         except BrokerDependencyError as error:
             # same refusal as the module form, in the shape a command reports with: BROKER

@@ -295,6 +295,7 @@ def check(
     max_age: int | None = None,
     stranded: bool = False,
     guarantee: bool = False,
+    consumes: bool = True,
 ) -> Report:
     """Read Redis, then ask the broker for consumer liveness and queue depth, in that order.
 
@@ -306,6 +307,12 @@ def check(
     list. Both are one transport's answer: a stream's consumer group records when each
     member last spoke, so nothing is written and nothing expires, and its waiting count is
     a group's lag rather than a list's length.
+
+    ``consumes`` is what a container started with ``--updates-only`` sets to False: there is
+    no consumer in it by design, so a missing heartbeat is the configuration rather than a
+    fault, and reporting it as one would restart a healthy container for ever. The transport is
+    still read -- a receiver has to *send* what its handlers produce, so a queue it cannot
+    reach is a real failure -- and only the consumer's own liveness is left unasked.
 
     ``stranded`` and ``guarantee`` are off by default and the management command turns
     them on, which is the one place the two entry points differ. Both cost more than
@@ -321,20 +328,27 @@ def check(
         return Report(ok=True, message='disabled in this process; nothing to check', checked=False)
 
     try:
-        # inside the guard: these two are read before Redis is touched, so an
-        # unreadable one is the first thing the probe meets rather than the last
-        ttl = heartbeat_ttl(max(1, _setting_int('HEARTBEAT_INTERVAL')))
-        age_limit = ttl if max_age is None else max_age
+        # inside the guard: these are read before Redis is touched, so an unreadable one is
+        # the first thing the probe meets rather than the last.
+        #
+        # The heartbeat's two only where a consumer is expected: a container with none reads
+        # neither, so an unreadable `HEARTBEAT_INTERVAL` would make it unhealthy over a
+        # setting it never asks about -- restarting a receiver for a number nothing in it uses
         queue_limit = _setting_int('HEALTHCHECK_MAX_QUEUE') if max_queue is None else max_queue
         broker = get_broker()
-        age = _liveness_age(broker, limit=age_limit, ttl=ttl)
+        age = None
+        if consumes:
+            ttl = heartbeat_ttl(max(1, _setting_int('HEARTBEAT_INTERVAL')))
+            age = _liveness_age(broker, limit=ttl if max_age is None else max_age, ttl=ttl)
         queued = _depth(broker, limit=queue_limit)
     except _UnhealthyError as refusal:
         return Report(ok=False, message=str(refusal))
 
-    # `None` is the transport saying nobody outside can see whether a consumer is turning.
-    # Reported as such rather than as an age of zero, which would read as a fresh heartbeat
-    reported = f'{age}s old' if age is not None else 'not observable from outside'
+    # `None` is the transport saying nobody outside can see whether a consumer is turning,
+    # or this container saying it has none. Reported as such rather than as an age of zero,
+    # which would read as a fresh heartbeat
+    observed = f'{age}s old' if age is not None else 'not observable from outside'
+    reported = 'not run here' if not consumes else observed
     healthy = f'healthy: consumer {reported}, {queued} queued'
     if guarantee:
         # its own client, and only here: the two reports below are the only Redis-shaped
@@ -345,7 +359,7 @@ def check(
     # the per-worker in-flight list is one transport's bookkeeping, and a transport that
     # answers `needs_identity` false has none — scanning for keys that cannot exist would
     # report a reassuring zero about a question this deployment does not have
-    if stranded and broker.needs_identity:
+    if stranded and consumes and broker.needs_identity:
         sweep = _stranded()
         if sweep.found:
             # not a failure: another worker may be sending them right now. But an
@@ -483,18 +497,29 @@ def _stranded() -> _Sweep:
 
 
 def add_limit_flags(parser: argparse.ArgumentParser) -> None:
-    """Declare the two limits on any parser, so the entry points cannot drift.
+    """Declare the limits and the role flag on any parser, so the entry points cannot drift.
 
     The management command adds them to the parser Django hands it, which is why this
     takes one rather than making its own: the flags, their types and their defaults are
     a property of :func:`check`, and a reader comparing ``--help`` of the two forms is
-    entitled to the same answer from both.
+    entitled to the same answer from both. ``--no-consumer`` is here for that reason too: a
+    deployment that runs `start_tgbot --updates-only` has to be able to say so to whichever
+    form of the probe it uses.
     """
     parser.add_argument(
         '--max-queue',
         type=int,
         default=None,
         help=f"messages allowed to be waiting; defaults to {SETTINGS_NAME}['HEALTHCHECK_MAX_QUEUE'], 0 disables",
+    )
+    parser.add_argument(
+        '--no-consumer',
+        action='store_true',
+        help=(
+            'this container runs no consumer by design -- `start_tgbot --updates-only` -- so '
+            'do not ask whether one is turning. The transport is still read: a receiver has '
+            'to send what its handlers produce'
+        ),
     )
     parser.add_argument(
         '--max-age',
@@ -561,6 +586,7 @@ def main(argv: list[str] | None = None) -> int:
             max_age=options.max_age,
             stranded=options.stranded,
             guarantee=options.guarantee,
+            consumes=not options.no_consumer,
         )
     except BrokerDependencyError as error:
         # the deployment this module was rewritten for: BROKER names a transport whose driver

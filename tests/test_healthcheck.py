@@ -1273,3 +1273,91 @@ def test_the_command_reports_a_missing_driver_instead_of_tracebacking():
 
     assert "needs the 'aiokafka' package" in str(caught.value)
     assert 'django-aiogram[kafka]' in str(caught.value)
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0', 'TOKEN': '42:x'})
+def test_a_container_with_no_consumer_by_design_is_not_unhealthy(redis_server):
+    """`start_tgbot --updates-only` runs no consumer, so no heartbeat is ever written.
+
+    Read as a fault, the probe restarts a healthy container for ever — and the container is
+    doing exactly what it was told. The transport is still read: a receiver has to *send*
+    what its handlers produce, so a queue it cannot reach is a real failure.
+    """
+    # a message on the queue, so the depth in the report is a number that was *read*: the
+    # case would otherwise pass on a hard-coded zero, and receive-only mode is meant to skip
+    # the consumer's liveness and nothing else
+    from django_aiogram.broker.registry import get_broker
+
+    get_broker().publish([b'{}'])
+
+    report = check(consumes=False)
+
+    assert report.ok, report.message
+    assert 'not run here' in report.message, report.message
+    assert '1 queued' in report.message, report.message
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0', 'TOKEN': '42:x'})
+def test_a_receiver_is_still_unhealthy_when_it_cannot_reach_the_transport(redis_server, monkeypatch):
+    """Only the consumer's liveness goes unasked; the queue is still read.
+
+    A receiver has to *send* what its handlers produce, so a transport it cannot reach is a
+    real failure and must not be hidden by the flag that says there is no consumer here.
+    """
+
+    def refuse(*args, **kwargs):
+        msg = 'the transport is not reachable'
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr('django_aiogram.healthcheck._depth', refuse)
+
+    with pytest.raises(RuntimeError):
+        check(consumes=False)
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0', 'TOKEN': '42:x'})
+def test_a_container_that_should_have_a_consumer_is_still_told_when_it_has_none(redis_server):
+    """The other half: the flag is a statement about this container, not a way to pass."""
+    report = check()
+
+    assert not report.ok, report.message
+    assert 'heartbeat' in report.message.lower(), report.message
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0', 'TOKEN': '42:x'})
+def test_the_flag_reaches_the_check_from_either_entry_point(redis_server, monkeypatch):
+    """Two forms of the probe, one contract: a compose file may use either."""
+    from django_aiogram.healthcheck import Report
+
+    asked = []
+
+    def recording(**kwargs):
+        asked.append(kwargs)
+        return Report(ok=True, message='fine')
+
+    monkeypatch.setattr('django_aiogram.healthcheck.check', recording)
+    monkeypatch.setattr('django_aiogram.management.commands.tgbot_healthcheck.check', recording)
+
+    main(['--no-consumer'])
+    call_command('tgbot_healthcheck', '--no-consumer')
+
+    assert [kwargs['consumes'] for kwargs in asked] == [False, False], asked
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={
+        'REDIS_URL': 'redis://localhost:6379/0',
+        'TOKEN': '42:x',
+        'HEARTBEAT_INTERVAL': 'often',
+    }
+)
+def test_a_receiver_is_not_unhealthy_over_a_setting_it_never_reads(redis_server):
+    """A container with no consumer reads neither the interval nor the heartbeat it bounds.
+
+    Read anyway, an unusable `HEARTBEAT_INTERVAL` restarts a receiver over a number nothing
+    in it uses — while `E023` is what reports the setting to whoever can fix it.
+    """
+    assert check(consumes=False).ok
+
+    # and it is still the first thing a container *with* a consumer meets
+    assert not check().ok
