@@ -272,6 +272,13 @@ def test_rate_limiting_can_be_disabled():
     assert TelegramBot().rate_limiter is None
 
 
+@override_settings(TELEGRAM_BOT_DEFAULTS={'RATE_LIMIT': {}})
+def test_an_empty_mapping_disables_pacing_like_none_does():
+    """Both forms are documented as switching pacing off, and a row with no budgets is `{}`."""
+    assert build_rate_limiter() is None
+    assert TelegramBot().rate_limiter is None
+
+
 @override_settings(TELEGRAM_BOT_DEFAULTS={})
 def test_enabled_by_default_with_telegrams_numbers():
     limiter = build_rate_limiter()

@@ -20,7 +20,8 @@ TELEGRAM_BOT_DEFAULTS = {
 ```
 
 Set an entry to `0` to drop that one limit, or `RATE_LIMIT` to `None` to switch
-pacing off entirely.
+pacing off entirely. An empty mapping says the same thing — `RATE_LIMIT: {}` is what a
+row with no budgets in it resolves to, so both forms disable pacing.
 
 ## How it behaves
 
@@ -63,12 +64,13 @@ TELEGRAM_BOTS = {
 or, for a bot that lives in the database, the same key in its row's `overrides` — which
 is what an admin form writes. **A change there takes effect on the next send**, without a
 restart: the limiter remembers the numbers it was built from and is rebuilt when they
-move. `RATE_LIMIT: {}` switches pacing off for that bot, and the limiter goes with it.
+move. `RATE_LIMIT: {}` — or `None` — switches pacing off for that bot, and the limiter goes
+with it.
 
 **One token is one budget**, so where two configurations describe the same identity — a
 row and a settings section holding one token — the numbers of whichever of them sent first
 are the ones that pace both, and a warning names the other. Rebuilding the limiter for each
-in turn would start every send with a full burst. `RATE_LIMIT: {}` is owned the same way:
+in turn would start every send with a full burst. Pacing switched off is owned the same way:
 the owner's `{}` leaves the token paced by nothing, and an owner that paces paces the other
 configuration too.
 
