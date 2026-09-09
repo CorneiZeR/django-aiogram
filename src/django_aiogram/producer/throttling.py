@@ -362,6 +362,11 @@ class _LimiterRegistry:
             # has an answer here -- ``None`` -- and no entry in `_limiters` at all
             known = token in self._owners
             if known and self._numbers.get(token) == asked:
+                if owner is not None and self._owners[token] is None:
+                    # claimed rather than rebuilt: the limiter already holds these numbers,
+                    # and leaving the token unowned would let the *next* record take it --
+                    # after which this one's rate changes would be refused as a disagreement
+                    self._owners[token] = owner
                 return self._limiters.get(token)
             if known and not self._may_rebuild(token, owner):
                 if token not in self._told:

@@ -214,3 +214,31 @@ def test_the_owner_of_a_shared_token_decides_even_when_it_decides_not_to_pace():
     reset_rate_limiters()
     paced = get_rate_limiter(row.token, disagreeing)
     assert get_rate_limiter(row.token, found) is paced, 'the owner asked to pace and the token was not paced'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_the_first_record_to_agree_with_an_unowned_limiter_owns_it():
+    """A limiter built from the process-wide settings belongs to nobody yet.
+
+    The first record whose numbers match it takes it over — without a rebuild, which would
+    hand out a fresh burst — because a token left unowned is one the *next* record can claim,
+    and this one's later rate changes would then be refused as a disagreement.
+    """
+    row = TelegramBot.objects.create(bot_id=123456, token='123456:AAaa')
+    unowned = get_rate_limiter(row.token)
+    found = next(record for record in _desired() if record.bot_id == 123456)
+
+    assert get_rate_limiter(row.token, found) is unowned, 'agreeing numbers rebuilt the limiter'
+
+    rival = found.__class__(
+        alias='rival',
+        resolved={**found.resolved, 'RATE_LIMIT': {'overall_per_second': 7}},
+        origins=found.origins,
+        declared=True,
+    )
+    assert get_rate_limiter(row.token, rival) is unowned, 'the token was still up for grabs'
+
+    row.overrides = {'RATE_LIMIT': {'overall_per_second': 3}}
+    row.save()
+    moved = next(record for record in _desired() if record.bot_id == 123456)
+    assert get_rate_limiter(row.token, moved)._overall.rate == 3, 'the owner could not change its own rate'
