@@ -134,6 +134,11 @@
   could not do for a value that lives in a row. `RATE_LIMIT: {}` switches pacing off for that
   bot and the limiter is dropped with it.
 
+  Only the record the numbers came from may rebuild it. Two configurations of one identity --
+  a row and a section holding the same token -- are answered with the limiter that exists,
+  because a rebuild starts the buckets full and alternating sends would then be paced by
+  nothing at all; a warning names the one that was not used.
+
   `Rate-limits.md` states the multi-container arithmetic plainly, because the limiter is per
   process: two containers with one budget send at twice it. Divide the number by the processes
   that send for that bot, or accept 429 and let the retry absorb it as far as `MAX_RETRIES`

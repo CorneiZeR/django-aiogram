@@ -45,6 +45,7 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_control` | a notice on the queue this version does not know, by the word it carried |
 | `tg_reason` | why a bot stopped being served: no longer configured, or reconfigured under it |
 | `tg_bot` | which bot a line is about, by the alias it is configured under — the section's name, or the identity written out for a bot that came from the database |
+| `tg_paced_by` | which of two configurations holding one token its rate limit was taken from, on the line reporting that they disagree |
 | `tg_other` | the second bot in a line about two of them: the one a conflict was resolved against |
 | `tg_provider` | the dotted path of the provider a line is about |
 | `tg_queue` | which queue a line is about, where a container serves several |

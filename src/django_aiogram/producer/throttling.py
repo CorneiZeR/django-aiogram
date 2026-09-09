@@ -15,6 +15,7 @@ share this budget — which is what makes the multi-bot case work unchanged.
 """
 
 import asyncio
+import logging
 import threading
 import time
 from collections import OrderedDict
@@ -28,6 +29,8 @@ from django_aiogram.config.bots import BotRecord
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import KNOWN_RATE_LIMIT_KEYS, RateLimitKey
 from django_aiogram.config.settings import SETTINGS_NAME, conf
+
+logger = logging.getLogger('django_aiogram')
 
 Clock = Callable[[], float]
 Sleeper = Callable[[float], Awaitable[None]]
@@ -296,6 +299,19 @@ def _numbers(settings: 'Mapping[str, Any] | None') -> tuple[tuple[str, Any], ...
     return tuple(sorted((str(key), value) for key, value in limits.items()))
 
 
+def _owner(settings: 'Mapping[str, Any] | None') -> str | None:
+    """Name the record a token's numbers came from, or ``None`` where nothing named one.
+
+    Two configurations may legally hold one token -- a row and a section of the same
+    identity -- and Telegram meters the token, so they share one
+    limiter. Which of them the numbers came from is what decides whether a different
+    snapshot is a plan that moved or the other configuration disagreeing.
+    """
+    if not isinstance(settings, BotRecord):
+        return None
+    return f'{"row" if settings.provided else "section"}:{settings.alias}'
+
+
 class _LimiterRegistry:
     """The limiters in use, one per bot token.
 
@@ -310,6 +326,12 @@ class _LimiterRegistry:
         #: the numbers each limiter was built from, so a change in a row is noticed. A
         #: `setting_changed` receiver cannot see one: the rates live in rows since 5.0
         self._numbers: dict[str, tuple[tuple[str, Any], ...]] = {}
+        #: which record each limiter's numbers came from, so a second configuration holding
+        #: the same token cannot rebuild it -- a rebuild starts the buckets full, and two
+        #: records disagreeing would hand a full burst to every send
+        self._owners: dict[str, str | None] = {}
+        #: tokens whose collision has been reported, so the log says it once
+        self._told: set[str] = set()
         # threading, not asyncio: see TokenBucket.acquire
         self._guard = threading.Lock()
 
@@ -319,11 +341,29 @@ class _LimiterRegistry:
         Rebuilt where the bot's numbers have moved since: a client whose plan changed is
         paced by the new budget on the next send rather than at the next restart. The buckets
         start full, which is the same state a fresh process would give them.
+
+        **Only the record the numbers came from may rebuild it.** Where a second
+        configuration holds the same token and asks for different numbers, it is answered
+        with the limiter that exists: alternating sends would otherwise rebuild it on every
+        call, and a limiter built a moment ago has a full burst to give away, which is pacing
+        switched off rather than shared.
         """
         with self._guard:
             asked = _numbers(settings)
+            owner = _owner(settings)
             existing = self._limiters.get(token)
             if existing is not None and self._numbers.get(token) == asked:
+                return existing
+            if existing is not None and not self._may_rebuild(token, owner):
+                if token not in self._told:
+                    self._told.add(token)
+                    logger.warning(
+                        'two configurations hold one token with different limits; pacing by the first',
+                        extra={
+                            'tg_bot': settings.alias if isinstance(settings, BotRecord) else None,
+                            'tg_paced_by': self._owners.get(token),
+                        },
+                    )
                 return existing
             limiter = build_rate_limiter(settings)
             if limiter is None:
@@ -331,16 +371,29 @@ class _LimiterRegistry:
                 # settings again, and a stale limiter would pace a bot nothing asked to pace
                 self._limiters.pop(token, None)
                 self._numbers.pop(token, None)
+                self._owners.pop(token, None)
                 return None
             self._limiters[token] = limiter
             self._numbers[token] = asked
+            self._owners[token] = owner
             return limiter
+
+    def _may_rebuild(self, token: str, owner: str | None) -> bool:
+        """Whether ``owner`` is the record this token's limiter answers to.
+
+        An unrecorded owner is one nothing named -- a caller that passed the process-wide
+        settings -- and a named record takes it over rather than being refused by it.
+        """
+        held = self._owners.get(token)
+        return held is None or held == owner
 
     def clear(self) -> None:
         """Forget every limiter, so the next ask reads the settings again."""
         with self._guard:
             self._limiters.clear()
             self._numbers.clear()
+            self._owners.clear()
+            self._told.clear()
 
 
 _registry = _LimiterRegistry()

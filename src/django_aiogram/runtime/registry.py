@@ -123,7 +123,7 @@ class Bots(Mapping[str, 'TelegramBot']):
         # a row's bot is cached under a key no alias can be -- an alias matches
         # `^[a-z0-9][a-z0-9_]*$` -- because a section may legally be *named* `123456` and
         # handing that section's bot to a row of the same identity would send under the
-        # wrong token. `E062` reports the collision; this makes it harmless meanwhile
+        # wrong token, and no check reports that collision; this makes it harmless
         key = f'#{found.bot_id}' if found.provided else found.alias
         with self._lock:
             made = self._made.get(key)

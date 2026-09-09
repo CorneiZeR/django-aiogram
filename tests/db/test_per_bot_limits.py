@@ -34,6 +34,13 @@ def _no_limiters_left_behind():
     reset_rate_limiters()
 
 
+def _desired():
+    """The records the providers see, imported where the app registry is up."""
+    from django_aiogram.runtime.providers import desired
+
+    return desired()
+
+
 def bot_for(bot_id):
     """The bot object one row describes."""
     from django_aiogram.runtime.providers import desired
@@ -155,3 +162,30 @@ def test_the_token_and_the_numbers_come_from_one_read(monkeypatch):
     assert served.rate_limiter is None  # the stand-in answers with nothing; the call is the point
 
     assert asked == [('123456:AAaa', '123456:AAaa')], 'the token and the numbers came from different reads'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_two_records_holding_one_token_do_not_rebuild_each_other_s_limiter():
+    """One token is one budget at Telegram, and a rebuild hands out a full burst.
+
+    A row and a section may legally describe the same identity, and if
+    each ask rebuilt the limiter the other built, alternating sends would start every call
+    with an empty bucket queue, which is pacing switched off rather than shared.
+    """
+    row = TelegramBot.objects.create(
+        bot_id=123456,
+        token='123456:AAaa',
+        overrides={'RATE_LIMIT': {'overall_per_second': 1}},
+    )
+    found = next(record for record in _desired() if record.bot_id == 123456)
+    disagreeing = found.__class__(
+        alias='rival',
+        resolved={**found.resolved, 'RATE_LIMIT': {'overall_per_second': 7}},
+        origins=found.origins,
+        declared=True,
+    )
+
+    first = get_rate_limiter(row.token, found)
+    assert get_rate_limiter(row.token, disagreeing) is first, 'the other configuration rebuilt it'
+    assert first._overall.rate == 1, first._overall.rate
+    assert get_rate_limiter(row.token, found) is first, 'the owner was displaced by the other one'

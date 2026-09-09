@@ -65,6 +65,11 @@ is what an admin form writes. **A change there takes effect on the next send**, 
 restart: the limiter remembers the numbers it was built from and is rebuilt when they
 move. `RATE_LIMIT: {}` switches pacing off for that bot, and the limiter goes with it.
 
+**One token is one budget**, so where two configurations describe the same identity — a
+row and a settings section holding one token — the numbers of whichever of them sent first
+are the ones that pace both, and a warning names the other. Rebuilding the limiter for each
+in turn would start every send with a full burst.
+
 ### With more than one container, the arithmetic is yours
 
 **The limiter is per process.** Two containers with the same budget send at twice it, ten
@@ -76,8 +81,9 @@ so the two honest options are both available:
   at `overall_per_second: 15` is one bot at 30, which is the documented ceiling.
 - **Accept 429 and let the retry absorb it.** `TelegramRetryAfter` carries a delay and
   `MAX_RETRIES` bounds the attempts, so a burst is usually delivered a moment late rather
-  than refused — but the bound is a bound: a send that exhausts it is recorded as failed
-  and `manage.py tgbot_replay` is what sends it afterwards. This is the right answer when
+  than refused — but the bound is a bound: a send that exhausts it is recorded as
+  `outbound.dropped` with `detail.max_retries`, and `manage.py tgbot_replay` is what sends
+  it afterwards. This is the right answer when
   the traffic is bursty rather than sustained, since a divided budget paces every
   container down even while the others are idle.
 
