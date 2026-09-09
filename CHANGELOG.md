@@ -125,8 +125,9 @@
   different state, where the settings are the whole declaration.
 
 - **A webhook per bot, and a pass that keeps Telegram's idea of them in line.** The URL
-  carries the identity -- `path('tg/<int:bot_id>/<secret>/', telegram_webhook)` -- and each
-  bot has its own `WEBHOOK_SECRET`, in its section or its row. Both halves matter: one URL
+  carries the identity -- `path('tg/<secret>/<int:bot_id>/', telegram_webhook)`, with
+  `WEBHOOK_URL` as the prefix the command appends the identity to -- and each bot has its own
+  `WEBHOOK_SECRET`, in its section or its row. Both halves matter: one URL
   would leave the update's contents as the only clue about who it is for, and one shared
   secret would let a leak from one client's bot post as every other. A bot with no secret of
   its own is refused rather than served under the process's.
@@ -137,9 +138,10 @@
   second, so a bot registered a moment ago is served without a flood of unknown identities
   costing a query each.
 
-  `manage.py tgbot_webhook reconcile` asks `getWebhookInfo` what Telegram has, compares it
-  with what each bot should have and repairs the difference -- the only way to know, since the
-  two drift apart in both directions. It paces itself with a jittered `--pause`, so a thousand
+  `manage.py tgbot_webhook reconcile` asks `getWebhookInfo` what Telegram has and gives each
+  bot this deployment serves the webhook it should have -- the only authority on what Telegram
+  will post to is Telegram. It cannot repair the other direction: deregistering a bot needs
+  that bot's token, so `delete --bot <id>` belongs *before* its row is removed. It paces itself with a jittered `--pause`, so a thousand
   bots starting at once are not a thousand calls arriving together, and one bot's failure is
   its own. `--force` applies a rotated secret, which Telegram never reports. `--bot` bounds
   any of the actions to one bot.

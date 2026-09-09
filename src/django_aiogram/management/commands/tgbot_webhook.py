@@ -4,11 +4,14 @@ Telegram remembers the URL, not your settings file, so switching between polling
 and webhooks means telling Telegram. `getUpdates` refuses to run while a webhook
 is registered, which is why `delete` exists.
 
-**`reconcile` is the one a deployment with many bots runs.** Telegram's state and the
-deployment's drift apart in both directions -- a bot added and never registered, a bot
-removed and still being posted to -- and only Telegram can be asked which it is. The pass
-compares `getWebhookInfo` against what each bot should have and repairs the difference,
-which is also why it is safe to run again: a bot already registered costs one read.
+**`reconcile` is the one a deployment with many bots runs.** Only Telegram knows what it
+will post to, so the pass asks -- `getWebhookInfo` per bot -- and gives each bot this
+deployment serves the webhook it should have. Safe to run again: a bot already registered
+costs one read.
+
+It cannot repair the other direction. A bot Telegram is still posting to and this deployment
+no longer serves needs that bot's token to deregister, and the row that held it is gone --
+which is why `delete --bot <id>` belongs *before* the row is removed rather than after.
 
 It paces itself, because a thousand bots starting at once is a thousand `setWebhook` calls
 into an API with its own limits: `--pause` between calls and a jitter so two containers that
@@ -152,10 +155,11 @@ class Command(BaseCommand):
     def _reconcile(self, options: dict[str, Any]) -> None:
         """Compare what Telegram has against what each bot should have, and repair it.
 
-        Both directions, because the drift goes both ways: a bot this deployment serves and
-        Telegram has no webhook for gets one, and a bot Telegram is still posting to and this
-        deployment does not serve has its webhook deleted -- the second is how a removed
-        client keeps receiving updates nobody handles.
+        **One direction only**, and the reason is the token: this walks the bots this
+        deployment serves and gives each the webhook it should have. A bot Telegram is still
+        posting to and this deployment no longer serves cannot be repaired from here at all --
+        deregistering needs that bot's token, and the row that held it is gone. `delete --bot
+        <id>` *before* removing the row is the other direction, and :meth:`_delete` says so.
 
         One bot's failure is its own: the pass carries on and says what it could not do, for
         the reason the supervisor gives about the same shape of work. A container that gave up

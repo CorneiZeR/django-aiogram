@@ -235,11 +235,17 @@ def test_two_updates_in_a_row_are_both_handled(handled):
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_what_set_webhook_is_given():
+    """And the empty update set is `[]`, not `None`.
+
+    Telegram reads an *omitted* `allowed_updates` as "keep whatever was registered before", so
+    a bot narrowed to one update type once would stay narrowed for ever while the settings said
+    default. An empty list is the documented way to ask for the default set.
+    """
     arguments = webhook_settings()
 
     assert arguments['url'] == 'https://example.test/tg/hook/'
     assert arguments['secret_token'] == SECRET
-    assert arguments['allowed_updates'] is None
+    assert arguments['allowed_updates'] == []
     assert arguments['drop_pending_updates'] is False
 
 

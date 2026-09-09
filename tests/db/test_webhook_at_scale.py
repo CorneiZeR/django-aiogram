@@ -43,10 +43,10 @@ def _cold_cache():
     """Forget the identities between cases: the cache is a module's, and cases share it."""
     from django_aiogram.consumer import webhook
 
-    webhook._served = frozenset()
+    webhook._served = {}
     webhook._read_at = None
     yield
-    webhook._served = frozenset()
+    webhook._served = {}
     webhook._read_at = None
 
 
@@ -155,3 +155,76 @@ def test_a_bot_the_deployment_does_not_configure_is_refused_by_name():
     """A typo in `--bot` would otherwise be a run that reported nothing and changed nothing."""
     with pytest.raises(CommandError, match='No bot with the identity'):
         call_command('tgbot_webhook', 'info', '--bot', '999999')
+
+
+def test_a_bot_narrowed_once_is_repaired_against_the_default_set():
+    """Telegram omits `allowed_updates` for the default set, so `None` cannot mean "fine".
+
+    Read that way, a bot registered for `['message']` a year ago looks correctly registered
+    for ever while the settings ask for everything — and the pass would never repair it.
+    """
+
+    class Has:
+        """What `getWebhookInfo` answers with."""
+
+        def __init__(self, url, allowed=None):
+            """Take what Telegram says it has."""
+            self.url = url
+            self.allowed_updates = allowed
+
+    wanted = {'url': 'https://example.test/tg/123456/', 'allowed_updates': []}
+
+    assert registered(wanted, Has(wanted['url']))
+    assert not registered(wanted, Has(wanted['url'], ['message'])), 'a narrowed bot read as correct'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_database_that_cannot_be_read_is_asked_once_per_interval(monkeypatch, django_assert_num_queries):
+    """A failure that left the timestamp alone made every request re-enter the read.
+
+    Which is one attempt per webhook request while the database is down — the load the cache
+    exists to remove, arriving exactly when the deployment can least afford it.
+    """
+    from django_aiogram.consumer import webhook
+
+    reads = []
+
+    def refuse():
+        reads.append('asked')
+        msg = 'the database is not reachable'
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr('django_aiogram.runtime.providers.desired', refuse)
+    monkeypatch.setattr(webhook, 'MISS_GRACE', 60.0)
+
+    assert posted(123456, 'mine').status_code == 404
+    with django_assert_num_queries(0):
+        assert posted(123456, 'mine').status_code == 404
+
+    assert reads == ['asked'], f'the failed read was retried {len(reads)} times'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WEBHOOK_URL': 'https://example.test/tg/9c1f2b7a'})
+def test_the_registered_url_is_the_route_the_page_documents(monkeypatch):
+    """The identity goes last, after whatever unguessable segment the prefix carries.
+
+    Registered any other way, Telegram posts somewhere Django does not route — and nothing
+    local says so: the updates simply stop arriving. Asserted against a resolver over the
+    documented pattern, so the two cannot drift apart in prose alone.
+    """
+    from django.urls import path, re_path  # noqa: F401 - `path` is what the page shows
+    from django.urls.resolvers import URLPattern, URLResolver, get_resolver  # noqa: F401
+
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'WEBHOOK_SECRET': 'mine'})
+    from django_aiogram.runtime.providers import desired
+
+    (record,) = desired()
+
+    url = webhook_settings(record, record.bot_id)['url']
+
+    assert url == 'https://example.test/tg/9c1f2b7a/123456/'
+    # and the path the documented route matches is the path that URL carries
+    pattern = path('tg/9c1f2b7a/<int:bot_id>/', telegram_webhook)
+    matched = pattern.resolve('tg/9c1f2b7a/123456/')
+    assert matched is not None, 'the documented route does not match the URL that is registered'
+    assert matched.kwargs == {'bot_id': 123456}

@@ -128,10 +128,22 @@ So the path carries the identity and each bot has its own secret:
 ```python
 # urls.py
 urlpatterns = [
-    path('tg/<int:bot_id>/9c1f2b7a/', telegram_webhook),
+    # the unguessable segment first, the identity last: `WEBHOOK_URL` is the prefix and
+    # `tgbot_webhook` appends the identity to it, so the order here is the order it registers
+    path('tg/9c1f2b7a/<int:bot_id>/', telegram_webhook),
     path('tg/9c1f2b7a/', telegram_webhook),  # the process's own bot, if it has one
 ]
 ```
+
+```python
+TELEGRAM_BOT_DEFAULTS = {
+    'WEBHOOK_URL': 'https://example.test/tg/9c1f2b7a',  # no identity: the command adds it
+}
+```
+
+`manage.py tgbot_webhook reconcile` then registers `https://example.test/tg/9c1f2b7a/123456/`
+for the bot whose identity is `123456`, which is the route above. Put the identity anywhere
+else in the path and Telegram will be posting somewhere Django does not route.
 
 The secret goes in that bot's own settings — a section under `TELEGRAM_BOTS`, or the
 `overrides` on its `TelegramBot` row:

@@ -195,9 +195,12 @@ def served_records(*, refresh: bool = False) -> 'Mapping[int, Any]':
     # deferred: the providers reach the ORM, and this module is imported by `urls.py`
     from django_aiogram.runtime.providers import desired  # noqa: PLC0415 - as above
 
+    # stamped whichever way it goes: a failure that left the old timestamp would make every
+    # following request re-enter the read, so an unreachable database would be one attempt per
+    # webhook request -- exactly the load this cache is here to remove
+    _read_at = time.monotonic()
     try:
         _served = {record.bot_id: record for record in desired() if record.bot_id is not None}
-        _read_at = time.monotonic()
     except Exception:
         logger.exception('webhook could not re-read the bots it serves; going by the last read')
     return _served
@@ -324,7 +327,11 @@ def webhook_settings(settings: 'Mapping[str, Any] | None' = None, bot_id: 'int |
     return {
         'url': url if bot_id is None else f'{url.rstrip("/")}/{bot_id}/',
         'secret_token': webhook_secret(resolved),
-        'allowed_updates': list(allowed) if allowed else None,
+        # `[]` rather than `None`, and that is not a formality: Telegram reads an *omitted*
+        # `allowed_updates` as "keep whatever was registered before", so a bot narrowed to
+        # `['message']` once would stay narrowed for ever while the settings said default.
+        # An empty list is the documented way to ask for the default set
+        'allowed_updates': list(allowed) if allowed else [],
         'drop_pending_updates': False,
     }
 
@@ -347,10 +354,15 @@ def registered(desired: dict[str, Any], info: Any) -> bool:  # noqa: ANN401 - ai
     reconciliation can compare. **The secret is not reported at all**, so a rotated one looks
     like no change from here -- which is why the pass takes `--force` and why rotating a
     secret means registering again.
+
+    Telegram omits ``allowed_updates`` where the default set is registered, so both sides are
+    normalised to a list: read as "nothing to compare", a bot narrowed to one update type
+    once would look correctly registered for ever against settings asking for the default.
     """
     if str(getattr(info, 'url', '') or '') != desired['url']:
         return False
-    wanted = desired['allowed_updates']
-    if wanted is None:
-        return True
+    # both sides normalised to a list, because Telegram omits the field where the default set
+    # is registered: read as "nothing to compare", a bot narrowed once would look correct for
+    # ever against settings asking for the default
+    wanted = desired['allowed_updates'] or []
     return sorted(getattr(info, 'allowed_updates', None) or []) == sorted(wanted)

@@ -111,6 +111,11 @@ class Bots(Mapping[str, 'TelegramBot']):
         written out -- so a bot that arrives from the database is cached exactly as one from a
         settings section is, and a settings change drops both.
         """
+        if found.alias == DEFAULT_ALIAS:
+            # through the mapping, which hands back the process's own object: a second
+            # instance under that alias would hold half the handlers and half the in-flight
+            # sends, and a shutdown closes only the singleton
+            return self[found.alias]
         # deferred: importing the client costs aiogram, and this module is reached by a
         # listing that may never send
         from django_aiogram.producer.client import TelegramBot  # noqa: PLC0415 - as above
