@@ -456,3 +456,32 @@ class _Info:
         """Take the URL this stand-in reports."""
         self.url = url
         self.allowed_updates = None
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_the_records_are_read_under_a_lock(monkeypatch):
+    """An expiry under load would otherwise be one read per request in flight.
+
+    Asserted on the lock rather than with threads: the interleaving that multiplies the work
+    needs several requests to pass the age check before any of them stamps it, which a test
+    cannot ask for. What it can pin is the property that makes it impossible.
+    """
+    from django_aiogram.consumer import webhook
+
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'WEBHOOK_SECRET': 'mine'})
+    under = []
+    original = webhook.served_records
+
+    def watching(**kwargs):
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        'django_aiogram.runtime.providers.desired',
+        lambda: under.append(webhook._reading.locked()) or (),
+    )
+    webhook._served = {}
+    webhook._read_at = None
+
+    watching()
+
+    assert under == [True], 'the records were read with the lock released'

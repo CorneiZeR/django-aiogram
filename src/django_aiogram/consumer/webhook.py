@@ -25,6 +25,7 @@ import hmac
 import json
 import logging
 import secrets
+import threading
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -196,22 +197,38 @@ def served_records(*, refresh: bool = False) -> 'Mapping[int, Any]':
     every update because a database blinked would be an outage.
     """
     global _served, _read_at  # noqa: PLW0603 - one cache per process, like the bots it names
-    if _read_at is not None:
-        age = time.monotonic() - _read_at
-        if age < (MISS_GRACE if refresh else _cache_for()):
-            return _served
+    if _fresh_enough(refresh=refresh):
+        return _served
     # deferred: the providers reach the ORM, and this module is imported by `urls.py`
     from django_aiogram.runtime.providers import desired  # noqa: PLC0415 - as above
 
-    # stamped whichever way it goes: a failure that left the old timestamp would make every
-    # following request re-enter the read, so an unreachable database would be one attempt per
-    # webhook request -- exactly the load this cache is here to remove
-    _read_at = time.monotonic()
-    try:
-        _served = {record.bot_id: record for record in desired() if record.bot_id is not None}
-    except Exception:
-        logger.exception('webhook could not re-read the bots it serves; going by the last read')
-    return _served
+    # one reader at a time, and the age re-checked inside: without the lock every request that
+    # arrived while the cache was expiring would read for itself, so a cold start or an
+    # expiry under load multiplies the database work by however many requests are in flight.
+    # The waiters find the fresh answer and return it
+    with _reading:
+        if _fresh_enough(refresh=refresh):
+            return _served
+        # stamped whichever way it goes: a failure that left the old timestamp would make
+        # every following request re-enter the read, so an unreachable database would be one
+        # attempt per webhook request -- exactly the load this cache is here to remove
+        _read_at = time.monotonic()
+        try:
+            _served = {record.bot_id: record for record in desired() if record.bot_id is not None}
+        except Exception:
+            logger.exception('webhook could not re-read the bots it serves; going by the last read')
+        return _served
+
+
+def _fresh_enough(*, refresh: bool) -> bool:
+    """Whether the cached records are young enough to answer with.
+
+    Two ages, for the reason :func:`served_records` gives: a hit is answered for the whole
+    interval, and a miss may re-read once the grace has passed.
+    """
+    if _read_at is None:
+        return False
+    return time.monotonic() - _read_at < (MISS_GRACE if refresh else _cache_for())
 
 
 def _cache_for() -> float:
@@ -226,6 +243,9 @@ def _cache_for() -> float:
     except (TypeError, ValueError, ImproperlyConfigured):
         return float(DEFAULTS['BOT_REFRESH_INTERVAL'])
 
+
+#: one reader at a time, so an expiry under load is one read rather than one per request
+_reading = threading.Lock()
 
 #: how often a *miss* may re-read: enough that a bot registered a moment ago is served, and
 #: little enough that unknown identities arriving in a flood cannot be a query each

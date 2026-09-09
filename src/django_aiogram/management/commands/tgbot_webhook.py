@@ -187,16 +187,18 @@ class Command(BaseCommand):
             if missing:
                 msg = f'These bots are not configured here: {", ".join(str(found) for found in missing)}.'
                 raise CommandError(msg)
-        for number, record in enumerate([*serving, *disabled]):
+        # each record tagged with what to do while the two lists are still apart: asking
+        # `record in disabled` per bot is a scan per bot, and whole-record comparisons at that,
+        # over a list this pass is written for a thousand of
+        work = [(record, self._reconcile_one) for record in serving]
+        work += [(record, self._deregister_one) for record in disabled]
+        for number, (record, act) in enumerate(work):
             if number:
                 self._breathe(options['pause'])
             identity = record.bot_id
             if identity is None:  # pragma: no cover - filtered above, and mypy cannot see that
                 continue
-            if record in disabled:
-                self._deregister_one(identity, record, options)
-            else:
-                self._reconcile_one(identity, record, options)
+            act(identity, record, options)
 
     def _deregister_one(self, identity: int, record: Any, options: dict[str, Any]) -> None:  # noqa: ANN401
         """Take the webhook off a bot nobody serves, and say whether there was one.
