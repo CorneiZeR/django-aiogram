@@ -18,12 +18,13 @@ import asyncio
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from django.core.exceptions import ImproperlyConfigured
 from django.core.signals import setting_changed
 
+from django_aiogram.config.bots import BotRecord
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import KNOWN_RATE_LIMIT_KEYS, RateLimitKey
 from django_aiogram.config.settings import SETTINGS_NAME, conf
@@ -261,17 +262,38 @@ class RateLimiter:
             return None
 
 
-def build_rate_limiter() -> RateLimiter | None:
-    """Build the limiter described by settings, or None when disabled."""
-    limits = conf['RATE_LIMIT']
+def build_rate_limiter(settings: 'Mapping[str, Any] | None' = None) -> RateLimiter | None:
+    """Build the limiter one bot's settings describe, or None when disabled.
+
+    ``settings`` is that bot's resolved record: Telegram meters the token, so the numbers are
+    a bot's own -- a noisy client throttled below the shared default, a client with paid
+    broadcasting above it -- and reading the process-wide dict here would have given every bot
+    the same budget whatever its row said.
+    """
+    resolved = conf if settings is None else settings
+    limits = resolved['RATE_LIMIT']
     if not limits:
         return None
 
     unknown = sorted(str(key) for key in limits if key not in KNOWN_RATE_LIMIT_KEYS)
     if unknown:
-        msg = f"{SETTINGS_NAME}['RATE_LIMIT'] has unknown keys: {', '.join(unknown)}."
+        label = settings.label('RATE_LIMIT') if isinstance(settings, BotRecord) else f"{SETTINGS_NAME}['RATE_LIMIT']"
+        msg = f'{label} has unknown keys: {", ".join(unknown)}.'
         raise ImproperlyConfigured(msg)
     return RateLimiter(**limits)
+
+
+def _numbers(settings: 'Mapping[str, Any] | None') -> tuple[tuple[str, Any], ...]:
+    """Return the limits as something comparable, for a cache that has to notice a change.
+
+    The rates live in rows since 5.0, and a row moves without `setting_changed` firing -- so
+    a registry that only cleared on that signal would pace a client against the numbers their
+    previous plan had. Compared rather than versioned because a record carries no revision:
+    what matters is whether the numbers this limiter was built from are still the numbers.
+    """
+    resolved = conf if settings is None else settings
+    limits = resolved['RATE_LIMIT'] or {}
+    return tuple(sorted((str(key), value) for key, value in limits.items()))
 
 
 class _LimiterRegistry:
@@ -285,32 +307,54 @@ class _LimiterRegistry:
     def __init__(self) -> None:
         """Start empty: a limiter is built on the first send with that token."""
         self._limiters: dict[str, RateLimiter] = {}
+        #: the numbers each limiter was built from, so a change in a row is noticed. A
+        #: `setting_changed` receiver cannot see one: the rates live in rows since 5.0
+        self._numbers: dict[str, tuple[tuple[str, Any], ...]] = {}
         # threading, not asyncio: see TokenBucket.acquire
         self._guard = threading.Lock()
 
-    def get(self, token: str) -> RateLimiter | None:
-        """Return the limiter for ``token``, building it if this is the first ask."""
+    def get(self, token: str, settings: 'Mapping[str, Any] | None' = None) -> RateLimiter | None:
+        """Return the limiter for ``token``, building it if this is the first ask.
+
+        Rebuilt where the bot's numbers have moved since: a client whose plan changed is
+        paced by the new budget on the next send rather than at the next restart. The buckets
+        start full, which is the same state a fresh process would give them.
+        """
         with self._guard:
+            asked = _numbers(settings)
             existing = self._limiters.get(token)
-            if existing is not None:
+            if existing is not None and self._numbers.get(token) == asked:
                 return existing
-            limiter = build_rate_limiter()
-            if limiter is not None:
-                self._limiters[token] = limiter
+            limiter = build_rate_limiter(settings)
+            if limiter is None:
+                # a bot whose limits were switched off keeps nothing: the next ask reads the
+                # settings again, and a stale limiter would pace a bot nothing asked to pace
+                self._limiters.pop(token, None)
+                self._numbers.pop(token, None)
+                return None
+            self._limiters[token] = limiter
+            self._numbers[token] = asked
             return limiter
 
     def clear(self) -> None:
         """Forget every limiter, so the next ask reads the settings again."""
         with self._guard:
             self._limiters.clear()
+            self._numbers.clear()
 
 
 _registry = _LimiterRegistry()
 
 
-def get_rate_limiter(token: str) -> RateLimiter | None:
-    """Return the limiter for ``token``, shared across bot instances."""
-    return _registry.get(token)
+def get_rate_limiter(token: str, settings: 'Mapping[str, Any] | None' = None) -> RateLimiter | None:
+    """Return the limiter for ``token``, shared across bot instances.
+
+    Keyed by the token because that is what Telegram meters: two objects holding one token
+    draw on one budget, and separate limiters would let them send at twice the rate. The
+    *numbers* come from ``settings`` -- that bot's resolved record -- so a client throttled in
+    their row is throttled here.
+    """
+    return _registry.get(token, settings)
 
 
 def reset_rate_limiters() -> None:

@@ -240,15 +240,17 @@ class TelegramBot(RouterShortcuts):
 
     @property
     def rate_limiter(self) -> RateLimiter | None:
-        """Paced per token: Telegram meters the bot, not this object.
+        """Paced per token, by this bot's own numbers.
 
-        Two instances holding the same token therefore share one budget; a
-        different token gets its own.
+        Telegram meters the bot rather than this object, so two instances holding one token
+        share one budget and a different token gets its own. The *numbers* are this bot's
+        resolved `RATE_LIMIT`: a client throttled in their row is throttled here, and one
+        whose row raises the budget is paced by the higher one.
         """
         # no instance cache: the registry already caches per token, and holding
         # a second copy here is what kept a bot on stale RATE_LIMIT settings
         # after the registry was reset
-        return get_rate_limiter(str(self.settings['TOKEN'] or ''))
+        return get_rate_limiter(str(self.settings['TOKEN'] or ''), self.settings)
 
     @property
     def max_retries(self) -> int:
