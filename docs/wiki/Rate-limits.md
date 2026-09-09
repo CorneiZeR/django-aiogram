@@ -74,10 +74,12 @@ so the two honest options are both available:
 
 - **Divide the budget** by the number of processes that send for that bot. Two consumers
   at `overall_per_second: 15` is one bot at 30, which is the documented ceiling.
-- **Accept 429 and let the retry absorb it.** `TelegramRetryAfter` carries a delay,
-  `MAX_RETRIES` bounds the attempts, and the send is not lost — see below. This is the
-  right answer when the traffic is bursty rather than sustained, since a divided budget
-  paces every container down even while the others are idle.
+- **Accept 429 and let the retry absorb it.** `TelegramRetryAfter` carries a delay and
+  `MAX_RETRIES` bounds the attempts, so a burst is usually delivered a moment late rather
+  than refused — but the bound is a bound: a send that exhausts it is recorded as failed
+  and `manage.py tgbot_replay` is what sends it afterwards. This is the right answer when
+  the traffic is bursty rather than sustained, since a divided budget paces every
+  container down even while the others are idle.
 
 ## Retries still exist
 

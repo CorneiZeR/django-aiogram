@@ -136,8 +136,8 @@
 
   `Rate-limits.md` states the multi-container arithmetic plainly, because the limiter is per
   process: two containers with one budget send at twice it. Divide the number by the processes
-  that send for that bot, or accept 429 and let the retry absorb it -- and the per-bot number
-  is what makes the first of those possible.
+  that send for that bot, or accept 429 and let the retry absorb it as far as `MAX_RETRIES`
+  reaches -- and the per-bot number is what makes the first of those possible.
 
 - **A webhook per bot, and a pass that keeps Telegram's idea of them in line.** The URL
   carries the identity -- `path('tg/9c1f2b7a/<int:bot_id>/', telegram_webhook)`, with
