@@ -105,15 +105,22 @@ class Command(BaseCommand):
         if len(asked) > 1:
             msg = f'--bot may be given once for `{options["action"]}`; use `reconcile` to walk every bot.'
             raise CommandError(msg)
-        from django_aiogram.runtime.providers import desired  # noqa: PLC0415 - the ORM, deferred
+        from django_aiogram.runtime.providers import desired, switched_off  # noqa: PLC0415 - the ORM
         from django_aiogram.runtime.registry import bots  # noqa: PLC0415 - as above
 
         identity = asked[0]
         found = next((record for record in desired() if record.bot_id == identity), None)
         if found is None:
+            # a switched-off row too, and only here: a bot nobody serves still has a webhook
+            # to delete, and deleting one needs that bot's token. Unreachable, disabling a row
+            # would leave Telegram posting at a URL that answers 404 for ever
+            found = next((record for record in switched_off() if record.bot_id == identity), None)
+            if found is not None:
+                self.stdout.write(f'{identity} is switched off; acting on it anyway.')
+        if found is None:
             msg = f'No bot with the identity {identity} is configured here.'
             raise CommandError(msg)
-        return bots.by_id(identity), found, identity
+        return bots.for_record(found), found, identity
 
     def _set(self, options: dict[str, Any]) -> None:
         """Register the webhook Telegram should deliver to, warning if MODE disagrees.

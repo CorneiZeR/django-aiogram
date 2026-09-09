@@ -67,7 +67,7 @@ def test_an_update_for_a_served_bot_costs_no_query(django_assert_num_queries, mo
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
-def test_a_stranger_posting_nonsense_cannot_keep_the_database_busy(django_assert_num_queries):
+def test_a_stranger_posting_nonsense_cannot_keep_the_database_busy(django_assert_num_queries, monkeypatch):
     """Otherwise the webhook is a way to load the database by posting identities at it.
 
     A miss re-reads so a bot registered a moment ago is served, and that read is bounded to
@@ -75,6 +75,9 @@ def test_a_stranger_posting_nonsense_cannot_keep_the_database_busy(django_assert
     identities as fast as the database can answer them. The flood is the second post onward,
     and those are answered from the cache.
     """
+    # pinned rather than left to the clock: the default grace is a second, and a slow CI
+    # machine between the first post and the block below would let the next miss re-read
+    monkeypatch.setattr('django_aiogram.consumer.webhook.MISS_GRACE', 60.0)
     TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'WEBHOOK_SECRET': 'mine'})
     assert posted(999999, 'mine').status_code == 404
 
@@ -266,3 +269,42 @@ def test_a_section_named_like_an_identity_is_reported():
 
     assert reported, 'a section named like a bot identity was not reported'
     assert '123456' in reported[0].msg
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_secret_rotated_in_the_settings_takes_effect_at_once():
+    """An interval of stale records is an interval of accepting the secret that was rotated.
+
+    Which is the window a rotation exists to close, so the cache is dropped when either
+    settings dict moves rather than waited out.
+    """
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'WEBHOOK_SECRET': 'old'})
+    assert posted(123456, 'old').status_code == 200
+
+    TelegramBot.objects.filter(bot_id=123456).update(overrides={'WEBHOOK_SECRET': 'new'})
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WEBHOOK_ALLOWED_UPDATES': ()}):
+        # the settings moved, so the records are re-read: the row's new secret comes with them
+        assert posted(123456, 'old').status_code == 403, 'the rotated-away secret was still accepted'
+        assert posted(123456, 'new').status_code == 200
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_switched_off_bot_can_still_have_its_webhook_deleted():
+    """Disabling a row is not deregistering a webhook, and only that bot's token can do it.
+
+    Unreachable, disabling would leave Telegram posting at a URL that answers 404 for ever,
+    with nothing able to tell it to stop.
+    """
+    TelegramBot.objects.create(
+        bot_id=123456,
+        token='123456:AAaa',
+        overrides={'WEBHOOK_SECRET': 'mine'},
+        enabled=False,
+    )
+    from django_aiogram.runtime.providers import desired, switched_off
+
+    assert desired() == (), 'a switched-off bot is not one to serve'
+    (found,) = switched_off()
+
+    assert found.bot_id == 123456
+    assert found.provided

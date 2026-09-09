@@ -181,8 +181,9 @@ redeliver — which is what you want. Each reason has its own log line:
 - `webhook received an update while this deployment polls` — `MODE` is not `webhook`, so
   a worker is polling and this process must not also feed the dispatcher
 - `webhook cannot resolve the bot the path names` — the identity in the URL is one this
-  deployment serves, and resolving it still failed: a settings dict that cannot be read, or a
-  row whose token has no identity in it
+  deployment serves, and building its bot still failed: a settings dict that cannot be read is
+  the case that gets here. A row whose token carries no identity never does — the providers
+  skip it, so nothing could have matched the path
 - `webhook has no secret to serve this update with` — `WEBHOOK_SECRET` is empty for the bot
   the path names, or for this process where the path names none. Read only once the mode says
   to serve, so a polling deployment is told it polls instead. A bot with no secret of its own

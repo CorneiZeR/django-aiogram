@@ -30,11 +30,14 @@ from typing import TYPE_CHECKING, Any
 
 from aiogram.types import Update
 from django.core.exceptions import ImproperlyConfigured
+from django.core.signals import setting_changed
+from django.dispatch import receiver
 from django.http import HttpRequest, HttpResponse, HttpResponseNotAllowed
 from django.views.decorators.csrf import csrf_exempt
 from pydantic import ValidationError
 
 from django_aiogram import bot
+from django_aiogram.config.bots import BOTS_SETTINGS_NAME
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import UpdateMode, as_member, choices
 from django_aiogram.config.settings import SETTINGS_NAME, conf
@@ -227,6 +230,21 @@ MISS_GRACE = 1.0
 #: and when: `None` is "never read", which is not the same as "read and empty"
 _served: dict[int, Any] = {}
 _read_at: float | None = None
+
+
+@receiver(setting_changed, dispatch_uid='django_aiogram.consumer.webhook')
+def _forget_the_bots_it_serves(**kwargs: Any) -> None:
+    """Drop the cache when either dict a bot is configured in changes.
+
+    An interval of stale records is an interval of the wrong answers: a bot whose section was
+    removed would still be routed, and one whose ``WEBHOOK_SECRET`` was rotated would still
+    accept the old one -- for up to `BOT_REFRESH_INTERVAL` after the change, which is the
+    window a rotation exists to close.
+    """
+    global _served, _read_at  # noqa: PLW0603 - one cache per process, like the bots it names
+    if kwargs.get('setting') in {SETTINGS_NAME, BOTS_SETTINGS_NAME}:
+        _served = {}
+        _read_at = None
 
 
 def webhook_secret(settings: 'Mapping[str, Any] | None' = None) -> str:

@@ -187,6 +187,10 @@ could not do and carries on.
 **Telegram never reports the secret**, so a rotated one looks like no change from here:
 `--force` is how it is applied.
 
+**Switching a row off is not deregistering its webhook.** A disabled bot is one nobody
+serves, so its updates get a 404 — while Telegram goes on posting them. `delete --bot <id>`
+still reaches a switched-off bot for exactly that reason, and says so when it does.
+
 **Delete before removing the row, not after.** Deleting a webhook needs that bot's token, and
 once the row is gone this deployment has none — so Telegram goes on posting to a URL that
 answers 404 for ever. `reconcile` cannot repair that either: there is nothing left to ask
