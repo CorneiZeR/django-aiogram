@@ -114,3 +114,41 @@ def test_a_bot_whose_limits_are_switched_off_keeps_no_limiter():
     from django_aiogram.producer.throttling import _registry
 
     assert '123456:AAaa' not in _registry._limiters, 'the limiter was kept, unread'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_the_token_and_the_numbers_come_from_one_read(monkeypatch):
+    """`settings` resolves each time it is asked, so two reads can straddle a rotation.
+
+    The old token with the new numbers puts a limiter under a token nothing sends with, and
+    the bot's pacing is then split across two budgets — which is the one thing keying on the
+    token is there to prevent.
+    """
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'RATE_LIMIT': {'overall_per_second': 1}})
+    served = bot_for(123456)
+    reads = []
+    found = served.settings
+
+    def rotating(self):
+        """Answer with a different record every time, the way a rotation between reads looks."""
+        reads.append(len(reads))
+        if len(reads) > 1:
+            return found.__class__(
+                alias=found.alias,
+                resolved={**found.resolved, 'TOKEN': '123456:AArotated'},
+                origins=found.origins,
+                declared=found.declared,
+                provided=found.provided,
+            )
+        return found
+
+    monkeypatch.setattr(type(served), 'settings', property(rotating))
+    asked = []
+    monkeypatch.setattr(
+        'django_aiogram.producer.client.get_rate_limiter',
+        lambda token, settings=None: asked.append((token, settings['TOKEN'])) or None,
+    )
+
+    assert served.rate_limiter is None  # the stand-in answers with nothing; the call is the point
+
+    assert asked == [('123456:AAaa', '123456:AAaa')], 'the token and the numbers came from different reads'

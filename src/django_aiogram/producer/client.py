@@ -250,7 +250,11 @@ class TelegramBot(RouterShortcuts):
         # no instance cache: the registry already caches per token, and holding
         # a second copy here is what kept a bot on stale RATE_LIMIT settings
         # after the registry was reset
-        return get_rate_limiter(str(self.settings['TOKEN'] or ''), self.settings)
+        # one read, kept local: `settings` resolves each time it is asked, so reading it twice
+        # can straddle a rotation -- the old token with the new numbers, stored under a token
+        # nothing sends with, and the pacing then split across two budgets
+        found = self.settings
+        return get_rate_limiter(str(found['TOKEN'] or ''), found)
 
     @property
     def max_retries(self) -> int:
