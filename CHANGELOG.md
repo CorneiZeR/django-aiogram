@@ -151,6 +151,11 @@
   the answer and between twenty and a hundred the leases are -- and what grows with the bots
   whatever the mode.
 
+  A bot the providers described follows its row: a rotated token or a new webhook secret
+  reaches the object that is already serving it, so a rotation takes effect on the next pass
+  rather than at the next restart. The object itself is kept -- it holds the loop and the
+  in-flight sends a shutdown drains -- and what it built from the old record is not.
+
   A row's bot and a settings section of the same name are two bots, and stay two: a section
   may legally be *named* `123456`, and a bot that resolved its settings by alias would have
   read that section's token. `I004` reports the collision so it can be renamed.

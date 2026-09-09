@@ -308,3 +308,27 @@ def test_a_switched_off_bot_can_still_have_its_webhook_deleted():
 
     assert found.bot_id == 123456
     assert found.provided
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_secret_rotated_in_the_row_takes_effect_without_a_restart():
+    """Nothing in the settings moved, so nothing dropped the built bots: the row alone did.
+
+    Cached with the record it was built from, the bot goes on reading the old secret — and a
+    rotation that needs a restart to take effect is a rotation that has not happened.
+    """
+    from django_aiogram.consumer import webhook
+
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'WEBHOOK_SECRET': 'old'})
+    assert posted(123456, 'old').status_code == 200
+
+    # saved rather than `update`d: `update` moves no `auto_now` column, so the providers'
+    # watermark would not see it -- the rule `Troubleshooting.md` states
+    row = TelegramBot.objects.get(bot_id=123456)
+    row.overrides = {'WEBHOOK_SECRET': 'new'}
+    row.save()
+    # the interval is not what this case is about, so it is stepped over rather than waited out
+    webhook._read_at = None
+
+    assert posted(123456, 'new').status_code == 200, 'the rotated secret was not accepted'
+    assert posted(123456, 'old').status_code == 403, 'the old secret was still accepted'

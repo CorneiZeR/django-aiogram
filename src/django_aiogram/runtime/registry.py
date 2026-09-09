@@ -129,6 +129,12 @@ class Bots(Mapping[str, 'TelegramBot']):
             made = self._made.get(key)
             if made is None:
                 made = self._made[key] = TelegramBot(record=found)
+            elif found.provided:
+                # the row moved under it: a rotated token or a new webhook secret has to reach
+                # the object, or the rotation takes effect at the next restart and the old
+                # secret goes on being accepted until then. The object is kept -- it holds the
+                # loop and the in-flight sends -- and what it built from the old record is not
+                made.reconfigure(found)
             return made
 
     def __iter__(self) -> Iterator[str]:

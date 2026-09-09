@@ -166,6 +166,28 @@ class TelegramBot(RouterShortcuts):
                 raise
             return self._record
 
+    def reconfigure(self, found: 'BotRecord') -> None:
+        """Take a new record for the same bot, and drop what was built from the old one.
+
+        For a bot the providers described: its row changed -- a rotated token, a new webhook
+        secret, a different profile -- and the object has to follow, because the alternative
+        is a rotation that does not take effect until something restarts. `E052` and the
+        supervisor deal with a *different* bot; this is the same one, differently configured.
+
+        The object itself is kept rather than replaced, and that is the point of doing it this
+        way: it holds the loop, the in-flight sends a shutdown has to drain and the router the
+        handlers hang from. What is dropped is the aiogram ``Bot``, since that is what carries
+        the token.
+        """
+        with self._build_guard:
+            if self._record == found:
+                return
+            self._record = found
+            # the aiogram `Bot` and nothing else: it is the thing built from the token, and
+            # the next reader builds it again from the record above
+            self._bot = None
+            self._built_at = None
+
     @property
     def bot_id(self) -> int | None:
         """The number in this bot's token, which is what a queued message names it by.
