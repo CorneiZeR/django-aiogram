@@ -19,7 +19,10 @@ SETTINGS = {
     'BROKER': 'django_aiogram.testing.InMemoryBroker',
     'FSM_STORAGE': 'memory',
     'BOT_PROVIDERS': FROM_DB,
-    'RATE_LIMIT': {'overall_per_second': 30},
+    # 23 rather than the packaged 30: a shared number equal to the default is a number the
+    # case cannot tell from it, and "the bot inherited the shared budget" would then pass for
+    # a limiter that read the packaged defaults or the process-wide dict instead
+    'RATE_LIMIT': {'overall_per_second': 23},
 }
 
 
@@ -59,7 +62,7 @@ def test_a_bot_without_its_own_numbers_takes_the_shared_ones():
     """Which is most bots: a budget is a decision, and most clients need no decision."""
     TelegramBot.objects.create(bot_id=123456, token='123456:AAaa')
 
-    assert bot_for(123456).rate_limiter._overall.rate == 30
+    assert bot_for(123456).rate_limiter._overall.rate == 23
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
