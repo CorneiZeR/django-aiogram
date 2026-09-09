@@ -139,7 +139,8 @@ class Command(BaseCommand):
         serving, settings, identity = self._addressed(options)
         arguments = webhook_settings(settings, identity)
         arguments['drop_pending_updates'] = options['drop_pending']
-        serving.loop.run_until_complete(serving.bot.set_webhook(**arguments))
+        # the process's own loop, for the reason `_reconcile_one` gives
+        bot.loop.run_until_complete(serving.bot.set_webhook(**arguments))
         self.stdout.write(self.style.SUCCESS(f'webhook set to {arguments["url"]}'))
         self.stdout.write('polling will refuse to start until this is deleted')
 
@@ -156,7 +157,7 @@ class Command(BaseCommand):
         duplicate work rather than about the webhook.
         """
         serving, _settings, _identity = self._addressed(options)
-        serving.loop.run_until_complete(serving.bot.delete_webhook(drop_pending_updates=options['drop_pending']))
+        bot.loop.run_until_complete(serving.bot.delete_webhook(drop_pending_updates=options['drop_pending']))
         self.stdout.write(self.style.SUCCESS('webhook deleted; polling can start again'))
 
     def _reconcile(self, options: dict[str, Any]) -> None:
@@ -211,12 +212,16 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING(f'{identity}: not registered — {refused}'))
             return
         try:
-            info = serving.loop.run_until_complete(serving.bot.get_webhook_info())
+            # this process's own loop, not the bot's: reading `serving.loop` builds one per
+            # bot, and a pass over a thousand bots would leave a thousand of them open --
+            # `handle` closes the singleton and nothing else. The bots share the process's
+            # HTTP session, so one loop is all the calls need
+            info = bot.loop.run_until_complete(serving.bot.get_webhook_info())
             if not options['force'] and registered(arguments, info):
                 self.stdout.write(f'{identity}: already registered')
                 return
             arguments['drop_pending_updates'] = options['drop_pending']
-            serving.loop.run_until_complete(serving.bot.set_webhook(**arguments))
+            bot.loop.run_until_complete(serving.bot.set_webhook(**arguments))
         except Exception as refused:  # noqa: BLE001 - one bot's failure is its own, see above
             logger.warning('could not reconcile a webhook', extra={'tg_bot_id': identity})
             self.stdout.write(self.style.WARNING(f'{identity}: failed — {type(refused).__name__}: {refused}'))
@@ -243,7 +248,7 @@ class Command(BaseCommand):
         registered and rejected on every delivery, and nothing local shows that.
         """
         serving, _settings, _identity = self._addressed(options)
-        info = serving.loop.run_until_complete(serving.bot.get_webhook_info())
+        info = bot.loop.run_until_complete(serving.bot.get_webhook_info())
         if not info.url:
             self.stdout.write('no webhook registered; this bot is polled')
             return

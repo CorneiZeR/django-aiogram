@@ -125,7 +125,7 @@
   different state, where the settings are the whole declaration.
 
 - **A webhook per bot, and a pass that keeps Telegram's idea of them in line.** The URL
-  carries the identity -- `path('tg/<secret>/<int:bot_id>/', telegram_webhook)`, with
+  carries the identity -- `path('tg/9c1f2b7a/<int:bot_id>/', telegram_webhook)`, with
   `WEBHOOK_URL` as the prefix the command appends the identity to -- and each bot has its own
   `WEBHOOK_SECRET`, in its section or its row. Both halves matter: one URL
   would leave the update's contents as the only clue about who it is for, and one shared

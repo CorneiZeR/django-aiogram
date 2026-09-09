@@ -332,3 +332,86 @@ def test_a_secret_rotated_in_the_row_takes_effect_without_a_restart():
 
     assert posted(123456, 'new').status_code == 200, 'the rotated secret was not accepted'
     assert posted(123456, 'old').status_code == 403, 'the old secret was still accepted'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_record_from_a_project_own_provider_missing_a_key_is_refused_not_raised():
+    """`BOT_PROVIDERS` is a seam, so a record this package did not resolve can reach the view.
+
+    A mapping without `WEBHOOK_SECRET` is such a provider's answer to give — and unguarded it
+    was an unauthenticated 500 with a traceback out of the one branch whose whole job is to
+    refuse.
+    """
+    from django_aiogram.config.bots import BotRecord
+    from django_aiogram.consumer import webhook
+
+    sparse = BotRecord(
+        alias='123456',
+        resolved={'TOKEN': '123456:AAaa'},
+        origins={},
+        declared=False,
+        provided=True,
+    )
+    webhook._served = {123456: sparse}
+    webhook._read_at = 1e12
+
+    assert posted(123456, 'anything').status_code == 503
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_pass_over_many_bots_runs_on_this_process_own_loop(monkeypatch):
+    """Reading `serving.loop` builds one per bot, and only the singleton's is ever closed.
+
+    A pass over a thousand bots would leave a thousand loops open, which is how a command
+    runs out of file descriptors while doing exactly what it was told. Asserted by refusing
+    the attribute on every bot but the process's own: the pass has to run without it, on the
+    real loop, against a stubbed API.
+    """
+    from django_aiogram import bot as singleton
+    from django_aiogram.producer.client import TelegramBot as Client
+
+    for number in (123456, 654321, 111111):
+        TelegramBot.objects.create(bot_id=number, token=f'{number}:AAaa', overrides={'WEBHOOK_SECRET': 'x'})
+
+    calls = []
+    loop_of = Client.loop.fget
+
+    def refuse_unless_the_singleton(self):
+        """Hand back the real loop for the process's own bot, and refuse for any other."""
+        if self is not singleton:
+            msg = 'a loop was asked of a bot that is not the process own'
+            raise AssertionError(msg)
+        return loop_of(self)
+
+    monkeypatch.setattr(Client, 'loop', property(refuse_unless_the_singleton))
+    monkeypatch.setattr(Client, 'bot', property(lambda self: _Api(calls)))
+
+    call_command('tgbot_webhook', 'reconcile', '--pause', '0')
+
+    # two calls per bot -- `getWebhookInfo` and `setWebhook` -- every one of them on one loop
+    assert sorted(calls) == ['get', 'get', 'get', 'set', 'set', 'set'], calls
+
+
+class _Api:
+    """The two Telegram calls the pass makes, without a network under them."""
+
+    def __init__(self, calls):
+        """Remember where to record what was asked."""
+        self._calls = calls
+
+    async def get_webhook_info(self):
+        """Answer that nothing is registered, so the pass registers."""
+        self._calls.append('get')
+        return _Info()
+
+    async def set_webhook(self, **arguments):
+        """Record the registration and say it worked."""
+        self._calls.append('set')
+        return True
+
+
+class _Info:
+    """What `getWebhookInfo` would have answered: nothing registered."""
+
+    url = ''
+    allowed_updates = None

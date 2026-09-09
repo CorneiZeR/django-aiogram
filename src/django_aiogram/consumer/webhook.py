@@ -136,9 +136,14 @@ def _serving_bot(bot_id: 'int | None') -> 'tuple[Any, str, HttpResponse | None]'
         return None, '', HttpResponse(status=503)
     try:
         secret = webhook_secret() if bot_id is None else webhook_secret(serving.settings)
-    except ImproperlyConfigured:
+    except (ImproperlyConfigured, KeyError):
         # a bot with no secret of its own is not served rather than served under somebody
-        # else's: a shared secret makes one client's leak everybody's
+        # else's: a shared secret makes one client's leak everybody's.
+        #
+        # `KeyError` because `BOT_PROVIDERS` is a seam: a project's own provider hands back
+        # records this package did not resolve, so a mapping without the key is its answer to
+        # give -- and unguarded it would be an unauthenticated 500 with a traceback, from the
+        # one branch whose whole job is to refuse
         logger.exception('webhook has no secret to serve this update with', extra={'tg_bot_id': bot_id})
         return None, '', HttpResponse(status=503)
     return serving, secret, None
