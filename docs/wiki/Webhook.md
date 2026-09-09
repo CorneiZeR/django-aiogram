@@ -48,8 +48,9 @@ Webhooks are also not always possible — a public HTTPS endpoint with a valid
 certificate is a hard requirement, and plenty of deployments cannot offer one.
 Nothing here pushes you towards them.
 
-Past a few dozen bots this is not one of two options but the only one:
-**[Scaling](Scaling.md)** says where polling stops and why.
+Past a hundred bots or so this stops being one of two options: polling holds a connection
+per bot against a session whose connector limit is 100, and a webhook holds none.
+**[Scaling](Scaling.md)** has the numbers and what to do between twenty and a hundred.
 
 ## What changes
 

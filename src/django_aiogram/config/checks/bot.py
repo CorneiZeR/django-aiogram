@@ -383,6 +383,38 @@ def _a_declared_queue(key: str, record: BotRecord) -> list[Problem]:
     ]
 
 
+def _a_section_named_like_a_bot(_key: str, _record: BotRecord) -> list[Problem]:
+    """Report a section whose name is a bot identity, which is a row's alias.
+
+    A row from `TelegramBot` is known by its identity written out -- `123456` -- and a section
+    may legally be *named* that. The two then share an alias, and an alias is what a bot
+    resolves its settings by: nothing here can tell which of them a reader meant.
+
+    Harmless in this release, and reported anyway: the runtime keeps a row's bot apart from a
+    section of the same name -- see `Bots.for_record` -- so this is the confusion rather than
+    the failure. It is still worth renaming the section, because every message about either
+    bot names the same alias.
+    """
+    try:
+        configured = sections()
+    except ImproperlyConfigured:
+        return []  # E054 owns a dict that cannot be read at all
+    numeric = sorted(alias for alias in configured if alias.isdigit())
+    if not numeric:
+        return []
+    return [
+        Problem(
+            f'names a section {", ".join(numeric)}, which is the shape of a bot identity.',
+            label=BOTS_SETTINGS_NAME,
+            hint=(
+                'A bot that lives in the `TelegramBot` table is known by its identity written '
+                'out, so the two share an alias and every message about either names it. '
+                'Rename the section to something a person chose.'
+            ),
+        )
+    ]
+
+
 def _anything_polls() -> bool:
     """Whether any configured bot takes its updates by polling, which is the default.
 

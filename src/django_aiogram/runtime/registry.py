@@ -111,7 +111,7 @@ class Bots(Mapping[str, 'TelegramBot']):
         written out -- so a bot that arrives from the database is cached exactly as one from a
         settings section is, and a settings change drops both.
         """
-        if found.alias == DEFAULT_ALIAS:
+        if not found.provided and found.alias == DEFAULT_ALIAS:
             # through the mapping, which hands back the process's own object: a second
             # instance under that alias would hold half the handlers and half the in-flight
             # sends, and a shutdown closes only the singleton
@@ -120,10 +120,15 @@ class Bots(Mapping[str, 'TelegramBot']):
         # listing that may never send
         from django_aiogram.producer.client import TelegramBot  # noqa: PLC0415 - as above
 
+        # a row's bot is cached under a key no alias can be -- an alias matches
+        # `^[a-z0-9][a-z0-9_]*$` -- because a section may legally be *named* `123456` and
+        # handing that section's bot to a row of the same identity would send under the
+        # wrong token. `E062` reports the collision; this makes it harmless meanwhile
+        key = f'#{found.bot_id}' if found.provided else found.alias
         with self._lock:
-            made = self._made.get(found.alias)
+            made = self._made.get(key)
             if made is None:
-                made = self._made[found.alias] = TelegramBot(record=found)
+                made = self._made[key] = TelegramBot(record=found)
             return made
 
     def __iter__(self) -> Iterator[str]:

@@ -228,3 +228,41 @@ def test_the_registered_url_is_the_route_the_page_documents(monkeypatch):
     matched = pattern.resolve('tg/9c1f2b7a/123456/')
     assert matched is not None, 'the documented route does not match the URL that is registered'
     assert matched.kwargs == {'bot_id': 123456}
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS=SETTINGS,
+    TELEGRAM_BOTS={'123456': {'TOKEN': '111111:CCsection', 'WEBHOOK_SECRET': 'section'}},
+)
+def test_a_row_and_a_section_of_the_same_name_are_two_bots():
+    """A row is known by its identity written out, and a section may legally be *named* that.
+
+    Resolved by alias, the row's bot would read the section's settings — and send under the
+    section's token, to that client's chats. Measured before this: `bot_id` came back as the
+    section's identity for a bot built from the row.
+    """
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'WEBHOOK_SECRET': 'mine'})
+    from django_aiogram.runtime.providers import desired
+    from django_aiogram.runtime.registry import bots
+
+    (from_row,) = [found for found in desired() if found.provided]
+    served = bots.for_record(from_row)
+
+    assert served.settings['TOKEN'] == '123456:AAaa', "the row's bot read the section's token"
+    assert served.bot_id == 123456
+    assert served is not bots['123456'], 'one object served both bots'
+    assert bots['123456'].settings['TOKEN'] == '111111:CCsection'
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS=SETTINGS,
+    TELEGRAM_BOTS={'123456': {'TOKEN': '111111:CCsection'}},
+)
+def test_a_section_named_like_an_identity_is_reported():
+    """`I004`, so an operator renames it before every message about either bot reads the same."""
+    from django_aiogram.config.checks import check_settings
+
+    reported = [message for message in check_settings() if str(message.id).endswith('I004')]
+
+    assert reported, 'a section named like a bot identity was not reported'
+    assert '123456' in reported[0].msg

@@ -92,7 +92,11 @@ def from_database() -> 'tuple[BotRecord, ...]':
         if row.profile is not None:
             layers.append((f'TelegramBotProfile({row.profile.name}).overrides', row.profile.overrides))
         layers.append((f'TelegramBot({row.bot_id}).overrides', {'TOKEN': row.token, **row.overrides}))
-        found.append(resolve(str(row.bot_id), *layers))
+        # `provided=True`: this bot is a row, not a section, and the difference is not
+        # cosmetic. A section may legally be *named* `123456`, and a bot that re-resolved its
+        # own settings by alias would then read that section's token -- see
+        # `TelegramBot.settings`, and `E062`, which reports the collision at boot
+        found.append(resolve(str(row.bot_id), *layers, provided=True))
     read = tuple(found)
     with _lock:
         _from_table = (mark, read)

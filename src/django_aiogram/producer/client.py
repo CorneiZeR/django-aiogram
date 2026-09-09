@@ -150,6 +150,12 @@ class TelegramBot(RouterShortcuts):
         # process that may never touch one
         from django_aiogram.config.bots import DEFAULT_ALIAS, record  # noqa: PLC0415 - as above
 
+        if self._record is not None and self._record.provided:
+            # a bot the providers described -- a row rather than a section -- reads the record
+            # it was built from and nothing else. Re-resolving by alias would be a hazard
+            # rather than a refresh: a row's alias is its identity written out, and a section
+            # may legally be *named* `123456`, so this bot would read that section's token
+            return self._record
         try:
             return record(self._alias or DEFAULT_ALIAS)
         except ImproperlyConfigured:

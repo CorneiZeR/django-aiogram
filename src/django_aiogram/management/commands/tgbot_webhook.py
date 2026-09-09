@@ -166,7 +166,6 @@ class Command(BaseCommand):
         on the first refusal would leave the rest unregistered.
         """
         from django_aiogram.runtime.providers import desired  # noqa: PLC0415 - the ORM, deferred
-        from django_aiogram.runtime.registry import bots  # noqa: PLC0415 - as above
 
         wanted = [record for record in desired() if record.bot_id is not None]
         only = set(options['bots'])
@@ -182,16 +181,26 @@ class Command(BaseCommand):
             identity = record.bot_id
             if identity is None:  # pragma: no cover - filtered above, and mypy cannot see that
                 continue
-            self._reconcile_one(bots.by_id(identity), record, options)
+            self._reconcile_one(identity, record, options)
 
-    def _reconcile_one(self, serving: Any, record: Any, options: dict[str, Any]) -> None:  # noqa: ANN401
-        """Bring one bot's webhook into line, and say what that took."""
-        identity = record.bot_id
+    def _reconcile_one(self, identity: int, record: Any, options: dict[str, Any]) -> None:  # noqa: ANN401
+        """Bring one bot's webhook into line, and say what that took.
+
+        Resolving the bot is inside the boundary, not before it: the providers are read again
+        to build one, and a read that failed between the pass and this call would raise out of
+        the loop and leave every later bot unregistered. One bot's failure is its own.
+        """
+        # deferred: the registry reaches aiogram and the providers, and a command module is
+        # imported by `manage.py help`
+        from django_aiogram.runtime.registry import bots  # noqa: PLC0415 - as above
+
         try:
+            serving = bots.by_id(identity)
             arguments = webhook_settings(record, identity)
-        except ImproperlyConfigured as refused:
-            # a bot with no URL or no secret of its own is not registered under another
-            # bot's: `E027` reports the same thing at boot
+        except (ImproperlyConfigured, LookupError, KeyError) as refused:
+            # a bot with no URL or no secret of its own is not registered under another bot's
+            # -- `E027` reports the same thing at boot -- and a settings mapping missing a key
+            # answers with `KeyError`, which is this bot's problem rather than the pass's
             self.stdout.write(self.style.WARNING(f'{identity}: not registered — {refused}'))
             return
         try:

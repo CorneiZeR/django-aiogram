@@ -147,8 +147,13 @@
   any of the actions to one bot.
 
   New page: **Scaling**, which says where polling stops -- the shared session's connector
-  limit is 100 connections and polling holds one per bot -- and what grows with the bots
+  limit is 100 connections and polling holds one per bot, so past a hundred bots a webhook is
+  the answer and between twenty and a hundred the leases are -- and what grows with the bots
   whatever the mode.
+
+  A row's bot and a settings section of the same name are two bots, and stay two: a section
+  may legally be *named* `123456`, and a bot that resolved its settings by alias would have
+  read that section's token. `I004` reports the collision so it can be renamed.
 
 - **Receiving updates and draining the queue are two jobs, and a container can do one.**
   `start_tgbot --no-updates` consumes and never calls `getUpdates` -- the shape a webhook
