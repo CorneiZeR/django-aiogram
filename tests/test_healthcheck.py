@@ -1342,3 +1342,22 @@ def test_the_flag_reaches_the_check_from_either_entry_point(redis_server, monkey
     call_command('tgbot_healthcheck', '--no-consumer')
 
     assert [kwargs['consumes'] for kwargs in asked] == [False, False], asked
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={
+        'REDIS_URL': 'redis://localhost:6379/0',
+        'TOKEN': '42:x',
+        'HEARTBEAT_INTERVAL': 'often',
+    }
+)
+def test_a_receiver_is_not_unhealthy_over_a_setting_it_never_reads(redis_server):
+    """A container with no consumer reads neither the interval nor the heartbeat it bounds.
+
+    Read anyway, an unusable `HEARTBEAT_INTERVAL` restarts a receiver over a number nothing
+    in it uses — while `E023` is what reports the setting to whoever can fix it.
+    """
+    assert check(consumes=False).ok
+
+    # and it is still the first thing a container *with* a consumer meets
+    assert not check().ok

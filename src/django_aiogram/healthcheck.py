@@ -328,13 +328,18 @@ def check(
         return Report(ok=True, message='disabled in this process; nothing to check', checked=False)
 
     try:
-        # inside the guard: these two are read before Redis is touched, so an
-        # unreadable one is the first thing the probe meets rather than the last
-        ttl = heartbeat_ttl(max(1, _setting_int('HEARTBEAT_INTERVAL')))
-        age_limit = ttl if max_age is None else max_age
+        # inside the guard: these are read before Redis is touched, so an unreadable one is
+        # the first thing the probe meets rather than the last.
+        #
+        # The heartbeat's two only where a consumer is expected: a container with none reads
+        # neither, so an unreadable `HEARTBEAT_INTERVAL` would make it unhealthy over a
+        # setting it never asks about -- restarting a receiver for a number nothing in it uses
         queue_limit = _setting_int('HEALTHCHECK_MAX_QUEUE') if max_queue is None else max_queue
         broker = get_broker()
-        age = _liveness_age(broker, limit=age_limit, ttl=ttl) if consumes else None
+        age = None
+        if consumes:
+            ttl = heartbeat_ttl(max(1, _setting_int('HEARTBEAT_INTERVAL')))
+            age = _liveness_age(broker, limit=ttl if max_age is None else max_age, ttl=ttl)
         queued = _depth(broker, limit=queue_limit)
     except _UnhealthyError as refusal:
         return Report(ok=False, message=str(refusal))
