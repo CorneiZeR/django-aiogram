@@ -48,6 +48,10 @@ Webhooks are also not always possible — a public HTTPS endpoint with a valid
 certificate is a hard requirement, and plenty of deployments cannot offer one.
 Nothing here pushes you towards them.
 
+Past a hundred bots or so this stops being one of two options: polling holds a connection
+per bot against a session whose connector limit is 100, and a webhook holds none.
+**[Scaling](Scaling.md)** has the numbers and what to do between twenty and a hundred.
+
 ## What changes
 
 | | Polling | Webhook |
@@ -116,6 +120,85 @@ Telegram remembers the URL, not your settings file. `info` prints the pending
 count and the last delivery error, which is the first thing to look at when
 updates stop arriving.
 
+### Several bots
+
+One URL for every bot would leave the update's own contents as the only clue about which bot
+it is for, and one shared secret would let a leak from one client's bot post as every other.
+So the path carries the identity and each bot has its own secret:
+
+```python
+# urls.py
+urlpatterns = [
+    # the unguessable segment first, the identity last: `WEBHOOK_URL` is the prefix and
+    # `tgbot_webhook` appends the identity to it, so the order here is the order it registers
+    path('tg/9c1f2b7a/<int:bot_id>/', telegram_webhook),
+    path('tg/9c1f2b7a/', telegram_webhook),  # the process's own bot, if it has one
+]
+```
+
+```python
+TELEGRAM_BOT_DEFAULTS = {
+    'WEBHOOK_URL': 'https://example.test/tg/9c1f2b7a',  # no identity: the command adds it
+}
+```
+
+`manage.py tgbot_webhook reconcile` then registers `https://example.test/tg/9c1f2b7a/123456/`
+for the bot whose identity is `123456`, which is the route above. Put the identity anywhere
+else in the path and Telegram will be posting somewhere Django does not route.
+
+The secret goes in that bot's own settings — a section under `TELEGRAM_BOTS`, or the
+`overrides` on its `TelegramBot` row:
+
+```python
+TELEGRAM_BOTS = {
+    'support': {'TOKEN': '...', 'WEBHOOK_SECRET': '...'},
+}
+```
+
+Generate them; do not type them. `django_aiogram.consumer.webhook.new_secret()` is what the
+package uses. A bot with **no** secret of its own is refused rather than served under the
+process's, because served that way every bot would accept the same one again.
+
+An update whose path names a bot this deployment does not serve gets a **404**, answered from
+a cached set of identities: a webhook that read the database per request would be a way for a
+stranger to load it by posting nonsense. The cache is held for `BOT_REFRESH_INTERVAL`, and an
+identity missing from it is re-read at most once a second — so a bot registered a moment ago
+is served, and a flood of unknown identities is not a query each.
+
+### Registering a thousand of them
+
+```shell
+python manage.py tgbot_webhook reconcile
+python manage.py tgbot_webhook reconcile --bot 123456 --force
+python manage.py tgbot_webhook delete --bot 123456
+```
+
+`reconcile` asks Telegram what it has — `getWebhookInfo` — compares it with what each bot
+should have, and repairs the difference in **both directions, as far as the tokens reach**: a
+bot this deployment serves gets its webhook, and a bot whose row is *switched off* has its
+webhook deleted, because a disabled bot is one nobody serves and Telegram would go on posting
+updates that answer 404. That is the only way to know which way the drift went — nothing local
+can tell you. A bot already registered costs one read, so running it again is cheap and running
+it after every deploy is the intended use.
+
+It paces itself: `--pause` between calls, jittered, so a thousand bots starting at once are
+not a thousand `setWebhook` calls arriving together — and two containers that started
+together do not walk the list in step. One bot's failure is its own; the pass says what it
+could not do and carries on.
+
+**Telegram never reports the secret**, so a rotated one looks like no change from here:
+`--force` is how it is applied.
+
+**Switching a row off is not deregistering its webhook**, so `reconcile` does it: a disabled
+bot is one nobody serves, and its updates would get a 404 while Telegram went on posting them.
+`delete --bot <id>` reaches a switched-off bot too, for the same reason, and says so when it
+does.
+
+**Delete before removing the row, not after.** Deleting a webhook needs that bot's token, and
+once the row is gone this deployment has none — so Telegram goes on posting to a URL that
+answers 404 for ever. `reconcile` cannot repair that either: there is nothing left to ask
+with.
+
 **4. Run a worker for the queue.**
 
 ```shell
@@ -170,17 +253,19 @@ instance and disappearing into a 200 nobody acted on.
 
 What a POST gets back: **200** handled, or a handler raised; **503** refused, so
 redeliver; **403** the secret does not match — the comparison is on bytes, so a secret
-outside ASCII is compared like any other and a matching one passes; **400** the body is
-not an update Telegram could have sent. Anything that is not a POST gets **405**.
+outside ASCII is compared like any other and a matching one passes; **404** the path names a
+bot this deployment does not serve, where redelivery would be Telegram trying for ever;
+**400** the body is not an update Telegram could have sent. Anything that is not a POST gets
+**405**.
 
-All five reasons for a 503, in the order the view checks them: `ENABLED` is off in this
-process; the configuration cannot be read, which is one refusal reached at two points — an
-unknown `MODE` before the next check, and an empty `WEBHOOK_SECRET` after it, because a
-polling deployment has no reason to set one; `MODE` is not `webhook`, so a worker is polling
-and two sources of updates would be one too many; building the bot raised
-`ImproperlyConfigured`, most often a `TOKEN` that is missing or malformed; and nothing ran
-the update — the process is shutting down, its loop is closed,
-or the loop's own thread had not started yet.
+All seven reasons for a 503, in the order the view checks them: `ENABLED` is off in this process;
+`MODE` cannot be read; `MODE` is not `webhook`, so a worker is polling and two sources of
+updates would be one too many; the bot the path names cannot be resolved; there is no
+`WEBHOOK_SECRET` for it — read only after the mode check, because a polling deployment has no
+reason to set one; building the bot raised `ImproperlyConfigured`, most often a `TOKEN` that
+is missing or malformed; and nothing ran the update — the process is shutting down, its loop
+is closed, or the loop's own thread had not started yet. Each has its own log line, and
+**[Troubleshooting](Troubleshooting.md)** lists them.
 
 **Updates are not queued at all.** They go straight from the request to the
 dispatcher, whichever transport is configured: the broker carries outbound

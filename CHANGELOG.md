@@ -124,6 +124,42 @@
   down, or not migrated here -- declares nothing and refuses nothing; no table at all is a
   different state, where the settings are the whole declaration.
 
+- **A webhook per bot, and a pass that keeps Telegram's idea of them in line.** The URL
+  carries the identity -- `path('tg/9c1f2b7a/<int:bot_id>/', telegram_webhook)`, with
+  `WEBHOOK_URL` as the prefix the command appends the identity to -- and each bot has its own
+  `WEBHOOK_SECRET`, in its section or its row. Both halves matter: one URL
+  would leave the update's contents as the only clue about who it is for, and one shared
+  secret would let a leak from one client's bot post as every other. A bot with no secret of
+  its own is refused rather than served under the process's.
+
+  An update naming a bot this deployment does not serve gets a 404 from a **cached** set of
+  identities: a webhook that read the database per request would be a way for a stranger to
+  load it. The cache is held for `BOT_REFRESH_INTERVAL`, and a miss re-reads at most once a
+  second, so a bot registered a moment ago is served without a flood of unknown identities
+  costing a query each.
+
+  `manage.py tgbot_webhook reconcile` asks `getWebhookInfo` what Telegram has and gives each
+  bot this deployment serves the webhook it should have -- the only authority on what Telegram
+  will post to is Telegram. It cannot repair the other direction: deregistering a bot needs
+  that bot's token, so `delete --bot <id>` belongs *before* its row is removed. It paces itself with a jittered `--pause`, so a thousand
+  bots starting at once are not a thousand calls arriving together, and one bot's failure is
+  its own. `--force` applies a rotated secret, which Telegram never reports. `--bot` bounds
+  any of the actions to one bot.
+
+  New page: **Scaling**, which says where polling stops -- the shared session's connector
+  limit is 100 connections and polling holds one per bot, so past a hundred bots a webhook is
+  the answer and between twenty and a hundred the leases are -- and what grows with the bots
+  whatever the mode.
+
+  A bot the providers described follows its row: a rotated token or a new webhook secret
+  reaches the object that is already serving it, so a rotation takes effect on the next pass
+  rather than at the next restart. The object itself is kept -- it holds the loop and the
+  in-flight sends a shutdown drains -- and what it built from the old record is not.
+
+  A row's bot and a settings section of the same name are two bots, and stay two: a section
+  may legally be *named* `123456`, and a bot that resolved its settings by alias would have
+  read that section's token. `I004` reports the collision so it can be renamed.
+
 - **Receiving updates and draining the queue are two jobs, and a container can do one.**
   `start_tgbot --no-updates` consumes and never calls `getUpdates` -- the shape a webhook
   deployment's sender pool is -- and `--updates-only` polls and consumes nothing. Both by

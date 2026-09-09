@@ -34,6 +34,7 @@ from django_aiogram.config.checks.bot import (
     _a_declared_queue,
     _a_lease_a_pass_can_renew,
     _a_readable_bots_dict,
+    _a_section_named_like_a_bot,
     _a_token_with_an_identity,
     _importable_storage,
     _known_bot_properties,
@@ -174,6 +175,10 @@ CHECKS: tuple[Check, ...] = (
     Check('E051', '', _one_bot_per_token, process=True),
     Check('E054', '', _a_readable_bots_dict, process=True),
     Check('E053', '', _settings_one_process_decides, process=True),
+    # I, not W: the runtime keeps the two apart, so this is a confusion an operator may
+    # decide to live with rather than a failure -- and a warning would fail
+    # `check --fail-level WARNING` for a deployment that works
+    Check('I004', '', _a_section_named_like_a_bot, process=True),
     # the leases a polling container takes: how many, and for how long
     # the queue a bot publishes to: a name, and one this deployment has declared
     Check('E057', 'QUEUE', _a_string),

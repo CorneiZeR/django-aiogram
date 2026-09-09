@@ -268,3 +268,21 @@ def test_a_consumer_for_one_queue_is_given_the_transport_own_options_too():
     built = KafkaBroker.configured(served)
     assert built.addressed() == 'vip', 'the queue asked for did not reach the transport'
     assert built.opt('KAFKA_BOOTSTRAP') == 'kafka:9092'
+
+
+def test_a_provided_record_for_the_default_alias_is_the_process_own_bot():
+    """A second instance under that alias holds half of everything and is closed by nothing.
+
+    The handlers a project registered are on the process's own object, and so are its
+    in-flight sends: a shutdown closes that one. A provider answering with the `default`
+    alias -- which a settings-shaped record does -- must reach it rather than a copy.
+    """
+    from django_aiogram import bot as singleton
+    from django_aiogram.config.bots import record
+    from django_aiogram.runtime.registry import bots
+
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**MEMORY, 'TOKEN': '123456:AAaa'}):
+        # against the singleton itself, not against `bots['default']`: the mapping caches
+        # whatever it built first, so a copy built here would *become* the answer to that
+        # lookup and the two would agree about the wrong object
+        assert bots.for_record(record('default')) is singleton

@@ -72,6 +72,11 @@ class BotRecord(Mapping[str, Any]):
     origins: Mapping[str, str]
     #: whether a ``TELEGRAM_BOTS`` section declared this bot, as against the implicit one
     declared: bool
+    #: whether a *provider* described this bot -- a row rather than any settings section.
+    #: Kept apart from `declared`, which is about sections and the implicit default: this one
+    #: decides whether the bot may re-resolve its own settings by alias, and it may not. A
+    #: row's alias is its identity written out, and a section may legally be *named* `123456`
+    provided: bool = False
 
     @property
     def bot_id(self) -> int | None:
@@ -130,7 +135,12 @@ def sections() -> Mapping[str, Any]:
     return raw
 
 
-def resolve(alias: str, *layers: tuple[str, Mapping[str, Any]], declared: bool = True) -> BotRecord:
+def resolve(
+    alias: str,
+    *layers: tuple[str, Mapping[str, Any]],
+    declared: bool = True,
+    provided: bool = False,
+) -> BotRecord:
     """Resolve one bot from the shared settings, its own environment, and the layers over them.
 
     A layer is ``(where, mapping)``: what to call it in a finding, and what it says. Later
@@ -169,7 +179,13 @@ def resolve(alias: str, *layers: tuple[str, Mapping[str, Any]], declared: bool =
                 continue
             resolved[key] = value
             origins[key] = f"{where}['{key}']"
-    return BotRecord(alias=alias, resolved=resolved, origins=origins, declared=declared)
+    return BotRecord(
+        alias=alias,
+        resolved=resolved,
+        origins=origins,
+        declared=declared,
+        provided=provided,
+    )
 
 
 def _from_settings(alias: str, section: Mapping[str, Any], *, declared: bool) -> BotRecord:

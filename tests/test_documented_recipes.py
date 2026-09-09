@@ -469,6 +469,8 @@ WEBHOOK_REFUSALS = (
     'webhook received an update while the bot is disabled',
     'webhook is not configured to serve updates',
     'webhook received an update while this deployment polls',
+    'webhook cannot resolve the bot the path names',
+    'webhook has no secret to serve this update with',
     'webhook cannot build the bot',
     'webhook refused an update',
 )
@@ -504,7 +506,7 @@ def test_every_reason_the_webhook_refuses_is_catalogued(fragment):
 #: enough to read the count the page states in prose; it is a small number by construction
 NUMBER_WORDS = {'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7}
 
-#: what each of the four 503 branches is called on Webhook.md, where the causes are prose
+#: what each of the 503 branches is called on Webhook.md, where the causes are prose
 #: rather than log lines. Ordered as the view checks them, which is what the page claims.
 #: The third names the exception, because the view catches `ImproperlyConfigured` and a
 #: bad `TOKEN` is only its most common cause
@@ -512,6 +514,8 @@ WEBHOOK_CAUSES = (
     '`ENABLED` is off',
     'cannot be read',
     '`MODE` is not `webhook`',
+    'cannot be resolved',
+    'no `WEBHOOK_SECRET` for it',
     'raised `ImproperlyConfigured`',
     'nothing ran the update',
 )

@@ -172,21 +172,35 @@ that part rather than fail the container over it:
 ## The webhook answers 503, or every update 403s
 
 **503** means the view refused the update rather than handling it, so Telegram will
-redeliver — which is what you want. Four reasons, each with its own log line:
+redeliver — which is what you want. Each reason has its own log line:
 
 - `webhook received an update while the bot is disabled` — `ENABLED` is off here
-- `webhook is not configured to serve updates` — `MODE` or `WEBHOOK_SECRET` cannot be
-  read: an unknown mode and an empty secret each raise `ImproperlyConfigured`, and this is
-  the view answering for it rather than raising through. The secret is only read once the
-  mode says to serve, so a polling deployment is told it polls instead
+- `webhook is not configured to serve updates` — `MODE` cannot be read: an unknown one
+  raises `ImproperlyConfigured`, and this is the view answering for it rather than raising
+  through
 - `webhook received an update while this deployment polls` — `MODE` is not `webhook`, so
   a worker is polling and this process must not also feed the dispatcher
+- `webhook cannot resolve the bot the path names` — the identity in the URL is one this
+  deployment serves, and building its bot still failed: a settings dict that cannot be read is
+  the case that gets here. A row whose token carries no identity never does — the providers
+  skip it, so nothing could have matched the path
+- `webhook has no secret to serve this update with` — `WEBHOOK_SECRET` is empty for the bot
+  the path names, or for this process where the path names none. Read only once the mode says
+  to serve, so a polling deployment is told it polls instead. A bot with no secret of its own
+  is refused rather than served under another bot's: one shared secret makes a leak from one
+  client's bot a way to post as every other
 - `webhook cannot build the bot` — building it raised `ImproperlyConfigured`; a
   missing or malformed `TOKEN` is the common example, not the only one
 - `webhook refused an update` — nothing ran it: the process is shutting down, its loop was
   already closed by an earlier `close()`, or the loop's own thread had not started yet.
   The closed-loop case is worth knowing about in a web worker that stays up — something
   closed the bot and requests kept arriving
+
+**404** means the path named a bot this deployment does not serve, and it is a 404 rather
+than a 503 on purpose: nothing here can ever handle that update, so redelivery would be
+Telegram trying for ever. The line is `webhook refused an update for a bot this deployment
+does not serve`, and it is answered from a cached set of identities — a stranger posting at
+the URL costs no database read.
 
 **403** means the `X-Telegram-Bot-Api-Secret-Token` header did not match
 `WEBHOOK_SECRET`. Check that the value you registered with `manage.py tgbot_webhook set`

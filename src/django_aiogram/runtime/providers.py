@@ -35,11 +35,12 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
 
     from django_aiogram.config.bots import BotRecord
+    from django_aiogram.models import TelegramBot as BotRow
 
     #: what a provider is: something callable that answers with the bots it can see
     Provider = Callable[[], Iterable[BotRecord]]
 
-__all__ = ('desired', 'forget', 'from_database', 'from_settings', 'providers')
+__all__ = ('desired', 'forget', 'from_database', 'from_settings', 'providers', 'switched_off')
 
 logger = logging.getLogger('django_aiogram')
 
@@ -86,17 +87,40 @@ def from_database() -> 'tuple[BotRecord, ...]':
     if held is not None and held[0] == mark:
         return held[1]
 
-    found = []
-    for row in TelegramBot.objects.filter(enabled=True).select_related('profile'):
-        layers = []
-        if row.profile is not None:
-            layers.append((f'TelegramBotProfile({row.profile.name}).overrides', row.profile.overrides))
-        layers.append((f'TelegramBot({row.bot_id}).overrides', {'TOKEN': row.token, **row.overrides}))
-        found.append(resolve(str(row.bot_id), *layers))
-    read = tuple(found)
+    read = tuple(_resolved(row) for row in TelegramBot.objects.filter(enabled=True).select_related('profile'))
     with _lock:
         _from_table = (mark, read)
     return read
+
+
+def _resolved(row: 'BotRow') -> 'BotRecord':
+    """Resolve one row through its profile and its own overrides.
+
+    ``provided=True``: this bot is a row, not a section, and the difference is not cosmetic. A
+    section may legally be *named* `123456`, and a bot that re-resolved its own settings by
+    alias would then read that section's token -- see `TelegramBot.settings`, and `I004`,
+    which reports the collision at boot.
+    """
+    layers = []
+    if row.profile is not None:
+        layers.append((f'TelegramBotProfile({row.profile.name}).overrides', row.profile.overrides))
+    layers.append((f'TelegramBot({row.bot_id}).overrides', {'TOKEN': row.token, **row.overrides}))
+    return resolve(str(row.bot_id), *layers, provided=True)
+
+
+def switched_off() -> 'tuple[BotRecord, ...]':
+    """Return the bots whose rows are switched off, which :func:`desired` leaves out.
+
+    Not for serving -- a bot switched off is one a person decided not to serve -- but for the
+    operator's own work on it: **its webhook still has to be deleted**, and deleting one needs
+    that bot's token. Left unreachable, disabling a row would leave Telegram posting updates
+    at a URL that answers 404 for ever, with nothing able to tell it to stop.
+    """
+    # deferred: the ORM, as in `from_database`
+    from django_aiogram.models import TelegramBot  # noqa: PLC0415 - as above
+
+    rows = TelegramBot.objects.filter(enabled=False).select_related('profile')
+    return tuple(_resolved(row) for row in rows)
 
 
 def providers() -> 'Iterator[Provider]':

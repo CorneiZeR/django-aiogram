@@ -1,0 +1,487 @@
+"""A webhook for each of many bots: the URL that names one, and the pass that registers it.
+
+Polling costs a connection and a task per bot; a webhook costs nothing per bot, which is why
+this is the shape a deployment past a few dozen bots uses. Every case here is about one of the
+three things that makes it work at that size: the identity in the path, the secret that is not
+shared, and a reconciliation that asks Telegram rather than assuming.
+"""
+
+import json
+from io import StringIO
+
+import pytest
+from django.core.management import CommandError, call_command
+from django.test import override_settings
+from django.test.client import RequestFactory
+
+from django_aiogram.consumer.webhook import SECRET_HEADER, registered, telegram_webhook, webhook_settings
+from django_aiogram.models import TelegramBot
+
+pytestmark = pytest.mark.django_db
+
+FROM_DB = ('django_aiogram.runtime.providers.from_database',)
+SETTINGS = {
+    'BROKER': 'django_aiogram.testing.InMemoryBroker',
+    'FSM_STORAGE': 'memory',
+    'MODE': 'webhook',
+    'WEBHOOK_URL': 'https://example.test/tg',
+    'WEBHOOK_SECRET': 'the-process-secret',
+    'BOT_PROVIDERS': FROM_DB,
+}
+UPDATE = {'update_id': 1, 'message': {'message_id': 1, 'date': 0, 'chat': {'id': 1, 'type': 'private'}, 'text': 'hi'}}
+
+
+def posted(bot_id=None, secret='the-process-secret'):  # noqa: S107 - a test secret, and the subject
+    """One update posted the way Telegram posts it, through the view."""
+    request = RequestFactory().post(
+        '/tg/', data=json.dumps(UPDATE), content_type='application/json', **{SECRET_HEADER: secret}
+    )
+    return telegram_webhook(request, bot_id) if bot_id is not None else telegram_webhook(request)
+
+
+@pytest.fixture(autouse=True)
+def _cold_cache():
+    """Forget the identities between cases: the cache is a module's, and cases share it."""
+    from django_aiogram.consumer import webhook
+
+    webhook._served = {}
+    webhook._read_at = None
+    yield
+    webhook._served = {}
+    webhook._read_at = None
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_an_update_for_a_served_bot_costs_no_query(django_assert_num_queries, monkeypatch):
+    """A webhook is asked per request, so per request it must not be asked of the database.
+
+    With the miss grace at zero, so the case says which path is being asserted: a *hit* is
+    answered from the cache for the whole interval and never consults the grace, while a miss
+    is what may re-read. Reversed -- the refresh asked for first -- this fails.
+    """
+    monkeypatch.setattr('django_aiogram.consumer.webhook.MISS_GRACE', 0.0)
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'WEBHOOK_SECRET': 'mine'})
+    assert posted(123456, 'mine').status_code == 200  # the first update fills the cache
+
+    with django_assert_num_queries(0):
+        assert posted(123456, 'mine').status_code == 200
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_stranger_posting_nonsense_cannot_keep_the_database_busy(django_assert_num_queries, monkeypatch):
+    """Otherwise the webhook is a way to load the database by posting identities at it.
+
+    A miss re-reads so a bot registered a moment ago is served, and that read is bounded to
+    one a second -- `MISS_GRACE` -- because the alternative is a stranger posting unknown
+    identities as fast as the database can answer them. The flood is the second post onward,
+    and those are answered from the cache.
+    """
+    # pinned rather than left to the clock: the default grace is a second, and a slow CI
+    # machine between the first post and the block below would let the next miss re-read
+    monkeypatch.setattr('django_aiogram.consumer.webhook.MISS_GRACE', 60.0)
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'WEBHOOK_SECRET': 'mine'})
+    assert posted(999999, 'mine').status_code == 404
+
+    with django_assert_num_queries(0):
+        assert posted(999999, 'mine').status_code == 404
+        assert posted(888888, 'mine').status_code == 404
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_bot_registered_a_moment_ago_is_not_refused_for_the_interval(monkeypatch):
+    """The reason the miss re-reads at all: a new client's bot posts as soon as it is set up.
+
+    The grace is stepped over rather than waited out: what the case is about is that a miss
+    re-reads, not how long a second is.
+    """
+    assert posted(123456, 'mine').status_code == 404
+    monkeypatch.setattr('django_aiogram.consumer.webhook.MISS_GRACE', 0.0)
+
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'WEBHOOK_SECRET': 'mine'})
+
+    assert posted(123456, 'mine').status_code == 200, 'a bot added after the last read was refused'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_bots_own_secret_is_the_one_that_has_to_match():
+    """One secret for every bot makes a leak from one client's bot a way to post as all."""
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'WEBHOOK_SECRET': 'mine'})
+    TelegramBot.objects.create(bot_id=654321, token='654321:BBbb', overrides={'WEBHOOK_SECRET': 'theirs'})
+
+    assert posted(123456, 'mine').status_code == 200
+    assert posted(123456, 'theirs').status_code == 403, "another bot's secret was accepted"
+    assert posted(123456, 'the-process-secret').status_code == 403, 'the shared secret was accepted'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_bot_with_no_secret_of_its_own_is_not_served_under_the_process_one():
+    """Served that way, every bot would accept the same secret again."""
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'WEBHOOK_SECRET': ''})
+
+    assert posted(123456, 'the-process-secret').status_code == 503
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_the_url_a_bot_registers_carries_its_identity():
+    """Which is what the view reads back out of the request, and what tells the bots apart."""
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'WEBHOOK_SECRET': 'mine'})
+    from django_aiogram.runtime.providers import desired
+
+    (record,) = desired()
+
+    arguments = webhook_settings(record, record.bot_id)
+
+    assert arguments['url'] == 'https://example.test/tg/123456/'
+    assert arguments['secret_token'] == 'mine'
+
+
+def test_telegram_having_the_wrong_url_is_what_a_pass_repairs():
+    """`getWebhookInfo` is the only authority on what Telegram will post to."""
+    desired_state = {'url': 'https://example.test/tg/123456/', 'allowed_updates': None}
+
+    class Has:
+        """What `getWebhookInfo` answers with."""
+
+        def __init__(self, url, allowed=None):
+            """Take what Telegram says it has."""
+            self.url = url
+            self.allowed_updates = allowed
+
+    assert registered(desired_state, Has('https://example.test/tg/123456/'))
+    assert not registered(desired_state, Has(''))
+    assert not registered(desired_state, Has('https://example.test/tg/654321/'))
+    assert not registered({**desired_state, 'allowed_updates': ['message']}, Has(desired_state['url']))
+    assert registered({**desired_state, 'allowed_updates': ['message']}, Has(desired_state['url'], ['message']))
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_bot_the_deployment_does_not_configure_is_refused_by_name():
+    """A typo in `--bot` would otherwise be a run that reported nothing and changed nothing."""
+    with pytest.raises(CommandError, match='No bot with the identity'):
+        call_command('tgbot_webhook', 'info', '--bot', '999999')
+
+
+def test_a_bot_narrowed_once_is_repaired_against_the_default_set():
+    """Telegram omits `allowed_updates` for the default set, so `None` cannot mean "fine".
+
+    Read that way, a bot registered for `['message']` a year ago looks correctly registered
+    for ever while the settings ask for everything — and the pass would never repair it.
+    """
+
+    class Has:
+        """What `getWebhookInfo` answers with."""
+
+        def __init__(self, url, allowed=None):
+            """Take what Telegram says it has."""
+            self.url = url
+            self.allowed_updates = allowed
+
+    wanted = {'url': 'https://example.test/tg/123456/', 'allowed_updates': []}
+
+    assert registered(wanted, Has(wanted['url']))
+    assert not registered(wanted, Has(wanted['url'], ['message'])), 'a narrowed bot read as correct'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_database_that_cannot_be_read_is_asked_once_per_interval(monkeypatch, django_assert_num_queries):
+    """A failure that left the timestamp alone made every request re-enter the read.
+
+    Which is one attempt per webhook request while the database is down — the load the cache
+    exists to remove, arriving exactly when the deployment can least afford it.
+    """
+    from django_aiogram.consumer import webhook
+
+    reads = []
+
+    def refuse():
+        reads.append('asked')
+        msg = 'the database is not reachable'
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr('django_aiogram.runtime.providers.desired', refuse)
+    monkeypatch.setattr(webhook, 'MISS_GRACE', 60.0)
+
+    assert posted(123456, 'mine').status_code == 404
+    with django_assert_num_queries(0):
+        assert posted(123456, 'mine').status_code == 404
+
+    assert reads == ['asked'], f'the failed read was retried {len(reads)} times'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WEBHOOK_URL': 'https://example.test/tg/9c1f2b7a'})
+def test_the_registered_url_is_the_route_the_page_documents(monkeypatch):
+    """The identity goes last, after whatever unguessable segment the prefix carries.
+
+    Registered any other way, Telegram posts somewhere Django does not route — and nothing
+    local says so: the updates simply stop arriving. Asserted against a resolver over the
+    documented pattern, so the two cannot drift apart in prose alone.
+    """
+    from django.urls import path, re_path  # noqa: F401 - `path` is what the page shows
+    from django.urls.resolvers import URLPattern, URLResolver, get_resolver  # noqa: F401
+
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'WEBHOOK_SECRET': 'mine'})
+    from django_aiogram.runtime.providers import desired
+
+    (record,) = desired()
+
+    url = webhook_settings(record, record.bot_id)['url']
+
+    assert url == 'https://example.test/tg/9c1f2b7a/123456/'
+    # and the path the documented route matches is the path that URL carries
+    pattern = path('tg/9c1f2b7a/<int:bot_id>/', telegram_webhook)
+    matched = pattern.resolve('tg/9c1f2b7a/123456/')
+    assert matched is not None, 'the documented route does not match the URL that is registered'
+    assert matched.kwargs == {'bot_id': 123456}
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS=SETTINGS,
+    TELEGRAM_BOTS={'123456': {'TOKEN': '111111:CCsection', 'WEBHOOK_SECRET': 'section'}},
+)
+def test_a_row_and_a_section_of_the_same_name_are_two_bots():
+    """A row is known by its identity written out, and a section may legally be *named* that.
+
+    Resolved by alias, the row's bot would read the section's settings — and send under the
+    section's token, to that client's chats. Measured before this: `bot_id` came back as the
+    section's identity for a bot built from the row.
+    """
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'WEBHOOK_SECRET': 'mine'})
+    from django_aiogram.runtime.providers import desired
+    from django_aiogram.runtime.registry import bots
+
+    (from_row,) = [found for found in desired() if found.provided]
+    served = bots.for_record(from_row)
+
+    assert served.settings['TOKEN'] == '123456:AAaa', "the row's bot read the section's token"
+    assert served.bot_id == 123456
+    assert served is not bots['123456'], 'one object served both bots'
+    assert bots['123456'].settings['TOKEN'] == '111111:CCsection'
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS=SETTINGS,
+    TELEGRAM_BOTS={'123456': {'TOKEN': '111111:CCsection'}},
+)
+def test_a_section_named_like_an_identity_is_reported():
+    """`I004`, so an operator renames it before every message about either bot reads the same."""
+    from django_aiogram.config.checks import check_settings
+
+    reported = [message for message in check_settings() if str(message.id).endswith('I004')]
+
+    assert reported, 'a section named like a bot identity was not reported'
+    assert '123456' in reported[0].msg
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_secret_rotated_in_the_settings_takes_effect_at_once():
+    """An interval of stale records is an interval of accepting the secret that was rotated.
+
+    Which is the window a rotation exists to close, so the cache is dropped when either
+    settings dict moves rather than waited out.
+    """
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'WEBHOOK_SECRET': 'old'})
+    assert posted(123456, 'old').status_code == 200
+
+    TelegramBot.objects.filter(bot_id=123456).update(overrides={'WEBHOOK_SECRET': 'new'})
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WEBHOOK_ALLOWED_UPDATES': ()}):
+        # the settings moved, so the records are re-read: the row's new secret comes with them
+        assert posted(123456, 'old').status_code == 403, 'the rotated-away secret was still accepted'
+        assert posted(123456, 'new').status_code == 200
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_switched_off_bot_can_still_have_its_webhook_deleted(monkeypatch):
+    """Disabling a row is not deregistering a webhook, and only that bot's token can do it.
+
+    Unreachable, disabling would leave Telegram posting at a URL that answers 404 for ever,
+    with nothing able to tell it to stop. Through the command, because the claim is about what
+    `delete --bot` reaches: asserting that `switched_off()` reports the row proves nothing
+    about that.
+    """
+    from django_aiogram.producer.client import TelegramBot as Client
+
+    TelegramBot.objects.create(
+        bot_id=123456,
+        token='123456:AAaa',
+        overrides={'WEBHOOK_SECRET': 'mine'},
+        enabled=False,
+    )
+    calls = []
+    monkeypatch.setattr(Client, 'bot', property(lambda self: _Api(calls)))
+
+    written = StringIO()
+    call_command('tgbot_webhook', 'delete', '--bot', '123456', stdout=written)
+
+    assert calls == ['delete'], calls
+    assert 'switched off' in written.getvalue(), written.getvalue()
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_pass_takes_the_webhook_off_a_bot_that_was_switched_off(monkeypatch):
+    """The other direction, as far as the tokens reach: a disabled bot still has a token.
+
+    Telegram would otherwise go on posting updates that answer 404, for as long as the row
+    stays disabled -- which for a paused client is however long they are paused.
+    """
+    from django_aiogram.producer.client import TelegramBot as Client
+
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'WEBHOOK_SECRET': 'mine'})
+    TelegramBot.objects.create(
+        bot_id=654321,
+        token='654321:BBbb',
+        overrides={'WEBHOOK_SECRET': 'theirs'},
+        enabled=False,
+    )
+    calls = []
+    monkeypatch.setattr(Client, 'bot', property(lambda self: _Api(calls, url='https://example.test/tg/654321/')))
+
+    written = StringIO()
+    call_command('tgbot_webhook', 'reconcile', '--pause', '0', stdout=written)
+
+    # the served bot is registered, the switched-off one is deregistered
+    assert calls == ['get', 'set', 'get', 'delete'], calls
+    assert 'webhook deleted' in written.getvalue(), written.getvalue()
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_secret_rotated_in_the_row_takes_effect_without_a_restart():
+    """Nothing in the settings moved, so nothing dropped the built bots: the row alone did.
+
+    Cached with the record it was built from, the bot goes on reading the old secret — and a
+    rotation that needs a restart to take effect is a rotation that has not happened.
+    """
+    from django_aiogram.consumer import webhook
+
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'WEBHOOK_SECRET': 'old'})
+    assert posted(123456, 'old').status_code == 200
+
+    # saved rather than `update`d: `update` moves no `auto_now` column, so the providers'
+    # watermark would not see it -- the rule `Troubleshooting.md` states
+    row = TelegramBot.objects.get(bot_id=123456)
+    row.overrides = {'WEBHOOK_SECRET': 'new'}
+    row.save()
+    # the interval is not what this case is about, so it is stepped over rather than waited out
+    webhook._read_at = None
+
+    assert posted(123456, 'new').status_code == 200, 'the rotated secret was not accepted'
+    assert posted(123456, 'old').status_code == 403, 'the old secret was still accepted'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_record_from_a_project_own_provider_missing_a_key_is_refused_not_raised():
+    """`BOT_PROVIDERS` is a seam, so a record this package did not resolve can reach the view.
+
+    A mapping without `WEBHOOK_SECRET` is such a provider's answer to give — and unguarded it
+    was an unauthenticated 500 with a traceback out of the one branch whose whole job is to
+    refuse.
+    """
+    from django_aiogram.config.bots import BotRecord
+    from django_aiogram.consumer import webhook
+
+    sparse = BotRecord(
+        alias='123456',
+        resolved={'TOKEN': '123456:AAaa'},
+        origins={},
+        declared=False,
+        provided=True,
+    )
+    webhook._served = {123456: sparse}
+    webhook._read_at = 1e12
+
+    assert posted(123456, 'anything').status_code == 503
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_pass_over_many_bots_runs_on_this_process_own_loop(monkeypatch):
+    """Reading `serving.loop` builds one per bot, and only the singleton's is ever closed.
+
+    A pass over a thousand bots would leave a thousand loops open, which is how a command
+    runs out of file descriptors while doing exactly what it was told. Asserted by refusing
+    the attribute on every bot but the process's own: the pass has to run without it, on the
+    real loop, against a stubbed API.
+    """
+    from django_aiogram import bot as singleton
+    from django_aiogram.producer.client import TelegramBot as Client
+
+    for number in (123456, 654321, 111111):
+        TelegramBot.objects.create(bot_id=number, token=f'{number}:AAaa', overrides={'WEBHOOK_SECRET': 'x'})
+
+    calls = []
+    loop_of = Client.loop.fget
+
+    def refuse_unless_the_singleton(self):
+        """Hand back the real loop for the process's own bot, and refuse for any other."""
+        if self is not singleton:
+            msg = 'a loop was asked of a bot that is not the process own'
+            raise AssertionError(msg)
+        return loop_of(self)
+
+    monkeypatch.setattr(Client, 'loop', property(refuse_unless_the_singleton))
+    monkeypatch.setattr(Client, 'bot', property(lambda self: _Api(calls)))
+
+    call_command('tgbot_webhook', 'reconcile', '--pause', '0')
+
+    # two calls per bot -- `getWebhookInfo` and `setWebhook` -- every one of them on one loop
+    assert sorted(calls) == ['get', 'get', 'get', 'set', 'set', 'set'], calls
+
+
+class _Api:
+    """The three Telegram calls these cases make, without a network under them."""
+
+    def __init__(self, calls, url=''):
+        """Remember where to record what was asked, and what Telegram says it has."""
+        self._calls = calls
+        self._url = url
+
+    async def get_webhook_info(self):
+        """Answer with whatever this stand-in was told Telegram has."""
+        self._calls.append('get')
+        return _Info(self._url)
+
+    async def set_webhook(self, **arguments):
+        """Record the registration and say it worked."""
+        self._calls.append('set')
+        return True
+
+    async def delete_webhook(self, **arguments):
+        """Record the deregistration and say it worked."""
+        self._calls.append('delete')
+        return True
+
+
+class _Info:
+    """What `getWebhookInfo` answers: the URL Telegram has, and the updates it was given."""
+
+    def __init__(self, url=''):
+        """Take the URL this stand-in reports."""
+        self.url = url
+        self.allowed_updates = None
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_the_records_are_read_under_a_lock(monkeypatch):
+    """An expiry under load would otherwise be one read per request in flight.
+
+    Asserted on the lock rather than with threads: the interleaving that multiplies the work
+    needs several requests to pass the age check before any of them stamps it, which a test
+    cannot ask for. What it can pin is the property that makes it impossible.
+    """
+    from django_aiogram.consumer import webhook
+
+    TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'WEBHOOK_SECRET': 'mine'})
+    under = []
+    original = webhook.served_records
+
+    def watching(**kwargs):
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        'django_aiogram.runtime.providers.desired',
+        lambda: under.append(webhook._reading.locked()) or (),
+    )
+    webhook._served = {}
+    webhook._read_at = None
+
+    watching()
+
+    assert under == [True], 'the records were read with the lock released'
