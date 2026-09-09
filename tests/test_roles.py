@@ -74,7 +74,9 @@ def watching(monkeypatch):
         bot.loop.run_until_complete(asyncio.sleep(0))
 
     monkeypatch.setattr(bot, 'start_polling', polled)
-    monkeypatch.setattr(bot, 'close', lambda: None)
+    # recorded rather than a no-op: a case that asserts the teardown was reached has to be
+    # able to see it, and a `_unwind` that stopped closing the bot would otherwise pass
+    monkeypatch.setattr(bot, 'close', lambda: events.append('bot-closed'))
     monkeypatch.setattr(Command, '_idle_on_the_loop', idled)
     return events
 
@@ -99,6 +101,7 @@ def test_both_halves_run_by_default(watching):
 
     assert 'polling-started' in watching
     assert 'consumer-started' in watching
+    assert 'bot-closed' in watching, 'the teardown was not reached'
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
@@ -150,7 +153,7 @@ def test_a_receiver_starts_and_stops_with_no_consumer_to_join(watching):
     """
     call_command('start_tgbot', '--updates-only')
 
-    assert watching == ['polling-started'], watching
+    assert watching == ['polling-started', 'bot-closed'], watching
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
