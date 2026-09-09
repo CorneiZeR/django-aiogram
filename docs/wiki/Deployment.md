@@ -649,8 +649,8 @@ and `MAX_BOTS_PER_WORKER` is what splits the bots between them.
 always had. At scale they do not scale together, so each half can be turned off:
 
 ```shell
-manage.py start_tgbot --no-updates      # consume the queues; never call getUpdates
-manage.py start_tgbot --updates-only    # receive updates; consume nothing
+python manage.py start_tgbot --no-updates    # consume the queues; never call getUpdates
+python manage.py start_tgbot --updates-only  # receive updates; consume nothing
 ```
 
 - **`--no-updates`** is the sender: the shape a webhook deployment wants, where updates arrive
@@ -659,7 +659,7 @@ manage.py start_tgbot --updates-only    # receive updates; consume nothing
 - **`--updates-only`** is the receiver. Give its probe `--no-consumer` as well:
 
   ```shell
-  manage.py tgbot_healthcheck --no-consumer
+  python manage.py tgbot_healthcheck --no-consumer
   # the module form reads the settings itself, so it needs the variable `manage.py` sets
   DJANGO_SETTINGS_MODULE=core.settings python -m django_aiogram.healthcheck --no-consumer
   ```
@@ -671,8 +671,10 @@ manage.py start_tgbot --updates-only    # receive updates; consume nothing
 - Both flags together are refused: a container that neither receives nor consumes would sit
   there looking alive, answering the probe, and doing nothing.
 
-Shutdown is unchanged — whatever is running stops together, and the at-least-once guarantee
-holds across the halves, which is why `close()` and the drain stay one story.
+Shutdown is unchanged — whatever is running stops together, and it preserves whichever
+guarantee your transport gives: at-least-once where there is an in-flight list, at-most-once
+on a Redis server without `LMOVE` (see **Crash safety** above). Splitting the roles changes
+neither, which is why `close()` and the drain stay one story.
 
 ### One container, several queues
 
@@ -681,8 +683,8 @@ backlog is theirs. A container is then told which queues to consume, the way
 Celery's worker is told with `-Q`:
 
 ```shell
-manage.py start_tgbot --queues default,vip
-manage.py start_tgbot --pools vip
+python manage.py start_tgbot --queues default,vip
+python manage.py start_tgbot --pools vip
 ```
 
 - **`--queues`** names them. Each has to be declared, in

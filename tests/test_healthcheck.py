@@ -1283,11 +1283,36 @@ def test_a_container_with_no_consumer_by_design_is_not_unhealthy(redis_server):
     doing exactly what it was told. The transport is still read: a receiver has to *send*
     what its handlers produce, so a queue it cannot reach is a real failure.
     """
+    # a message on the queue, so the depth in the report is a number that was *read*: the
+    # case would otherwise pass on a hard-coded zero, and receive-only mode is meant to skip
+    # the consumer's liveness and nothing else
+    from django_aiogram.broker.registry import get_broker
+
+    get_broker().publish([b'{}'])
+
     report = check(consumes=False)
 
     assert report.ok, report.message
     assert 'not run here' in report.message, report.message
-    assert '0 queued' in report.message
+    assert '1 queued' in report.message, report.message
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0', 'TOKEN': '42:x'})
+def test_a_receiver_is_still_unhealthy_when_it_cannot_reach_the_transport(redis_server, monkeypatch):
+    """Only the consumer's liveness goes unasked; the queue is still read.
+
+    A receiver has to *send* what its handlers produce, so a transport it cannot reach is a
+    real failure and must not be hidden by the flag that says there is no consumer here.
+    """
+
+    def refuse(*args, **kwargs):
+        msg = 'the transport is not reachable'
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr('django_aiogram.healthcheck._depth', refuse)
+
+    with pytest.raises(RuntimeError):
+        check(consumes=False)
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0', 'TOKEN': '42:x'})

@@ -134,7 +134,9 @@
   --no-consumer` (and `python -m django_aiogram.healthcheck --no-consumer`) is how the probe
   is told that, and without it the probe restarts a container that is doing what it was told.
   `start_tgbot` warns at startup rather than leaving it to be discovered. The transport is
-  still read either way -- a receiver has to send what its handlers produce.
+  still read either way -- a receiver has to send what its handlers produce. Shutdown stops
+  whatever is running and preserves whichever guarantee the transport gives; splitting the
+  roles changes neither of them.
 
 - **`manage.py tgbot_prune_queues`, for the queues a client leaves behind.** A queue per
   client keeps one backlog off another's, and it is also how a deployment leaks: the client
