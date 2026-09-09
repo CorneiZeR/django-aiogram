@@ -326,9 +326,12 @@ class _LimiterRegistry:
         #: the numbers each limiter was built from, so a change in a row is noticed. A
         #: `setting_changed` receiver cannot see one: the rates live in rows since 5.0
         self._numbers: dict[str, tuple[tuple[str, Any], ...]] = {}
-        #: which record each limiter's numbers came from, so a second configuration holding
+        #: which record each token's numbers came from, so a second configuration holding
         #: the same token cannot rebuild it -- a rebuild starts the buckets full, and two
-        #: records disagreeing would hand a full burst to every send
+        #: records disagreeing would hand a full burst to every send. Kept for a token whose
+        #: owner switched pacing *off* as well, which is why the decision is read from here
+        #: and not from `_limiters`: a decision not to pace is a decision, and forgetting it
+        #: would let the other record take the token over on the next send
         self._owners: dict[str, str | None] = {}
         #: tokens whose collision has been reported, so the log says it once
         self._told: set[str] = set()
@@ -344,17 +347,23 @@ class _LimiterRegistry:
 
         **Only the record the numbers came from may rebuild it.** Where a second
         configuration holds the same token and asks for different numbers, it is answered
-        with the limiter that exists: alternating sends would otherwise rebuild it on every
-        call, and a limiter built a moment ago has a full burst to give away, which is pacing
-        switched off rather than shared.
+        with what that record decided: alternating sends would otherwise rebuild the limiter
+        on every call, and a limiter built a moment ago has a full burst to give away, which
+        is pacing switched off rather than shared. ``RATE_LIMIT: {}`` is one of those
+        decisions and is owned like any other: the owner's ``{}`` leaves the token paced by
+        nothing for both of them, and an owner that paces paces the other one too -- Telegram
+        meters the token, so the alternative is the second record spending a budget the first
+        is being held to.
         """
         with self._guard:
             asked = _numbers(settings)
             owner = _owner(settings)
-            existing = self._limiters.get(token)
-            if existing is not None and self._numbers.get(token) == asked:
-                return existing
-            if existing is not None and not self._may_rebuild(token, owner):
+            # by the owner rather than by a limiter: a token whose owner switched pacing off
+            # has an answer here -- ``None`` -- and no entry in `_limiters` at all
+            known = token in self._owners
+            if known and self._numbers.get(token) == asked:
+                return self._limiters.get(token)
+            if known and not self._may_rebuild(token, owner):
                 if token not in self._told:
                     self._told.add(token)
                     logger.warning(
@@ -364,22 +373,21 @@ class _LimiterRegistry:
                             'tg_paced_by': self._owners.get(token),
                         },
                     )
-                return existing
+                return self._limiters.get(token)
             limiter = build_rate_limiter(settings)
-            if limiter is None:
-                # a bot whose limits were switched off keeps nothing: the next ask reads the
-                # settings again, and a stale limiter would pace a bot nothing asked to pace
-                self._limiters.pop(token, None)
-                self._numbers.pop(token, None)
-                self._owners.pop(token, None)
-                return None
-            self._limiters[token] = limiter
             self._numbers[token] = asked
             self._owners[token] = owner
+            if limiter is None:
+                # the limiter goes, the decision stays: a bot asked not to be paced must not
+                # be paced by whatever it built a moment ago, and the ownership above is what
+                # keeps a second record holding this token from pacing it instead
+                self._limiters.pop(token, None)
+                return None
+            self._limiters[token] = limiter
             return limiter
 
     def _may_rebuild(self, token: str, owner: str | None) -> bool:
-        """Whether ``owner`` is the record this token's limiter answers to.
+        """Whether ``owner`` is the record this token's pacing answers to.
 
         An unrecorded owner is one nothing named -- a caller that passed the process-wide
         settings -- and a named record takes it over rather than being refused by it.

@@ -189,3 +189,28 @@ def test_two_records_holding_one_token_do_not_rebuild_each_other_s_limiter():
     assert get_rate_limiter(row.token, disagreeing) is first, 'the other configuration rebuilt it'
     assert first._overall.rate == 1, first._overall.rate
     assert get_rate_limiter(row.token, found) is first, 'the owner was displaced by the other one'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_the_owner_of_a_shared_token_decides_even_when_it_decides_not_to_pace():
+    """`RATE_LIMIT: {}` is a decision, and a shared token has to remember it as one.
+
+    Kept by the owner rather than by the presence of a limiter: forgetting it would let the
+    other configuration of the same identity build one on its next send, and the bot that
+    asked not to be paced would be paced — by numbers nobody wrote for it.
+    """
+    row = TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', overrides={'RATE_LIMIT': {}})
+    found = next(record for record in _desired() if record.bot_id == 123456)
+    disagreeing = found.__class__(
+        alias='rival',
+        resolved={**found.resolved, 'RATE_LIMIT': {'overall_per_second': 7}},
+        origins=found.origins,
+        declared=True,
+    )
+
+    assert get_rate_limiter(row.token, found) is None
+    assert get_rate_limiter(row.token, disagreeing) is None, 'the other configuration started pacing the token'
+
+    reset_rate_limiters()
+    paced = get_rate_limiter(row.token, disagreeing)
+    assert get_rate_limiter(row.token, found) is paced, 'the owner asked to pace and the token was not paced'

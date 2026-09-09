@@ -68,7 +68,9 @@ move. `RATE_LIMIT: {}` switches pacing off for that bot, and the limiter goes wi
 **One token is one budget**, so where two configurations describe the same identity — a
 row and a settings section holding one token — the numbers of whichever of them sent first
 are the ones that pace both, and a warning names the other. Rebuilding the limiter for each
-in turn would start every send with a full burst.
+in turn would start every send with a full burst. `RATE_LIMIT: {}` is owned the same way:
+the owner's `{}` leaves the token paced by nothing, and an owner that paces paces the other
+configuration too.
 
 ### With more than one container, the arithmetic is yours
 
