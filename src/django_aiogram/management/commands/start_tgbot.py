@@ -210,7 +210,7 @@ class Command(BaseCommand):
             return
 
         mode = self._mode_for_this_run(options)
-        receives, consumes = self._roles(options)
+        receives, consumes = self._roles(options, mode)
 
         serving = self._queues_to_serve(options) if consumes else ()
         one_queue = _only_its_own_queue(serving, options['pools'])
@@ -390,7 +390,7 @@ class Command(BaseCommand):
             with contextlib.suppress(ValueError):
                 signal.signal(signal.SIGTERM, previous)
 
-    def _roles(self, options: dict[str, Any]) -> tuple[bool, bool]:
+    def _roles(self, options: dict[str, Any], mode: str) -> tuple[bool, bool]:
         """Say which of the two jobs this run does, and refuse a run that does neither.
 
         `start_tgbot` has always done both, and at scale they do not scale together: a
@@ -399,10 +399,22 @@ class Command(BaseCommand):
         why both is the default and each flag takes one away.
 
         A container that does neither is refused rather than started: it would sit there
-        looking alive, answering a probe, and doing nothing at all.
+        looking alive, answering a probe, and doing nothing at all. That is two
+        configurations, not one -- the flags together, and ``--updates-only`` in webhook
+        mode, where this process receives nothing anyway because the updates arrive over HTTP
+        in whatever serves them. Consuming is all a bot container *is* there, so taking it
+        away leaves an idle loop.
         """
         receives = not options['no_updates']
         consumes = not options['updates_only']
+        if not consumes and mode == UpdateMode.WEBHOOK:
+            msg = (
+                '--updates-only leaves nothing for this process to do in webhook mode: the '
+                'updates arrive over HTTP in whatever serves the webhook, so consuming the '
+                'queues is all this process was doing. Drop the flag, or run it where MODE '
+                'is polling.'
+            )
+            raise CommandError(msg)
         if not receives and not consumes:
             msg = '--no-updates and --updates-only together leave nothing for this process to do.'
             raise CommandError(msg)

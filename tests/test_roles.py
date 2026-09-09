@@ -151,3 +151,48 @@ def test_a_receiver_starts_and_stops_with_no_consumer_to_join(watching):
     call_command('start_tgbot', '--updates-only')
 
     assert watching == ['polling-started'], watching
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_updates_only_is_refused_in_webhook_mode_by_the_flag(watching):
+    """In webhook mode this process receives nothing: the updates arrive over HTTP elsewhere.
+
+    So `--updates-only` leaves an idle loop — the same nothing the two flags together leave,
+    reached by a configuration that looks reasonable.
+    """
+    with pytest.raises(CommandError, match='nothing for this process to do in webhook mode'):
+        call_command('start_tgbot', '--updates-only', '--mode', 'webhook')
+
+    assert watching == []
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={
+        **SETTINGS,
+        'MODE': 'webhook',
+        'WEBHOOK_URL': 'https://example.test/tg',
+        'WEBHOOK_SECRET': 'a-secret',
+    }
+)
+def test_updates_only_is_refused_where_webhook_is_the_configured_mode(watching):
+    """The same refusal by the setting rather than the flag, which is how a deployment has it."""
+    with pytest.raises(CommandError, match='nothing for this process to do in webhook mode'):
+        call_command('start_tgbot', '--updates-only')
+
+    assert watching == []
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={
+        **SETTINGS,
+        'MODE': 'webhook',
+        'WEBHOOK_URL': 'https://example.test/tg',
+        'WEBHOOK_SECRET': 'a-secret',
+    }
+)
+def test_a_webhook_container_still_consumes_by_default(watching):
+    """The other side: consuming is what a webhook deployment's bot container is for."""
+    call_command('start_tgbot')
+
+    assert 'consumer-started' in watching
+    assert 'polling-started' not in watching

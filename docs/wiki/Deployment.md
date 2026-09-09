@@ -669,7 +669,9 @@ python manage.py start_tgbot --updates-only  # receive updates; consume nothing
   transport is still read either way: a receiver has to *send* what its handlers produce, so a
   queue it cannot reach is a real failure. The command warns about this at startup.
 - Both flags together are refused: a container that neither receives nor consumes would sit
-  there looking alive, answering the probe, and doing nothing.
+  there looking alive, answering the probe, and doing nothing. So is `--updates-only` in
+  **webhook mode** — there the updates arrive over HTTP in whatever serves the webhook, so
+  this process receives nothing anyway and consuming is all it was doing.
 
 Shutdown is unchanged — whatever is running stops together, and it preserves whichever
 guarantee your transport gives: at-least-once where there is an in-flight list, at-most-once
