@@ -140,9 +140,14 @@ def test_a_receiver_is_told_to_give_the_probe_the_same_news(watching, capsys):
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
-def test_a_receiver_shuts_down_cleanly_with_no_consumer_to_join(watching):
-    """`max` of no queues raises, and the join bound is read before any thread exists."""
+def test_a_receiver_starts_and_stops_with_no_consumer_to_join(watching):
+    """The join bound is read before any thread exists, and it is a `max` over the queues.
+
+    Over *no* queues that raises, and it raises where nothing has started yet: the command
+    would refuse to run at all, before polling, with a `ValueError` about an empty sequence.
+    So the postcondition is the whole run -- updates received, nothing consumed, and the
+    teardown reached without a consumer to stop.
+    """
     call_command('start_tgbot', '--updates-only')
 
-    assert 'consumer-stopped' not in watching
-    assert asyncio.get_event_loop_policy() is not None  # the loop was left in one piece
+    assert watching == ['polling-started'], watching
