@@ -124,6 +124,28 @@
   down, or not migrated here -- declares nothing and refuses nothing; no table at all is a
   different state, where the settings are the whole declaration.
 
+- **A rate limit per bot.** `RATE_LIMIT` is resolved per bot like every other setting, so a
+  noisy client can be throttled below the shared default and one with paid broadcasting can go
+  above it -- in a `TELEGRAM_BOTS` section or in that bot's row. Telegram meters the token, so
+  the budget is still shared by every object holding one; what is a bot's own is the numbers.
+
+  A change in a row takes effect on the next send rather than at the next restart: the limiter
+  remembers the numbers it was built from and is rebuilt when they move, which `setting_changed`
+  could not do for a value that lives in a row. `RATE_LIMIT: {}` switches pacing off for that
+  bot and the limiter is dropped with it.
+
+  Only the record the numbers came from may rebuild it. Two configurations of one identity --
+  a row and a section holding the same token -- are answered with what that record decided,
+  because a rebuild starts the buckets full and alternating sends would then be paced by
+  nothing at all; a warning names the one that was not used. `RATE_LIMIT: {}` is one of those
+  decisions and is owned like the numbers are, so an owner that switched pacing off leaves the
+  token paced by nothing rather than by whichever record sends next.
+
+  `Rate-limits.md` states the multi-container arithmetic plainly, because the limiter is per
+  process: two containers with one budget send at twice it. Divide the number by the processes
+  that send for that bot, or accept 429 and let the retry absorb it as far as `MAX_RETRIES`
+  reaches -- and the per-bot number is what makes the first of those possible.
+
 - **A webhook per bot, and a pass that keeps Telegram's idea of them in line.** The URL
   carries the identity -- `path('tg/9c1f2b7a/<int:bot_id>/', telegram_webhook)`, with
   `WEBHOOK_URL` as the prefix the command appends the identity to -- and each bot has its own

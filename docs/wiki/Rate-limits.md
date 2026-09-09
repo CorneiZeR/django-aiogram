@@ -20,7 +20,8 @@ TELEGRAM_BOT_DEFAULTS = {
 ```
 
 Set an entry to `0` to drop that one limit, or `RATE_LIMIT` to `None` to switch
-pacing off entirely.
+pacing off entirely. An empty mapping says the same thing — `RATE_LIMIT: {}` is what a
+row with no budgets in it resolves to, so both forms disable pacing.
 
 ## How it behaves
 
@@ -37,15 +38,58 @@ many chats does not accumulate them forever.
 
 ## Several bots
 
-Telegram meters per token, so the budget belongs to a bot instance rather than
-the process:
+Telegram meters per token, so the budget belongs to a bot rather than the process:
 
 ```python
 first = TelegramBot()  # its own budget
 second = TelegramBot()  # a separate one
 ```
 
-Nothing extra is needed when a second token arrives.
+Nothing extra is needed when a second token arrives. Two objects holding the *same*
+token share one budget, which is the same fact from the other side: separate limiters
+would let them send at twice the rate Telegram allows.
+
+### A budget per bot
+
+`RATE_LIMIT` is resolved per bot like every other setting, so the numbers can differ:
+throttle a noisy client below the shared default, or let a client with paid broadcasting
+go above it.
+
+```python
+TELEGRAM_BOTS = {
+    'noisy': {'TOKEN': '...', 'RATE_LIMIT': {'overall_per_second': 5}},
+}
+```
+
+or, for a bot that lives in the database, the same key in its row's `overrides` — which
+is what an admin form writes. **A change there takes effect on the next send**, without a
+restart: the limiter remembers the numbers it was built from and is rebuilt when they
+move. `RATE_LIMIT: {}` — or `None` — switches pacing off for that bot, and the limiter goes
+with it.
+
+**One token is one budget**, so where two configurations describe the same identity — a
+row and a settings section holding one token — the numbers of whichever of them sent first
+are the ones that pace both, and a warning names the other. Rebuilding the limiter for each
+in turn would start every send with a full burst. Pacing switched off is owned the same way:
+the owner's `{}` leaves the token paced by nothing, and an owner that paces paces the other
+configuration too.
+
+### With more than one container, the arithmetic is yours
+
+**The limiter is per process.** Two containers with the same budget send at twice it, ten
+send at ten times it — nothing here coordinates them, and this package will not tie every
+transport to Redis to change that. What it gives you instead is the per-bot number above,
+so the two honest options are both available:
+
+- **Divide the budget** by the number of processes that send for that bot. Two consumers
+  at `overall_per_second: 15` is one bot at 30, which is the documented ceiling.
+- **Accept 429 and let the retry absorb it.** `TelegramRetryAfter` carries a delay and
+  `MAX_RETRIES` bounds the attempts, so a burst is usually delivered a moment late rather
+  than refused — but the bound is a bound: a send that exhausts it is recorded as
+  `outbound.dropped` with `detail.max_retries`, and `manage.py tgbot_replay` is what sends
+  it afterwards. This is the right answer when
+  the traffic is bursty rather than sustained, since a divided budget paces every
+  container down even while the others are idle.
 
 ## Retries still exist
 

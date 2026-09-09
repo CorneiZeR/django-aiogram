@@ -309,7 +309,7 @@ consumer as not observable from outside.
 
 | Setting | Default | Description |
 | ------- | ------- | ----------- |
-| `RATE_LIMIT` | see below | Proactive pacing, or `None` to disable |
+| `RATE_LIMIT` | see below | Proactive pacing, or `None` (or `{}`) to disable |
 
 ```python
 TELEGRAM_BOT_DEFAULTS = {
