@@ -36,7 +36,9 @@ from django_aiogram.config.checks.bot import (
     _a_readable_bots_dict,
     _a_section_named_like_a_bot,
     _a_token_with_an_identity,
+    _a_usable_token_storage,
     _importable_storage,
+    _keys_for_a_storage_that_needs_them,
     _known_bot_properties,
     _known_update_types,
     _one_bot_per_token,
@@ -183,6 +185,9 @@ CHECKS: tuple[Check, ...] = (
     # the queue a bot publishes to: a name, and one this deployment has declared
     Check('E057', 'QUEUE', _a_string),
     Check('E058', 'QUEUES', _a_collection_of_strings, process=True),
+    # where a token is kept, and what the encrypting storage needs to keep it
+    Check('E062', 'TOKEN_STORAGE', _a_usable_token_storage, process=True),
+    Check('E063', 'TOKEN_ENCRYPTION_KEYS', _keys_for_a_storage_that_needs_them, process=True),
     Check('E059', 'QUEUE', _a_declared_queue),
     Check('E055', 'MAX_BOTS_PER_WORKER', partial(_an_integer, minimum=0), process=True),
     Check('E056', 'BOT_LEASE_SECONDS', partial(_a_number, minimum=1), process=True),

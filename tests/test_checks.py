@@ -2136,3 +2136,42 @@ def test_one_polling_bot_among_webhook_ones_is_enough_to_report_the_lease():
 def test_a_bare_string_of_queues_is_reported():
     """It is a collection of its characters, so read as one it declares `v`, `i` and `p`."""
     assert [message for message in check_settings() if str(message.id).endswith('E058')]
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN_STORAGE': 'nowhere.NoStorage'})
+def test_a_token_storage_that_cannot_be_imported_is_reported():
+    """A misspelt path is a deployment with no way to read a single stored token."""
+    (found,) = [message for message in check_settings() if str(message.id).endswith('E062')]
+
+    assert 'nowhere.NoStorage' in found.msg
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN_STORAGE': 'django_aiogram.crypto.FernetTokenStorage'})
+def test_an_encrypting_storage_with_no_keys_is_reported_by_both_rows():
+    """`E062` because it cannot be built, `E063` because the keys are what is missing.
+
+    Both, and deliberately: the reader who set the storage looks for it under the storage, and
+    the one who forgot the keys looks under the keys.
+    """
+    reported = {str(message.id).rsplit('.', 1)[-1] for message in check_settings()}
+
+    assert {'E062', 'E063'} <= reported
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={
+        'TOKEN_STORAGE': 'django_aiogram.crypto.FernetTokenStorage',
+        'TOKEN_ENCRYPTION_KEYS': 'not-a-fernet-key',
+    }
+)
+def test_a_key_the_storage_cannot_use_is_reported_at_boot():
+    """Read in `__init__`, so `manage.py check` answers rather than the first row read does."""
+    (found,) = [message for message in check_settings() if str(message.id).endswith('E062')]
+
+    assert 'not a Fernet key' in found.msg
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN_ENCRYPTION_KEYS': 5})
+def test_keys_that_are_not_a_collection_of_strings_are_reported():
+    """The shape rule, which holds whatever storage is configured."""
+    assert [message for message in check_settings() if str(message.id).endswith('E063')]

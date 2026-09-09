@@ -224,7 +224,11 @@ a person, after an incident, with `--dry-run` first — see
 **[Troubleshooting](Troubleshooting.md#telegram-was-down-what-did-we-lose-and-can-it-be-sent-again)**.
 Scheduling it would mean re-sending failures nobody has looked at.
 
-`manage.py tgbot_prune_queues` is the fourth, and it is on neither list because that depends
+`manage.py tgbot_rewrap_tokens` is the fourth, and it is run when the storage the tokens are
+kept in changes: turning `TOKEN_STORAGE` on, or rotating its key. Never on a schedule — there
+is nothing to do until a key moves — see **[Tokens](Tokens.md)**.
+
+`manage.py tgbot_prune_queues` is the fifth, and it is on neither list because that depends
 on your `REMOVED_QUEUE_POLICY`. A queue per client is what keeps one client's backlog off
 another's, and it is also how a deployment leaks: a client goes, their bot's row goes, and a
 Redis key, an AMQP queue or a consumer group stays for ever. The command finds the queues no

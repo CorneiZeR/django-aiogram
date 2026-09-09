@@ -17,7 +17,7 @@ from django.utils.module_loading import import_string
 
 from django_aiogram.config.bots import BOTS_SETTINGS_NAME, BotRecord, parse_bot_id, records, sections
 from django_aiogram.config.checks.problems import Problem
-from django_aiogram.config.checks.shapes import _setting
+from django_aiogram.config.checks.shapes import _a_collection_of_strings, _setting
 from django_aiogram.config.defaults import PROCESS_SCOPED
 from django_aiogram.config.enums import (
     KNOWN_RATE_LIMIT_KEYS,
@@ -449,5 +449,60 @@ def _the_dict_5_0_replaced(_key: str, _record: BotRecord) -> list[Problem]:
             f'and {BOTS_SETTINGS_NAME}, which holds one section per bot.',
             label=REMOVED_SETTINGS_NAME,
             hint='Rename it to ' + SETTINGS_NAME + ' if this project runs one bot; see Upgrading.',
+        )
+    ]
+
+
+def _a_usable_token_storage(key: str, record: BotRecord) -> list[Problem]:
+    """Refuse a ``TOKEN_STORAGE`` that cannot be built, naming what was wrong with it.
+
+    Built rather than only imported: the encrypting storage reads its keys in ``__init__``, so
+    a deployment whose keys are missing or unusable finds out here rather than on the first
+    row it tries to read -- at which point every bot in the table is a bot nothing can serve.
+    """
+    path = str(_setting(key, record) or '').strip()
+    if not path:
+        return [Problem('is empty; it names the class a token is stored through.')]
+    # deferred: this reaches the seam, which imports whatever the project configured -- and
+    # for the encrypting storage that is `cryptography`
+    from django_aiogram.tokens import get_token_storage  # noqa: PLC0415 - as above
+
+    try:
+        get_token_storage()
+    except ImproperlyConfigured as refused:
+        return [Problem(f'cannot be used: {refused}')]
+    return []
+
+
+def _keys_for_a_storage_that_needs_them(key: str, record: BotRecord) -> list[Problem]:
+    """Refuse keys that are not a collection of strings, and say who is asking for them.
+
+    Asked of the storage class rather than matched on its dotted path: a project's own
+    ``TokenStorage`` declares ``needs_keys`` for itself, and a rule keyed on our class name
+    would have nothing to say about it. Read from the class without building one, so this
+    reports the missing keys even where the storage refuses to be built *because* they are
+    missing -- `E062` says it cannot be built and this says what is absent.
+    """
+    problems = _a_collection_of_strings(key, record)
+    if problems:
+        return problems
+    # through the seam's own loader rather than `import_string` here: what a check may resolve
+    # is a rule of its own -- `tests/test_checks.py` plants a mine on this module's importer
+    # for the paths that cost aiogram -- and the storage is the one path a check has to
+    # resolve, because whether it can be imported at all is what `E062` reports
+    from django_aiogram.tokens import storage_class  # noqa: PLC0415 - as above
+
+    try:
+        storage = storage_class(str(_setting('TOKEN_STORAGE', record) or '').strip())
+    except ImproperlyConfigured:
+        # `E062` is the row about a path that cannot be imported; saying it twice would send
+        # the reader to the keys for a problem that is not about them
+        return []
+    if not storage.needs_keys or _setting(key, record):
+        return []
+    return [
+        Problem(
+            f'is empty, and {storage.__name__} needs it: it holds the keys, newest first, '
+            'and the first one is what encrypts.',
         )
     ]

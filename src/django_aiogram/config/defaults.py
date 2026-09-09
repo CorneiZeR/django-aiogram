@@ -128,6 +128,16 @@ DEFAULTS: dict[str, Any] = {
     # (leave it and report it), 'hold' (remove it once empty) or 'drop' (remove it now).
     # Nothing acts on this on its own -- removing a queue is not a signal handler's decision
     'REMOVED_QUEUE_POLICY': 'park',
+    # where a bot's credential is kept, as a dotted path to a `TokenStorage`. The shipped
+    # default writes the value as it was given: what protects a token then is the database's
+    # own access control and the admin permission on the column. `[crypto]` ships the
+    # encrypting one, so a project that needs it at rest pays for `cryptography` and the
+    # rest do not
+    'TOKEN_STORAGE': 'django_aiogram.tokens.PlainTokenStorage',
+    # the keys an encrypting storage uses, newest first: the first one writes and every one
+    # of them reads, which is what makes a rotation `manage.py tgbot_rewrap_tokens` can walk
+    # through while the old rows are still being read
+    'TOKEN_ENCRYPTION_KEYS': (),
     'QUEUES': (),
     'BOT_PROVIDERS': ('django_aiogram.runtime.providers.from_settings',),
     # how often a supervisor re-reads them. The push through the transport is what makes a
@@ -168,6 +178,8 @@ PROCESS_SCOPED: frozenset[str] = frozenset(
         'BOT_LEASE_SECONDS',
         'QUEUES',
         'REMOVED_QUEUE_POLICY',
+        'TOKEN_STORAGE',
+        'TOKEN_ENCRYPTION_KEYS',
     }
     | {key for key in DEFAULTS if key.startswith('EVENT_LOG')},
 )

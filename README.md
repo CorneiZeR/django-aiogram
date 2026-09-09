@@ -129,6 +129,7 @@ the same pull request as the code they describe and published from `master`.
 | [Webhook](https://corneizer.github.io/django-aiogram/latest/Webhook/) | receiving updates over HTTP instead of polling |
 | [Scaling](https://corneizer.github.io/django-aiogram/latest/Scaling/) | where polling stops, why a webhook costs nothing per bot, and what grows with the bots |
 | [Rate limits](https://corneizer.github.io/django-aiogram/latest/Rate-limits/) | staying inside Telegram's published limits |
+| [Tokens](https://corneizer.github.io/django-aiogram/latest/Tokens/) | where a bot's credential is kept, and rotating the key that wraps it |
 | [Deployment](https://corneizer.github.io/django-aiogram/latest/Deployment/) | compose recipes, healthchecks, per-process opt-out |
 | [Logging](https://corneizer.github.io/django-aiogram/latest/Logging/) | the logger and its structured fields |
 | [Event log](https://corneizer.github.io/django-aiogram/latest/Event-log/) | recording what the bot did to a table, and a signal to count it without one |

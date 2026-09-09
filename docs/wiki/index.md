@@ -141,6 +141,12 @@ defaults to aiogram's Redis one, and `FSM_STORAGE: 'memory'` is what drops it.
 
     Staying inside Telegram's published limits, and what the pacer does when you do not.
 
+-   **[Tokens](Tokens.md)**
+
+    ---
+
+    Where a bot's credential is kept, encrypting the column, and rotating the key with nothing down.
+
 -   **[Logging](Logging.md)**
 
     ---

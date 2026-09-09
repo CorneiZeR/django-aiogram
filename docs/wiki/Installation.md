@@ -85,12 +85,17 @@ says so with the install line for the one you named:
 	HINT: pip install "django-aiogram[redis]"
 ```
 
-**Two extras are not transports.** `hiredis` swaps redis-py's parser for the C one, and
-`prometheus` (`prometheus-client>=0.20`) installs the client the shipped exporter fills:
+**Three extras are not transports.** `hiredis` swaps redis-py's parser for the C one,
+`prometheus` (`prometheus-client>=0.20`) installs the client the shipped exporter fills, and
+`crypto` (`cryptography>=42`) the encrypting `TOKEN_STORAGE`:
 
 ```shell
-pip install 'django-aiogram[redis,prometheus]'
+pip install 'django-aiogram[redis,prometheus,crypto]'
 ```
+
+`crypto` is needed only where `TOKEN_STORAGE` names the encrypting storage; a deployment whose
+database is already the trust boundary keeps its tokens as they are and never imports
+`cryptography`. See **[Tokens](Tokens.md)**.
 
 `django_aiogram.contrib.prometheus` is the only module that imports `prometheus_client`, and
 nothing in this package imports *that* module — a project does, from its own
