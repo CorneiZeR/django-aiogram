@@ -127,6 +127,7 @@ the same pull request as the code they describe and published from `master`.
 | [RabbitMQ](https://corneizer.github.io/django-aiogram/latest/RabbitMQ/) | a broker that tracks its own consumers, and one thread per connection |
 | [Kafka](https://corneizer.github.io/django-aiogram/latest/Kafka/) | offsets settle a prefix, ordering is per partition, a refusal rewinds |
 | [Webhook](https://corneizer.github.io/django-aiogram/latest/Webhook/) | receiving updates over HTTP instead of polling |
+| [Scaling](https://corneizer.github.io/django-aiogram/latest/Scaling/) | where polling stops, why a webhook costs nothing per bot, and what grows with the bots |
 | [Rate limits](https://corneizer.github.io/django-aiogram/latest/Rate-limits/) | staying inside Telegram's published limits |
 | [Deployment](https://corneizer.github.io/django-aiogram/latest/Deployment/) | compose recipes, healthchecks, per-process opt-out |
 | [Logging](https://corneizer.github.io/django-aiogram/latest/Logging/) | the logger and its structured fields |

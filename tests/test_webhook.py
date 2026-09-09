@@ -150,7 +150,7 @@ def test_serving_without_a_secret_answers_503_rather_than_raising(handled, caplo
         response = post(an_update())
 
     assert response.status_code == 503
-    assert 'webhook is not configured to serve updates' in caplog.text
+    assert 'webhook has no secret to serve this update with' in caplog.text
     # and nothing ran: a 503 returned *after* dispatch would satisfy both assertions above
     # while the update had already been handled, which is the half that matters
     assert seen == [], 'the update was dispatched before the refusal'

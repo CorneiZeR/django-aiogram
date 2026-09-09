@@ -9,6 +9,7 @@ Built on first ask and never at import, like everything else here — a process 
 ``manage.py check`` must not pay for aiogram, and ``tests/test_lazy_init.py`` fails if it does.
 """
 
+import logging
 import threading
 from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING, Any
@@ -21,9 +22,12 @@ from django_aiogram.config.bots import BOTS_SETTINGS_NAME, DEFAULT_ALIAS, aliase
 from django_aiogram.config.settings import SETTINGS_NAME
 
 if TYPE_CHECKING:
+    from django_aiogram.config.bots import BotRecord
     from django_aiogram.producer.client import TelegramBot
 
 __all__ = ('Bots', 'bots')
+
+logger = logging.getLogger('django_aiogram')
 
 
 class Bots(Mapping[str, 'TelegramBot']):
@@ -65,14 +69,57 @@ class Bots(Mapping[str, 'TelegramBot']):
         """Return the bot a token's identity names, which is what the wire will carry.
 
         An alias is what a settings file writes and an identity is what a message names, so
-        both have to resolve — see `config.bots` for why the two are not the same thing.
+        both have to resolve -- see `config.bots` for why the two are not the same thing.
+
+        **The providers are asked too**, not only the settings: a client's bot is a row, and
+        by the time a message or a webhook update names it there is no section to find it
+        under. The settings come first, which is the same order `desired` resolves a conflict
+        in, and the refusal names what it looked at.
         """
         for found in records():
             if found.bot_id == bot_id:
                 return self[found.alias]
-        known = ', '.join(str(found.bot_id) for found in records()) or 'none'
+        for found in self._provided():
+            if found.bot_id == bot_id:
+                return self.for_record(found)
+        known = ', '.join(str(found.bot_id) for found in [*records(), *self._provided()]) or 'none'
         msg = f'No bot is configured with the identity {bot_id}. Configured: {known}.'
         raise ImproperlyConfigured(msg)
+
+    @staticmethod
+    def _provided() -> 'tuple[BotRecord, ...]':
+        """Every bot the providers can see, or none where they cannot be read.
+
+        Contained, because this is reached from a webhook request and from a send: a database
+        that blinked must not turn "which bot is this" into a traceback out of a view. The
+        settings-configured bots above are answered whatever happens here.
+        """
+        # deferred: the providers reach the ORM, and this module is imported by a process
+        # that may have no database at all
+        from django_aiogram.runtime.providers import desired  # noqa: PLC0415 - as above
+
+        try:
+            return desired()
+        except Exception:
+            logger.exception('could not read the bots the providers see; going by the settings')
+            return ()
+
+    def for_record(self, found: 'BotRecord') -> 'TelegramBot':
+        """Return the bot one resolved record describes, building it at most once.
+
+        Keyed by the record's alias like everything else here -- a row's alias is its identity
+        written out -- so a bot that arrives from the database is cached exactly as one from a
+        settings section is, and a settings change drops both.
+        """
+        # deferred: importing the client costs aiogram, and this module is reached by a
+        # listing that may never send
+        from django_aiogram.producer.client import TelegramBot  # noqa: PLC0415 - as above
+
+        with self._lock:
+            made = self._made.get(found.alias)
+            if made is None:
+                made = self._made[found.alias] = TelegramBot(record=found)
+            return made
 
     def __iter__(self) -> Iterator[str]:
         """Iterate over the configured aliases, in the order the project declared them."""

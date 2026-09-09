@@ -137,6 +137,7 @@ nav:
   - Running it:
       - Delivery: Delivery.md
       - Webhook: Webhook.md
+      - Scaling: Scaling.md
       - Rate limits: Rate-limits.md
       - Deployment: Deployment.md
       - Logging: Logging.md

@@ -1,18 +1,34 @@
-"""Register, inspect or remove the Telegram webhook.
+"""Register, inspect or remove the Telegram webhook, for one bot or for every bot.
 
 Telegram remembers the URL, not your settings file, so switching between polling
 and webhooks means telling Telegram. `getUpdates` refuses to run while a webhook
 is registered, which is why `delete` exists.
+
+**`reconcile` is the one a deployment with many bots runs.** Telegram's state and the
+deployment's drift apart in both directions -- a bot added and never registered, a bot
+removed and still being posted to -- and only Telegram can be asked which it is. The pass
+compares `getWebhookInfo` against what each bot should have and repairs the difference,
+which is also why it is safe to run again: a bot already registered costs one read.
+
+It paces itself, because a thousand bots starting at once is a thousand `setWebhook` calls
+into an API with its own limits: `--pause` between calls and a jitter so two containers that
+started together do not walk the list in step.
 """
 
+import logging
+import random
+import time
 from argparse import ArgumentParser
 from typing import Any
 
+from django.core.exceptions import ImproperlyConfigured
 from django.core.management import BaseCommand, CommandError
 
 from django_aiogram import bot
 from django_aiogram.config.enums import UpdateMode
-from django_aiogram.consumer.webhook import current_mode, webhook_settings
+from django_aiogram.consumer.webhook import current_mode, registered, webhook_settings
+
+logger = logging.getLogger('django_aiogram')
 
 
 class Command(BaseCommand):
@@ -21,12 +37,41 @@ class Command(BaseCommand):
     help = 'Set, delete or show the Telegram webhook'
 
     def add_arguments(self, parser: ArgumentParser) -> None:
-        """Declare the action and --drop-pending."""
-        parser.add_argument('action', choices=['set', 'delete', 'info'])
+        """Declare the action, which bots it applies to, and how it paces itself."""
+        parser.add_argument('action', choices=['set', 'delete', 'info', 'reconcile'])
         parser.add_argument(
             '--drop-pending',
             action='store_true',
             help='discard the updates Telegram queued while no webhook was registered',
+        )
+        parser.add_argument(
+            '--bot',
+            action='append',
+            default=[],
+            dest='bots',
+            type=int,
+            help=(
+                'the identity of one bot, however many times it is given. Defaults to every '
+                'configured bot for `reconcile`, and to this process own for the rest.'
+            ),
+        )
+        parser.add_argument(
+            '--force',
+            action='store_true',
+            help=(
+                'register even where Telegram already has the right URL. Telegram never '
+                'reports the secret, so a rotated one looks like no change: this is how it '
+                'is applied.'
+            ),
+        )
+        parser.add_argument(
+            '--pause',
+            type=float,
+            default=0.05,
+            help=(
+                'seconds between calls, jittered, so a deployment registering a thousand bots '
+                'does not arrive as a thousand calls at once. 0 disables the pause.'
+            ),
         )
 
     def handle(self, *args: Any, **options: Any) -> None:
@@ -44,6 +89,29 @@ class Command(BaseCommand):
         finally:
             bot.close()
 
+    def _addressed(self, options: dict[str, Any]) -> tuple[Any, Any, 'int | None']:
+        """Return the bot one single-bot action applies to, with its settings and identity.
+
+        The process's own where no `--bot` is given, which is every deployment with one bot.
+        More than one identity is refused rather than looped over: `set`, `delete` and `info`
+        each say one thing about one bot, and `reconcile` is the action that walks a list.
+        """
+        asked = options['bots']
+        if not asked:
+            return bot, None, None
+        if len(asked) > 1:
+            msg = f'--bot may be given once for `{options["action"]}`; use `reconcile` to walk every bot.'
+            raise CommandError(msg)
+        from django_aiogram.runtime.providers import desired  # noqa: PLC0415 - the ORM, deferred
+        from django_aiogram.runtime.registry import bots  # noqa: PLC0415 - as above
+
+        identity = asked[0]
+        found = next((record for record in desired() if record.bot_id == identity), None)
+        if found is None:
+            msg = f'No bot with the identity {identity} is configured here.'
+            raise CommandError(msg)
+        return bots.by_id(identity), found, identity
+
     def _set(self, options: dict[str, Any]) -> None:
         """Register the webhook Telegram should deliver to, warning if MODE disagrees.
 
@@ -58,29 +126,104 @@ class Command(BaseCommand):
                     'stops getUpdates from working, so polling will fail until it is deleted'
                 )
             )
-        arguments = webhook_settings()
+        serving, settings, identity = self._addressed(options)
+        arguments = webhook_settings(settings, identity)
         arguments['drop_pending_updates'] = options['drop_pending']
-        bot.loop.run_until_complete(bot.bot.set_webhook(**arguments))
+        serving.loop.run_until_complete(serving.bot.set_webhook(**arguments))
         self.stdout.write(self.style.SUCCESS(f'webhook set to {arguments["url"]}'))
         self.stdout.write('polling will refuse to start until this is deleted')
 
     def _delete(self, options: dict[str, Any]) -> None:
         """Unregister the webhook, which is what polling needs before it can start.
 
+        **Run it before removing a bot's row, not after.** Deleting a webhook needs that
+        bot's token, and once the row is gone this deployment has none -- so Telegram goes on
+        posting updates to a URL that answers 404 for ever. `reconcile` cannot repair that
+        either, for the same reason: there is nothing left to ask with.
+
         ``drop_pending_updates`` decides whether Telegram forgets what it queued while
         the webhook was down; the caller chooses, because that is a decision about
         duplicate work rather than about the webhook.
         """
-        bot.loop.run_until_complete(bot.bot.delete_webhook(drop_pending_updates=options['drop_pending']))
+        serving, _settings, _identity = self._addressed(options)
+        serving.loop.run_until_complete(serving.bot.delete_webhook(drop_pending_updates=options['drop_pending']))
         self.stdout.write(self.style.SUCCESS('webhook deleted; polling can start again'))
 
-    def _info(self, _options: dict[str, Any]) -> None:
+    def _reconcile(self, options: dict[str, Any]) -> None:
+        """Compare what Telegram has against what each bot should have, and repair it.
+
+        Both directions, because the drift goes both ways: a bot this deployment serves and
+        Telegram has no webhook for gets one, and a bot Telegram is still posting to and this
+        deployment does not serve has its webhook deleted -- the second is how a removed
+        client keeps receiving updates nobody handles.
+
+        One bot's failure is its own: the pass carries on and says what it could not do, for
+        the reason the supervisor gives about the same shape of work. A container that gave up
+        on the first refusal would leave the rest unregistered.
+        """
+        from django_aiogram.runtime.providers import desired  # noqa: PLC0415 - the ORM, deferred
+        from django_aiogram.runtime.registry import bots  # noqa: PLC0415 - as above
+
+        wanted = [record for record in desired() if record.bot_id is not None]
+        only = set(options['bots'])
+        if only:
+            wanted = [record for record in wanted if record.bot_id in only]
+            missing = sorted(only - {record.bot_id for record in wanted})
+            if missing:
+                msg = f'These bots are not configured here: {", ".join(str(found) for found in missing)}.'
+                raise CommandError(msg)
+        for number, record in enumerate(wanted):
+            if number:
+                self._breathe(options['pause'])
+            identity = record.bot_id
+            if identity is None:  # pragma: no cover - filtered above, and mypy cannot see that
+                continue
+            self._reconcile_one(bots.by_id(identity), record, options)
+
+    def _reconcile_one(self, serving: Any, record: Any, options: dict[str, Any]) -> None:  # noqa: ANN401
+        """Bring one bot's webhook into line, and say what that took."""
+        identity = record.bot_id
+        try:
+            arguments = webhook_settings(record, identity)
+        except ImproperlyConfigured as refused:
+            # a bot with no URL or no secret of its own is not registered under another
+            # bot's: `E027` reports the same thing at boot
+            self.stdout.write(self.style.WARNING(f'{identity}: not registered — {refused}'))
+            return
+        try:
+            info = serving.loop.run_until_complete(serving.bot.get_webhook_info())
+            if not options['force'] and registered(arguments, info):
+                self.stdout.write(f'{identity}: already registered')
+                return
+            arguments['drop_pending_updates'] = options['drop_pending']
+            serving.loop.run_until_complete(serving.bot.set_webhook(**arguments))
+        except Exception as refused:  # noqa: BLE001 - one bot's failure is its own, see above
+            logger.warning('could not reconcile a webhook', extra={'tg_bot_id': identity})
+            self.stdout.write(self.style.WARNING(f'{identity}: failed — {type(refused).__name__}: {refused}'))
+            return
+        self.stdout.write(self.style.SUCCESS(f'{identity}: registered at {arguments["url"]}'))
+
+    @staticmethod
+    def _breathe(pause: float) -> None:
+        """Wait a jittered fraction of a second, so a thousand bots are not a thousand calls.
+
+        Jittered rather than fixed: two containers that started together would otherwise walk
+        the same list at the same rate and arrive at the API in step, which is the stampede
+        the pause exists to avoid.
+        """
+        if pause <= 0:
+            return
+        # not a secret, a delay: the jitter is about arrival times, not unpredictability
+        time.sleep(pause * (0.5 + random.random()))  # noqa: S311 - see above
+
+    def _info(self, options: dict[str, Any]) -> None:
         """Report what Telegram thinks the webhook is, which is the only authority on it.
 
         ``last_error_message`` is the field worth the command: a webhook can be
         registered and rejected on every delivery, and nothing local shows that.
         """
-        info = bot.loop.run_until_complete(bot.bot.get_webhook_info())
+        serving, _settings, _identity = self._addressed(options)
+        info = serving.loop.run_until_complete(serving.bot.get_webhook_info())
         if not info.url:
             self.stdout.write('no webhook registered; this bot is polled')
             return

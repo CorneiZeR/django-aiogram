@@ -124,6 +124,30 @@
   down, or not migrated here -- declares nothing and refuses nothing; no table at all is a
   different state, where the settings are the whole declaration.
 
+- **A webhook per bot, and a pass that keeps Telegram's idea of them in line.** The URL
+  carries the identity -- `path('tg/<int:bot_id>/<secret>/', telegram_webhook)` -- and each
+  bot has its own `WEBHOOK_SECRET`, in its section or its row. Both halves matter: one URL
+  would leave the update's contents as the only clue about who it is for, and one shared
+  secret would let a leak from one client's bot post as every other. A bot with no secret of
+  its own is refused rather than served under the process's.
+
+  An update naming a bot this deployment does not serve gets a 404 from a **cached** set of
+  identities: a webhook that read the database per request would be a way for a stranger to
+  load it. The cache is held for `BOT_REFRESH_INTERVAL`, and a miss re-reads at most once a
+  second, so a bot registered a moment ago is served without a flood of unknown identities
+  costing a query each.
+
+  `manage.py tgbot_webhook reconcile` asks `getWebhookInfo` what Telegram has, compares it
+  with what each bot should have and repairs the difference -- the only way to know, since the
+  two drift apart in both directions. It paces itself with a jittered `--pause`, so a thousand
+  bots starting at once are not a thousand calls arriving together, and one bot's failure is
+  its own. `--force` applies a rotated secret, which Telegram never reports. `--bot` bounds
+  any of the actions to one bot.
+
+  New page: **Scaling**, which says where polling stops -- the shared session's connector
+  limit is 100 connections and polling holds one per bot -- and what grows with the bots
+  whatever the mode.
+
 - **Receiving updates and draining the queue are two jobs, and a container can do one.**
   `start_tgbot --no-updates` consumes and never calls `getUpdates` -- the shape a webhook
   deployment's sender pool is -- and `--updates-only` polls and consumes nothing. Both by

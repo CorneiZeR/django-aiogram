@@ -129,6 +129,12 @@ defaults to aiogram's Redis one, and `FSM_STORAGE: 'memory'` is what drops it.
 
     Updates over HTTP instead of polling for them, in four steps.
 
+-   **[Scaling](Scaling.md)**
+
+    ---
+
+    Where polling stops, why a webhook costs nothing per bot, and what grows with the bots.
+
 -   **[Rate limits](Rate-limits.md)**
 
     ---
