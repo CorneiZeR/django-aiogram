@@ -126,9 +126,13 @@
 
 - **Receiving updates and draining the queue are two jobs, and a container can do one.**
   `start_tgbot --no-updates` consumes and never calls `getUpdates` -- the shape a webhook
-  deployment's sender pool is -- and `--updates-only` receives and consumes nothing. Both by
-  default, which is what every installation has today; both flags together are refused,
-  because a container that does neither would sit there looking alive and doing nothing.
+  deployment's sender pool is -- and `--updates-only` polls and consumes nothing. Both by
+  default, which is what every installation has today.
+
+  Two configurations are refused rather than started, because both leave a container looking
+  alive and doing nothing: the flags together, and `--updates-only` in **webhook mode**, where
+  the updates arrive over HTTP in whatever serves the webhook and consuming the queues was all
+  this process was doing. So `--updates-only` is a polling deployment's flag.
 
   A receiver has no consumer in it, so nothing writes a heartbeat: `tgbot_healthcheck
   --no-consumer` (and `python -m django_aiogram.healthcheck --no-consumer`) is how the probe

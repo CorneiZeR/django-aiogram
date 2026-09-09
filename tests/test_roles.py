@@ -196,3 +196,16 @@ def test_a_webhook_container_still_consumes_by_default(watching):
 
     assert 'consumer-started' in watching
     assert 'polling-started' not in watching
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'ENABLED': False})
+def test_the_flags_are_refused_even_where_the_bot_is_switched_off(watching):
+    """A contradiction in a compose file should be heard about now, not when `ENABLED` returns.
+
+    The disabled path exits successfully by design -- nothing is meant to be running -- so a
+    run that would have been refused looked like a run that worked.
+    """
+    with pytest.raises(CommandError, match='nothing for this process to do'):
+        call_command('start_tgbot', '--no-updates', '--updates-only')
+
+    assert watching == []

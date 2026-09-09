@@ -197,6 +197,11 @@ class Command(BaseCommand):
 
     def handle(self, *args: Any, **options: Any) -> None:
         """Receive updates, drain the queue, and unwind both on a signal."""
+        # before the disabled check, because a contradiction in the flags is a contradiction
+        # whatever `ENABLED` says: a deployment that has both of them in its compose file
+        # would otherwise be told nothing while the bot was off, and told the truth only
+        # once somebody switched it on
+        self._refuse_contradictory_flags(options)
         if not bot.enabled:
             self.stdout.write(
                 self.style.WARNING(
@@ -405,6 +410,7 @@ class Command(BaseCommand):
         in whatever serves them. Consuming is all a bot container *is* there, so taking it
         away leaves an idle loop.
         """
+        self._refuse_contradictory_flags(options)
         receives = not options['no_updates']
         consumes = not options['updates_only']
         if not consumes and mode == UpdateMode.WEBHOOK:
@@ -415,9 +421,6 @@ class Command(BaseCommand):
                 'is polling.'
             )
             raise CommandError(msg)
-        if not receives and not consumes:
-            msg = '--no-updates and --updates-only together leave nothing for this process to do.'
-            raise CommandError(msg)
         if not consumes:
             self.stdout.write(
                 self.style.WARNING(
@@ -427,6 +430,18 @@ class Command(BaseCommand):
                 )
             )
         return receives, consumes
+
+    @staticmethod
+    def _refuse_contradictory_flags(options: dict[str, Any]) -> None:
+        """Refuse the pair of flags that leave nothing for this process to do.
+
+        Read before anything else, including whether the bot is enabled: the pair is wrong
+        however the deployment is configured, and a compose file carrying both should hear
+        about it now rather than the first time somebody switches `ENABLED` back on.
+        """
+        if options['no_updates'] and options['updates_only']:
+            msg = '--no-updates and --updates-only together leave nothing for this process to do.'
+            raise CommandError(msg)
 
     def _mode_for_this_run(self, options: dict[str, Any]) -> str:
         """Say how updates reach this process, and warn where the flag and the setting differ."""
