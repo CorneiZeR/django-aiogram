@@ -253,6 +253,33 @@ def test_a_state_write_happens_under_the_lock_that_chose_it(monkeypatch):
     assert under == [True], 'the write ran with the lock released, so a stale retry could follow it'
 
 
+def test_what_a_failed_start_logs_carries_no_token(caplog):
+    """The log, not the row: `logger.exception` would put the traceback in it.
+
+    aiogram's message holds the API URL and the URL holds the credential, so a traceback here
+    would ship every quarantined bot's token to wherever the logs go. What is logged is the
+    class and the redacted sentence.
+    """
+    token = '123456:AAaa'
+    TelegramBot.objects.create(bot_id=123456, token=token)
+    refused = TelegramUnauthorizedError(
+        method=GetMe(),
+        message=f'POST https://api.telegram.org/bot{token}/getMe: Unauthorized',
+    )
+
+    def start(record):
+        """Refuse the way Telegram does when the token has been revoked."""
+        raise refused
+
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'BOT_PROVIDERS': FROM_DB}), caplog.at_level('ERROR'):
+        Supervisor(start=start, stop=lambda identity: None).reconcile()
+
+    said = '\n'.join(record.getMessage() + str(record.__dict__.get('tg_error', '')) for record in caplog.records)
+    assert 'TelegramUnauthorizedError' in said, said
+    assert token not in said
+    assert not [record for record in caplog.records if record.exc_info], 'the traceback was logged'
+
+
 def test_what_a_failed_start_writes_carries_no_token():
     """aiogram puts the API URL into its message, and the URL carries the credential.
 

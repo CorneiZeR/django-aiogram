@@ -178,7 +178,7 @@ class Supervisor:
             return
         try:
             self.start(record)
-        except Exception as refused:
+        except Exception as refused:  # noqa: BLE001 - one bot's failure is its own; see the module docstring
             attempts = held.attempts + 1 if held is not None else 1
             fate = classify(refused)
             entry = Quarantined(
@@ -191,13 +191,21 @@ class Supervisor:
             wait = entry.wait() if waits(fate) else None
             entry.until = None if wait is None else self.clock() + wait
             self.quarantined[identity] = entry
-            logger.exception(
+            # `error` rather than `exception`, and the class rather than the message: aiogram
+            # puts the API URL into what it raises and the URL carries the token, so a
+            # traceback here would ship every quarantined bot's credential to wherever the
+            # logs go. `tg_error` is the class name for the reason `Logging.md` gives about
+            # every other use of it -- a message is what carries a secret, and a class is what
+            # an aggregator can group on. The row holds the same thing, and `tg_fate` is what
+            # says whether anything will retry it
+            logger.error(  # noqa: TRY400 - `exception` is the traceback, and the traceback is the leak
                 'a bot could not be served; quarantining it and carrying on',
                 extra={
                     'tg_bot_id': identity,
                     'tg_bot': record.alias,
                     'tg_attempts': attempts,
                     'tg_fate': fate.value,
+                    'tg_error': type(refused).__name__,
                 },
             )
             # the wall clock, and only here: a row is read by a person and by another process,

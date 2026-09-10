@@ -19,6 +19,7 @@ away, a column somebody edited by hand: that is one bot's problem, and
 
 import threading
 from abc import ABC, abstractmethod
+from inspect import isabstract
 from typing import Any
 
 from django.core.exceptions import ImproperlyConfigured
@@ -119,6 +120,11 @@ def storage_class(path: str) -> 'type[TokenStorage]':
         raise ImproperlyConfigured(msg) from error
     if not (isinstance(resolved, type) and issubclass(resolved, TokenStorage)):
         msg = f'{named} is {path!r}, which is not a TokenStorage subclass.'
+        raise ImproperlyConfigured(msg)
+    if isabstract(resolved):
+        # the base class itself, or a half-written one: instantiating it raises `TypeError`,
+        # and a `TypeError` out of here is a traceback where `E062` should have been a finding
+        msg = f'{named} is {path!r}, which is abstract: it leaves store or read unwritten.'
         raise ImproperlyConfigured(msg)
     return resolved
 

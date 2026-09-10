@@ -83,6 +83,10 @@ def test_an_empty_column_is_empty_rather_than_unreadable():
     [
         ('tests.test_token_storage.NotThere', 'cannot be imported'),
         ('tests.test_token_storage.TOKEN', 'not a TokenStorage subclass'),
+        # the base class is a `TokenStorage` subclass by every test but the one that matters:
+        # instantiating it raises `TypeError`, and a `TypeError` here is a traceback out of
+        # `manage.py check` where `E062` should have been a finding
+        ('django_aiogram.tokens.TokenStorage', 'which is abstract'),
     ],
 )
 def test_a_storage_that_cannot_be_built_is_refused_by_name(path, says):

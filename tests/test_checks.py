@@ -2192,3 +2192,11 @@ def test_keys_written_as_a_set_are_reported_because_the_order_decides():
     (found,) = [message for message in check_settings() if str(message.id).endswith('E063')]
 
     assert 'no order' in found.msg
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN_STORAGE': 'django_aiogram.tokens.TokenStorage'})
+def test_an_abstract_token_storage_is_reported_rather_than_crashing_the_checks():
+    """It passes `issubclass` and fails `__init__`, which is a traceback where E062 belongs."""
+    (found,) = [message for message in check_settings() if str(message.id).endswith('E062')]
+
+    assert 'abstract' in found.msg
