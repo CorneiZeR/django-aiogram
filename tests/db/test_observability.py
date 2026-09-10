@@ -157,3 +157,40 @@ def test_the_feed_can_still_be_narrowed_to_a_client_who_has_gone(client):
     assert page.status_code == 200
     assert {row.bot_id for row in page.context['cl'].queryset} == {654321}
     assert '654321 (no longer configured)' in page.content.decode()
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_bot_filter_outside_the_column_answers_nothing(client):
+    """The column is a BIGINT, and a bigger number raises while the query is built.
+
+    So it is refused here rather than handed to the database — the same bound the search box
+    keeps, and for the same reason.
+    """
+    from django.contrib.auth.models import Permission, User
+
+    a_row(bot_id=123456)
+    user = User.objects.create_user(username='reader', password='x', is_staff=True)
+    user.user_permissions.add(Permission.objects.get(codename='view_telegramevent'))
+    client.force_login(user)
+
+    page = client.get(f'{FEED}?bot={2**63}')
+
+    assert page.status_code == 200
+    assert not list(page.context['cl'].queryset)
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_the_detail_page_names_the_bot(client):
+    """A row opened from a search has to say whose bot it is about without going back."""
+    from django.contrib.auth.models import Permission, User
+
+    row = a_row(bot_id=123456)
+    user = User.objects.create_user(username='reader', password='x', is_staff=True)
+    user.user_permissions.add(Permission.objects.get(codename='view_telegramevent'))
+    client.force_login(user)
+
+    page = client.get(f'{FEED}{row.pk}/change/')
+
+    assert page.status_code == 200
+    assert '123456' in page.content.decode()
+    assert 'bot id' in page.content.decode().lower()

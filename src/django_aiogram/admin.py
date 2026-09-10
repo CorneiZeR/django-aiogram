@@ -202,6 +202,11 @@ class BotFilter(admin.SimpleListFilter):
             # a query string somebody typed by hand. Nothing matches it, and saying so beats
             # a changelist that answers as though no filter had been asked for
             return queryset.none()
+        if not -(2**63) <= identity < 2**63:
+            # the column is a BIGINT, and a number outside it raises while the query is being
+            # built rather than matching nothing -- the same bound `get_search_results` keeps,
+            # and for the same reason
+            return queryset.none()
         return queryset.filter(bot_id=identity)
 
 
@@ -330,6 +335,9 @@ class TelegramEventAdmin(ModelAdminBase):
             'created_at',
             'correlation_id',
             'kind',
+            # named on the page as well as on the list: a row somebody opened from a search
+            # has to say whose bot it is about without going back
+            'bot_id',
             'function',
             'chat_id',
             'user_id',

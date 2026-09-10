@@ -294,6 +294,12 @@ Every series then carries `bot`, holding the identity, or `unknown` for a row th
 bot — an undecodable payload does not — so a query can tell the two apart. Read once when the
 exporter is built, because a live metric's label set cannot change under it.
 
+**The queue is in `detail`, not a column.** A consumed row carries `detail.queue` — which
+queue the message was taken from, for a container serving several — beside the `detail.queue_ms`
+it waited. Not a column of its own and not a filter: a column here is a migration on the one
+table whose size is set by traffic, and nothing looks for a client's messages *by queue*. The
+bot is that dimension, and it has a column, an index and a filter.
+
 The same question per bot is answered by the feed itself, which is indexed by `bot_id` and
 costs nothing per client: `bot.token_revealed`, whose messages were dropped, which client's
 handler raised.

@@ -132,7 +132,10 @@
   in `TelegramBot` rather than a `SELECT DISTINCT` over a table sized by traffic -- and it
   still narrows to a client who has *gone*, which is one of the questions a feed is kept for.
   `bot_id` is a column on the list and sortable, because the feed keeps an index leading with
-  it.
+  it, and the detail page names it too. A consumed row also carries `detail.queue`, so a
+  container serving several says which one a message came from -- in `detail` rather than a
+  column, because a column here is a migration on the one table sized by traffic and nothing
+  looks for a client's messages by queue.
 
   **The Prometheus exporter labels by bot only where a project asks.** `METRICS_PER_BOT` is
   off, so the number of series does not grow with the number of bots: a label per bot is a
