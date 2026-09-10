@@ -135,17 +135,15 @@ def _wrote(identity: int, intent: str, claim: str, answer: str) -> bool:
 
     now = timezone.now()
     try:
-        moved = (
-            TelegramBot.objects.filter(bot_id=identity, intent=intent, intent_claim=claim).update(
-                intent='',
-                intent_claim='',
-                intent_claimed_at=None,
-                # redacted for the reason the feed redacts: aiogram puts the API URL into its
-                # messages, and the URL carries the token
-                intent_result=redact_text(answer)[:RESULT],
-                intent_done_at=now,
-                updated_at=now,
-            )
+        moved = TelegramBot.objects.filter(bot_id=identity, intent=intent, intent_claim=claim).update(
+            intent='',
+            intent_claim='',
+            intent_claimed_at=None,
+            # redacted for the reason the feed redacts: aiogram puts the API URL into its
+            # messages, and the URL carries the token
+            intent_result=redact_text(answer)[:RESULT],
+            intent_done_at=now,
+            updated_at=now,
         )
     except Exception:
         logger.exception('could not write back what a bot intent answered', extra={'tg_bot_id': identity})

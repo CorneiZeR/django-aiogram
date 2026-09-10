@@ -207,11 +207,16 @@ def test_an_answer_from_a_lapsed_claim_does_not_replace_a_newer_one(monkeypatch)
     (record,) = providers.desired()
 
     def overtaken(intent, held):
-        """Answer slowly: while this runs, the intent is re-asked and answered by another."""
+        """Answer slowly: while this runs, the same intent is re-asked and taken by another.
+
+        Deliberately still *outstanding* and of the same kind, because that is the case the
+        claim is for: with the asking cleared, a write filtered on the identity and the intent
+        alone is refused too, and the case would pass without the claim being compared at all.
+        """
         TelegramBot.objects.filter(bot_id=123456).update(
-            intent='',
-            intent_claim='',
-            intent_claimed_at=None,
+            intent=BotIntent.CHECK.value,
+            intent_claim='another-worker',
+            intent_claimed_at=timezone.now(),
             intent_result='ok: the newer answer',
             intent_done_at=timezone.now(),
         )
