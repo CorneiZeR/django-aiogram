@@ -20,7 +20,6 @@ the deployment then refuses to start with.
 from typing import TYPE_CHECKING, Any
 
 from django import forms
-from django.core.exceptions import ValidationError
 
 from django_aiogram.config.bots import resolve
 from django_aiogram.config.defaults import DEFAULTS, PROCESS_SCOPED
@@ -38,6 +37,7 @@ __all__ = (
     'fields_for',
     'group_fields',
     'inherited_note',
+    'problems_in',
     'read_overrides',
     'switch_name',
 )
@@ -186,13 +186,20 @@ def fields_for(inherited: 'Mapping[str, Any]', origins: 'Mapping[str, str]') -> 
 def read_overrides(
     bot: 'TelegramBot | None',
     profile: 'TelegramBotProfile | None',
+    bot_id: int | None = None,
 ) -> tuple[dict[str, Any], dict[str, str]]:
     """Return what this bot would inherit, and where each of those values comes from.
 
     Resolved through the same function the runtime uses, with this bot's own layer left out:
     what a person needs to see is the value the checkbox would leave in place.
+
+    ``bot_id`` is for a bot that has no row yet: the identity is in the token being submitted,
+    and it is what a bot's own environment variables are keyed by --
+    ``DJANGO_AIOGRAM_123456_MAX_RETRIES`` -- so resolving an unsaved bot as ``default`` would
+    read another bot's variables and show, and judge by, the wrong numbers.
     """
-    alias = str(bot.bot_id) if bot is not None and bot.bot_id else 'default'
+    identity = bot_id if bot_id is not None else (bot.bot_id if bot is not None else None)
+    alias = str(identity) if identity else 'default'
     layers = []
     if profile is not None:
         layers.append((f'the profile {profile.name!r}', profile.overrides))
@@ -200,23 +207,27 @@ def read_overrides(
     return dict(record.resolved), dict(record.origins)
 
 
-def validate_one(key: str, value: Any, inherited: 'Mapping[str, Any]') -> None:  # noqa: ANN401 - a setting holds anything
-    """Run the package's own checks about ``key`` against ``value``, and raise what they found.
+def problems_in(decided: 'Mapping[str, Any]', inherited: 'Mapping[str, Any]') -> 'dict[str, list[str]]':
+    """Judge the whole submitted set, and return what each setting was refused for.
 
     The registry rather than a second copy of the rules: one law about what a valid value is,
     and a page that accepts what the deployment would refuse to start with is the drift this
     avoids.
+
+    **The whole set at once**, because the rules read each other: `W004` judges a
+    ``BLPOP_TIMEOUT`` against ``HEARTBEAT_INTERVAL`` and the transport's deadline, so a
+    setting judged against the *inherited* value of its neighbour would refuse a pair that is
+    correct together -- and accept one the runtime will not have.
     """
     # deferred: the checks reach the transports and the ORM, and this module is imported by
     # `admin_bots`, which `admin.autodiscover` imports while the registry is still loading
     from django_aiogram.config.checks import CHECKS  # noqa: PLC0415 - as above
 
-    record = resolve('admin', ('this form', {**inherited, key: value}), provided=True)
-    found = [
-        problem.message
-        for check in CHECKS
-        if check.key == key and not check.per_process
-        for problem in check.validate(key, record)
-    ]
-    if found:
-        raise ValidationError([f'{key} {message}' for message in found])
+    record = resolve('admin', ('this form', {**inherited, **decided}), provided=True)
+    found: dict[str, list[str]] = {}
+    for check in CHECKS:
+        if check.key not in decided or check.per_process:
+            continue
+        for problem in check.validate(check.key, record):
+            found.setdefault(check.key, []).append(f'{check.key} {problem.message}')
+    return found

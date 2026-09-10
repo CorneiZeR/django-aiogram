@@ -235,7 +235,12 @@ def test_a_value_the_package_would_refuse_is_refused_on_the_page(client):
     response = post_bot(client, bot, set_MAX_RETRIES='on', val_MAX_RETRIES='0')
 
     assert response.status_code == 200
-    assert 'MAX_RETRIES' in response.content.decode()
+    # the field's own error, not the word appearing on a page that renders every setting's
+    # name anyway: any other refusal would leave `overrides` empty too, and the case would
+    # pass without `_decided` having judged anything
+    said = response.context['adminform'].form.errors
+    assert 'val_MAX_RETRIES' in said, said
+    assert said['val_MAX_RETRIES'] == ['MAX_RETRIES must be >= 1, got 0.'], said['val_MAX_RETRIES']
     bot.refresh_from_db()
     assert bot.overrides == {}, 'a refused value was written anyway'
 
@@ -435,3 +440,77 @@ def test_overrides_are_judged_against_the_profile_the_form_chose(client):
     bot.refresh_from_db()
     assert bot.overrides == {'BLPOP_TIMEOUT': 30}
     assert bot.profile_id == roomy.pk
+
+
+def test_a_pair_of_settings_that_is_right_together_is_accepted(client):
+    """The rules read each other, so they have to be judged against one another.
+
+    `W004` decides whether a `BLPOP_TIMEOUT` will be honoured from `HEARTBEAT_INTERVAL` and the
+    transport's deadline. Judged one at a time against the *inherited* neighbour, this pair is
+    refused — and the operator is told to fix a configuration that is correct.
+    """
+    bot = a_bot()
+    client.force_login(a_user('editor', 'view_telegrambot', 'change_telegrambot'))
+
+    response = client.post(
+        f'{BOTS}{bot.pk}/change/',
+        {
+            'label': bot.label,
+            'enabled': 'on',
+            'set_BLPOP_TIMEOUT': 'on',
+            'val_BLPOP_TIMEOUT': '30',
+            'set_HEARTBEAT_INTERVAL': 'on',
+            'val_HEARTBEAT_INTERVAL': '60',
+            'set_REDIS_TIMEOUT': 'on',
+            'val_REDIS_TIMEOUT': '90',
+        },
+    )
+
+    assert response.status_code == 302, response.content
+    bot.refresh_from_db()
+    assert bot.overrides == {'BLPOP_TIMEOUT': 30, 'HEARTBEAT_INTERVAL': 60, 'REDIS_TIMEOUT': 90}
+
+
+def test_a_new_bots_own_environment_decides_what_it_inherits(client, monkeypatch):
+    """A bot with no row yet still has an identity: it is in the token being submitted.
+
+    Environment variables are keyed by it — `DJANGO_AIOGRAM_123456_HEARTBEAT_INTERVAL` — so
+    resolving an unsaved bot as `default` judges it by another bot's variables. Asserted
+    through a value that is only valid under *this* bot's, because a page merely rendering the
+    right number passes either way once the row exists.
+    """
+    monkeypatch.setenv('DJANGO_AIOGRAM_HEARTBEAT_INTERVAL', '2')
+    monkeypatch.setenv('DJANGO_AIOGRAM_REDIS_TIMEOUT', '5')
+    monkeypatch.setenv('DJANGO_AIOGRAM_123456_HEARTBEAT_INTERVAL', '60')
+    monkeypatch.setenv('DJANGO_AIOGRAM_123456_REDIS_TIMEOUT', '90')
+    client.force_login(
+        a_user('adder', 'add_telegrambot', 'change_telegrambot', 'view_telegrambot', 'view_telegrambot_token')
+    )
+
+    response = client.post(
+        f'{BOTS}add/',
+        {
+            'label': 'a new client',
+            'token': TOKEN,
+            'enabled': 'on',
+            'set_BLPOP_TIMEOUT': 'on',
+            'val_BLPOP_TIMEOUT': '30',
+        },
+    )
+
+    assert response.status_code == 302, response.context['adminform'].form.errors
+    assert TelegramBot.objects.get().overrides == {'BLPOP_TIMEOUT': 30}
+
+
+def test_a_reader_who_may_not_change_a_bot_still_gets_a_page(client):
+    """Which sounds obvious, and was a 500: Django extends its exclude list with the field
+    names on a change form the user may not edit, so a form built with `fields=None` reached
+    `list.extend(None)`. A view-only page renders what the row *is*.
+    """
+    bot = a_bot()
+    client.force_login(a_user('auditor', 'view_telegrambot'))
+
+    response = client.get(f'{BOTS}{bot.pk}/change/')
+
+    assert response.status_code == 200
+    assert str(bot.bot_id) in response.content.decode()

@@ -41,9 +41,9 @@ from django_aiogram.admin_overrides import (
     fields_for,
     group_fields,
     inherited_note,
+    problems_in,
     read_overrides,
     switch_name,
-    validate_one,
 )
 from django_aiogram.config.bots import parse_bot_id
 from django_aiogram.models import TelegramBot, TelegramBotProfile, TelegramQueue
@@ -153,8 +153,16 @@ class TelegramBotForm(BotFormBase):
         # re-resolved against the profile *this submission* chose, not the one the row held: a
         # form that moved a bot to another profile would otherwise judge its settings against
         # the values it is leaving -- and a rule that reads a neighbouring setting, as `W004`
-        # reads the broker timeout, would accept or refuse by the wrong numbers
-        self.inherited, _ = read_overrides(self.instance if self.instance.pk else None, cleaned.get('profile'))
+        # reads the broker timeout, would accept or refuse by the wrong numbers.
+        #
+        # The identity comes from the token being submitted where there is no row yet: a bot's
+        # own environment variables are keyed by it, so resolving a new bot as `default` would
+        # read another bot's variables
+        self.inherited, _ = read_overrides(
+            self.instance if self.instance.pk else None,
+            cleaned.get('profile'),
+            parse_bot_id(given),
+        )
         self.overrides = self._decided(cleaned)
         return cleaned
 
@@ -166,18 +174,15 @@ class TelegramBotForm(BotFormBase):
         refuses it, because the refusal arrives at the next restart and in another person's
         terminal.
         """
-        decided: dict[str, Any] = {}
-        for key in OVERRIDABLE:
-            if not cleaned.get(switch_name(key)):
-                continue
-            value = cleaned.get(field_name(key))
-            try:
-                validate_one(key, value, self.inherited)
-            except ValidationError as refused:
-                self.add_error(field_name(key), refused)
-                continue
-            decided[key] = value
-        return decided
+        decided: dict[str, Any] = {
+            key: cleaned.get(field_name(key)) for key in OVERRIDABLE if cleaned.get(switch_name(key))
+        }
+        # collected first and judged together: the rules read each other, so a setting judged
+        # against the inherited value of its neighbour refuses a pair that is right together
+        refused = problems_in(decided, self.inherited)
+        for key, said in refused.items():
+            self.add_error(field_name(key), ValidationError(said))
+        return {key: value for key, value in decided.items() if key not in refused}
 
     def save(self, commit: bool = True) -> TelegramBot:  # noqa: FBT001, FBT002 - Django's signature
         """Store a new token through the seam, and leave the old one alone when none was given.
@@ -304,7 +309,7 @@ class TelegramBotAdmin(BotAdminBase):
     def get_fieldsets(
         self,
         request: 'HttpRequest',
-        obj: TelegramBot | None = None,  # noqa: ARG002 - as above; the sections do not depend on the row
+        obj: TelegramBot | None = None,
     ) -> Any:  # noqa: ANN401 - Django's own signature
         """Drop the credentials section for a user who may not see the token.
 
@@ -312,6 +317,11 @@ class TelegramBotAdmin(BotAdminBase):
         back, and leaving the token field there would let a user who cannot see the credential
         replace it -- which is the same thing as taking the bot.
         """
+        if obj is not None and not self.has_change_permission(request, obj):
+            # a page somebody may read and not edit: the pairs are form fields, and a section
+            # naming one on a form that has none would be a page that cannot render. What is
+            # left is what the row *is*, which is what a reader came for
+            return tuple(section for section in self.FIELDSETS if section[0] in {'Bot', 'State'})
         if may_see_tokens(request):
             return self.FIELDSETS
         hidden = {name for key in SENSITIVE for name in (switch_name(key), field_name(key))}
@@ -338,6 +348,12 @@ class TelegramBotAdmin(BotAdminBase):
         refuses them as unknown. The form already says which columns it edits, and the pairs
         are on the class beside them.
         """
+        if obj is not None and not self.has_change_permission(request, obj):
+            # Django extends its exclude list with `fields` where the user may not change the
+            # row, so `None` reaches `list.extend` and the page 500s. A reader needs no form
+            # at all: the sections above are the read-only ones
+            kwargs['fields'] = []
+            return super().get_form(request, obj, change=change, **kwargs)
         kwargs['fields'] = None
         built = super().get_form(request, obj, change=change, **kwargs)
         if may_see_tokens(request):

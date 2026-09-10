@@ -154,9 +154,12 @@
   `WEBHOOK_SECRET` and `REDIS_URL` are credentials too -- one tells Telegram's requests from
   anybody else's, the other carries the broker's password -- so the page prints `'set'` or
   `'not set'` and the layer rather than the value, and their pairs are offered only to a user
-  who may see the token. The values are judged against the profile the *submission* chose, not
-  the one the row held: `W004` reads its neighbours to decide whether a `BLPOP_TIMEOUT` will be
-  honoured, and the old profile's numbers refuse what the new one makes correct.
+  who may see the token. The values are judged as a set, and against the profile the
+  *submission* chose rather than the one the row held: `W004` reads its neighbours to decide
+  whether a `BLPOP_TIMEOUT` will be honoured, so judging one at a time -- or under the old
+  profile -- refuses a configuration that is correct. A bot being added is resolved by the
+  identity in the token being submitted, since a bot's own environment variables are keyed by
+  it.
 
   Adding a bot needs `view_telegrambot_token`, and the token field is absent from the *form* a
   user without it gets rather than only from the page: an unrendered section still posts back,

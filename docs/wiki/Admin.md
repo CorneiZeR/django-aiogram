@@ -65,10 +65,12 @@ Two settings *are* credentials — `WEBHOOK_SECRET`, and `REDIS_URL` because it 
 broker's password — so what the page prints for them is `'set'` or `'not set'` and the layer,
 never the value, and their pairs are only offered to a user who may see this bot's token.
 
-The values are judged against the profile **this submission chose**, not the one the row held: a
-rule that reads a neighbouring setting — `W004` reads `HEARTBEAT_INTERVAL` and the transport's
-deadline to decide whether a `BLPOP_TIMEOUT` will be honoured — would otherwise refuse a value
-the new profile makes correct.
+The values are judged **together**, and against the profile this submission chose rather than the
+one the row held: `W004` decides whether a `BLPOP_TIMEOUT` will be honoured from
+`HEARTBEAT_INTERVAL` and the transport's deadline, so a setting judged one at a time — or under
+the old profile — is refused while the configuration is right. A bot being added is resolved by
+the identity in the token being submitted, because a bot's own environment variables are keyed
+by it.
 
 `TOKEN`, `QUEUE`, `ENABLED` and `DEFAULT_KWARGS` are not on those sections: the first three
 have a place of their own on the page — the credentials section, the queue picker and the
