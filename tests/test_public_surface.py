@@ -106,10 +106,6 @@ REMOVED_FROM_THE_CLIENT = ('send_redis', 'asend_redis', 'redis_conn')
 EVENT_FIELDS = (
     'kind',
     'correlation_id',
-    # 5.0.0: which bot it happened to. Added rather than renamed, so a receiver reading the
-    # fields it already read is unaffected -- and the column it fills has been there since the
-    # tables landed
-    'bot_id',
     'created_at',
     'function',
     'chat_id',
@@ -122,6 +118,10 @@ EVENT_FIELDS = (
     'error_code',
     'error',
     'detail',
+    # 5.0.0: which bot it happened to. **At the end**, because this list is the positional
+    # constructor as much as it is the field names: a receiver reading the fields it already
+    # read is unaffected, and so is a caller that built one positionally
+    'bot_id',
 )
 
 SETTINGS = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'FSM_STORAGE': 'memory'}

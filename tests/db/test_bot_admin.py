@@ -658,3 +658,67 @@ def test_a_queue_that_cannot_be_reached_does_not_block_the_edit(client, monkeypa
     assert response.status_code == 302, response.content
     bot.refresh_from_db()
     assert bot.queue_id == other.pk
+
+
+def test_a_bot_whose_queue_is_inherited_is_judged_by_the_queue_it_actually_uses(client, monkeypatch):
+    """A row with no queue of its own takes one from its profile, and that one holds messages.
+
+    Comparing the two foreign keys skips the check exactly where the queue is inherited — and
+    moving such a bot strands its backlog like any other.
+    """
+    profile = TelegramBotProfile.objects.create(name='vip', overrides={'QUEUE': 'inherited-queue'})
+    other = TelegramQueue.objects.create(name='client-b', pool='default')
+    bot = a_bot(profile=profile)
+    monkeypatch.setattr('django_aiogram.admin_bots._waiting_in', lambda name: 3 if name == 'inherited-queue' else 0)
+    client.force_login(a_user('editor', 'view_telegrambot', 'change_telegrambot'))
+
+    response = client.post(
+        f'{BOTS}{bot.pk}/change/',
+        {'label': bot.label, 'enabled': 'on', 'profile': str(profile.pk), 'queue': str(other.pk)},
+    )
+
+    assert response.status_code == 200
+    assert 'inherited-queue still holds 3 message' in response.content.decode()
+    bot.refresh_from_db()
+    assert bot.queue_id is None, 'the bot was moved off a queue holding its backlog'
+
+
+def test_a_backlog_one_read_confirmed_is_not_lost_to_the_others_failure(client, monkeypatch):
+    """`depth()` said four and the in-flight read then failed: that is four messages.
+
+    Folding both reads into one guard answered zero, and the move went through.
+    """
+    held = TelegramQueue.objects.create(name='client-a', pool='default')
+    other = TelegramQueue.objects.create(name='client-b', pool='default')
+    bot = a_bot(queue=held)
+
+    class Half:
+        """A transport that can count what is queued and not what is in flight."""
+
+        def configured(self, _settings):
+            """Answer as a configured broker does."""
+            return self
+
+        def depth(self):
+            """Four messages, and this read worked."""
+            return 4
+
+        def inflight_depth(self, worker=None):
+            """Refuse the way a transport that keeps no such number does."""
+            from django_aiogram.broker.exceptions import BrokerError
+
+            msg = 'no in-flight count here'
+            raise BrokerError(msg)
+
+    monkeypatch.setattr('django_aiogram.broker.registry.broker_class', lambda *_a, **_k: Half())
+    client.force_login(a_user('editor', 'view_telegrambot', 'change_telegrambot'))
+
+    response = client.post(
+        f'{BOTS}{bot.pk}/change/',
+        {'label': bot.label, 'enabled': 'on', 'queue': str(other.pk)},
+    )
+
+    assert response.status_code == 200
+    assert 'still holds 4 message' in response.content.decode()
+    bot.refresh_from_db()
+    assert bot.queue_id == held.pk

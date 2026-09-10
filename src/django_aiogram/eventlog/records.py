@@ -52,10 +52,6 @@ class Event:
 
     kind: str
     correlation_id: uuid.UUID = field(default_factory=new_correlation_id)
-    #: which bot this happened to, by the identity in its token. The column has been there
-    #: since 5.0 and nothing filled it: a feed that cannot say *whose* bot failed is a feed a
-    #: deployment with twenty clients cannot read
-    bot_id: int | None = None
     created_at: float = field(default_factory=time.time)
     function: str = ''
     chat_id: int | None = None
@@ -70,3 +66,11 @@ class Event:
     #: already JSON-safe by the time it arrives: encoding aiogram objects is the
     #: caller's job, because this module must stay free of aiogram
     detail: dict[str, Any] | None = None
+    #: which bot this happened to, by the identity in its token. The column has been there
+    #: since 5.0 and nothing filled it: a feed that cannot say *whose* bot failed is a feed a
+    #: deployment with twenty clients cannot read.
+    #:
+    #: **Last, not beside `correlation_id` where it belongs by meaning.** This dataclass is
+    #: public -- receivers are handed one -- so its generated constructor is public too, and a
+    #: field inserted in the middle rebinds every positional argument after it
+    bot_id: int | None = None

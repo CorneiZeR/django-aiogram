@@ -52,6 +52,8 @@ from django_aiogram.models import TelegramBot, TelegramBotProfile, TelegramQueue
 from django_aiogram.tokens import read_token, store_token
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping
+
     from django.db.models import QuerySet
     from django.http import HttpRequest, HttpResponse
 
@@ -168,15 +170,23 @@ class TelegramBotForm(BotFormBase):
             parse_bot_id(given),
         )
         self.overrides = self._decided(cleaned)
+        # after the overrides are collected: a bot's queue may be one of them, so the edit
+        # cannot be judged before this submission's own settings are known
+        self._refuse_a_stranded_backlog(cleaned, self.overrides)
         return cleaned
 
-    def clean_queue(self) -> Any:  # noqa: ANN401 - a model choice, whose type is Django's
+    def _refuse_a_stranded_backlog(self, cleaned: 'dict[str, Any]', decided: 'dict[str, Any]') -> None:
         """Refuse moving a bot off a queue that still holds its messages.
 
         A queue is where this bot's backlog is: point the bot somewhere else and the messages
         already in the old one have nobody to take them -- a consumer serves the queues it was
         told about, and nothing points at that one any more. So the edit is refused with the
         thing to do first, which is to let it drain.
+
+        **By the queue each configuration resolves to, not by the foreign key.** A row with no
+        queue of its own takes one from its profile or from the deployment's defaults, so
+        comparing the two columns would skip the check exactly where the queue is inherited --
+        and moving such a bot strands its backlog like any other.
 
         **A queue that cannot be reached is not a queue with messages in it.** The depth read
         goes over the network, and an admin page that refuses every edit because Redis blinked
@@ -192,28 +202,44 @@ class TelegramBotForm(BotFormBase):
         -- and the message names the order that has no race in it: switch the bot off, let the
         queue drain, then move it.
         """
-        chosen = self.cleaned_data.get('queue')
-        held = self.instance.queue if self.instance.pk else None
-        if held is None or chosen == held:
-            return chosen
+        if not self.instance.pk:
+            # a bot being added has no backlog anywhere: there was no queue before this
+            return
+        was = self._resolves_to(self.instance.queue, self.instance.overrides or {})
+        now = self._resolves_to(cleaned.get('queue'), decided)
+        if not was or was == now:
+            return
         try:
-            waiting = _waiting_in(held.name)
+            waiting = _waiting_in(was)
         except (ImproperlyConfigured, BrokerError) as refused:
             # the transport cannot be *built*, so nobody can say what that queue holds -- now
             # or after the edit. Refused rather than allowed: a misconfigured deployment would
             # otherwise find every dangerous edit permitted
             msg = (
-                f'{held.name} cannot be read, so this edit cannot be judged: {refused}. '
+                f'{was} cannot be read, so this edit cannot be judged: {refused}. '
                 'Fix the transport settings, or switch the bot off and drain it deliberately.'
             )
-            raise ValidationError(msg) from refused
+            self.add_error('queue', msg)
+            return
         if waiting:
             msg = (
-                f'{held.name} still holds {waiting} message(s). Moving this bot would strand them: '
+                f'{was} still holds {waiting} message(s). Moving this bot would strand them: '
                 'let the queue drain first, or switch the bot off and drain it deliberately.'
             )
-            raise ValidationError(msg)
-        return chosen
+            self.add_error('queue', msg)
+
+    def _resolves_to(self, queue: 'TelegramQueue | None', overrides: 'Mapping[str, Any]') -> str:
+        """Return the queue name one configuration of this bot ends up publishing to.
+
+        The same precedence `runtime.providers` applies: the row's own `QUEUE` override wins,
+        then the queue it points at, then whatever the profile and the defaults resolved to.
+        """
+        written = str(overrides.get('QUEUE') or '').strip()
+        if written:
+            return written
+        if queue is not None:
+            return queue.name
+        return str(self.inherited.get('QUEUE') or '').strip()
 
     def _decided(self, cleaned: 'dict[str, Any]') -> 'dict[str, Any]':
         """Collect the settings whose box is checked, refusing what the package would refuse.
@@ -556,25 +582,37 @@ def _waiting_in(queue: str) -> int:
     """
     # deferred: building a transport imports its driver, and this module is imported by
     # `admin.autodiscover` while the app registry is still loading
-    from django_aiogram.broker.exceptions import BrokerError  # noqa: PLC0415 - as above
     from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
     from django_aiogram.runtime.queues import settings_for  # noqa: PLC0415 - as above
 
     settings = settings_for(queue)
     # outside the guard below: `BrokerError` and `ImproperlyConfigured` from here are the
-    # settings being wrong, and `clean_queue` turns them into a refusal a person can act on
+    # settings being wrong, and the caller turns them into a refusal a person can act on
     broker = broker_class(settings).configured(settings)
+    # separately, and summed from what answered: a queue whose `depth()` said four and whose
+    # in-flight read then failed is a queue with four messages in it, and folding both into one
+    # `try` threw that away -- the answer was zero, and the edit went through
+    return _read(queue, broker.depth) + _read(queue, broker.inflight_depth)
+
+
+def _read(queue: str, ask: 'Callable[[], int]') -> int:
+    """Ask one transport for one number, or answer zero where it could not be reached.
+
+    Zero for unreachable rather than a refusal: an admin page that refused every edit while
+    Redis blinked would be worse than the rare mistake -- the same trade the supervisor makes
+    about a provider it could not read. A transport that cannot be *built* never reaches here.
+    """
     try:
-        return int(broker.depth()) + int(broker.inflight_depth())
+        return int(ask())
     except BrokerError:
         # the transport's own way of saying it could not answer -- unreachable, or a depth it
         # does not keep. Not the settings, so not a refusal
-        logger.warning('could not read the depth of %s; allowing the edit', queue, exc_info=True)
+        logger.warning('could not read the depth of %s; taking it as zero', queue, exc_info=True)
         return 0
     except OSError:
         # a socket, which is the other half of "could not be reached": every driver here
         # raises its own class, and they all derive from this one
-        logger.warning('could not reach the transport for %s; allowing the edit', queue, exc_info=True)
+        logger.warning('could not reach the transport for %s; taking it as zero', queue, exc_info=True)
         return 0
 
 

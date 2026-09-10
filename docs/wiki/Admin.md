@@ -114,6 +114,10 @@ consumer serves the queues it was told about, and after the move nothing points 
 edit is refused while that queue still holds messages, and the message says what to do first —
 let it drain, or switch the bot off and drain it deliberately.
 
+Judged by the queue each configuration **resolves to**, not by the picker alone: a bot with no
+queue of its own takes one from its profile or the deployment's defaults, and moving that one
+strands a backlog like any other.
+
 A queue the transport **cannot be reached** to read is not a queue with messages in it: the edit
 goes through, because a page that refused every change while Redis blinked would be worse than
 the rare mistake. That is the same trade the supervisor makes about a provider it could not read.

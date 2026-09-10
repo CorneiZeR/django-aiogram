@@ -172,13 +172,17 @@
 
   `Event` gained `bot_id`, and the writer fills the column the tables have had since 5.0: a
   feed that cannot say *whose* bot failed is one a deployment with twenty clients cannot read.
-  Added rather than renamed, so a receiver reading the fields it already read is unaffected.
+  Added at the **end** of the dataclass rather than beside `correlation_id` where it belongs by
+  meaning: the class is public, so its positional constructor is too, and a field inserted in
+  the middle rebinds every argument after it.
 
   **An edit that would strand a backlog is refused**: pointing a bot at another queue while the
   old one still holds messages leaves them with no consumer, so the page says to drain it
   first. A queue the transport cannot be reached to read is not a full one, and the edit goes
   through -- the trade the supervisor makes about a provider it could not read; a transport
-  that cannot be *built* is refused, because then nobody can read that queue at all. It is a
+  that cannot be *built* is refused, because then nobody can read that queue at all. The check
+  reads the queue each configuration **resolves to** rather than the picker alone, so a bot
+  whose queue comes from its profile is judged like any other. It is a
   guard rather than a guarantee: the read and the save are two steps, and closing that would
   mean a lock across every send in the deployment. The order with no race in it is the one the
   refusal names -- switch the bot off, let the queue drain, then move it.
