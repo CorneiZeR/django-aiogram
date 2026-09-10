@@ -30,6 +30,7 @@ from django.utils.module_loading import import_string
 
 from django_aiogram.config.bots import BOTS_SETTINGS_NAME, records, resolve
 from django_aiogram.config.settings import SETTINGS_NAME, conf
+from django_aiogram.tokens import TokenUnreadableError, read_token
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
@@ -87,10 +88,31 @@ def from_database() -> 'tuple[BotRecord, ...]':
     if held is not None and held[0] == mark:
         return held[1]
 
-    read = tuple(_resolved(row) for row in TelegramBot.objects.filter(enabled=True).select_related('profile'))
+    read = _records(TelegramBot.objects.filter(enabled=True).select_related('profile'))
     with _lock:
         _from_table = (mark, read)
     return read
+
+
+def _records(rows: 'Iterable[BotRow]') -> 'tuple[BotRecord, ...]':
+    """Resolve every row, leaving out the ones whose stored token cannot be read.
+
+    One bot's credential is one bot's problem: a key dropped before its rows were rewrapped
+    must not turn a read of twenty bots into a read of none, which is what a refusal escaping
+    here would do -- the supervisor would keep the running set and no new bot would arrive
+    until somebody noticed.
+    """
+    found = []
+    for row in rows:
+        try:
+            found.append(_resolved(row))
+        except TokenUnreadableError:  # noqa: PERF203 - per row, because one bad row must not lose the rest
+            # the message carries no ciphertext, which is why it can be logged at all
+            logger.exception(
+                'ignoring a bot whose stored token cannot be read',
+                extra={'tg_bot_id': row.bot_id},
+            )
+    return tuple(found)
 
 
 def _resolved(row: 'BotRow') -> 'BotRecord':
@@ -104,7 +126,9 @@ def _resolved(row: 'BotRow') -> 'BotRecord':
     layers = []
     if row.profile is not None:
         layers.append((f'TelegramBotProfile({row.profile.name}).overrides', row.profile.overrides))
-    layers.append((f'TelegramBot({row.bot_id}).overrides', {'TOKEN': row.token, **row.overrides}))
+    # through the seam, always: a project that turned `TOKEN_STORAGE` on has no plaintext
+    # path left, and reading the column directly here would have been one
+    layers.append((f'TelegramBot({row.bot_id}).overrides', {'TOKEN': read_token(row.token), **row.overrides}))
     return resolve(str(row.bot_id), *layers, provided=True)
 
 
@@ -120,7 +144,7 @@ def switched_off() -> 'tuple[BotRecord, ...]':
     from django_aiogram.models import TelegramBot  # noqa: PLC0415 - as above
 
     rows = TelegramBot.objects.filter(enabled=False).select_related('profile')
-    return tuple(_resolved(row) for row in rows)
+    return _records(rows)
 
 
 def providers() -> 'Iterator[Provider]':

@@ -139,6 +139,7 @@ nav:
       - Webhook: Webhook.md
       - Scaling: Scaling.md
       - Rate limits: Rate-limits.md
+      - Tokens: Tokens.md
       - Deployment: Deployment.md
       - Logging: Logging.md
       - Event log: Event-log.md

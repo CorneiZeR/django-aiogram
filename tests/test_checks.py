@@ -2136,3 +2136,82 @@ def test_one_polling_bot_among_webhook_ones_is_enough_to_report_the_lease():
 def test_a_bare_string_of_queues_is_reported():
     """It is a collection of its characters, so read as one it declares `v`, `i` and `p`."""
     assert [message for message in check_settings() if str(message.id).endswith('E058')]
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN_STORAGE': 'nowhere.NoStorage'})
+def test_a_token_storage_that_cannot_be_imported_is_reported():
+    """A misspelt path is a deployment with no way to read a single stored token."""
+    (found,) = [message for message in check_settings() if str(message.id).endswith('E062')]
+
+    assert 'nowhere.NoStorage' in found.msg
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN_STORAGE': 'django_aiogram.crypto.FernetTokenStorage'})
+def test_an_encrypting_storage_with_no_keys_is_reported_by_both_rows():
+    """`E062` because it cannot be built, `E063` because the keys are what is missing.
+
+    Both, and deliberately: the reader who set the storage looks for it under the storage, and
+    the one who forgot the keys looks under the keys.
+    """
+    reported = {str(message.id).rsplit('.', 1)[-1] for message in check_settings()}
+
+    assert {'E062', 'E063'} <= reported
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={
+        'TOKEN_STORAGE': 'django_aiogram.crypto.FernetTokenStorage',
+        'TOKEN_ENCRYPTION_KEYS': 'not-a-fernet-key',
+    }
+)
+def test_a_key_the_storage_cannot_use_is_reported_at_boot():
+    """Read in `__init__`, so `manage.py check` answers rather than the first row read does."""
+    (found,) = [message for message in check_settings() if str(message.id).endswith('E062')]
+
+    assert 'not a Fernet key' in found.msg
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN_ENCRYPTION_KEYS': 5})
+def test_keys_that_are_not_a_collection_of_strings_are_reported():
+    """The shape rule, which holds whatever storage is configured."""
+    assert [message for message in check_settings() if str(message.id).endswith('E063')]
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={
+        'TOKEN_STORAGE': 'django_aiogram.crypto.FernetTokenStorage',
+        'TOKEN_ENCRYPTION_KEYS': {'one', 'two'},
+    }
+)
+def test_keys_written_as_a_set_are_reported_because_the_order_decides():
+    """*Newest first* is the contract, and a set cannot say which one that is.
+
+    Iterated in whatever order it happens to have, the ring would encrypt under a key an
+    operator is about to drop, and the rewrapped rows would go with it.
+    """
+    (found,) = [message for message in check_settings() if str(message.id).endswith('E063')]
+
+    assert 'no order' in found.msg
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN_STORAGE': 'django_aiogram.tokens.TokenStorage'})
+def test_an_abstract_token_storage_is_reported_rather_than_crashing_the_checks():
+    """It passes `issubclass` and fails `__init__`, which is a traceback where E062 belongs."""
+    (found,) = [message for message in check_settings() if str(message.id).endswith('E062')]
+
+    assert 'abstract' in found.msg
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={
+        'TOKEN_STORAGE': 'django_aiogram.crypto.FernetTokenStorage',
+        'TOKEN_ENCRYPTION_KEYS': 'one-key-written-as-a-string',
+    }
+)
+def test_one_key_written_as_a_bare_string_is_not_reported():
+    """The storage reads it as one key, so a check refusing it would block what works.
+
+    Which is the one place `TOKEN_ENCRYPTION_KEYS` parts from `QUEUES`: a string there is a
+    collection of characters and every one of them a queue name, and here it is a key.
+    """
+    assert not [message for message in check_settings() if str(message.id).endswith('E063')]

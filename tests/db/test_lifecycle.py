@@ -251,3 +251,60 @@ def test_a_state_write_happens_under_the_lock_that_chose_it(monkeypatch):
     lifecycle.remember(123456, Fate.CONFLICT, 'TelegramConflictError', None)
 
     assert under == [True], 'the write ran with the lock released, so a stale retry could follow it'
+
+
+def test_what_a_failed_start_logs_carries_no_token(caplog):
+    """The log, not the row: `logger.exception` would put the traceback in it.
+
+    aiogram's message holds the API URL and the URL holds the credential, so a traceback here
+    would ship every quarantined bot's token to wherever the logs go. What is logged is the
+    class and the redacted sentence.
+    """
+    token = '123456:AAaa'
+    TelegramBot.objects.create(bot_id=123456, token=token)
+    refused = TelegramUnauthorizedError(
+        method=GetMe(),
+        message=f'POST https://api.telegram.org/bot{token}/getMe: Unauthorized',
+    )
+
+    def start(record):
+        """Refuse the way Telegram does when the token has been revoked."""
+        raise refused
+
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'BOT_PROVIDERS': FROM_DB}), caplog.at_level('ERROR'):
+        Supervisor(start=start, stop=lambda identity: None).reconcile()
+
+    said = '\n'.join(record.getMessage() + str(record.__dict__.get('tg_error', '')) for record in caplog.records)
+    assert 'TelegramUnauthorizedError' in said, said
+    assert token not in said
+    assert not [record for record in caplog.records if record.exc_info], 'the traceback was logged'
+
+
+def test_what_a_failed_start_writes_carries_no_token():
+    """aiogram puts the API URL into its message, and the URL carries the credential.
+
+    So a supervisor that wrote what it was told would put every quarantined bot's token in a
+    column the admin renders and a dump carries. What goes in is the exception's *class*, and
+    this is the case that says so — through the supervisor rather than through `remember`,
+    because the value being narrowed is the one the pass reads off the failure.
+    """
+    # short enough that it would survive the column's 64 characters if the message were
+    # written: a long token is cut off by the cap, and the case would then pass for a reason
+    # that has nothing to do with what is written
+    token = '123456:AAaa'
+    TelegramBot.objects.create(bot_id=123456, token=token)
+    refused = TelegramUnauthorizedError(
+        method=GetMe(),
+        message=f'POST https://api.telegram.org/bot{token}/getMe: Unauthorized',
+    )
+
+    def start(record):
+        """Refuse the way Telegram does when the token has been revoked."""
+        raise refused
+
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'BOT_PROVIDERS': FROM_DB}):
+        Supervisor(start=start, stop=lambda identity: None).reconcile()
+
+    row = TelegramBot.objects.get(bot_id=123456)
+    assert row.quarantine_reason == 'revoked: TelegramUnauthorizedError', row.quarantine_reason
+    assert token not in row.quarantine_reason

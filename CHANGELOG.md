@@ -21,12 +21,10 @@
   index treats two NULLs as distinct on every database this package supports -- so a nullable
   one would let two runs claim one failure and send the message twice.
 
-  **The token column stores the token as given.** Nothing encrypts it yet: what protects it is
-  the database's own access control and the `view_telegrambot_token` permission the model
-  declares, which is why that permission exists. `TOKEN_STORAGE` -- a seam, with an optional
-  implementation behind an extra rather than `cryptography` as a dependency for everyone -- is
-  what a project needing encryption at rest will reach for, and until it lands a dump of this
-  table is a dump of every bot's credential.
+  **The token column stores the token as `TOKEN_STORAGE` writes it**, and the shipped default
+  writes it as given: what protects it then is the database's own access control and the
+  `view_telegrambot_token` permission the model declares, which is why that permission exists.
+  A dump of this table is a dump of every bot's credential.
 
   Nothing reads any of it until a supervisor or the admin is configured, and a project running
   one bot from `settings.py` writes no row at all. **Run `manage.py migrate`** -- on both databases where
@@ -123,6 +121,26 @@
   consumes is a send that succeeds and arrives nowhere. A table that could not be *read* --
   down, or not migrated here -- declares nothing and refuses nothing; no table at all is a
   different state, where the settings are the whole declaration.
+
+- **A token can be encrypted at rest, and the package does not decide that for you.**
+  `TOKEN_STORAGE` names the class every stored token is written and read through. The default,
+  `django_aiogram.tokens.PlainTokenStorage`, keeps the value as it was given -- the right
+  answer wherever the database is already the trust boundary, and what keeps a base install
+  from importing `cryptography` at all. `django_aiogram.crypto.FernetTokenStorage` behind the
+  new `[crypto]` extra encrypts it.
+
+  Both directions go through the seam -- the providers, the rewrapping command -- so a project
+  that turns it on has no plaintext path left behind. A value the storage did not write comes
+  back as it is, which is what makes turning it on a settings change followed by
+  `manage.py tgbot_rewrap_tokens` rather than an outage.
+
+  `TOKEN_ENCRYPTION_KEYS` lists the keys **newest first**: the first encrypts, all of them
+  decrypt. So a rotation is add the key, deploy, rewrap, drop the old one -- readable at every
+  step. Dropping it before the rewrap is the one order that costs data, and then it costs one
+  bot at a time: an unreadable row is reported and left out, and the other bots keep running.
+  `E062` reports a storage that cannot be built and `E063` an encrypting one with no keys,
+  both at boot. Both settings belong to the process rather than to a bot. See
+  **[Tokens](https://corneizer.github.io/django-aiogram/latest/Tokens/)**.
 
 - **A rate limit per bot.** `RATE_LIMIT` is resolved per bot like every other setting, so a
   noisy client can be throttled below the shared default and one with paid broadcasting can go
@@ -275,7 +293,7 @@
 
   Settings the process owns rather than a bot -- `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`,
   `FSM_STORAGE`, `BOT_PROVIDERS`, `BOT_REFRESH_INTERVAL`, `MAX_BOTS_PER_WORKER`,
-  `BOT_LEASE_SECONDS`, `QUEUES`, `REMOVED_QUEUE_POLICY`, `EVENT_LOG` and every `EVENT_LOG_*` one -- may not be set per bot. `ENABLED` is not one of
+  `BOT_LEASE_SECONDS`, `QUEUES`, `REMOVED_QUEUE_POLICY`, `TOKEN_STORAGE`, `TOKEN_ENCRYPTION_KEYS`, `EVENT_LOG` and every `EVENT_LOG_*` one -- may not be set per bot. `ENABLED` is not one of
   them: a bot may be switched off on its own. There is one writer thread and one
   in-flight list per process, so a per-bot value could only mean whichever bot resolved last
   wins. `E053` reports the attempt.

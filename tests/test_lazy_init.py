@@ -480,3 +480,29 @@ def test_the_healthcheck_probe_does_not_populate_the_app_registry(tmp_path):
 
     assert control.returncode == 0, control.stderr
     assert marker.exists(), 'the marker never fires, so its absence above proved nothing'
+
+
+def test_a_base_install_never_imports_cryptography():
+    """#122's first acceptance: the extra is a decision, and the default is not it.
+
+    In a subprocess, because this suite installs the extra to test it — the question is
+    whether *using the default storage* reaches the driver, and in-process `sys.modules`
+    cannot answer that once another case has imported it.
+    """
+    script = textwrap.dedent("""
+        import sys
+
+        import django
+
+        django.setup()
+
+        from django_aiogram.tokens import read_token, store_token
+
+        wrapped = store_token('123456:AAaa')
+        assert read_token(wrapped) == '123456:AAaa', wrapped
+        assert 'cryptography' not in {name.split('.')[0] for name in sys.modules}, 'the default reached the driver'
+        print('no crypto ok')
+    """)
+    result = run_python(script, env={'DJANGO_SETTINGS_MODULE': 'tests.settings'})
+    assert result.returncode == 0, result.stderr
+    assert 'no crypto ok' in result.stdout
