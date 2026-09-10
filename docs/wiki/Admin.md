@@ -21,6 +21,12 @@ somebody else's bot.
 A new token is stored through `TOKEN_STORAGE`, like every other write — see
 **[Tokens](Tokens.md)**.
 
+**Reading one is a page of its own.** Next to the mask is *show it*, which asks for a
+confirmation and then writes a `bot.token_revealed` row into the event feed: the bot, and who
+asked. So "who saw this token" has an answer during the incident where somebody has to ask it —
+and a credential is never in a changeform, a browser history or a screenshot of one by accident.
+
+
 ## Fieldsets are permission boundaries
 
 | section | what is on it |
@@ -100,6 +106,17 @@ profile or a queue shows how many bots are on it, as a link to exactly those bot
 Saving a row moves its watermark and publishes a notice; a supervisor reads it and acts, seconds
 later. Nothing here calls `getMe` or `setWebhook`, which is what makes an action over five hundred
 selected rows return immediately instead of holding a request open for five hundred round trips.
+
+## Edits that would strand a backlog are refused
+
+Pointing a bot at a different queue leaves whatever is in the old one with nobody to take it: a
+consumer serves the queues it was told about, and after the move nothing points there. So the
+edit is refused while that queue still holds messages, and the message says what to do first —
+let it drain, or switch the bot off and drain it deliberately.
+
+A queue the transport **cannot be reached** to read is not a queue with messages in it: the edit
+goes through, because a page that refused every change while Redis blinked would be worse than
+the rare mistake. That is the same trade the supervisor makes about a provider it could not read.
 
 `quarantine_reason` and `quarantined_until` are the supervisor's own writing, read-only here: they
 say what happened to a bot, and a person clearing the text would not clear the condition. The

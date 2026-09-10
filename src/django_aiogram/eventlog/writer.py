@@ -110,6 +110,7 @@ def to_row(
         # place is what keeps the column and the id from ever disagreeing
         short_id=short_id(event.correlation_id),
         kind=_text(event.kind, 48),
+        bot_id=event.bot_id,
         function=_text(event.function, 64),
         chat_id=event.chat_id,
         user_id=event.user_id,

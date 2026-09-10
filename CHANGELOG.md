@@ -165,6 +165,20 @@
   user without it gets rather than only from the page: an unrendered section still posts back,
   and a token accepted from somebody who may not read one is the bot given away.
 
+  **Reading a token is a deliberate act and a recorded one.** The mask carries a *show it*
+  link to a page of its own, which asks for confirmation and writes `bot.token_revealed` into
+  the feed -- the bot, and who asked -- so a credential is never in a changeform or a
+  screenshot of one by accident, and "who saw this token" has an answer.
+
+  `Event` gained `bot_id`, and the writer fills the column the tables have had since 5.0: a
+  feed that cannot say *whose* bot failed is one a deployment with twenty clients cannot read.
+  Added rather than renamed, so a receiver reading the fields it already read is unaffected.
+
+  **An edit that would strand a backlog is refused**: pointing a bot at another queue while the
+  old one still holds messages leaves them with no consumer, so the page says to drain it
+  first. A queue the transport cannot be reached to read is not a full one, and the edit goes
+  through -- the trade the supervisor makes about a provider it could not read.
+
   The list is built to be scanned: the pool, the settings each bot overrides and whether
   anything is serving it, filters over the switch, profile, queue and pool, and **Switch
   on/off** as actions -- one statement for five hundred clients, and their watermark moves with

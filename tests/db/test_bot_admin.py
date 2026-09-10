@@ -514,3 +514,112 @@ def test_a_reader_who_may_not_change_a_bot_still_gets_a_page(client):
 
     assert response.status_code == 200
     assert str(bot.bot_id) in response.content.decode()
+
+
+REVEAL = '{pk}/token/'
+
+
+def test_revealing_a_token_needs_the_permission(client):
+    """A change permission is not a permission to read the credential."""
+    bot = a_bot()
+    client.force_login(a_user('support', 'view_telegrambot', 'change_telegrambot'))
+
+    response = client.post(BOTS + REVEAL.format(pk=bot.pk))
+
+    assert response.status_code == 403
+    assert TOKEN not in response.content.decode()
+
+
+def test_revealing_a_token_shows_it_once_and_records_who(client, monkeypatch):
+    """ "Who saw this token" is a question an incident asks, and the feed is what answers it.
+
+    Asserted on what reaches the recorder rather than on the row it writes: the writer is a
+    thread with its own connection, and a case that waited for it would be asserting the
+    recorder's own plumbing — which `tests/db/test_recorder.py` already covers.
+    """
+    from django_aiogram.config.enums import EventKind
+    from django_aiogram.eventlog import recorder as recorder_module
+
+    bot = a_bot()
+    kept = []
+    monkeypatch.setattr(type(recorder_module.recorder), 'active', property(lambda self: True))
+    monkeypatch.setattr(recorder_module.recorder, 'record', kept.append)
+    client.force_login(a_user('trusted', 'view_telegrambot', 'view_telegrambot_token'))
+
+    page = client.get(BOTS + REVEAL.format(pk=bot.pk)).content.decode()
+    assert TOKEN not in page, 'a GET showed the credential without being asked'
+    assert not kept, 'a GET recorded a reveal that did not happen'
+
+    shown = client.post(BOTS + REVEAL.format(pk=bot.pk)).content.decode()
+
+    assert TOKEN in shown
+    (event,) = kept
+    assert event.kind == EventKind.BOT_TOKEN_REVEALED.value
+    assert event.bot_id == bot.bot_id
+    assert event.detail['by'] == 'trusted'
+
+
+def test_the_feed_says_which_bot_a_row_is_about():
+    """The column has been there since 5.0 and nothing filled it.
+
+    A deployment with twenty clients reads this feed to answer "whose bot failed", and a
+    column of nulls answers nothing.
+    """
+    from django_aiogram.eventlog.records import Event
+    from django_aiogram.eventlog.writer import to_row
+
+    row = to_row(Event(kind='outbound.sent', bot_id=123456))
+
+    assert row.bot_id == 123456
+
+
+def test_moving_a_bot_off_a_queue_that_still_holds_messages_is_refused(client, monkeypatch):
+    """The messages already in the old queue would have nobody to take them.
+
+    A consumer serves the queues it was told about, and after the move nothing points at that
+    one — so the backlog is stranded rather than delivered late. The refusal names what to do
+    first.
+    """
+    held = TelegramQueue.objects.create(name='client-a', pool='default')
+    other = TelegramQueue.objects.create(name='client-b', pool='default')
+    bot = a_bot(queue=held)
+    monkeypatch.setattr('django_aiogram.admin_bots._waiting_in', lambda name: 4 if name == 'client-a' else 0)
+    client.force_login(a_user('editor', 'view_telegrambot', 'change_telegrambot'))
+
+    response = client.post(
+        f'{BOTS}{bot.pk}/change/',
+        {'label': bot.label, 'token': '', 'enabled': 'on', 'queue': str(other.pk)},
+    )
+
+    assert response.status_code == 200
+    assert 'still holds 4 message' in response.content.decode()
+    bot.refresh_from_db()
+    assert bot.queue_id == held.pk, 'the bot was moved anyway'
+
+
+def test_a_queue_that_cannot_be_read_does_not_block_the_edit(client, monkeypatch):
+    """A page that refused every edit because Redis blinked would be worse than the mistake.
+
+    The same trade the supervisor makes about a provider it could not read: an unreachable
+    transport has not said the queue is full.
+    """
+    held = TelegramQueue.objects.create(name='client-a', pool='default')
+    other = TelegramQueue.objects.create(name='client-b', pool='default')
+    bot = a_bot(queue=held)
+
+    def unreachable(_settings=None, **_kwargs):
+        """Refuse the way a broker with no server does."""
+        msg = 'no server'
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr('django_aiogram.broker.registry.broker_class', unreachable)
+    client.force_login(a_user('editor', 'view_telegrambot', 'change_telegrambot'))
+
+    response = client.post(
+        f'{BOTS}{bot.pk}/change/',
+        {'label': bot.label, 'token': '', 'enabled': 'on', 'queue': str(other.pk)},
+    )
+
+    assert response.status_code == 302, response.content
+    bot.refresh_from_db()
+    assert bot.queue_id == other.pk

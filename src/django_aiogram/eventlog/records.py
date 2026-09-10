@@ -52,6 +52,10 @@ class Event:
 
     kind: str
     correlation_id: uuid.UUID = field(default_factory=new_correlation_id)
+    #: which bot this happened to, by the identity in its token. The column has been there
+    #: since 5.0 and nothing filled it: a feed that cannot say *whose* bot failed is a feed a
+    #: deployment with twenty clients cannot read
+    bot_id: int | None = None
     created_at: float = field(default_factory=time.time)
     function: str = ''
     chat_id: int | None = None

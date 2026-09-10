@@ -24,6 +24,7 @@ loading, and :meth:`~django_aiogram.apps.TelegramBotAppConfig.ready` is where se
 safe to read.
 """
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from django import forms
@@ -47,11 +48,11 @@ from django_aiogram.admin_overrides import (
 )
 from django_aiogram.config.bots import parse_bot_id
 from django_aiogram.models import TelegramBot, TelegramBotProfile, TelegramQueue
-from django_aiogram.tokens import store_token
+from django_aiogram.tokens import read_token, store_token
 
 if TYPE_CHECKING:
     from django.db.models import QuerySet
-    from django.http import HttpRequest
+    from django.http import HttpRequest, HttpResponse
 
     BotAdminBase = admin.ModelAdmin[TelegramBot]
     ProfileAdminBase = admin.ModelAdmin[TelegramBotProfile]
@@ -69,6 +70,8 @@ MASK = '{bot_id}:{hidden}'
 HIDDEN = '•' * 8
 
 #: the permission the credentials section is behind
+logger = logging.getLogger('django_aiogram')
+
 BOT_CHANGELIST = 'admin:django_aiogram_telegrambot_changelist'
 
 TOKEN_PERMISSION = 'django_aiogram.view_telegrambot_token'  # noqa: S105 - a permission name, not a secret
@@ -165,6 +168,32 @@ class TelegramBotForm(BotFormBase):
         )
         self.overrides = self._decided(cleaned)
         return cleaned
+
+    def clean_queue(self) -> Any:  # noqa: ANN401 - a model choice, whose type is Django's
+        """Refuse moving a bot off a queue that still holds its messages.
+
+        A queue is where this bot's backlog is: point the bot somewhere else and the messages
+        already in the old one have nobody to take them -- a consumer serves the queues it was
+        told about, and nothing points at that one any more. So the edit is refused with the
+        thing to do first, which is to let it drain.
+
+        **A queue that cannot be reached is not a queue with messages in it.** The depth read
+        goes over the network, and an admin page that refuses every edit because Redis blinked
+        would be worse than one that lets a rare mistake through -- the same trade the
+        supervisor makes about a provider it could not read.
+        """
+        chosen = self.cleaned_data.get('queue')
+        held = self.instance.queue if self.instance.pk else None
+        if held is None or chosen == held:
+            return chosen
+        waiting = _waiting_in(held.name)
+        if waiting:
+            msg = (
+                f'{held.name} still holds {waiting} message(s). Moving this bot would strand them: '
+                'let the queue drain first, or switch the bot off and drain it deliberately.'
+            )
+            raise ValidationError(msg)
+        return chosen
 
     def _decided(self, cleaned: 'dict[str, Any]') -> 'dict[str, Any]':
         """Collect the settings whose box is checked, refusing what the package would refuse.
@@ -334,6 +363,56 @@ class TelegramBotAdmin(BotAdminBase):
             shown.append((title, settings))
         return tuple(shown)
 
+    def get_urls(self) -> list[Any]:
+        """Add the one page that shows a credential, so revealing it is a deliberate act.
+
+        A page rather than a column: a token rendered into the changeform is a token in a
+        browser history, a proxy log and every screenshot of that page, whether anybody meant
+        to read it or not. Here it takes a click, from a user holding the permission, and it
+        leaves a row in the feed saying who.
+        """
+        from django.urls import path  # noqa: PLC0415 - the URL conf, and this module is imported early
+
+        return [
+            path(
+                '<int:pk>/token/',
+                self.admin_site.admin_view(self.reveal_token),
+                name='django_aiogram_telegrambot_token',
+            ),
+            *super().get_urls(),
+        ]
+
+    def reveal_token(self, request: 'HttpRequest', pk: int) -> 'HttpResponse':
+        """Show one bot's token to somebody holding the permission, and record that.
+
+        `bot.token_revealed` goes into the append-only feed, so *who saw this token* has an
+        answer during the incident where somebody has to ask. Recorded before the value is
+        rendered: a response that reached the browser and no row is the one order that leaves
+        the question unanswerable.
+        """
+        from django.http import Http404, HttpResponseForbidden  # noqa: PLC0415 - as in `get_urls`
+        from django.template.response import TemplateResponse  # noqa: PLC0415 - as above
+
+        if not (may_see_tokens(request) and self.has_view_permission(request)):
+            return HttpResponseForbidden('You may not read bot tokens.')
+        bot = self.get_queryset(request).filter(pk=pk).first()
+        if bot is None:
+            raise Http404
+        shown = read_token(bot.token) if request.method == 'POST' else ''
+        if shown:
+            _record_reveal(bot, request)
+        return TemplateResponse(
+            request,
+            'admin/django_aiogram/reveal_token.html',
+            {
+                **self.admin_site.each_context(request),
+                'title': f'Token for {bot}',
+                'bot': bot,
+                'token': shown,
+                'opts': self.opts,
+            },
+        )
+
     def get_form(
         self,
         request: 'HttpRequest',
@@ -429,10 +508,64 @@ class TelegramBotAdmin(BotAdminBase):
 
     @admin.display(description='token')
     def token_mask(self, obj: TelegramBot) -> str:
-        """Show that a token is there, and its identity, without showing the token."""
+        """Show that a token is there, and its identity, with a way to read the rest.
+
+        The link is a page of its own rather than a value in this one: see `reveal_token`.
+        """
         if not obj.token:
             return 'not set'
-        return MASK.format(bot_id=obj.bot_id, hidden=HIDDEN)
+        masked = MASK.format(bot_id=obj.bot_id, hidden=HIDDEN)
+        if not obj.pk:
+            return masked
+        target = reverse('admin:django_aiogram_telegrambot_token', args=(obj.pk,))
+        return format_html('{} <a href="{}">show it</a>', masked, target)
+
+
+def _waiting_in(queue: str) -> int:
+    """How many messages one queue still holds, or zero where that cannot be read.
+
+    Zero for unreadable on purpose: this answers a *refusal*, and a transport that could not
+    be reached has not said the queue is full -- see `TelegramBotForm.clean_queue`.
+    """
+    # deferred: building a transport imports its driver, and this module is imported by
+    # `admin.autodiscover` while the app registry is still loading
+    from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
+    from django_aiogram.runtime.queues import settings_for  # noqa: PLC0415 - as above
+
+    try:
+        settings = settings_for(queue)
+        broker = broker_class(settings).configured(settings)
+        return int(broker.depth()) + int(broker.inflight_depth())
+    except Exception:
+        logger.warning('could not read the depth of %s; allowing the edit', queue, exc_info=True)
+        return 0
+
+
+def _record_reveal(bot: TelegramBot, request: 'HttpRequest') -> None:
+    """Write the feed row that says whose token was read, and by whom.
+
+    Best effort, like every other write into the feed: a recorder that is off or a database
+    that refused must not be the reason a page 500s. What it costs is the row -- and the
+    recorder logs its own failures.
+    """
+    # deferred: the recorder reaches the ORM and the settings, and this module is imported by
+    # `admin.autodiscover` while the app registry is still loading
+    from django_aiogram.config.enums import EventKind  # noqa: PLC0415 - as above
+    from django_aiogram.eventlog.recorder import recorder  # noqa: PLC0415 - as above
+    from django_aiogram.eventlog.records import Event  # noqa: PLC0415 - as above
+
+    if not recorder.active:
+        return
+    who = getattr(request.user, 'get_username', lambda: '')() or 'anonymous'
+    recorder.record(
+        Event(
+            kind=EventKind.BOT_TOKEN_REVEALED.value,
+            bot_id=bot.bot_id,
+            # the username in `detail` rather than in a column: the feed's columns are the
+            # ones its indexes serve, and nothing queries this by user
+            detail={'by': who, 'label': bot.label},
+        )
+    )
 
 
 def _without_the_credentials(form: 'type[BotFormBase]') -> 'type[BotFormBase]':
