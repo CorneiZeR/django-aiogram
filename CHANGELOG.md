@@ -137,8 +137,22 @@
   rather than masked, because a section that renders is a section that posts back and a token
   field left in place is the bot given away. Support staff keep the limits and the switch.
 
-  Nothing in a request talks to Telegram, and the changelist asks the same number of queries
-  for five hundred bots as for one. See
+  **A setting a bot decides is a checkbox, not a JSON key somebody has to remember.** Each
+  overridable setting renders as "this bot decides it" plus a value, with what it would inherit
+  and the layer that decides it written beside it -- because `overrides` is sparse by key
+  presence and "inherit" is an answer a person has to be able to give. Values are judged by the
+  package's own check registry, so a page cannot accept what the deployment would refuse to
+  start with.
+
+  The queue picked in the admin is now the queue the bot publishes to: `TelegramBot.queue` is
+  read into `QUEUE` when the row is resolved, below its own overrides. Before this it decided
+  nothing -- routing read the setting and the column was decoration.
+
+  The list is built to be scanned: the pool, the settings each bot overrides and whether
+  anything is serving it, filters over the switch, profile, queue and pool, and **Switch
+  on/off** as actions -- one statement for five hundred clients, and their watermark moves with
+  it so a supervisor picks the change up within a poll. Nothing in a request talks to Telegram,
+  and the changelist asks the same number of queries for five hundred bots as for one. See
   **[Admin](https://corneizer.github.io/django-aiogram/latest/Admin/)**.
 
 - **A token can be encrypted at rest, and the package does not decide that for you.**

@@ -27,10 +27,23 @@ safe to read.
 from typing import TYPE_CHECKING, Any
 
 from django import forms
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.core.exceptions import ValidationError
 from django.db.models import Count
+from django.urls import reverse
+from django.utils import timezone
+from django.utils.html import format_html
 
+from django_aiogram.admin_overrides import (
+    OVERRIDABLE,
+    field_name,
+    fields_for,
+    group_fields,
+    inherited_note,
+    read_overrides,
+    switch_name,
+    validate_one,
+)
 from django_aiogram.config.bots import parse_bot_id
 from django_aiogram.models import TelegramBot, TelegramBotProfile, TelegramQueue
 from django_aiogram.tokens import store_token
@@ -55,6 +68,8 @@ MASK = '{bot_id}:{hidden}'
 HIDDEN = '•' * 8
 
 #: the permission the credentials section is behind
+BOT_CHANGELIST = 'admin:django_aiogram_telegrambot_changelist'
+
 TOKEN_PERMISSION = 'django_aiogram.view_telegrambot_token'  # noqa: S105 - a permission name, not a secret
 
 
@@ -81,10 +96,37 @@ class TelegramBotForm(BotFormBase):
     )
 
     class Meta:
-        """Every editable column; the fieldsets decide which of them a user is shown."""
+        """Every editable column; the fieldsets decide which of them a user is shown.
+
+        ``overrides`` is not among them: the column is built from the checkbox-and-value pairs
+        this form grows instead, because a raw JSON box makes the keys undiscoverable and a
+        typo silent.
+        """
 
         model = TelegramBot
-        fields = ('label', 'token', 'profile', 'queue', 'overrides', 'enabled')
+        fields = ('label', 'token', 'profile', 'queue', 'enabled')
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Grow one checkbox and one value field per overridable setting, and fill them in.
+
+        The inherited value is resolved for *this* bot -- through its profile, if it has one --
+        so what a person reads next to an unchecked box is what leaving it unchecked means.
+        """
+        super().__init__(*args, **kwargs)
+        bot = self.instance if self.instance.pk else None
+        profile = bot.profile if bot is not None else None
+        self.inherited, origins = read_overrides(bot, profile)
+        # the pairs are on the class, so Django's form factory knows about them; what belongs
+        # to *this* bot is the inherited value each line reports
+        for key in OVERRIDABLE:
+            self.fields[switch_name(key)].help_text = inherited_note(key, self.inherited, origins)
+        held = dict(bot.overrides) if bot is not None else {}
+        for key in OVERRIDABLE:
+            if key not in held:
+                continue
+            self.initial[switch_name(key)] = True
+            value = held[key]
+            self.initial[field_name(key)] = str(value).lower() if isinstance(value, bool) else value
 
     def clean_token(self) -> str:
         """Refuse a string Telegram would not have issued, and keep an empty one empty.
@@ -102,12 +144,34 @@ class TelegramBotForm(BotFormBase):
         return given
 
     def clean(self) -> 'dict[str, Any] | None':
-        """Require a token on a new bot, and take the identity from whichever one applies."""
-        cleaned = super().clean()
-        given = str((cleaned or {}).get('token') or '').strip()
+        """Require a token on a new bot, and judge every setting this bot decides."""
+        cleaned = super().clean() or {}
+        given = str(cleaned.get('token') or '').strip()
         if not given and not self.instance.pk:
             self.add_error('token', 'A new bot needs a token: its identity is the number inside one.')
+        self.overrides = self._decided(cleaned)
         return cleaned
+
+    def _decided(self, cleaned: 'dict[str, Any]') -> 'dict[str, Any]':
+        """Collect the settings whose box is checked, refusing what the package would refuse.
+
+        Judged by the check registry rather than by a second copy of the rules here: a page
+        that accepted a value the deployment then refuses to start with is worse than one that
+        refuses it, because the refusal arrives at the next restart and in another person's
+        terminal.
+        """
+        decided: dict[str, Any] = {}
+        for key in OVERRIDABLE:
+            if not cleaned.get(switch_name(key)):
+                continue
+            value = cleaned.get(field_name(key))
+            try:
+                validate_one(key, value, self.inherited)
+            except ValidationError as refused:
+                self.add_error(field_name(key), refused)
+                continue
+            decided[key] = value
+        return decided
 
     def save(self, commit: bool = True) -> TelegramBot:  # noqa: FBT001, FBT002 - Django's signature
         """Store a new token through the seam, and leave the old one alone when none was given.
@@ -117,6 +181,8 @@ class TelegramBotForm(BotFormBase):
         a mis-keyed digit away from a row that serves somebody else's bot.
         """
         bot = super().save(commit=False)
+        # the pairs, not a JSON box: `clean` has already judged each of them
+        bot.overrides = getattr(self, 'overrides', bot.overrides)
         given = str(self.cleaned_data.get('token') or '').strip()
         identity = parse_bot_id(given)
         if identity is not None:
@@ -135,6 +201,17 @@ class TelegramBotForm(BotFormBase):
         return bot
 
 
+#: the checkbox-and-value pairs, declared on the class rather than grown per instance:
+#: Django's model-form factory validates a `fieldsets` naming them against the form's fields,
+#: and a field that only appears in `__init__` is one the admin refuses to render
+_PAIRS = fields_for({}, {})
+TelegramBotForm.base_fields.update(_PAIRS)
+# `declared_fields` as well, and that is the load-bearing half: the admin builds its form with
+# `modelform_factory`, which *subclasses* this one, and a subclass inherits the fields a class
+# declared rather than whatever was added to its `base_fields` afterwards
+TelegramBotForm.declared_fields.update(_PAIRS)
+
+
 class TelegramBotProfileAdmin(ProfileAdminBase):
     """The settings a group of bots shares, as a row."""
 
@@ -147,9 +224,13 @@ class TelegramBotProfileAdmin(ProfileAdminBase):
         return super().get_queryset(request).annotate(_bots=Count('bots'))
 
     @admin.display(description='bots', ordering='_bots')
-    def bots(self, obj: TelegramBotProfile) -> int:
-        """How many bots take their settings from this profile."""
-        return getattr(obj, '_bots', 0)
+    def bots(self, obj: TelegramBotProfile) -> str:
+        """How many bots take their settings from this profile, as a link to them.
+
+        A count is the answer to "is this profile in use"; the next question is always *which
+        bots*, and a number nobody can click leaves that to a search somebody has to compose.
+        """
+        return _bots_link('profile__id__exact', obj.pk, getattr(obj, '_bots', 0))
 
 
 class TelegramQueueAdmin(QueueAdminBase):
@@ -165,18 +246,19 @@ class TelegramQueueAdmin(QueueAdminBase):
         return super().get_queryset(request).annotate(_bots=Count('bots'))
 
     @admin.display(description='bots', ordering='_bots')
-    def bots(self, obj: TelegramQueue) -> int:
-        """How many bots publish to this queue."""
-        return getattr(obj, '_bots', 0)
+    def bots(self, obj: TelegramQueue) -> str:
+        """How many bots publish to this queue, as a link to them."""
+        return _bots_link('queue__id__exact', obj.pk, getattr(obj, '_bots', 0))
 
 
 class TelegramBotAdmin(BotAdminBase):
     """One client's bot: what it is, what sends as it, and whether it is being served."""
 
     form = TelegramBotForm
-    list_display = ('label', 'bot_id', 'profile', 'queue', 'enabled', 'quarantine_reason')
-    list_filter = ('enabled', 'profile', 'queue')
+    list_display = ('label', 'bot_id', 'profile', 'queue', 'pool', 'own_settings', 'enabled', 'serving')
+    list_filter = ('enabled', 'profile', 'queue', 'queue__pool')
     search_fields = ('label', 'bot_id')
+    actions = ('switch_on', 'switch_off')
     # the two foreign keys the list renders: without this the changelist asks for each of them
     # per row, which is the N+1 a page over five hundred clients cannot afford
     list_select_related = ('profile', 'queue')
@@ -195,15 +277,20 @@ class TelegramBotAdmin(BotAdminBase):
             },
         ),
         ('Placement', {'fields': ('profile', 'queue')}),
-        (
-            'Delivery and limits',
-            {
-                'fields': ('overrides',),
-                'description': (
-                    'Only what this bot decides. Anything absent comes from its profile, and '
-                    "then from the deployment's defaults."
-                ),
-            },
+        *(
+            (
+                title,
+                {
+                    'fields': named,
+                    'classes': ('collapse',),
+                    'description': (
+                        'Tick a setting to have this bot decide it. Left alone, it comes from '
+                        "the profile, and then from the deployment's defaults — which is what "
+                        'each line says it would inherit.'
+                    ),
+                },
+            )
+            for title, named in group_fields()
         ),
         ('State', {'fields': ('enabled', 'quarantine_reason', 'quarantined_until', 'created_at', 'updated_at')}),
     )
@@ -223,12 +310,90 @@ class TelegramBotAdmin(BotAdminBase):
             return self.FIELDSETS
         return tuple(section for section in self.FIELDSETS if section[0] != 'Credentials')
 
+    def get_form(
+        self,
+        request: 'HttpRequest',
+        obj: TelegramBot | None = None,
+        change: bool = False,  # noqa: FBT001, FBT002 - as above
+        **kwargs: Any,
+    ) -> Any:  # noqa: ANN401 - the factory's return type is Django's own
+        """Build the form from its own declaration rather than from the sections.
+
+        Django hands `modelform_factory` the fields it found in `fieldsets`, and every
+        checkbox-and-value pair is a form field with no column behind it -- so the factory
+        refuses them as unknown. The form already says which columns it edits, and the pairs
+        are on the class beside them.
+        """
+        kwargs['fields'] = None
+        return super().get_form(request, obj, change=change, **kwargs)
+
+    @admin.display(description='pool', ordering='queue__pool')
+    def pool(self, obj: TelegramBot) -> str:
+        """Which pool of containers serves this bot's queue.
+
+        The queue name is a client's and changes with them; the pool is the deployment axis a
+        container is started with, and it is what says *where* this bot's work is done.
+        """
+        return obj.queue.pool if obj.queue is not None else '—'
+
+    @admin.display(description='own settings')
+    def own_settings(self, obj: TelegramBot) -> str:
+        """Which settings this bot decides for itself, so a surprise is visible from the list.
+
+        A bot behaving unlike its neighbours is nearly always one carrying an override
+        somebody set months ago, and finding that out currently means opening every row.
+        """
+        keys = sorted(str(key) for key in (obj.overrides or {}))
+        return ', '.join(keys) if keys else '—'
+
+    @admin.display(description='serving', boolean=True)
+    def serving(self, obj: TelegramBot) -> bool:
+        """Whether anything is serving this bot right now, by its own two answers.
+
+        Read from the row rather than from Telegram: the supervisor writes what happened here,
+        and a page that asked the API would be five hundred round trips per load.
+        """
+        return bool(obj.enabled and not obj.quarantine_reason)
+
+    @admin.action(description='Switch on the selected bots')
+    def switch_on(self, request: 'HttpRequest', queryset: 'QuerySet[TelegramBot]') -> None:
+        """Let a supervisor serve these bots again, in one statement."""
+        self._switch(request, queryset, on=True)
+
+    @admin.action(description='Switch off the selected bots')
+    def switch_off(self, request: 'HttpRequest', queryset: 'QuerySet[TelegramBot]') -> None:
+        """Stop serving these bots without deleting anything they hold."""
+        self._switch(request, queryset, on=False)
+
+    def _switch(self, request: 'HttpRequest', queryset: 'QuerySet[TelegramBot]', *, on: bool) -> None:
+        """Move the switch on every selected row, and move their watermark with it.
+
+        `update()` rather than a save per row: an action over five hundred clients is one
+        statement, and none of this talks to Telegram. `updated_at` is passed by hand because
+        `update()` moves no `auto_now` column, and that column is what every supervisor polls
+        to notice the change at all -- without it the switch would take effect at the next
+        restart.
+        """
+        moved = queryset.update(enabled=on, updated_at=timezone.now())
+        self.message_user(
+            request,
+            f'{moved} bot(s) switched {"on" if on else "off"}. A supervisor picks this up within a poll.',
+            messages.SUCCESS,
+        )
+
     @admin.display(description='token')
     def token_mask(self, obj: TelegramBot) -> str:
         """Show that a token is there, and its identity, without showing the token."""
         if not obj.token:
             return 'not set'
         return MASK.format(bot_id=obj.bot_id, hidden=HIDDEN)
+
+
+def _bots_link(lookup: str, value: int, count: int) -> str:
+    """Render a count as a link into the bot changelist, filtered to what it counted."""
+    if not count:
+        return '0'
+    return format_html('<a href="{}?{}={}">{}</a>', reverse(BOT_CHANGELIST), lookup, value, count)
 
 
 def register_bot_admin(site: admin.AdminSite | None = None) -> None:
