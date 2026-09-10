@@ -36,6 +36,7 @@ from django.utils.html import format_html
 
 from django_aiogram.admin_overrides import (
     OVERRIDABLE,
+    SENSITIVE,
     field_name,
     fields_for,
     group_fields,
@@ -149,6 +150,11 @@ class TelegramBotForm(BotFormBase):
         given = str(cleaned.get('token') or '').strip()
         if not given and not self.instance.pk:
             self.add_error('token', 'A new bot needs a token: its identity is the number inside one.')
+        # re-resolved against the profile *this submission* chose, not the one the row held: a
+        # form that moved a bot to another profile would otherwise judge its settings against
+        # the values it is leaving -- and a rule that reads a neighbouring setting, as `W004`
+        # reads the broker timeout, would accept or refuse by the wrong numbers
+        self.inherited, _ = read_overrides(self.instance if self.instance.pk else None, cleaned.get('profile'))
         self.overrides = self._decided(cleaned)
         return cleaned
 
@@ -267,7 +273,7 @@ class TelegramBotAdmin(BotAdminBase):
 
     #: the sections, in the order they are read. `Credentials` is the one a user without
     #: `view_telegrambot_token` never sees -- not a masked copy of it, none of it
-    FIELDSETS = (
+    FIELDSETS: 'tuple[tuple[str, dict[str, Any]], ...]' = (
         ('Bot', {'fields': ('label', 'bot_id')}),
         (
             'Credentials',
@@ -308,7 +314,15 @@ class TelegramBotAdmin(BotAdminBase):
         """
         if may_see_tokens(request):
             return self.FIELDSETS
-        return tuple(section for section in self.FIELDSETS if section[0] != 'Credentials')
+        hidden = {name for key in SENSITIVE for name in (switch_name(key), field_name(key))}
+        shown = []
+        for title, options in self.FIELDSETS:
+            if title == 'Credentials':
+                continue
+            settings: dict[str, Any] = dict(options)
+            settings['fields'] = tuple(name for name in settings['fields'] if name not in hidden)
+            shown.append((title, settings))
+        return tuple(shown)
 
     def get_form(
         self,
@@ -333,7 +347,7 @@ class TelegramBotAdmin(BotAdminBase):
         # a POST carrying one would be accepted and stored -- the bot given away by somebody
         # who may not read its credential. Dropped from the class the factory built, which is
         # this request's own subclass rather than the form every request shares
-        return _without_the_token_field(built)
+        return _without_the_credentials(built)
 
     def has_add_permission(self, request: 'HttpRequest') -> bool:
         """Adding a bot means setting its token, so it needs the permission for one.
@@ -405,8 +419,12 @@ class TelegramBotAdmin(BotAdminBase):
         return MASK.format(bot_id=obj.bot_id, hidden=HIDDEN)
 
 
-def _without_the_token_field(form: 'type[BotFormBase]') -> 'type[BotFormBase]':
-    """Return the same form with no ``token`` field, for a user who may not set one.
+def _without_the_credentials(form: 'type[BotFormBase]') -> 'type[BotFormBase]':
+    """Return the same form with no credential fields, for a user who may not set one.
+
+    The token, and the settings whose value *is* a credential: a webhook secret is what tells
+    Telegram's requests from anybody else's, and `REDIS_URL` carries the password to the
+    broker. Same boundary, because they are the same kind of secret.
 
     Taken away in ``__init__`` rather than from ``base_fields``: a form's metaclass rebuilds
     that mapping from what the class *declared*, so a subclass handing it a filtered copy gets
@@ -421,7 +439,8 @@ def _without_the_token_field(form: 'type[BotFormBase]') -> 'type[BotFormBase]':
     def drop_it(self: 'BotFormBase', *args: Any, **kwargs: Any) -> None:
         """Build the form, then take the field away before anything can bind to it."""
         form.__init__(self, *args, **kwargs)
-        self.fields.pop('token', None)
+        for name in ('token', *(name for key in SENSITIVE for name in (switch_name(key), field_name(key)))):
+            self.fields.pop(name, None)
 
     return type(form.__name__, (form,), {'__init__': drop_it, '__doc__': form.__doc__})
 

@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 __all__ = (
     'GROUPS',
     'OVERRIDABLE',
+    'SENSITIVE',
     'field_name',
     'fields_for',
     'group_fields',
@@ -92,6 +93,13 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
+#: settings whose *value* is a credential, or carries one. Their inherited value is never
+#: written into the page -- `REDIS_URL` holds the password to the broker, and a webhook secret
+#: is what tells Telegram's requests from anybody else's -- and their pairs are only offered to
+#: a user who may see this bot's token, which is the same boundary
+SENSITIVE = frozenset({'WEBHOOK_SECRET', 'REDIS_URL'})
+
+
 def switch_name(key: str) -> str:
     """Name the checkbox that says whether this bot decides ``key``."""
     return f'set_{key}'
@@ -144,6 +152,10 @@ def inherited_note(key: str, inherited: 'Mapping[str, Any]', origins: 'Mapping[s
     can only choose it when they can see what it leaves in place.
     """
     value = inherited.get(key, DEFAULTS[key])
+    if key in SENSITIVE:
+        # presence and layer, never the value: a page that printed the inherited webhook
+        # secret would hand it to every user who may edit a limit
+        value = 'set' if value else 'not set'
     # the origin as a place rather than as a lookup: `resolve` labels a value
     # `<layer>['<KEY>']` for a finding that has to be greppable, and the key is already the
     # label of the line this sits under

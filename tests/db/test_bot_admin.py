@@ -362,3 +362,76 @@ def test_renaming_a_queue_reaches_the_bots_pointed_at_it(client):
         queue.save()
 
         assert providers.from_database()[0]['QUEUE'] == 'client-a-renamed', 'the rename was invisible to the cache'
+
+
+def test_an_inherited_secret_is_never_written_into_the_page(client):
+    """`REDIS_URL` carries the password to the broker, and a webhook secret is a credential.
+
+    Printing what a bot would inherit is what makes "leave it alone" a decision somebody can
+    make — and for these two it would hand the value to every user who may edit a limit.
+    """
+    profile = TelegramBotProfile.objects.create(
+        name='vip',
+        overrides={'WEBHOOK_SECRET': 'hunter2', 'REDIS_URL': 'redis://user:swordfish@example:6379/0'},
+    )
+    bot = a_bot(profile=profile)
+    client.force_login(a_user('trusted', 'view_telegrambot', 'change_telegrambot', 'view_telegrambot_token'))
+
+    page = client.get(f'{BOTS}{bot.pk}/change/').content.decode()
+
+    assert 'hunter2' not in page
+    assert 'swordfish' not in page
+    assert "Inherited: 'set' — from the profile 'vip'." in page, 'the page did not even say a secret was there'
+
+
+def test_a_user_without_the_permission_cannot_set_a_secret_either(client):
+    """Same boundary as the token: these settings *are* credentials."""
+    bot = a_bot()
+    client.force_login(a_user('support', 'view_telegrambot', 'change_telegrambot'))
+
+    page = client.get(f'{BOTS}{bot.pk}/change/').content.decode()
+    assert 'set_WEBHOOK_SECRET' not in page
+    response = client.post(
+        f'{BOTS}{bot.pk}/change/',
+        {'label': bot.label, 'enabled': 'on', 'set_WEBHOOK_SECRET': 'on', 'val_WEBHOOK_SECRET': 'mine'},
+    )
+
+    assert response.status_code == 302, response.content
+    bot.refresh_from_db()
+    assert bot.overrides == {}, 'a user without the permission set a credential'
+
+
+def test_overrides_are_judged_against_the_profile_the_form_chose(client):
+    """A form that moves a bot to another profile must not judge it by the one it is leaving.
+
+    `W004` reads `HEARTBEAT_INTERVAL` and the transport's deadline to decide whether a
+    `BLPOP_TIMEOUT` is one the consumer will honour — so judging against the profile the row
+    *held* refuses a value the profile it is *moving to* makes correct, and the operator is
+    told to fix something that is already right.
+    """
+    cramped = TelegramBotProfile.objects.create(
+        name='cramped',
+        overrides={'HEARTBEAT_INTERVAL': 2, 'REDIS_TIMEOUT': 5},
+    )
+    roomy = TelegramBotProfile.objects.create(
+        name='roomy',
+        overrides={'HEARTBEAT_INTERVAL': 60, 'REDIS_TIMEOUT': 90},
+    )
+    bot = a_bot(profile=cramped)
+    client.force_login(a_user('editor', 'view_telegrambot', 'change_telegrambot'))
+
+    response = client.post(
+        f'{BOTS}{bot.pk}/change/',
+        {
+            'label': bot.label,
+            'enabled': 'on',
+            'profile': str(roomy.pk),
+            'set_BLPOP_TIMEOUT': 'on',
+            'val_BLPOP_TIMEOUT': '30',
+        },
+    )
+
+    assert response.status_code == 302, response.content
+    bot.refresh_from_db()
+    assert bot.overrides == {'BLPOP_TIMEOUT': 30}
+    assert bot.profile_id == roomy.pk

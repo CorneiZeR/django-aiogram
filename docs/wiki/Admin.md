@@ -61,6 +61,15 @@ Values are judged by the package's own checks: a `MAX_RETRIES` of zero is refuse
 because `E012` refuses it at boot. One law, two consumers — a second copy of the rules in the
 form is how a page comes to accept a configuration the deployment then refuses to start with.
 
+Two settings *are* credentials — `WEBHOOK_SECRET`, and `REDIS_URL` because it carries the
+broker's password — so what the page prints for them is `'set'` or `'not set'` and the layer,
+never the value, and their pairs are only offered to a user who may see this bot's token.
+
+The values are judged against the profile **this submission chose**, not the one the row held: a
+rule that reads a neighbouring setting — `W004` reads `HEARTBEAT_INTERVAL` and the transport's
+deadline to decide whether a `BLPOP_TIMEOUT` will be honoured — would otherwise refuse a value
+the new profile makes correct.
+
 `TOKEN`, `QUEUE`, `ENABLED` and `DEFAULT_KWARGS` are not on those sections: the first three
 have a place of their own on the page — the credentials section, the queue picker and the
 switch — and the fourth is a callable, which no form can hold. Settings the *process* owns are

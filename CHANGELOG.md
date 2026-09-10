@@ -151,6 +151,13 @@
   without it a renamed queue would leave every container publishing to the old name until it
   restarted. **Run `manage.py migrate`.**
 
+  `WEBHOOK_SECRET` and `REDIS_URL` are credentials too -- one tells Telegram's requests from
+  anybody else's, the other carries the broker's password -- so the page prints `'set'` or
+  `'not set'` and the layer rather than the value, and their pairs are offered only to a user
+  who may see the token. The values are judged against the profile the *submission* chose, not
+  the one the row held: `W004` reads its neighbours to decide whether a `BLPOP_TIMEOUT` will be
+  honoured, and the old profile's numbers refuse what the new one makes correct.
+
   Adding a bot needs `view_telegrambot_token`, and the token field is absent from the *form* a
   user without it gets rather than only from the page: an unrendered section still posts back,
   and a token accepted from somebody who may not read one is the bot given away.
