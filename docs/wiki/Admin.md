@@ -107,6 +107,27 @@ Saving a row moves its watermark and publishes a notice; a supervisor reads it a
 later. Nothing here calls `getMe` or `setWebhook`, which is what makes an action over five hundred
 selected rows return immediately instead of holding a request open for five hundred round trips.
 
+The three actions that would need the network write an **intent** into the row instead:
+
+| action | what it asks for |
+| --- | --- |
+| Check the token with Telegram | `getMe` — the cheapest way to find out whether a pasted credential works |
+| Register the webhook | `setWebhook`, from the URL and secret that bot's settings resolve to |
+| Remove the webhook | `deleteWebhook`, which a bot being switched off needs before Telegram stops posting to a URL that answers 404 |
+
+Something with an event loop carries it out and writes one line back — the **asked for** column
+on the list, and four read-only fields on the State section. Run it beside the bot containers:
+
+```shell
+python manage.py tgbot_intents --watch
+```
+
+An intent is a person waiting for an answer, so `--watch` polls in seconds. Each one is claimed
+with a compare-and-set before it is carried out, so two containers reading the same table cannot
+both call Telegram for one bot, and an operator who asks for something else in the meantime keeps
+their newer question. What is written back is redacted the way a feed row is: aiogram puts the API
+URL into its messages, and the URL carries the token.
+
 ## Edits that would strand a backlog are refused
 
 Pointing a bot at a different queue leaves whatever is in the old one with nobody to take it: a

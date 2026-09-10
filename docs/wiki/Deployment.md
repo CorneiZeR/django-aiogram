@@ -229,7 +229,13 @@ kept in changes: after turning an encrypting `TOKEN_STORAGE` on, which leaves th
 before it in plain, and after rotating its key. Not on a schedule — it has nothing to do until
 one of those two things happens — see **[Tokens](Tokens.md)**.
 
-`manage.py tgbot_prune_queues` is the fifth, and it is on neither list because that depends
+`manage.py tgbot_intents` is the fifth, and it belongs on the *scheduled* list wherever the
+admin is used: the checks and webhook changes asked for there are written into the row rather
+than done in the request, and this is what carries them out. `--watch` is the form a deployment
+runs as a small always-on process; a person waiting for an answer makes seconds the useful
+interval. See **[Admin](Admin.md)**.
+
+`manage.py tgbot_prune_queues` is the sixth, and it is on neither list because that depends
 on your `REMOVED_QUEUE_POLICY`. A queue per client is what keeps one client's backlog off
 another's, and it is also how a deployment leaks: a client goes, their bot's row goes, and a
 Redis key, an AMQP queue or a consumer group stays for ever. The command finds the queues no

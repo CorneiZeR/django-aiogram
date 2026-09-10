@@ -48,6 +48,7 @@ from django_aiogram.admin_overrides import (
 )
 from django_aiogram.broker.exceptions import BrokerError
 from django_aiogram.config.bots import parse_bot_id
+from django_aiogram.config.enums import BotIntent
 from django_aiogram.models import TelegramBot, TelegramBotProfile, TelegramQueue
 from django_aiogram.tokens import read_token, store_token
 
@@ -355,14 +356,27 @@ class TelegramBotAdmin(BotAdminBase):
     """One client's bot: what it is, what sends as it, and whether it is being served."""
 
     form = TelegramBotForm
-    list_display = ('label', 'bot_id', 'profile', 'queue', 'pool', 'own_settings', 'enabled', 'serving')
+    list_display = ('label', 'bot_id', 'profile', 'queue', 'pool', 'own_settings', 'enabled', 'serving', 'asked')
     list_filter = ('enabled', 'profile', 'queue', 'queue__pool')
     search_fields = ('label', 'bot_id')
-    actions = ('switch_on', 'switch_off')
+    actions = ('switch_on', 'switch_off', 'ask_check', 'ask_set_webhook', 'ask_delete_webhook')
     # the two foreign keys the list renders: without this the changelist asks for each of them
     # per row, which is the N+1 a page over five hundred clients cannot afford
     list_select_related = ('profile', 'queue')
-    readonly_fields = ('bot_id', 'token_mask', 'quarantine_reason', 'quarantined_until', 'created_at', 'updated_at')
+    readonly_fields = (
+        'bot_id',
+        'token_mask',
+        'quarantine_reason',
+        'quarantined_until',
+        # asked through the actions rather than typed: an intent typed into a box would be a
+        # request nothing validated, and the actions are where the wording lives
+        'intent',
+        'intent_asked_at',
+        'intent_result',
+        'intent_done_at',
+        'created_at',
+        'updated_at',
+    )
     ordering = ('label', 'bot_id')
 
     #: the sections, in the order they are read. `Credentials` is the one a user without
@@ -392,7 +406,22 @@ class TelegramBotAdmin(BotAdminBase):
             )
             for title, named in group_fields()
         ),
-        ('State', {'fields': ('enabled', 'quarantine_reason', 'quarantined_until', 'created_at', 'updated_at')}),
+        (
+            'State',
+            {
+                'fields': (
+                    'enabled',
+                    'quarantine_reason',
+                    'quarantined_until',
+                    'intent',
+                    'intent_asked_at',
+                    'intent_result',
+                    'intent_done_at',
+                    'created_at',
+                    'updated_at',
+                )
+            },
+        ),
     )
 
     def get_fieldsets(
@@ -535,6 +564,18 @@ class TelegramBotAdmin(BotAdminBase):
         keys = sorted(str(key) for key in (obj.overrides or {}))
         return ', '.join(keys) if keys else '—'
 
+    @admin.display(description='asked for')
+    def asked(self, obj: TelegramBot) -> str:
+        """Say what this bot is waiting on, or what the last answer was.
+
+        Both in one column because they are one story, and a list that showed only the
+        outstanding half would leave an operator opening rows to find out whether the check
+        they ran said yes.
+        """
+        if obj.intent:
+            return f'{obj.intent} (waiting)'
+        return obj.intent_result or '—'
+
     @admin.display(description='serving', boolean=True)
     def serving(self, obj: TelegramBot) -> bool:
         """Whether anything is serving this bot right now, by its own two answers.
@@ -567,6 +608,46 @@ class TelegramBotAdmin(BotAdminBase):
         self.message_user(
             request,
             f'{moved} bot(s) switched {"on" if on else "off"}. A supervisor picks this up within a poll.',
+            messages.SUCCESS,
+        )
+
+    @admin.action(description='Check the token with Telegram')
+    def ask_check(self, request: 'HttpRequest', queryset: 'QuerySet[TelegramBot]') -> None:
+        """Ask who each token belongs to, without this request waiting for the answer."""
+        self._ask(request, queryset, BotIntent.CHECK)
+
+    @admin.action(description='Register the webhook')
+    def ask_set_webhook(self, request: 'HttpRequest', queryset: 'QuerySet[TelegramBot]') -> None:
+        """Ask for each bot's webhook to be registered from its resolved settings."""
+        self._ask(request, queryset, BotIntent.SET_WEBHOOK)
+
+    @admin.action(description='Remove the webhook')
+    def ask_delete_webhook(self, request: 'HttpRequest', queryset: 'QuerySet[TelegramBot]') -> None:
+        """Ask for each bot's webhook to be removed, which a bot going off needs."""
+        self._ask(request, queryset, BotIntent.DELETE_WEBHOOK)
+
+    def _ask(self, request: 'HttpRequest', queryset: 'QuerySet[TelegramBot]', intent: BotIntent) -> None:
+        """Write the asking into every selected row, in one statement and over no network.
+
+        This is what makes an action over five hundred clients survivable: the page records
+        what was asked and something with an event loop answers it -- `manage.py tgbot_intents`,
+        or a supervisor holding that bot. A page that called Telegram here would hold the
+        request open for one round trip per row, and a timeout half way through would leave
+        nobody able to say which of them happened.
+        """
+        moved = queryset.update(
+            intent=intent.value,
+            intent_asked_at=timezone.now(),
+            # the previous answer goes with the new asking: a stale `ok` beside a fresh
+            # question is the one thing a person here must not read as an answer
+            intent_result='',
+            intent_done_at=None,
+            updated_at=timezone.now(),
+        )
+        self.message_user(
+            request,
+            f'Asked for {moved} bot(s). The answer appears here once something with an event '
+            'loop carries it out — manage.py tgbot_intents, or the container holding that bot.',
             messages.SUCCESS,
         )
 

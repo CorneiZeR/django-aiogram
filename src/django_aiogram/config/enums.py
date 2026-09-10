@@ -36,6 +36,27 @@ class UpdateMode(str, Enum):
 
 
 @unique
+class BotIntent(str, Enum):
+    """What an operator asked to have done to one bot, for something with a loop to do.
+
+    An admin request must not talk to Telegram: a page that called ``getMe`` for five hundred
+    selected bots would hold a request open for five hundred round trips, and a timeout would
+    leave nobody knowing which of them had happened. So the page writes the *intent* and a
+    process that already has an event loop -- and already holds this bot -- carries it out and
+    writes back what it found.
+    """
+
+    #: ask Telegram who this token belongs to. The cheapest way to find out whether a
+    #: credential somebody pasted works at all
+    CHECK = 'check'
+    #: register this bot's webhook, with the URL and secret its settings resolve to
+    SET_WEBHOOK = 'set_webhook'
+    #: unregister it, which is what a bot being switched off needs before Telegram stops
+    #: posting updates at a URL that answers 404
+    DELETE_WEBHOOK = 'delete_webhook'
+
+
+@unique
 class RemovedQueuePolicy(str, Enum):
     """What becomes of a queue no bot publishes to any more.
 

@@ -122,6 +122,13 @@
   down, or not migrated here -- declares nothing and refuses nothing; no table at all is a
   different state, where the settings are the whole declaration.
 
+- **A token in an error message is redacted even where the deployment never configured it.**
+  The shape the redaction matches was anchored on a word boundary, and the place a token
+  actually appears is the API URL -- `.../bot123456:AA.../sendMessage` -- where there is no
+  boundary between `bot` and the digits. So a message from aiogram went into a feed row intact
+  unless that token was also in the settings, which is where every token used to be. A bot
+  configured in a row had no such second chance.
+
 - **An admin for the bots, their profiles and their queues.** Registered from
   `AppConfig.ready()` and behind no setting: the container that renders it may send nothing and
   record nothing, and it is still where the bots the other containers serve are configured.
@@ -164,6 +171,14 @@
   Adding a bot needs `view_telegrambot_token`, and the token field is absent from the *form* a
   user without it gets rather than only from the page: an unrendered section still posts back,
   and a token accepted from somebody who may not read one is the bot given away.
+
+  **The three actions that would need the network write an intent instead.** *Check the token*,
+  *register the webhook* and *remove the webhook* record what was asked on the row --
+  `TelegramBot.intent` and three columns beside it -- and `manage.py tgbot_intents` (or, once it
+  runs there, a supervisor holding that bot) carries it out and writes one line back. Each is
+  claimed with a compare-and-set, so two containers reading one table cannot both call Telegram
+  for a bot, and an operator asking for something else meanwhile keeps their newer question.
+  What comes back is redacted the way a feed row is.
 
   **Reading a token is a deliberate act and a recorded one.** The mask carries a *show it*
   link to a page of its own, which asks for confirmation and writes `bot.token_revealed` into

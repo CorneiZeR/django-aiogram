@@ -72,3 +72,21 @@ def test_an_empty_error_stays_empty(text):
     row = to_row(Event(kind='outbound.sent', error=text or ''))
 
     assert row.error == ''
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_token_this_deployment_never_configured_is_redacted_out_of_an_api_url():
+    """The realistic leak, and the one the shape has to catch on its own.
+
+    Since 5.0 a client's token lives in a row rather than in the settings, so redaction by
+    value cannot reach it — and the place it appears is the API URL, where there is no word
+    boundary between `bot` and the digits. A pattern anchored on one matched a token with
+    spaces around it and left every aiogram error message untouched.
+    """
+    other = '987654321:BBSomeOtherBotsTokenEntirelyDifferent'
+    message = f'aiohttp.ClientError: POST https://api.telegram.org/bot{other}/sendMessage failed'
+
+    row = to_row(Event(kind='outbound.failed', error=message))
+
+    assert other not in row.error
+    assert 'api.telegram.org' in row.error, 'the whole message was thrown away rather than redacted'
