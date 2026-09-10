@@ -63,7 +63,8 @@ value that was read, so a rewrapped copy of the old token cannot replace it.
 ## Rotating a key
 
 The keys are listed newest first: the first one encrypts, every one of them decrypts. A list or
-a tuple — a set has no order to be first in, and `E063` refuses one.
+a tuple — a set has no order to be first in, and `E063` refuses one. A single key may be a
+bare string.
 
 ```python
 TELEGRAM_BOT_DEFAULTS = {
@@ -73,7 +74,10 @@ TELEGRAM_BOT_DEFAULTS = {
 ```
 
 1. Add the new key **in front** and deploy. Old rows still read.
-2. Run `manage.py tgbot_rewrap_tokens`. Each row is rewritten under the new key.
+2. Wait until every process is running with both keys, then run
+   `manage.py tgbot_rewrap_tokens`. Each row is rewritten under the new key — and a process
+   still running with the old list alone cannot read a rewritten row, so on a rolling deploy
+   the walk has to wait for the rollout to finish rather than run beside it.
 3. Drop the old key from the list and deploy again.
 
 Doing step 3 before step 2 is the one mistake that costs data: the rows written under the old

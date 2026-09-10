@@ -483,10 +483,14 @@ def _keys_for_a_storage_that_needs_them(key: str, record: BotRecord) -> list[Pro
     reports the missing keys even where the storage refuses to be built *because* they are
     missing -- `E062` says it cannot be built and this says what is absent.
     """
-    problems = _a_collection_of_strings(key, record)
-    if problems:
-        return problems
     keys = _setting(key, record)
+    if not isinstance(keys, str):
+        # a bare string is one key rather than a collection of characters, which is what
+        # `FernetTokenStorage` does with it -- so the shape rule is skipped for that one case
+        # and refusing it here would block a configuration the storage supports
+        problems = _a_collection_of_strings(key, record)
+        if problems:
+            return problems
     if keys and isinstance(keys, (set, frozenset)):
         # a set cannot say which key is newest, and *newest first* is the whole contract here:
         # iterated in whatever order it happens to have, the ring would encrypt under a key an

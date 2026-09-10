@@ -2200,3 +2200,18 @@ def test_an_abstract_token_storage_is_reported_rather_than_crashing_the_checks()
     (found,) = [message for message in check_settings() if str(message.id).endswith('E062')]
 
     assert 'abstract' in found.msg
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={
+        'TOKEN_STORAGE': 'django_aiogram.crypto.FernetTokenStorage',
+        'TOKEN_ENCRYPTION_KEYS': 'one-key-written-as-a-string',
+    }
+)
+def test_one_key_written_as_a_bare_string_is_not_reported():
+    """The storage reads it as one key, so a check refusing it would block what works.
+
+    Which is the one place `TOKEN_ENCRYPTION_KEYS` parts from `QUEUES`: a string there is a
+    collection of characters and every one of them a queue name, and here it is a key.
+    """
+    assert not [message for message in check_settings() if str(message.id).endswith('E063')]
