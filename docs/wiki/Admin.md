@@ -21,6 +21,12 @@ somebody else's bot.
 A new token is stored through `TOKEN_STORAGE`, like every other write — see
 **[Tokens](Tokens.md)**.
 
+**Reading one is a page of its own.** Next to the mask is *show it*, which asks for a
+confirmation and then writes a `bot.token_revealed` row into the event feed: the bot, and who
+asked. So "who saw this token" has an answer during the incident where somebody has to ask it —
+and a credential is never in a changeform, a browser history or a screenshot of one by accident.
+
+
 ## Fieldsets are permission boundaries
 
 | section | what is on it |
@@ -100,6 +106,30 @@ profile or a queue shows how many bots are on it, as a link to exactly those bot
 Saving a row moves its watermark and publishes a notice; a supervisor reads it and acts, seconds
 later. Nothing here calls `getMe` or `setWebhook`, which is what makes an action over five hundred
 selected rows return immediately instead of holding a request open for five hundred round trips.
+
+## Edits that would strand a backlog are refused
+
+Pointing a bot at a different queue leaves whatever is in the old one with nobody to take it: a
+consumer serves the queues it was told about, and after the move nothing points there. So the
+edit is refused while that queue still holds messages, and the message says what to do first —
+let it drain, or switch the bot off and drain it deliberately.
+
+Judged by the queue each configuration **resolves to**, not by the picker alone: a bot with no
+queue of its own takes one from its profile or the deployment's defaults, and moving that one
+strands a backlog like any other.
+
+A queue the transport **cannot be reached** to read is not a queue with messages in it: the edit
+goes through, because a page that refused every change while Redis blinked would be worse than
+the rare mistake. That is the same trade the supervisor makes about a provider it could not read.
+A transport that cannot be **built** — a `BROKER` naming nothing importable, a driver that is not
+installed — is refused instead: nobody can read that queue at all, then or later.
+
+**This is a guard, not a guarantee.** The depth read and the save are two steps, so a message
+published between them lands in the queue the bot is leaving. Closing that would mean holding a
+lock across every `bot.send()` in the deployment for an edit somebody makes twice a year. What
+the check catches is the ordinary mistake — moving a client with a visible backlog — and the
+order with no race in it is the one the message names: switch the bot off, let the queue drain,
+then move it.
 
 `quarantine_reason` and `quarantined_until` are the supervisor's own writing, read-only here: they
 say what happened to a bot, and a person clearing the text would not clear the condition. The

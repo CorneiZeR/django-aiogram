@@ -24,11 +24,12 @@ loading, and :meth:`~django_aiogram.apps.TelegramBotAppConfig.ready` is where se
 safe to read.
 """
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from django import forms
 from django.contrib import admin, messages
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db.models import Count
 from django.urls import reverse
 from django.utils import timezone
@@ -45,13 +46,16 @@ from django_aiogram.admin_overrides import (
     read_overrides,
     switch_name,
 )
+from django_aiogram.broker.exceptions import BrokerError
 from django_aiogram.config.bots import parse_bot_id
 from django_aiogram.models import TelegramBot, TelegramBotProfile, TelegramQueue
-from django_aiogram.tokens import store_token
+from django_aiogram.tokens import read_token, store_token
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping
+
     from django.db.models import QuerySet
-    from django.http import HttpRequest
+    from django.http import HttpRequest, HttpResponse
 
     BotAdminBase = admin.ModelAdmin[TelegramBot]
     ProfileAdminBase = admin.ModelAdmin[TelegramBotProfile]
@@ -69,6 +73,8 @@ MASK = '{bot_id}:{hidden}'
 HIDDEN = '•' * 8
 
 #: the permission the credentials section is behind
+logger = logging.getLogger('django_aiogram')
+
 BOT_CHANGELIST = 'admin:django_aiogram_telegrambot_changelist'
 
 TOKEN_PERMISSION = 'django_aiogram.view_telegrambot_token'  # noqa: S105 - a permission name, not a secret
@@ -164,7 +170,90 @@ class TelegramBotForm(BotFormBase):
             parse_bot_id(given),
         )
         self.overrides = self._decided(cleaned)
+        # after the overrides are collected: a bot's queue may be one of them, so the edit
+        # cannot be judged before this submission's own settings are known
+        self._refuse_a_stranded_backlog(cleaned, self.overrides)
         return cleaned
+
+    def _refuse_a_stranded_backlog(self, cleaned: 'dict[str, Any]', decided: 'dict[str, Any]') -> None:
+        """Refuse moving a bot off a queue that still holds its messages.
+
+        A queue is where this bot's backlog is: point the bot somewhere else and the messages
+        already in the old one have nobody to take them -- a consumer serves the queues it was
+        told about, and nothing points at that one any more. So the edit is refused with the
+        thing to do first, which is to let it drain.
+
+        **By the queue each configuration resolves to, not by the foreign key.** A row with no
+        queue of its own takes one from its profile or from the deployment's defaults, so
+        comparing the two columns would skip the check exactly where the queue is inherited --
+        and moving such a bot strands its backlog like any other.
+
+        **A queue that cannot be reached is not a queue with messages in it.** The depth read
+        goes over the network, and an admin page that refuses every edit because Redis blinked
+        would be worse than one that lets a rare mistake through -- the same trade the
+        supervisor makes about a provider it could not read. A transport that cannot be *built*
+        is refused instead: see `_waiting_in`.
+
+        **And this is a guard rather than a guarantee.** The read and the save are two steps,
+        so a message published between them lands in the queue this bot is leaving. Nothing
+        here can close that without holding a lock across every send in the deployment, which
+        is a cost this package will not put on `bot.send()` for an edit somebody makes twice a
+        year. What it catches is the ordinary mistake -- moving a client with a visible backlog
+        -- and the message names the order that has no race in it: switch the bot off, let the
+        queue drain, then move it.
+        """
+        if not self.instance.pk:
+            # a bot being added has no backlog anywhere: there was no queue before this
+            return
+        # each side through its own inheritance: `clean` has already re-resolved
+        # `self.inherited` for the profile this submission chose, and resolving the *previous*
+        # queue through it would read the new profile's `QUEUE` -- missing a backlog the bot
+        # inherited from the profile it is leaving
+        held, _ = read_overrides(self.instance, self.instance.profile)
+        was = self._resolves_to(self.instance.queue, self.instance.overrides or {}, held)
+        now = self._resolves_to(cleaned.get('queue'), decided, self.inherited)
+        if not was or was == now:
+            return
+        try:
+            waiting = _waiting_in(was)
+        except (ImproperlyConfigured, BrokerError) as refused:
+            # the transport cannot be *built*, so nobody can say what that queue holds -- now
+            # or after the edit. Refused rather than allowed: a misconfigured deployment would
+            # otherwise find every dangerous edit permitted
+            msg = (
+                f'{was} cannot be read, so this edit cannot be judged: {refused}. '
+                'Fix the transport settings, or switch the bot off and drain it deliberately.'
+            )
+            self.add_error('queue', msg)
+            return
+        if waiting:
+            msg = (
+                f'{was} still holds {waiting} message(s). Moving this bot would strand them: '
+                'let the queue drain first, or switch the bot off and drain it deliberately.'
+            )
+            self.add_error('queue', msg)
+
+    @staticmethod
+    def _resolves_to(
+        queue: 'TelegramQueue | None',
+        overrides: 'Mapping[str, Any]',
+        inherited: 'Mapping[str, Any]',
+    ) -> str:
+        """Return the queue name one configuration of this bot ends up publishing to.
+
+        The same precedence `runtime.providers` applies: the row's own `QUEUE` override wins,
+        then the queue it points at, then whatever the profile and the defaults resolved to.
+
+        ``inherited`` is passed rather than read off the form, because the two sides of a
+        comparison have different ones: the profile the row holds, and the profile the
+        submission chose.
+        """
+        written = str(overrides.get('QUEUE') or '').strip()
+        if written:
+            return written
+        if queue is not None:
+            return queue.name
+        return str(inherited.get('QUEUE') or '').strip()
 
     def _decided(self, cleaned: 'dict[str, Any]') -> 'dict[str, Any]':
         """Collect the settings whose box is checked, refusing what the package would refuse.
@@ -334,6 +423,60 @@ class TelegramBotAdmin(BotAdminBase):
             shown.append((title, settings))
         return tuple(shown)
 
+    def get_urls(self) -> list[Any]:
+        """Add the one page that shows a credential, so revealing it is a deliberate act.
+
+        A page rather than a column: a token rendered into the changeform is a token in a
+        browser history, a proxy log and every screenshot of that page, whether anybody meant
+        to read it or not. Here it takes a click, from a user holding the permission, and it
+        leaves a row in the feed saying who.
+        """
+        from django.urls import path  # noqa: PLC0415 - the URL conf, and this module is imported early
+
+        return [
+            path(
+                '<int:pk>/token/',
+                self.admin_site.admin_view(self.reveal_token),
+                name='django_aiogram_telegrambot_token',
+            ),
+            *super().get_urls(),
+        ]
+
+    def reveal_token(self, request: 'HttpRequest', pk: int) -> 'HttpResponse':
+        """Show one bot's token to somebody holding the permission, and record that.
+
+        `bot.token_revealed` goes into the append-only feed, so *who saw this token* has an
+        answer during the incident where somebody has to ask. Recorded before the value is
+        rendered: a response that reached the browser and no row is the one order that leaves
+        the question unanswerable.
+        """
+        from django.http import Http404, HttpResponseForbidden  # noqa: PLC0415 - as in `get_urls`
+        from django.template.response import TemplateResponse  # noqa: PLC0415 - as above
+
+        if not (may_see_tokens(request) and self.has_view_permission(request)):
+            return HttpResponseForbidden('You may not read bot tokens.')
+        bot = self.get_queryset(request).filter(pk=pk).first()
+        if bot is None:
+            raise Http404
+        if not self.has_view_permission(request, bot):
+            # asked again with the row in hand: a deployment may allow a user to read *some*
+            # bots, and the check above knows only that they may read the model
+            return HttpResponseForbidden('You may not read this bot.')
+        shown = read_token(bot.token) if request.method == 'POST' else ''
+        if shown:
+            _record_reveal(bot, request)
+        return TemplateResponse(
+            request,
+            'admin/django_aiogram/reveal_token.html',
+            {
+                **self.admin_site.each_context(request),
+                'title': f'Token for {bot}',
+                'bot': bot,
+                'token': shown,
+                'opts': self.opts,
+            },
+        )
+
     def get_form(
         self,
         request: 'HttpRequest',
@@ -429,10 +572,93 @@ class TelegramBotAdmin(BotAdminBase):
 
     @admin.display(description='token')
     def token_mask(self, obj: TelegramBot) -> str:
-        """Show that a token is there, and its identity, without showing the token."""
+        """Show that a token is there, and its identity, with a way to read the rest.
+
+        The link is a page of its own rather than a value in this one: see `reveal_token`.
+        """
         if not obj.token:
             return 'not set'
-        return MASK.format(bot_id=obj.bot_id, hidden=HIDDEN)
+        masked = MASK.format(bot_id=obj.bot_id, hidden=HIDDEN)
+        if not obj.pk:
+            return masked
+        target = reverse('admin:django_aiogram_telegrambot_token', args=(obj.pk,))
+        return format_html('{} <a href="{}">show it</a>', masked, target)
+
+
+def _waiting_in(queue: str) -> int:
+    """How many messages one queue still holds, or zero where that cannot be read.
+
+    Zero for a transport that could not be *reached*: it has not said the queue is empty, but
+    it has not said it is full either, and a page that refused every edit while Redis blinked
+    would be worse than the rare mistake -- see `TelegramBotForm.clean_queue`.
+
+    **A transport that cannot be built is a different answer.** A `BROKER` that names nothing
+    importable, or a driver that is not installed, means nobody can read this queue *at all* --
+    including after the edit -- so it is raised rather than turned into a zero. Otherwise a
+    misconfigured deployment would find every dangerous edit allowed, which is the one shape
+    where the refusal is needed most.
+    """
+    # deferred: building a transport imports its driver, and this module is imported by
+    # `admin.autodiscover` while the app registry is still loading
+    from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
+    from django_aiogram.runtime.queues import settings_for  # noqa: PLC0415 - as above
+
+    settings = settings_for(queue)
+    # outside the guard below: `BrokerError` and `ImproperlyConfigured` from here are the
+    # settings being wrong, and the caller turns them into a refusal a person can act on
+    broker = broker_class(settings).configured(settings)
+    # separately, and summed from what answered: a queue whose `depth()` said four and whose
+    # in-flight read then failed is a queue with four messages in it, and folding both into one
+    # `try` threw that away -- the answer was zero, and the edit went through
+    return _read(queue, broker.depth) + _read(queue, broker.inflight_depth)
+
+
+def _read(queue: str, ask: 'Callable[[], int]') -> int:
+    """Ask one transport for one number, or answer zero where it could not be reached.
+
+    Zero for unreachable rather than a refusal: an admin page that refused every edit while
+    Redis blinked would be worse than the rare mistake -- the same trade the supervisor makes
+    about a provider it could not read. A transport that cannot be *built* never reaches here.
+    """
+    try:
+        return int(ask())
+    except BrokerError:
+        # the transport's own way of saying it could not answer -- unreachable, or a depth it
+        # does not keep. Not the settings, so not a refusal
+        logger.warning('could not read the depth of %s; taking it as zero', queue, exc_info=True)
+        return 0
+    except OSError:
+        # a socket, which is the other half of "could not be reached": every driver here
+        # raises its own class, and they all derive from this one
+        logger.warning('could not reach the transport for %s; taking it as zero', queue, exc_info=True)
+        return 0
+
+
+def _record_reveal(bot: TelegramBot, request: 'HttpRequest') -> None:
+    """Write the feed row that says whose token was read, and by whom.
+
+    Best effort, like every other write into the feed: a recorder that is off or a database
+    that refused must not be the reason a page 500s. What it costs is the row -- and the
+    recorder logs its own failures.
+    """
+    # deferred: the recorder reaches the ORM and the settings, and this module is imported by
+    # `admin.autodiscover` while the app registry is still loading
+    from django_aiogram.config.enums import EventKind  # noqa: PLC0415 - as above
+    from django_aiogram.eventlog.recorder import recorder  # noqa: PLC0415 - as above
+    from django_aiogram.eventlog.records import Event  # noqa: PLC0415 - as above
+
+    if not recorder.active:
+        return
+    who = getattr(request.user, 'get_username', lambda: '')() or 'anonymous'
+    recorder.record(
+        Event(
+            kind=EventKind.BOT_TOKEN_REVEALED.value,
+            bot_id=bot.bot_id,
+            # the username in `detail` rather than in a column: the feed's columns are the
+            # ones its indexes serve, and nothing queries this by user
+            detail={'by': who, 'label': bot.label},
+        )
+    )
 
 
 def _without_the_credentials(form: 'type[BotFormBase]') -> 'type[BotFormBase]':

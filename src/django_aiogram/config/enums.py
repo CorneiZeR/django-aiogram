@@ -125,6 +125,10 @@ class EventKind(str, Enum):
     FSM_TRANSITION = 'fsm.transition'
     QUEUE_UNDECODABLE = 'queue.undecodable'
     QUEUE_REJECTED = 'queue.rejected'
+    #: written when somebody with `view_telegrambot_token` reveals a bot's credential in the
+    #: admin. Its own kind because "who saw the token" is a question an incident asks, and the
+    #: feed is the only place in this package that can answer it
+    BOT_TOKEN_REVEALED = 'bot.token_revealed'  # noqa: S105 - an event kind, not a credential
     LOG_DROPPED = 'log.dropped'
 
 

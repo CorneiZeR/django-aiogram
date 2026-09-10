@@ -514,3 +514,255 @@ def test_a_reader_who_may_not_change_a_bot_still_gets_a_page(client):
 
     assert response.status_code == 200
     assert str(bot.bot_id) in response.content.decode()
+
+
+REVEAL = '{pk}/token/'
+
+
+def test_revealing_a_token_needs_the_permission(client):
+    """A change permission is not a permission to read the credential."""
+    bot = a_bot()
+    client.force_login(a_user('support', 'view_telegrambot', 'change_telegrambot'))
+
+    response = client.post(BOTS + REVEAL.format(pk=bot.pk))
+
+    assert response.status_code == 403
+    assert TOKEN not in response.content.decode()
+
+
+def test_revealing_a_token_shows_it_once_and_records_who(client, monkeypatch):
+    """ "Who saw this token" is a question an incident asks, and the feed is what answers it.
+
+    Asserted on what reaches the recorder rather than on the row it writes: the writer is a
+    thread with its own connection, and a case that waited for it would be asserting the
+    recorder's own plumbing — which `tests/db/test_recorder.py` already covers.
+    """
+    from django_aiogram.config.enums import EventKind
+    from django_aiogram.eventlog import recorder as recorder_module
+
+    bot = a_bot()
+    kept = []
+    monkeypatch.setattr(type(recorder_module.recorder), 'active', property(lambda self: True))
+    monkeypatch.setattr(recorder_module.recorder, 'record', kept.append)
+    client.force_login(a_user('trusted', 'view_telegrambot', 'view_telegrambot_token'))
+
+    page = client.get(BOTS + REVEAL.format(pk=bot.pk)).content.decode()
+    assert TOKEN not in page, 'a GET showed the credential without being asked'
+    assert not kept, 'a GET recorded a reveal that did not happen'
+
+    shown = client.post(BOTS + REVEAL.format(pk=bot.pk)).content.decode()
+
+    assert TOKEN in shown
+    (event,) = kept
+    assert event.kind == EventKind.BOT_TOKEN_REVEALED.value
+    assert event.bot_id == bot.bot_id
+    assert event.detail['by'] == 'trusted'
+
+
+def test_the_feed_says_which_bot_a_row_is_about():
+    """The column has been there since 5.0 and nothing filled it.
+
+    A deployment with twenty clients reads this feed to answer "whose bot failed", and a
+    column of nulls answers nothing.
+    """
+    from django_aiogram.eventlog.records import Event
+    from django_aiogram.eventlog.writer import to_row
+
+    row = to_row(Event(kind='outbound.sent', bot_id=123456))
+
+    assert row.bot_id == 123456
+
+
+def test_moving_a_bot_off_a_queue_that_still_holds_messages_is_refused(client, monkeypatch):
+    """The messages already in the old queue would have nobody to take them.
+
+    A consumer serves the queues it was told about, and after the move nothing points at that
+    one — so the backlog is stranded rather than delivered late. The refusal names what to do
+    first.
+    """
+    held = TelegramQueue.objects.create(name='client-a', pool='default')
+    other = TelegramQueue.objects.create(name='client-b', pool='default')
+    bot = a_bot(queue=held)
+    monkeypatch.setattr('django_aiogram.admin_bots._waiting_in', lambda name: 4 if name == 'client-a' else 0)
+    client.force_login(a_user('editor', 'view_telegrambot', 'change_telegrambot'))
+
+    response = client.post(
+        f'{BOTS}{bot.pk}/change/',
+        {'label': bot.label, 'token': '', 'enabled': 'on', 'queue': str(other.pk)},
+    )
+
+    assert response.status_code == 200
+    assert 'still holds 4 message' in response.content.decode()
+    bot.refresh_from_db()
+    assert bot.queue_id == held.pk, 'the bot was moved anyway'
+
+
+def test_a_transport_that_cannot_be_built_refuses_the_edit(client):
+    """A `BROKER` naming nothing importable means nobody can read that queue — ever.
+
+    Not "the queue is empty": a misconfigured deployment would otherwise find every dangerous
+    edit allowed, which is the shape where the refusal matters most.
+    """
+    held = TelegramQueue.objects.create(name='client-a', pool='default')
+    other = TelegramQueue.objects.create(name='client-b', pool='default')
+    bot = a_bot(queue=held)
+    client.force_login(a_user('editor', 'view_telegrambot', 'change_telegrambot'))
+
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'BROKER': 'no.such.module.Broker'}):
+        response = client.post(
+            f'{BOTS}{bot.pk}/change/',
+            {'label': bot.label, 'enabled': 'on', 'queue': str(other.pk)},
+        )
+
+    assert response.status_code == 200
+    assert 'cannot be read' in response.content.decode()
+    bot.refresh_from_db()
+    assert bot.queue_id == held.pk, 'the bot was moved on a deployment nothing could read'
+
+
+def test_a_queue_that_cannot_be_reached_does_not_block_the_edit(client, monkeypatch):
+    """A page that refused every edit because Redis blinked would be worse than the mistake.
+
+    The same trade the supervisor makes about a provider it could not read: an unreachable
+    transport has not said the queue is full. Distinct from a transport that cannot be *built*,
+    which is refused — the case above.
+    """
+    held = TelegramQueue.objects.create(name='client-a', pool='default')
+    other = TelegramQueue.objects.create(name='client-b', pool='default')
+    bot = a_bot(queue=held)
+
+    class Unreachable:
+        """A transport whose server is not answering, the way a blinking Redis looks."""
+
+        def configured(self, _settings):
+            """Answer as a configured broker does."""
+            return self
+
+        def depth(self):
+            """Refuse the way a socket does."""
+            msg = 'connection refused'
+            raise ConnectionError(msg)
+
+        def inflight_depth(self, worker=None):
+            """Never reached; the depth read raises first."""
+            return 0
+
+    monkeypatch.setattr('django_aiogram.broker.registry.broker_class', lambda *_a, **_k: Unreachable())
+    client.force_login(a_user('editor', 'view_telegrambot', 'change_telegrambot'))
+
+    response = client.post(
+        f'{BOTS}{bot.pk}/change/',
+        {'label': bot.label, 'enabled': 'on', 'queue': str(other.pk)},
+    )
+
+    assert response.status_code == 302, response.content
+    bot.refresh_from_db()
+    assert bot.queue_id == other.pk
+
+
+def test_a_bot_whose_queue_is_inherited_is_judged_by_the_queue_it_actually_uses(client, monkeypatch):
+    """A row with no queue of its own takes one from its profile, and that one holds messages.
+
+    Comparing the two foreign keys skips the check exactly where the queue is inherited — and
+    moving such a bot strands its backlog like any other.
+    """
+    profile = TelegramBotProfile.objects.create(name='vip', overrides={'QUEUE': 'inherited-queue'})
+    other = TelegramQueue.objects.create(name='client-b', pool='default')
+    bot = a_bot(profile=profile)
+    monkeypatch.setattr('django_aiogram.admin_bots._waiting_in', lambda name: 3 if name == 'inherited-queue' else 0)
+    client.force_login(a_user('editor', 'view_telegrambot', 'change_telegrambot'))
+
+    response = client.post(
+        f'{BOTS}{bot.pk}/change/',
+        {'label': bot.label, 'enabled': 'on', 'profile': str(profile.pk), 'queue': str(other.pk)},
+    )
+
+    assert response.status_code == 200
+    assert 'inherited-queue still holds 3 message' in response.content.decode()
+    bot.refresh_from_db()
+    assert bot.queue_id is None, 'the bot was moved off a queue holding its backlog'
+
+
+def test_a_backlog_one_read_confirmed_is_not_lost_to_the_others_failure(client, monkeypatch):
+    """`depth()` said four and the in-flight read then failed: that is four messages.
+
+    Folding both reads into one guard answered zero, and the move went through.
+    """
+    held = TelegramQueue.objects.create(name='client-a', pool='default')
+    other = TelegramQueue.objects.create(name='client-b', pool='default')
+    bot = a_bot(queue=held)
+
+    class Half:
+        """A transport that can count what is queued and not what is in flight."""
+
+        def configured(self, _settings):
+            """Answer as a configured broker does."""
+            return self
+
+        def depth(self):
+            """Four messages, and this read worked."""
+            return 4
+
+        def inflight_depth(self, worker=None):
+            """Refuse the way a transport that keeps no such number does."""
+            from django_aiogram.broker.exceptions import BrokerError
+
+            msg = 'no in-flight count here'
+            raise BrokerError(msg)
+
+    monkeypatch.setattr('django_aiogram.broker.registry.broker_class', lambda *_a, **_k: Half())
+    client.force_login(a_user('editor', 'view_telegrambot', 'change_telegrambot'))
+
+    response = client.post(
+        f'{BOTS}{bot.pk}/change/',
+        {'label': bot.label, 'enabled': 'on', 'queue': str(other.pk)},
+    )
+
+    assert response.status_code == 200
+    assert 'still holds 4 message' in response.content.decode()
+    bot.refresh_from_db()
+    assert bot.queue_id == held.pk
+
+
+def test_the_previous_queue_is_resolved_through_the_previous_profile(client, monkeypatch):
+    """Moving a bot between profiles moves the queue it inherits, so both sides need their own.
+
+    Resolved through the *new* profile, the old queue reads as the new one's — and a backlog
+    the bot inherited from the profile it is leaving is missed entirely.
+    """
+    leaving = TelegramBotProfile.objects.create(name='leaving', overrides={'QUEUE': 'queue-a'})
+    joining = TelegramBotProfile.objects.create(name='joining', overrides={'QUEUE': 'queue-b'})
+    bot = a_bot(profile=leaving)
+    monkeypatch.setattr('django_aiogram.admin_bots._waiting_in', lambda name: 2 if name == 'queue-a' else 0)
+    client.force_login(a_user('editor', 'view_telegrambot', 'change_telegrambot'))
+
+    response = client.post(
+        f'{BOTS}{bot.pk}/change/',
+        {'label': bot.label, 'enabled': 'on', 'profile': str(joining.pk)},
+    )
+
+    assert response.status_code == 200
+    assert 'queue-a still holds 2 message' in response.content.decode()
+    bot.refresh_from_db()
+    assert bot.profile_id == leaving.pk, 'the bot moved off a queue holding its backlog'
+
+
+def test_revealing_a_token_asks_the_permission_with_the_row_in_hand(client, monkeypatch):
+    """A deployment may let a user read *some* bots, and the model-level check cannot say which.
+
+    So the permission is asked again once the row is loaded, before the credential is read.
+    """
+    from django_aiogram.admin_bots import TelegramBotAdmin
+
+    bot = a_bot()
+    monkeypatch.setattr(
+        TelegramBotAdmin,
+        'has_view_permission',
+        lambda self, request, obj=None: obj is None,
+    )
+    client.force_login(a_user('trusted', 'view_telegrambot', 'view_telegrambot_token'))
+
+    response = client.post(BOTS + REVEAL.format(pk=bot.pk))
+
+    assert response.status_code == 403
+    assert TOKEN not in response.content.decode()

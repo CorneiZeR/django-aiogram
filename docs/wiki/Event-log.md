@@ -64,6 +64,7 @@ gives you `sent` rows with no `queued` rows to match. That is not a bug.
 | `fsm.transition` | a chat's state changed |
 | `queue.undecodable` | a payload could not be decoded |
 | `queue.rejected` | a payload named something that is not a Telegram API method |
+| `bot.token_revealed` | somebody with `view_telegrambot_token` read a bot's credential in the admin. Who, and which bot — see **[Admin](Admin.md)** |
 | `log.dropped` | the writer fell behind and lost events — the gap, recorded |
 
 `outbound.dropped` is the one worth reading twice. Four different things end up
