@@ -388,6 +388,26 @@ class TelegramBot(models.Model):
     #: when it may be tried again, or ``None`` for a quarantine that needs a person -- a token
     #: Telegram has refused is not going to start working on a timer
     quarantined_until = models.DateTimeField(null=True, blank=True)
+    #: what an operator asked to have done to this bot, for a process with an event loop to
+    #: do. Empty while there is nothing outstanding. **A request never talks to Telegram**: a
+    #: page that called `getMe` for five hundred selected bots would hold the request open for
+    #: five hundred round trips, so what the admin writes is the asking and something that
+    #: already holds this bot answers it
+    intent = models.CharField(max_length=32, blank=True)
+    #: when it was asked, so an intent nothing has picked up is visible as one
+    intent_asked_at = models.DateTimeField(null=True, blank=True)
+    #: which process is carrying it out, and since when. A **lease** rather than a flag: the
+    #: asking stays in `intent` until an answer is written, so a worker that died holding one
+    #: loses it to whoever asks next instead of taking the only record of it with them. And a
+    #: result is written only by the claim that is still held, so a slow worker cannot replace
+    #: the answer to a question somebody asked after it
+    intent_claim = models.CharField(max_length=64, blank=True)
+    intent_claimed_at = models.DateTimeField(null=True, blank=True)
+    #: what came back, in one line a person can read. Never the token: aiogram puts the API
+    #: URL into its messages, so what is written here is redacted the way a feed row is
+    intent_result = models.CharField(max_length=200, blank=True)
+    #: when the answer was written, which is what makes a stale result readable as stale
+    intent_done_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(default=timezone.now)
     #: the watermark a reconciling supervisor polls, for the reason the profile's says
     updated_at = models.DateTimeField(auto_now=True)

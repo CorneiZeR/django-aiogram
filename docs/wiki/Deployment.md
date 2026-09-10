@@ -211,26 +211,27 @@ purpose. See below.
 
 ## The jobs nothing runs for you
 
-Two commands do work no request path does, so a deployment that never schedules them is a
+Three commands do work no request path does, so a deployment that never schedules them is a
 deployment where that work never happens:
 
 | command | what waits on it |
 | --- | --- |
 | `manage.py tgbot_prune_events` | the event log's size. `W006` warns while `EVENT_LOG_RETENTION_DAYS` is unset |
 | `manage.py tgbot_dispatch_scheduled` | every send made with an `eta`. Without it a scheduled message waits for ever |
+| `manage.py tgbot_intents` | every check and webhook change asked for in the admin. Without it those actions are recorded and never carried out. `--watch` is the always-on form; a person is waiting, so seconds is the useful interval |
 
-`manage.py tgbot_replay` is the third command, and deliberately not on that list: it is run by
-a person, after an incident, with `--dry-run` first — see
+**The commands that are deliberately not on that list**, each for its own reason.
+
+`manage.py tgbot_replay` is run by a person, after an incident, with `--dry-run` first — see
 **[Troubleshooting](Troubleshooting.md#telegram-was-down-what-did-we-lose-and-can-it-be-sent-again)**.
 Scheduling it would mean re-sending failures nobody has looked at.
 
-`manage.py tgbot_rewrap_tokens` is the fourth, and it is run when the storage the tokens are
-kept in changes: after turning an encrypting `TOKEN_STORAGE` on, which leaves the rows written
+`manage.py tgbot_rewrap_tokens` is run when the storage the tokens are kept in changes: after turning an encrypting `TOKEN_STORAGE` on, which leaves the rows written
 before it in plain, and after rotating its key. Not on a schedule — it has nothing to do until
 one of those two things happens — see **[Tokens](Tokens.md)**.
 
-`manage.py tgbot_prune_queues` is the fifth, and it is on neither list because that depends
-on your `REMOVED_QUEUE_POLICY`. A queue per client is what keeps one client's backlog off
+`manage.py tgbot_prune_queues` belongs on neither list, because that depends on your
+`REMOVED_QUEUE_POLICY`. A queue per client is what keeps one client's backlog off
 another's, and it is also how a deployment leaks: a client goes, their bot's row goes, and a
 Redis key, an AMQP queue or a consumer group stays for ever. The command finds the queues no
 bot points at and does what the policy says:
