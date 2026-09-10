@@ -40,6 +40,14 @@ class TelegramBotAppConfig(AppConfig):
 
             register_event_log_admin()
 
+        # not behind `recording` and not behind `enabled`: the bots a deployment serves are
+        # configured from this page, and the process that renders it is a web container that
+        # may send nothing and record nothing. The import chain is admin -> models -> django.db
+        if apps.is_installed('django.contrib.admin'):
+            from django_aiogram.admin_bots import register_bot_admin  # noqa: PLC0415 - as above
+
+            register_bot_admin()
+
         if not (enabled or recording):
             logger.debug('django-aiogram is disabled in this process')
             return
