@@ -177,7 +177,11 @@
   **An edit that would strand a backlog is refused**: pointing a bot at another queue while the
   old one still holds messages leaves them with no consumer, so the page says to drain it
   first. A queue the transport cannot be reached to read is not a full one, and the edit goes
-  through -- the trade the supervisor makes about a provider it could not read.
+  through -- the trade the supervisor makes about a provider it could not read; a transport
+  that cannot be *built* is refused, because then nobody can read that queue at all. It is a
+  guard rather than a guarantee: the read and the save are two steps, and closing that would
+  mean a lock across every send in the deployment. The order with no race in it is the one the
+  refusal names -- switch the bot off, let the queue drain, then move it.
 
   The list is built to be scanned: the pool, the settings each bot overrides and whether
   anything is serving it, filters over the switch, profile, queue and pool, and **Switch

@@ -597,27 +597,62 @@ def test_moving_a_bot_off_a_queue_that_still_holds_messages_is_refused(client, m
     assert bot.queue_id == held.pk, 'the bot was moved anyway'
 
 
-def test_a_queue_that_cannot_be_read_does_not_block_the_edit(client, monkeypatch):
+def test_a_transport_that_cannot_be_built_refuses_the_edit(client):
+    """A `BROKER` naming nothing importable means nobody can read that queue — ever.
+
+    Not "the queue is empty": a misconfigured deployment would otherwise find every dangerous
+    edit allowed, which is the shape where the refusal matters most.
+    """
+    held = TelegramQueue.objects.create(name='client-a', pool='default')
+    other = TelegramQueue.objects.create(name='client-b', pool='default')
+    bot = a_bot(queue=held)
+    client.force_login(a_user('editor', 'view_telegrambot', 'change_telegrambot'))
+
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'BROKER': 'no.such.module.Broker'}):
+        response = client.post(
+            f'{BOTS}{bot.pk}/change/',
+            {'label': bot.label, 'enabled': 'on', 'queue': str(other.pk)},
+        )
+
+    assert response.status_code == 200
+    assert 'cannot be read' in response.content.decode()
+    bot.refresh_from_db()
+    assert bot.queue_id == held.pk, 'the bot was moved on a deployment nothing could read'
+
+
+def test_a_queue_that_cannot_be_reached_does_not_block_the_edit(client, monkeypatch):
     """A page that refused every edit because Redis blinked would be worse than the mistake.
 
     The same trade the supervisor makes about a provider it could not read: an unreachable
-    transport has not said the queue is full.
+    transport has not said the queue is full. Distinct from a transport that cannot be *built*,
+    which is refused — the case above.
     """
     held = TelegramQueue.objects.create(name='client-a', pool='default')
     other = TelegramQueue.objects.create(name='client-b', pool='default')
     bot = a_bot(queue=held)
 
-    def unreachable(_settings=None, **_kwargs):
-        """Refuse the way a broker with no server does."""
-        msg = 'no server'
-        raise RuntimeError(msg)
+    class Unreachable:
+        """A transport whose server is not answering, the way a blinking Redis looks."""
 
-    monkeypatch.setattr('django_aiogram.broker.registry.broker_class', unreachable)
+        def configured(self, _settings):
+            """Answer as a configured broker does."""
+            return self
+
+        def depth(self):
+            """Refuse the way a socket does."""
+            msg = 'connection refused'
+            raise ConnectionError(msg)
+
+        def inflight_depth(self, worker=None):
+            """Never reached; the depth read raises first."""
+            return 0
+
+    monkeypatch.setattr('django_aiogram.broker.registry.broker_class', lambda *_a, **_k: Unreachable())
     client.force_login(a_user('editor', 'view_telegrambot', 'change_telegrambot'))
 
     response = client.post(
         f'{BOTS}{bot.pk}/change/',
-        {'label': bot.label, 'token': '', 'enabled': 'on', 'queue': str(other.pk)},
+        {'label': bot.label, 'enabled': 'on', 'queue': str(other.pk)},
     )
 
     assert response.status_code == 302, response.content

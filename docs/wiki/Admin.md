@@ -117,6 +117,15 @@ let it drain, or switch the bot off and drain it deliberately.
 A queue the transport **cannot be reached** to read is not a queue with messages in it: the edit
 goes through, because a page that refused every change while Redis blinked would be worse than
 the rare mistake. That is the same trade the supervisor makes about a provider it could not read.
+A transport that cannot be **built** — a `BROKER` naming nothing importable, a driver that is not
+installed — is refused instead: nobody can read that queue at all, then or later.
+
+**This is a guard, not a guarantee.** The depth read and the save are two steps, so a message
+published between them lands in the queue the bot is leaving. Closing that would mean holding a
+lock across every `bot.send()` in the deployment for an edit somebody makes twice a year. What
+the check catches is the ordinary mistake — moving a client with a visible backlog — and the
+order with no race in it is the one the message names: switch the bot off, let the queue drain,
+then move it.
 
 `quarantine_reason` and `quarantined_until` are the supervisor's own writing, read-only here: they
 say what happened to a bot, and a person clearing the text would not clear the condition. The

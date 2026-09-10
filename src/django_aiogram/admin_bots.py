@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 from django import forms
 from django.contrib import admin, messages
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db.models import Count
 from django.urls import reverse
 from django.utils import timezone
@@ -46,6 +46,7 @@ from django_aiogram.admin_overrides import (
     read_overrides,
     switch_name,
 )
+from django_aiogram.broker.exceptions import BrokerError
 from django_aiogram.config.bots import parse_bot_id
 from django_aiogram.models import TelegramBot, TelegramBotProfile, TelegramQueue
 from django_aiogram.tokens import read_token, store_token
@@ -180,13 +181,32 @@ class TelegramBotForm(BotFormBase):
         **A queue that cannot be reached is not a queue with messages in it.** The depth read
         goes over the network, and an admin page that refuses every edit because Redis blinked
         would be worse than one that lets a rare mistake through -- the same trade the
-        supervisor makes about a provider it could not read.
+        supervisor makes about a provider it could not read. A transport that cannot be *built*
+        is refused instead: see `_waiting_in`.
+
+        **And this is a guard rather than a guarantee.** The read and the save are two steps,
+        so a message published between them lands in the queue this bot is leaving. Nothing
+        here can close that without holding a lock across every send in the deployment, which
+        is a cost this package will not put on `bot.send()` for an edit somebody makes twice a
+        year. What it catches is the ordinary mistake -- moving a client with a visible backlog
+        -- and the message names the order that has no race in it: switch the bot off, let the
+        queue drain, then move it.
         """
         chosen = self.cleaned_data.get('queue')
         held = self.instance.queue if self.instance.pk else None
         if held is None or chosen == held:
             return chosen
-        waiting = _waiting_in(held.name)
+        try:
+            waiting = _waiting_in(held.name)
+        except (ImproperlyConfigured, BrokerError) as refused:
+            # the transport cannot be *built*, so nobody can say what that queue holds -- now
+            # or after the edit. Refused rather than allowed: a misconfigured deployment would
+            # otherwise find every dangerous edit permitted
+            msg = (
+                f'{held.name} cannot be read, so this edit cannot be judged: {refused}. '
+                'Fix the transport settings, or switch the bot off and drain it deliberately.'
+            )
+            raise ValidationError(msg) from refused
         if waiting:
             msg = (
                 f'{held.name} still holds {waiting} message(s). Moving this bot would strand them: '
@@ -524,20 +544,37 @@ class TelegramBotAdmin(BotAdminBase):
 def _waiting_in(queue: str) -> int:
     """How many messages one queue still holds, or zero where that cannot be read.
 
-    Zero for unreadable on purpose: this answers a *refusal*, and a transport that could not
-    be reached has not said the queue is full -- see `TelegramBotForm.clean_queue`.
+    Zero for a transport that could not be *reached*: it has not said the queue is empty, but
+    it has not said it is full either, and a page that refused every edit while Redis blinked
+    would be worse than the rare mistake -- see `TelegramBotForm.clean_queue`.
+
+    **A transport that cannot be built is a different answer.** A `BROKER` that names nothing
+    importable, or a driver that is not installed, means nobody can read this queue *at all* --
+    including after the edit -- so it is raised rather than turned into a zero. Otherwise a
+    misconfigured deployment would find every dangerous edit allowed, which is the one shape
+    where the refusal is needed most.
     """
     # deferred: building a transport imports its driver, and this module is imported by
     # `admin.autodiscover` while the app registry is still loading
+    from django_aiogram.broker.exceptions import BrokerError  # noqa: PLC0415 - as above
     from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
     from django_aiogram.runtime.queues import settings_for  # noqa: PLC0415 - as above
 
+    settings = settings_for(queue)
+    # outside the guard below: `BrokerError` and `ImproperlyConfigured` from here are the
+    # settings being wrong, and `clean_queue` turns them into a refusal a person can act on
+    broker = broker_class(settings).configured(settings)
     try:
-        settings = settings_for(queue)
-        broker = broker_class(settings).configured(settings)
         return int(broker.depth()) + int(broker.inflight_depth())
-    except Exception:
+    except BrokerError:
+        # the transport's own way of saying it could not answer -- unreachable, or a depth it
+        # does not keep. Not the settings, so not a refusal
         logger.warning('could not read the depth of %s; allowing the edit', queue, exc_info=True)
+        return 0
+    except OSError:
+        # a socket, which is the other half of "could not be reached": every driver here
+        # raises its own class, and they all derive from this one
+        logger.warning('could not reach the transport for %s; allowing the edit', queue, exc_info=True)
         return 0
 
 
