@@ -77,3 +77,16 @@ def test_keys_it_cannot_use_are_refused_at_boot(keys, says):
         FernetTokenStorage()
 
     assert says in str(refused.value)
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN_STORAGE': CRYPTO, 'TOKEN_ENCRYPTION_KEYS': 5})
+def test_a_key_setting_there_is_no_walking_is_a_configuration_error():
+    """`E063` reports the shape; this is the same refusal for a process started without checks.
+
+    A raw `TypeError` out of the storage would reach a send or a webhook request as a
+    traceback about iteration, which says nothing about the setting that is wrong.
+    """
+    with pytest.raises(ImproperlyConfigured) as refused:
+        FernetTokenStorage()
+
+    assert 'TOKEN_ENCRYPTION_KEYS' in str(refused.value)

@@ -486,6 +486,17 @@ def _keys_for_a_storage_that_needs_them(key: str, record: BotRecord) -> list[Pro
     problems = _a_collection_of_strings(key, record)
     if problems:
         return problems
+    keys = _setting(key, record)
+    if keys and isinstance(keys, (set, frozenset)):
+        # a set cannot say which key is newest, and *newest first* is the whole contract here:
+        # iterated in whatever order it happens to have, the ring would encrypt under a key an
+        # operator is about to drop -- and the rewrapped rows would go with it
+        return [
+            Problem(
+                f'is a {type(keys).__name__}, which has no order, and the first key is the one that '
+                'encrypts. Write the keys as a list or a tuple, newest first.',
+            )
+        ]
     # through the seam's own loader rather than `import_string` here: what a check may resolve
     # is a rule of its own -- `tests/test_checks.py` plants a mine on this module's importer
     # for the paths that cost aiogram -- and the storage is the one path a check has to

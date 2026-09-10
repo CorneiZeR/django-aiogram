@@ -5,6 +5,8 @@ reads a wrapped column, that one bad row costs one bot, and that a rotation can 
 through without anything being down.
 """
 
+from io import StringIO
+
 import pytest
 from django.core.management import call_command
 from django.test import override_settings
@@ -118,12 +120,42 @@ def test_a_dry_run_writes_nothing_and_an_unchanged_row_is_left_alone():
 
 
 def test_an_unreadable_row_is_reported_and_left_as_it_is():
-    """Writing unreadable bytes back as a token would turn a recoverable mistake into a loss."""
+    """Writing unreadable bytes back as a token would turn a recoverable mistake into a loss.
+
+    Reported as well as left alone: a walk that skipped it quietly would say it finished, and
+    the operator who dropped a key too early would find out from a bot that stopped answering.
+    """
     with encrypting(FIRST):
         TelegramBot.objects.create(bot_id=123456, token=store_token(TOKEN))
     wrapped = TelegramBot.objects.get(bot_id=123456).token
+    said = StringIO()
 
     with encrypting(SECOND):
-        call_command('tgbot_rewrap_tokens')
+        call_command('tgbot_rewrap_tokens', stderr=said)
 
     assert TelegramBot.objects.get(bot_id=123456).token == wrapped
+    assert '123456' in said.getvalue(), said.getvalue()
+
+
+def test_a_token_rotated_under_the_walk_is_not_replaced_by_a_rewrapped_copy(monkeypatch):
+    """An admin rotating a token between the read and the write must win, and be told.
+
+    The row is read, then wrapped, then written, and an operator saving a new credential in
+    between would otherwise have it overwritten by a rewrapped copy of the token they were
+    replacing -- with the bot then serving under a token nobody has any more.
+    """
+    TelegramBot.objects.create(bot_id=123456, token=TOKEN)
+    rotated = '123456:AArotated'
+
+    def store_and_race(token):
+        """Wrap it, the way the command does, with a rotation landing at the same moment."""
+        TelegramBot.objects.filter(bot_id=123456).update(token=rotated)
+        return store_token(token)
+
+    said = StringIO()
+    with encrypting(FIRST):
+        monkeypatch.setattr('django_aiogram.management.commands.tgbot_rewrap_tokens.store_token', store_and_race)
+        call_command('tgbot_rewrap_tokens', stderr=said)
+
+    assert TelegramBot.objects.get(bot_id=123456).token == rotated, 'the rewrap overwrote a newer token'
+    assert '123456' in said.getvalue(), said.getvalue()

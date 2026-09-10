@@ -2175,3 +2175,20 @@ def test_a_key_the_storage_cannot_use_is_reported_at_boot():
 def test_keys_that_are_not_a_collection_of_strings_are_reported():
     """The shape rule, which holds whatever storage is configured."""
     assert [message for message in check_settings() if str(message.id).endswith('E063')]
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={
+        'TOKEN_STORAGE': 'django_aiogram.crypto.FernetTokenStorage',
+        'TOKEN_ENCRYPTION_KEYS': {'one', 'two'},
+    }
+)
+def test_keys_written_as_a_set_are_reported_because_the_order_decides():
+    """*Newest first* is the contract, and a set cannot say which one that is.
+
+    Iterated in whatever order it happens to have, the ring would encrypt under a key an
+    operator is about to drop, and the rewrapped rows would go with it.
+    """
+    (found,) = [message for message in check_settings() if str(message.id).endswith('E063')]
+
+    assert 'no order' in found.msg

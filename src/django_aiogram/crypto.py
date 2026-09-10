@@ -98,7 +98,13 @@ def _key_ring() -> 'MultiFernet':
         # one key written as a bare string rather than as a list of one: taken, because the
         # alternative is a ring of single characters and a refusal nobody can read
         keys = (keys,)
-    listed = [str(key).strip() for key in keys or () if str(key).strip()]
+    try:
+        listed = [str(key).strip() for key in keys or () if str(key).strip()]
+    except TypeError as error:
+        # a number, or anything else there is no walking: `E063` reports the shape, and this
+        # is the same refusal for a process that was started without running the checks
+        msg = f'{named} is not a list of keys: {error}'
+        raise ImproperlyConfigured(msg) from error
     if not listed:
         msg = f'FernetTokenStorage is configured but {named} is empty. It holds the keys, newest first.'
         raise ImproperlyConfigured(msg)

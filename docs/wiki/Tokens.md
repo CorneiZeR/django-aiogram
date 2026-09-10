@@ -56,9 +56,14 @@ row the walk has not reached yet is still readable by every process.
 left alone, because `updated_at` is the watermark every supervisor polls and a table-wide bump
 would have every container re-read every bot for nothing.
 
+A row whose token changed while the walk was running — an admin rotating that bot's credential
+at the same moment — is left with the new token and reported: the write is conditional on the
+value that was read, so a rewrapped copy of the old token cannot replace it.
+
 ## Rotating a key
 
-The keys are listed newest first: the first one encrypts, every one of them decrypts.
+The keys are listed newest first: the first one encrypts, every one of them decrypts. A list or
+a tuple — a set has no order to be first in, and `E063` refuses one.
 
 ```python
 TELEGRAM_BOT_DEFAULTS = {

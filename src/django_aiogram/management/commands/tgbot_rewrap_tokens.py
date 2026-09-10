@@ -19,7 +19,7 @@ from argparse import ArgumentParser
 from typing import Any
 
 from django.core.management import BaseCommand
-from django.db import transaction
+from django.utils import timezone
 
 from django_aiogram.tokens import TokenUnreadableError, read_token, store_token
 
@@ -62,7 +62,7 @@ class Command(BaseCommand):
         if options['bots']:
             rows = rows.filter(bot_id__in=options['bots'])
         dry_run = options['dry_run']
-        rewrapped = unchanged = unreadable = 0
+        rewrapped = unchanged = unreadable = raced = 0
         # by identity rather than by primary key, because that is what every message about a
         # bot names, and an operator reading this output has the identity in front of them
         for row in rows.order_by('bot_id').iterator(chunk_size=max(1, options['batch_size'])):
@@ -70,13 +70,15 @@ class Command(BaseCommand):
             rewrapped += outcome == 'rewrapped'
             unchanged += outcome == 'unchanged'
             unreadable += outcome == 'unreadable'
+            raced += outcome == 'raced'
         self.stdout.write(
-            f'{rewrapped} rewrapped, {unchanged} already stored as configured, {unreadable} unreadable'
+            f'{rewrapped} rewrapped, {unchanged} already stored as configured, '
+            f'{unreadable} unreadable, {raced} changed under the walk'
             + (' (dry run: nothing written)' if dry_run else '')
         )
 
     def _one(self, row: Any, *, dry_run: bool) -> str:  # noqa: ANN401 - a row, deferred past the ORM import
-        """Rewrap one row, and say which of the three things happened to it."""
+        """Rewrap one row, and say which of the four things happened to it."""
         if not row.token:
             # a bot somebody is in the middle of configuring: there is nothing to wrap, and
             # writing an empty column back would move `updated_at` for no reason
@@ -96,10 +98,17 @@ class Command(BaseCommand):
             return 'unchanged'
         if dry_run:
             return 'rewrapped'
-        row.token = written
-        with transaction.atomic():
-            # the token alone: a row read a moment ago may have been edited since, and
-            # `save()` would write back the settings as they were then
-            row.save(update_fields=['token', 'updated_at'])
+        # compare-and-set on the value that was read, the way every claim in this package is
+        # written: an admin rotating this bot's token between the read above and the write
+        # below would otherwise have their new credential replaced by a rewrapped copy of the
+        # old one. Nothing is locked for it -- one statement decides, and it works on every
+        # database this package supports
+        #
+        # `updated_at` is passed because `update()` moves no `auto_now` column, and it has to
+        # move: it is the watermark every supervisor polls to notice the row at all
+        moved = type(row).objects.filter(pk=row.pk, token=row.token).update(token=written, updated_at=timezone.now())
+        if not moved:
+            self.stderr.write(f'{row.bot_id}: the token changed while it was being rewrapped; left as it is')
+            return 'raced'
         logger.info('rewrapped a stored token', extra={'tg_bot_id': row.bot_id})
         return 'rewrapped'
