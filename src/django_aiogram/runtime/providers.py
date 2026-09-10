@@ -76,19 +76,24 @@ def from_database() -> 'tuple[BotRecord, ...]':
     """
     # deferred: importing models reaches the app registry, and this module is imported wherever
     # the settings are read -- including in a process that has none
-    from django_aiogram.models import TelegramBot, TelegramBotProfile  # noqa: PLC0415 - as above
+    from django_aiogram.models import TelegramBot, TelegramBotProfile, TelegramQueue  # noqa: PLC0415 - as above
 
     global _from_table  # noqa: PLW0603 - one table per process, like the rows it caches
+    # all three tables a resolved bot reads, because the watermark is only as good as the set
+    # it watches: a bot's `QUEUE` comes from the queue row it points at, so a queue renamed
+    # while nothing else moved would leave every container publishing to the old name until it
+    # restarted -- and a rename is exactly what an operator does to a queue
     mark = (
         TelegramBot.objects.aggregate(at=Max('updated_at'), n=Count('pk')),
         TelegramBotProfile.objects.aggregate(at=Max('updated_at'), n=Count('pk')),
+        TelegramQueue.objects.aggregate(at=Max('updated_at'), n=Count('pk')),
     )
     with _lock:
         held = _from_table
     if held is not None and held[0] == mark:
         return held[1]
 
-    read = _records(TelegramBot.objects.filter(enabled=True).select_related('profile'))
+    read = _records(TelegramBot.objects.filter(enabled=True).select_related('profile', 'queue'))
     with _lock:
         _from_table = (mark, read)
     return read
@@ -126,9 +131,17 @@ def _resolved(row: 'BotRow') -> 'BotRecord':
     layers = []
     if row.profile is not None:
         layers.append((f'TelegramBotProfile({row.profile.name}).overrides', row.profile.overrides))
+    own: dict[str, Any] = {}
+    if row.queue is not None:
+        # the row's own queue, and *below* its overrides so a written `QUEUE` still wins: the
+        # foreign key is what an admin picks and what `tgbot_prune_queues` reads as "a bot
+        # still publishes here", so a queue chosen there has to be the queue this bot uses --
+        # unchecked, the column decided nothing and the choice was decoration
+        own['QUEUE'] = row.queue.name
     # through the seam, always: a project that turned `TOKEN_STORAGE` on has no plaintext
     # path left, and reading the column directly here would have been one
-    layers.append((f'TelegramBot({row.bot_id}).overrides', {'TOKEN': read_token(row.token), **row.overrides}))
+    own.update({'TOKEN': read_token(row.token), **row.overrides})
+    layers.append((f'TelegramBot({row.bot_id}).overrides', own))
     return resolve(str(row.bot_id), *layers, provided=True)
 
 
@@ -143,7 +156,7 @@ def switched_off() -> 'tuple[BotRecord, ...]':
     # deferred: the ORM, as in `from_database`
     from django_aiogram.models import TelegramBot  # noqa: PLC0415 - as above
 
-    rows = TelegramBot.objects.filter(enabled=False).select_related('profile')
+    rows = TelegramBot.objects.filter(enabled=False).select_related('profile', 'queue')
     return _records(rows)
 
 

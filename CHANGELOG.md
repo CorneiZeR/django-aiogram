@@ -137,8 +137,39 @@
   rather than masked, because a section that renders is a section that posts back and a token
   field left in place is the bot given away. Support staff keep the limits and the switch.
 
-  Nothing in a request talks to Telegram, and the changelist asks the same number of queries
-  for five hundred bots as for one. See
+  **A setting a bot decides is a checkbox, not a JSON key somebody has to remember.** Each
+  overridable setting renders as "this bot decides it" plus a value, with what it would inherit
+  and the layer that decides it written beside it -- because `overrides` is sparse by key
+  presence and "inherit" is an answer a person has to be able to give. Values are judged by the
+  package's own check registry, so a page cannot accept what the deployment would refuse to
+  start with.
+
+  The queue picked in the admin is now the queue the bot publishes to: `TelegramBot.queue` is
+  read into `QUEUE` when the row is resolved, below its own overrides. Before this it decided
+  nothing -- routing read the setting and the column was decoration. `TelegramQueue` gained an
+  `updated_at`, and the providers' watermark watches all three tables a resolved bot reads:
+  without it a renamed queue would leave every container publishing to the old name until it
+  restarted. **Run `manage.py migrate`.**
+
+  `WEBHOOK_SECRET` and `REDIS_URL` are credentials too -- one tells Telegram's requests from
+  anybody else's, the other carries the broker's password -- so the page prints `'set'` or
+  `'not set'` and the layer rather than the value, and their pairs are offered only to a user
+  who may see the token. The values are judged as a set, and against the profile the
+  *submission* chose rather than the one the row held: `W004` reads its neighbours to decide
+  whether a `BLPOP_TIMEOUT` will be honoured, so judging one at a time -- or under the old
+  profile -- refuses a configuration that is correct. A bot being added is resolved by the
+  identity in the token being submitted, since a bot's own environment variables are keyed by
+  it.
+
+  Adding a bot needs `view_telegrambot_token`, and the token field is absent from the *form* a
+  user without it gets rather than only from the page: an unrendered section still posts back,
+  and a token accepted from somebody who may not read one is the bot given away.
+
+  The list is built to be scanned: the pool, the settings each bot overrides and whether
+  anything is serving it, filters over the switch, profile, queue and pool, and **Switch
+  on/off** as actions -- one statement for five hundred clients, and their watermark moves with
+  it so a supervisor picks the change up within a poll. Nothing in a request talks to Telegram,
+  and the changelist asks the same number of queries for five hundred bots as for one. See
   **[Admin](https://corneizer.github.io/django-aiogram/latest/Admin/)**.
 
 - **A token can be encrypted at rest, and the package does not decide that for you.**

@@ -106,9 +106,11 @@ def test_an_unchanged_table_is_answered_without_reading_the_rows(django_assert_n
     profile = TelegramBotProfile.objects.create(name='vip', overrides={'MAX_RETRIES': 2})
     TelegramBot.objects.create(bot_id=123456, token='123456:AAaa', profile=profile)
 
-    with django_assert_num_queries(3):  # two aggregates and the rows
+    # three aggregates, because a resolved bot reads three tables: its own, its profile's and
+    # the queue it points at -- a rename there changes what it publishes to
+    with django_assert_num_queries(4):  # three aggregates and the rows
         first = providers.desired()
-    with django_assert_num_queries(2):  # the aggregates alone
+    with django_assert_num_queries(3):  # the aggregates alone
         again = providers.desired()
 
     assert first == again
