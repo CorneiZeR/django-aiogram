@@ -122,6 +122,25 @@
   down, or not migrated here -- declares nothing and refuses nothing; no table at all is a
   different state, where the settings are the whole declaration.
 
+- **An admin for the bots, their profiles and their queues.** Registered from
+  `AppConfig.ready()` and behind no setting: the container that renders it may send nothing and
+  record nothing, and it is still where the bots the other containers serve are configured.
+
+  **The token field is write-only, and empty means keep** -- so a credential can be rotated by
+  somebody who cannot read the one being replaced. What is rendered is a mask: the identity,
+  which is in every queued message anyway, and eight dots for the half that is a secret. The
+  identity is read off the token rather than typed, and a new one is stored through
+  `TOKEN_STORAGE`.
+
+  **The fieldsets are permission boundaries.** `view_telegrambot_token` follows the precedent
+  `view_telegramevent_payload` set: without it the credentials section is not rendered at all
+  rather than masked, because a section that renders is a section that posts back and a token
+  field left in place is the bot given away. Support staff keep the limits and the switch.
+
+  Nothing in a request talks to Telegram, and the changelist asks the same number of queries
+  for five hundred bots as for one. See
+  **[Admin](https://corneizer.github.io/django-aiogram/latest/Admin/)**.
+
 - **A token can be encrypted at rest, and the package does not decide that for you.**
   `TOKEN_STORAGE` names the class every stored token is written and read through. The default,
   `django_aiogram.tokens.PlainTokenStorage`, keeps the value as it was given -- the right

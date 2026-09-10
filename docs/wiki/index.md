@@ -147,6 +147,12 @@ defaults to aiogram's Redis one, and `FSM_STORAGE: 'memory'` is what drops it.
 
     Where a bot's credential is kept, encrypting the column, and rotating the key with nothing down.
 
+-   **[Admin](Admin.md)**
+
+    ---
+
+    Configuring bots, profiles and queues from the admin, and the permission the token is behind.
+
 -   **[Logging](Logging.md)**
 
     ---
