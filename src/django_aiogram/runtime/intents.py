@@ -6,18 +6,28 @@ way through would leave nobody able to say which of them happened. So the page w
 asked into the row -- ``TelegramBot.intent`` -- and this is the other half: a process that
 already has an event loop, and already holds the bot, does it and writes back one line.
 
-**Claimed before it is carried out.** Two containers may hold different bots and both read
-this table, so the intent is taken with a compare-and-set against the value that was read --
+**Claimed before it is carried out, and the claim is a lease.** Two containers may hold
+different bots and both read this table, so the intent is taken with a compare-and-set --
 the same claim the leases and the replay rows use, and for the same reason: it is the only one
-that is atomic on every database this package supports.
+that is atomic on every database this package supports. What is taken is a *claim beside* the
+asking rather than the asking itself, because a worker that died between the two would
+otherwise have carried the only record of the request away with it; the claim expires and the
+next pass picks the intent up.
+
+**And an answer is written only by the claim that is still held.** A slow worker finishing the
+question before last must not replace the answer to the one asked after it -- the write is
+conditional on the same claim, so a lapsed one writes nothing and says so in the log.
 
 **One bot's failure is its own.** A token Telegram refuses is one line in one row; the pass
 carries on to the others, which is the rule the supervisor beside it already keeps.
 """
 
 import logging
+import uuid
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
+from django.db.models import Q
 from django.utils import timezone
 
 from django_aiogram.config.enums import BotIntent
@@ -34,6 +44,11 @@ logger = logging.getLogger('django_aiogram')
 
 #: how much of an answer a row keeps. The column is 200 and the rest is a log line
 RESULT = 200
+
+#: how long a claim is believed. Longer than any single Telegram call and short enough that a
+#: container killed mid-intent does not leave a person waiting: `getMe` and `setWebhook` answer
+#: in well under a second, and the retry after this costs one duplicate call at worst
+CLAIM_SECONDS = 60.0
 
 
 def outstanding(identities: 'Iterable[int]') -> 'dict[int, str]':
@@ -70,8 +85,9 @@ def carry_out(records: 'Iterable[BotRecord]') -> int:
 
 def _one(identity: int, intent: str, record: 'BotRecord') -> bool:
     """Claim one intent, carry it out, and write back what it answered."""
-    if not _claimed(identity, intent):
-        # another container took it, or the row moved under this pass. Either way it is not
+    claim = uuid.uuid4().hex
+    if not _claimed(identity, intent, claim):
+        # another container holds it, or the row moved under this pass. Either way it is not
         # this process's work any more, and doing it twice is a second call to Telegram
         return False
     try:
@@ -82,44 +98,64 @@ def _one(identity: int, intent: str, record: 'BotRecord') -> bool:
             'a bot intent failed',
             extra={'tg_bot_id': identity, 'tg_intent': intent, 'tg_error': type(refused).__name__},
         )
-    _wrote(identity, answer)
-    return True
+    return _wrote(identity, intent, claim, answer)
 
 
-def _claimed(identity: int, intent: str) -> bool:
-    """Take this intent, if it is still the one the row holds.
+def _claimed(identity: int, intent: str, claim: str) -> bool:
+    """Take this intent for this process, if nothing else holds a live claim on it.
 
-    Compare-and-set on the value that was read, so two containers reading one table cannot
-    both call Telegram for the same bot. The row keeps ``intent_asked_at`` -- what it was asked
-    and when it was asked are what a person reads -- and loses only the asking.
+    Compare-and-set against the asking *and* the claim, so two containers reading one table
+    cannot both call Telegram for the same bot. The asking stays where it is: a worker that
+    dies here must lose the intent rather than take the only record of it away, which is what
+    the expiry below is for.
     """
     from django_aiogram.models import TelegramBot  # noqa: PLC0415 - as in `outstanding`
 
+    now = timezone.now()
+    lapsed = now - timedelta(seconds=CLAIM_SECONDS)
+    rows = TelegramBot.objects.filter(bot_id=identity, intent=intent).filter(
+        # unclaimed, or claimed by something that has stopped answering. The `NULL` is the
+        # first claim on a row, which no comparison against a moment can match
+        Q(intent_claim='') | Q(intent_claimed_at__isnull=True) | Q(intent_claimed_at__lt=lapsed)
+    )
     # `updated_at` by hand: `update()` moves no `auto_now` column, and this row's watermark is
     # what every supervisor polls -- a claim that did not move it would be invisible until the
     # next unrelated edit
-    return bool(
-        TelegramBot.objects.filter(bot_id=identity, intent=intent).update(
-            intent='',
-            updated_at=timezone.now(),
-        )
-    )
+    return bool(rows.update(intent_claim=claim, intent_claimed_at=now, updated_at=now))
 
 
-def _wrote(identity: int, answer: str) -> None:
-    """Write one line back, redacted, and let a database that refused not stop the pass."""
+def _wrote(identity: int, intent: str, claim: str, answer: str) -> bool:
+    """Write one line back under this claim, and say whether it was still ours to write.
+
+    Conditional on the claim and on the asking: a worker slow enough to finish after its lease
+    lapsed must not replace the answer to a question asked since, and an operator who asked for
+    something else keeps their newer one.
+    """
     from django_aiogram.models import TelegramBot  # noqa: PLC0415 - as above
 
+    now = timezone.now()
     try:
-        TelegramBot.objects.filter(bot_id=identity).update(
-            # redacted for the reason the feed redacts: aiogram puts the API URL into its
-            # messages, and the URL carries the token
-            intent_result=redact_text(answer)[:RESULT],
-            intent_done_at=timezone.now(),
-            updated_at=timezone.now(),
+        moved = (
+            TelegramBot.objects.filter(bot_id=identity, intent=intent, intent_claim=claim).update(
+                intent='',
+                intent_claim='',
+                intent_claimed_at=None,
+                # redacted for the reason the feed redacts: aiogram puts the API URL into its
+                # messages, and the URL carries the token
+                intent_result=redact_text(answer)[:RESULT],
+                intent_done_at=now,
+                updated_at=now,
+            )
         )
     except Exception:
         logger.exception('could not write back what a bot intent answered', extra={'tg_bot_id': identity})
+        return False
+    if not moved:
+        logger.warning(
+            'a bot intent was answered after its claim lapsed; the answer was dropped',
+            extra={'tg_bot_id': identity, 'tg_intent': intent},
+        )
+    return bool(moved)
 
 
 def _performed(intent: str, record: 'BotRecord') -> str:

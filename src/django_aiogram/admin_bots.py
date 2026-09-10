@@ -638,6 +638,10 @@ class TelegramBotAdmin(BotAdminBase):
         moved = queryset.update(
             intent=intent.value,
             intent_asked_at=timezone.now(),
+            # any claim on the previous question goes with it: a worker still holding one will
+            # find its write refused, which is what keeps its answer off this new question
+            intent_claim='',
+            intent_claimed_at=None,
             # the previous answer goes with the new asking: a stale `ok` beside a fresh
             # question is the one thing a person here must not read as an answer
             intent_result='',

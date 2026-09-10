@@ -125,7 +125,14 @@ python manage.py tgbot_intents --watch
 An intent is a person waiting for an answer, so `--watch` polls in seconds. Each one is claimed
 with a compare-and-set before it is carried out, so two containers reading the same table cannot
 both call Telegram for one bot, and an operator who asks for something else in the meantime keeps
-their newer question. What is written back is redacted the way a feed row is: aiogram puts the API
+their newer question.
+
+The claim is a **lease**: the asking stays on the row until an answer is written, so a container
+killed mid-intent loses the work rather than taking the only record of the request with it — the
+next pass picks it up once the claim lapses. And the answer is written only by the claim still
+held, so a worker slow enough to finish after that cannot replace a newer answer; it says so in
+the log instead. Nothing is scheduled twice: `manage.py tgbot_intents` appears once on
+**[Deployment](Deployment.md#the-jobs-nothing-runs-for-you)**. What is written back is redacted the way a feed row is: aiogram puts the API
 URL into its messages, and the URL carries the token.
 
 ## Edits that would strand a backlog are refused

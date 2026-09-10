@@ -396,6 +396,13 @@ class TelegramBot(models.Model):
     intent = models.CharField(max_length=32, blank=True)
     #: when it was asked, so an intent nothing has picked up is visible as one
     intent_asked_at = models.DateTimeField(null=True, blank=True)
+    #: which process is carrying it out, and since when. A **lease** rather than a flag: the
+    #: asking stays in `intent` until an answer is written, so a worker that died holding one
+    #: loses it to whoever asks next instead of taking the only record of it with them. And a
+    #: result is written only by the claim that is still held, so a slow worker cannot replace
+    #: the answer to a question somebody asked after it
+    intent_claim = models.CharField(max_length=64, blank=True)
+    intent_claimed_at = models.DateTimeField(null=True, blank=True)
     #: what came back, in one line a person can read. Never the token: aiogram puts the API
     #: URL into its messages, so what is written here is redacted the way a feed row is
     intent_result = models.CharField(max_length=200, blank=True)

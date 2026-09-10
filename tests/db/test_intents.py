@@ -6,6 +6,8 @@ leave nobody able to say which of them happened. So the page writes the asking a
 what carries it out.
 """
 
+from datetime import timedelta
+
 import pytest
 from django.core.management import call_command
 from django.test import override_settings
@@ -114,7 +116,11 @@ def test_what_is_written_back_carries_no_token(monkeypatch):
 
     intents.carry_out(providers.desired())
 
-    assert token not in TelegramBot.objects.get(bot_id=123456).intent_result
+    said = TelegramBot.objects.get(bot_id=123456).intent_result
+    # the marker first: an empty column has no token in it either, and this case would pass
+    # for a failure that never reached the redaction at all
+    assert said.startswith('RuntimeError:'), said
+    assert token not in said
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
@@ -140,3 +146,80 @@ def test_an_intent_this_version_does_not_know_says_so_rather_than_raising():
     assert intents.carry_out(providers.desired()) == 1
 
     assert 'unknown intent' in TelegramBot.objects.get(bot_id=123456).intent_result
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_an_intent_whose_worker_died_is_carried_out_by_the_next_pass(monkeypatch):
+    """The asking stays in the row while a claim is held, so a killed worker loses the work.
+
+    Clearing the column at claim time was simpler and lost the request: the only record of
+    what somebody asked for went with the process that died holding it.
+    """
+    row = asked(BotIntent.CHECK.value)
+
+    def die(intent, record):
+        """Take the claim and never answer, the way a container killed mid-pass does."""
+        msg = 'killed'
+        raise KeyboardInterrupt(msg)
+
+    monkeypatch.setattr(intents, '_performed', die)
+    with pytest.raises(KeyboardInterrupt):
+        intents.carry_out(providers.desired())
+
+    row.refresh_from_db()
+    assert row.intent == BotIntent.CHECK.value, 'the asking was thrown away with the worker'
+
+    # the claim lapses, and the next pass takes it
+    row.intent_claimed_at = timezone.now() - timedelta(seconds=intents.CLAIM_SECONDS + 1)
+    row.save(update_fields=['intent_claimed_at'])
+    providers.forget()
+    monkeypatch.setattr(intents, '_performed', lambda intent, record: 'ok')
+
+    assert intents.carry_out(providers.desired()) == 1
+
+    row.refresh_from_db()
+    assert row.intent_result == 'ok'
+    assert row.intent == ''
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_live_claim_keeps_another_pass_off_the_same_intent(monkeypatch):
+    """Two containers read this table, and each carrying-out is a call to Telegram."""
+    asked(BotIntent.CHECK.value)
+    calls = []
+    monkeypatch.setattr(intents, '_performed', lambda intent, record: calls.append(intent) or 'ok')
+    (record,) = providers.desired()
+
+    TelegramBot.objects.filter(bot_id=123456).update(intent_claim='someone-else', intent_claimed_at=timezone.now())
+
+    assert intents.carry_out([record]) == 0
+    assert calls == [], 'a bot another container is holding was called anyway'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_an_answer_from_a_lapsed_claim_does_not_replace_a_newer_one(monkeypatch):
+    """A worker slow enough to finish after its lease must not answer a later question.
+
+    Two `check` requests for one bot look identical in the row, so the write has to be
+    conditional on the claim rather than on the identity alone.
+    """
+    row = asked(BotIntent.CHECK.value)
+    (record,) = providers.desired()
+
+    def overtaken(intent, held):
+        """Answer slowly: while this runs, the intent is re-asked and answered by another."""
+        TelegramBot.objects.filter(bot_id=123456).update(
+            intent='',
+            intent_claim='',
+            intent_claimed_at=None,
+            intent_result='ok: the newer answer',
+            intent_done_at=timezone.now(),
+        )
+        return 'ok: the older answer'
+
+    monkeypatch.setattr(intents, '_performed', overtaken)
+
+    assert intents.carry_out([record]) == 0, 'a lapsed claim reported success'
+
+    row.refresh_from_db()
+    assert row.intent_result == 'ok: the newer answer', 'the older worker overwrote a newer answer'

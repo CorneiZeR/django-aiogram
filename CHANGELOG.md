@@ -178,7 +178,11 @@
   runs there, a supervisor holding that bot) carries it out and writes one line back. Each is
   claimed with a compare-and-set, so two containers reading one table cannot both call Telegram
   for a bot, and an operator asking for something else meanwhile keeps their newer question.
-  What comes back is redacted the way a feed row is.
+  The claim is a lease rather than a flag: the asking stays on the row until an answer is
+  written, so a container killed mid-intent loses the work instead of carrying the only record
+  of the request away, and the answer is written only by the claim still held -- a worker that
+  finished after its lease lapsed cannot replace a newer answer. What comes back is redacted
+  the way a feed row is.
 
   **Reading a token is a deliberate act and a recorded one.** The mask carries a *show it*
   link to a page of its own, which asks for confirmation and writes `bot.token_revealed` into
