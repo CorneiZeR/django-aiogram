@@ -205,8 +205,13 @@ class TelegramBotForm(BotFormBase):
         if not self.instance.pk:
             # a bot being added has no backlog anywhere: there was no queue before this
             return
-        was = self._resolves_to(self.instance.queue, self.instance.overrides or {})
-        now = self._resolves_to(cleaned.get('queue'), decided)
+        # each side through its own inheritance: `clean` has already re-resolved
+        # `self.inherited` for the profile this submission chose, and resolving the *previous*
+        # queue through it would read the new profile's `QUEUE` -- missing a backlog the bot
+        # inherited from the profile it is leaving
+        held, _ = read_overrides(self.instance, self.instance.profile)
+        was = self._resolves_to(self.instance.queue, self.instance.overrides or {}, held)
+        now = self._resolves_to(cleaned.get('queue'), decided, self.inherited)
         if not was or was == now:
             return
         try:
@@ -228,18 +233,27 @@ class TelegramBotForm(BotFormBase):
             )
             self.add_error('queue', msg)
 
-    def _resolves_to(self, queue: 'TelegramQueue | None', overrides: 'Mapping[str, Any]') -> str:
+    @staticmethod
+    def _resolves_to(
+        queue: 'TelegramQueue | None',
+        overrides: 'Mapping[str, Any]',
+        inherited: 'Mapping[str, Any]',
+    ) -> str:
         """Return the queue name one configuration of this bot ends up publishing to.
 
         The same precedence `runtime.providers` applies: the row's own `QUEUE` override wins,
         then the queue it points at, then whatever the profile and the defaults resolved to.
+
+        ``inherited`` is passed rather than read off the form, because the two sides of a
+        comparison have different ones: the profile the row holds, and the profile the
+        submission chose.
         """
         written = str(overrides.get('QUEUE') or '').strip()
         if written:
             return written
         if queue is not None:
             return queue.name
-        return str(self.inherited.get('QUEUE') or '').strip()
+        return str(inherited.get('QUEUE') or '').strip()
 
     def _decided(self, cleaned: 'dict[str, Any]') -> 'dict[str, Any]':
         """Collect the settings whose box is checked, refusing what the package would refuse.
@@ -444,6 +458,10 @@ class TelegramBotAdmin(BotAdminBase):
         bot = self.get_queryset(request).filter(pk=pk).first()
         if bot is None:
             raise Http404
+        if not self.has_view_permission(request, bot):
+            # asked again with the row in hand: a deployment may allow a user to read *some*
+            # bots, and the check above knows only that they may read the model
+            return HttpResponseForbidden('You may not read this bot.')
         shown = read_token(bot.token) if request.method == 'POST' else ''
         if shown:
             _record_reveal(bot, request)

@@ -722,3 +722,47 @@ def test_a_backlog_one_read_confirmed_is_not_lost_to_the_others_failure(client, 
     assert 'still holds 4 message' in response.content.decode()
     bot.refresh_from_db()
     assert bot.queue_id == held.pk
+
+
+def test_the_previous_queue_is_resolved_through_the_previous_profile(client, monkeypatch):
+    """Moving a bot between profiles moves the queue it inherits, so both sides need their own.
+
+    Resolved through the *new* profile, the old queue reads as the new one's — and a backlog
+    the bot inherited from the profile it is leaving is missed entirely.
+    """
+    leaving = TelegramBotProfile.objects.create(name='leaving', overrides={'QUEUE': 'queue-a'})
+    joining = TelegramBotProfile.objects.create(name='joining', overrides={'QUEUE': 'queue-b'})
+    bot = a_bot(profile=leaving)
+    monkeypatch.setattr('django_aiogram.admin_bots._waiting_in', lambda name: 2 if name == 'queue-a' else 0)
+    client.force_login(a_user('editor', 'view_telegrambot', 'change_telegrambot'))
+
+    response = client.post(
+        f'{BOTS}{bot.pk}/change/',
+        {'label': bot.label, 'enabled': 'on', 'profile': str(joining.pk)},
+    )
+
+    assert response.status_code == 200
+    assert 'queue-a still holds 2 message' in response.content.decode()
+    bot.refresh_from_db()
+    assert bot.profile_id == leaving.pk, 'the bot moved off a queue holding its backlog'
+
+
+def test_revealing_a_token_asks_the_permission_with_the_row_in_hand(client, monkeypatch):
+    """A deployment may let a user read *some* bots, and the model-level check cannot say which.
+
+    So the permission is asked again once the row is loaded, before the credential is read.
+    """
+    from django_aiogram.admin_bots import TelegramBotAdmin
+
+    bot = a_bot()
+    monkeypatch.setattr(
+        TelegramBotAdmin,
+        'has_view_permission',
+        lambda self, request, obj=None: obj is None,
+    )
+    client.force_login(a_user('trusted', 'view_telegrambot', 'view_telegrambot_token'))
+
+    response = client.post(BOTS + REVEAL.format(pk=bot.pk))
+
+    assert response.status_code == 403
+    assert TOKEN not in response.content.decode()
