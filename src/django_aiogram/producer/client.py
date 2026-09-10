@@ -779,7 +779,7 @@ class TelegramBot(RouterShortcuts):
         check_function(function)
         identifier = resolve_correlation_id(correlation_id)
         if not self.enabled:
-            logger.debug('send skipped: bot disabled', extra={'tg_function': function})
+            logger.debug('send skipped: bot disabled', extra={'tg_bot_id': self.bot_id, 'tg_function': function})
             # the same slot-return as the refusals below: `ENABLED` is read live, so a
             # consumer that took a slot can reach this branch after the setting changed,
             # and without this the bound closes one message at a time until a restart
@@ -821,6 +821,7 @@ class TelegramBot(RouterShortcuts):
                     logger.warning(
                         'rate limited by telegram',
                         extra={
+                            'tg_bot_id': self.bot_id,
                             'tg_function': function,
                             'tg_retry_after': error.retry_after,
                             'tg_retries': retries,
@@ -835,7 +836,7 @@ class TelegramBot(RouterShortcuts):
                         attempt=retries,
                         error=error,
                     )
-                    logger.exception('send failed', extra={'tg_function': function})
+                    logger.exception('send failed', extra={'tg_bot_id': self.bot_id, 'tg_function': function})
                     if self._raises_send_failures:
                         raise
                     return
@@ -860,7 +861,7 @@ class TelegramBot(RouterShortcuts):
                             'message_ids': _message_ids(result),
                         },
                     )
-                    logger.info('message sent', extra={'tg_function': function})
+                    logger.info('message sent', extra={'tg_bot_id': self.bot_id, 'tg_function': function})
                     return
 
             # exhausting the retries used to return silently
@@ -873,7 +874,7 @@ class TelegramBot(RouterShortcuts):
             )
             logger.error(
                 'giving up on message',
-                extra={'tg_function': function, 'tg_max_retries': self.max_retries},
+                extra={'tg_bot_id': self.bot_id, 'tg_function': function, 'tg_max_retries': self.max_retries},
             )
             if self._raises_send_failures and last_error is not None:
                 raise last_error
@@ -883,8 +884,7 @@ class TelegramBot(RouterShortcuts):
         self._schedule(send(), outbound, on_complete, on_refused)
         return identifier
 
-    @staticmethod
-    def _record_send(kind: EventKind, outbound: 'Outbound', **fields: Any) -> None:
+    def _record_send(self, kind: EventKind, outbound: 'Outbound', **fields: Any) -> None:
         """Record one stage of an outbound message.
 
         Called from inside the send coroutine, which is the only place that
@@ -903,6 +903,9 @@ class TelegramBot(RouterShortcuts):
             Event(
                 kind=kind.value,
                 correlation_id=outbound.correlation_id,
+                # this bot, not the process's: a send goes out under one token, and a feed
+                # that cannot say which is one a deployment with twenty clients cannot read
+                bot_id=self.bot_id,
                 function=outbound.function,
                 chat_id=as_identifier(outbound.call_kwargs.get('chat_id')),
                 error_code=type(error).__name__ if error is not None else '',
@@ -983,6 +986,7 @@ class TelegramBot(RouterShortcuts):
                 logger.warning(
                     'scheduling a send on a loop nothing in this process runs',
                     extra={
+                        'tg_bot_id': self.bot_id,
                         'tg_function': outbound.function,
                         'tg_correlation_id': str(outbound.correlation_id),
                         'tg_short_id': short_id(outbound.correlation_id),
@@ -1090,8 +1094,7 @@ class TelegramBot(RouterShortcuts):
         """Create the task, named so shutdown can say which message it canceled."""
         return loop.create_task(coroutine, name=f'{TASK_PREFIX}{outbound.correlation_id.hex}')
 
-    @staticmethod
-    def _record_drop(outbound: 'Outbound', reason: str) -> None:
+    def _record_drop(self, outbound: 'Outbound', reason: str) -> None:
         """Record a send that never reached Telegram, and used to leave only a log line.
 
         Carries the call, not just its id: a direct `send_raw` was never queued,
@@ -1101,6 +1104,7 @@ class TelegramBot(RouterShortcuts):
             Event(
                 kind=EventKind.OUTBOUND_DROPPED.value,
                 correlation_id=outbound.correlation_id,
+                bot_id=self.bot_id,
                 function=outbound.function,
                 chat_id=as_identifier(outbound.call_kwargs.get('chat_id')),
                 error_code='NotScheduled',

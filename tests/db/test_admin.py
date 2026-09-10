@@ -506,7 +506,7 @@ def test_only_indexed_columns_are_sortable():
     """
     from django_aiogram.admin import TelegramEventAdmin
 
-    assert set(TelegramEventAdmin.sortable_by) == {'created_at', 'kind', 'chat_id'}
+    assert set(TelegramEventAdmin.sortable_by) == {'created_at', 'kind', 'bot_id', 'chat_id'}
 
 
 @pytest.mark.django_db

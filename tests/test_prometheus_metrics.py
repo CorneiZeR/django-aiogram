@@ -257,3 +257,55 @@ def test_the_package_does_not_import_the_metrics_client():
     finished = run_python(code, check=True)
 
     assert finished.stdout.strip() == 'False', 'importing the package pulled prometheus_client'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_the_default_series_count_does_not_grow_with_the_bots(registry):
+    """#123's acceptance, and the reason `METRICS_PER_BOT` is off.
+
+    A label per bot is a series per bot *per kind*: a thousand clients turn two metrics into
+    fourteen thousand series, which is a Prometheus problem rather than a dashboard.
+    """
+    metrics = EventMetrics(registry)
+
+    metrics(events=[Event(kind='outbound.sent', bot_id=123456), Event(kind='outbound.sent', bot_id=654321)])
+
+    assert value(registry, 'django_aiogram_events_total', kind='outbound.sent') == 2
+    assert 'bot' not in metrics.events._labelnames, metrics.events._labelnames
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'METRICS_PER_BOT': True})
+def test_a_project_that_asks_for_it_gets_a_label_per_bot(registry):
+    """Knowingly: the exporter is imported by a project, so the cardinality is their call."""
+    metrics = EventMetrics(registry)
+
+    metrics(events=[Event(kind='outbound.sent', bot_id=123456), Event(kind='outbound.sent', bot_id=654321)])
+
+    assert value(registry, 'django_aiogram_events_total', kind='outbound.sent', bot='123456') == 1
+    assert value(registry, 'django_aiogram_events_total', kind='outbound.sent', bot='654321') == 1
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'METRICS_PER_BOT': True})
+def test_a_row_that_names_no_bot_is_labelled_unknown(registry):
+    """An undecodable payload names no bot, and an empty label is one a query cannot exclude."""
+    metrics = EventMetrics(registry)
+
+    metrics(events=[Event(kind='queue.undecodable')])
+
+    assert value(registry, 'django_aiogram_events_total', kind='queue.undecodable', bot='unknown') == 1
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'METRICS_PER_BOT': 'nonsense'})
+def test_a_flag_nobody_can_read_labels_by_kind_alone(registry, caplog):
+    """`E064` is the finding; the exporter's own answer is the safe half of the choice.
+
+    A traceback out of the receiver that counts sends would take the batch with it, which is
+    the one thing this exporter promises not to do.
+    """
+    with caplog.at_level(logging.WARNING, logger='django_aiogram'):
+        metrics = EventMetrics(registry)
+
+    metrics(events=[Event(kind='outbound.sent', bot_id=123456)])
+
+    assert value(registry, 'django_aiogram_events_total', kind='outbound.sent') == 1
+    assert any('METRICS_PER_BOT' in record.getMessage() for record in caplog.records)

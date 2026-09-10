@@ -122,6 +122,24 @@
   down, or not migrated here -- declares nothing and refuses nothing; no table at all is a
   different state, where the settings are the whole declaration.
 
+- **Every line and every row about a bot says which bot.** `tg_bot_id` is on the send,
+  delivery, quarantine and reconciliation lines -- in `extra`, never interpolated, because a
+  line carrying it in the text is its own string and cannot be filtered on -- and the feed's
+  `bot_id` column is filled by everything that knew the bot: a send, a queued message, an
+  update, an FSM transition. It has existed since the 5.0 tables and nothing wrote it.
+
+  The feed's changelist gained a **bot** filter, offered from the configured bots and the rows
+  in `TelegramBot` rather than a `SELECT DISTINCT` over a table sized by traffic -- and it
+  still narrows to a client who has *gone*, which is one of the questions a feed is kept for.
+  `bot_id` is a column on the list and sortable, because the feed keeps an index leading with
+  it.
+
+  **The Prometheus exporter labels by bot only where a project asks.** `METRICS_PER_BOT` is
+  off, so the number of series does not grow with the number of bots: a label per bot is a
+  series per bot *per kind*, and a thousand clients would turn two metrics into fourteen
+  thousand series. Turned on, every series carries `bot` -- the identity, or `unknown` for a
+  row that named none. `E064` reports a value that does not read as a boolean.
+
 - **A token in an error message is redacted even where the deployment never configured it.**
   The shape the redaction matches was anchored on a word boundary, and the place a token
   actually appears is the API URL -- `.../bot123456:AA.../sendMessage` -- where there is no
@@ -384,7 +402,7 @@
 
   Settings the process owns rather than a bot -- `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`,
   `FSM_STORAGE`, `BOT_PROVIDERS`, `BOT_REFRESH_INTERVAL`, `MAX_BOTS_PER_WORKER`,
-  `BOT_LEASE_SECONDS`, `QUEUES`, `REMOVED_QUEUE_POLICY`, `TOKEN_STORAGE`, `TOKEN_ENCRYPTION_KEYS`, `EVENT_LOG` and every `EVENT_LOG_*` one -- may not be set per bot. `ENABLED` is not one of
+  `BOT_LEASE_SECONDS`, `QUEUES`, `REMOVED_QUEUE_POLICY`, `METRICS_PER_BOT`, `TOKEN_STORAGE`, `TOKEN_ENCRYPTION_KEYS`, `EVENT_LOG` and every `EVENT_LOG_*` one -- may not be set per bot. `ENABLED` is not one of
   them: a bot may be switched off on its own. There is one writer thread and one
   in-flight list per process, so a per-bot value could only mean whichever bot resolved last
   wins. `E053` reports the attempt.

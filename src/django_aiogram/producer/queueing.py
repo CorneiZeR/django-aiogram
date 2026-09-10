@@ -45,6 +45,10 @@ class Queueing:
     payloads: list[bytes]
     messages: list[tuple[uuid.UUID, dict[str, Any]]]
     queued_at: float
+    #: which bot these messages are for, the same identity the payload carries. Kept here so
+    #: the feed rows can say it: a deployment with twenty clients reads this log to find out
+    #: whose messages were queued or lost, and a column of nulls answers nothing
+    bot_id: int | None = None
     #: what the ``queued`` row will say about each call's arguments, or ``None`` per message
     #: where nothing reads them. Summarized beside the payload rather than at publish time:
     #: a deferred publish runs after the caller may have changed a nested value, and the
@@ -57,6 +61,7 @@ def _dropped(
     messages: list[tuple[uuid.UUID, dict[str, Any]]],
     stage: str,
     error: Exception,
+    bot_id: int | None = None,
 ) -> None:
     """Record every message a failure lost, and where it lost them.
 
@@ -74,6 +79,7 @@ def _dropped(
             Event(
                 kind=EventKind.OUTBOUND_DROPPED.value,
                 correlation_id=identifier,
+                bot_id=bot_id,
                 function=function,
                 chat_id=as_identifier(kwargs.get('chat_id')),
                 error_code=type(error).__name__,
@@ -133,10 +139,11 @@ def serialise(
             ],
             messages=messages,
             queued_at=queued_at,
+            bot_id=bot_id,
             details=[describe(kwargs) if described else None for _, kwargs in messages],
         )
     except Exception as error:
-        _dropped(function, messages, 'serialising', error)
+        _dropped(function, messages, 'serialising', error, bot_id)
         raise
 
 
@@ -155,7 +162,7 @@ def publishing(function: str, write: Queueing) -> 'Iterator[Queueing]':
     try:
         yield write
     except Exception as error:
-        _dropped(function, write.messages, 'queueing', error)
+        _dropped(function, write.messages, 'queueing', error, write.bot_id)
         raise
     if not recorder.active:
         # nothing keeps the table and nothing listens, so there is no event to make
@@ -165,6 +172,7 @@ def publishing(function: str, write: Queueing) -> 'Iterator[Queueing]':
             Event(
                 kind=EventKind.OUTBOUND_QUEUED.value,
                 correlation_id=identifier,
+                bot_id=write.bot_id,
                 created_at=write.queued_at,
                 function=function,
                 chat_id=as_identifier(kwargs.get('chat_id')),

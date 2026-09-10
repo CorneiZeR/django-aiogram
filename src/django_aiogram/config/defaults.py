@@ -133,6 +133,11 @@ DEFAULTS: dict[str, Any] = {
     # own access control and the admin permission on the column. `[crypto]` ships the
     # encrypting one, so a project that needs it at rest pays for `cryptography` and the
     # rest do not
+    # whether the shipped Prometheus exporter labels its series by bot. Off, and that is the
+    # load-bearing default: a label per bot is a series per bot per kind, so a deployment with
+    # a thousand clients turns two metrics into fourteen thousand -- which is a Prometheus
+    # problem rather than a dashboard. On, it is one label and the operator's own decision
+    'METRICS_PER_BOT': False,
     'TOKEN_STORAGE': 'django_aiogram.tokens.PlainTokenStorage',
     # the keys an encrypting storage uses, newest first: the first one writes and every one
     # of them reads, which is what makes a rotation `manage.py tgbot_rewrap_tokens` can walk
@@ -178,6 +183,7 @@ PROCESS_SCOPED: frozenset[str] = frozenset(
         'BOT_LEASE_SECONDS',
         'QUEUES',
         'REMOVED_QUEUE_POLICY',
+        'METRICS_PER_BOT',
         'TOKEN_STORAGE',
         'TOKEN_ENCRYPTION_KEYS',
     }

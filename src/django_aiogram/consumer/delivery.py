@@ -777,6 +777,7 @@ class Delivery(ABC):
             Event(
                 kind=kind.value,
                 correlation_id=envelope.correlation_id or new_correlation_id(),
+                bot_id=envelope.bot_id,
                 function=envelope.function,
                 chat_id=as_identifier(chat_id),
                 worker=worker_identity(),

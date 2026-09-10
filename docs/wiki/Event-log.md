@@ -33,6 +33,7 @@ not the flag is on; nothing reads or writes it until you turn it on.
 | `kind` | which of the kinds below |
 | `function` | the aiogram method, when there is one |
 | `chat_id`, `user_id`, `message_id`, `update_id` | the identifiers Telegram issued |
+| `bot_id` | which bot the row is about, by the number in its token. Filled on every row something knew the bot for — a send, a queued message, an update, an FSM transition, a revealed token — and null where nothing did: an undecodable payload names no bot. Indexed, and the feed's changelist filters by it |
 | `worker` | which container recorded it |
 | `attempt`, `duration_ms` | how many tries, and how long. `attempt` stops counting at 32767, which is its column: a value that does not fit fails the whole batch it travelled in rather than its own row, so the writer saturates it. Only `tgbot_dispatch_scheduled --max-attempts` above that reaches it, and its drop keeps the exact number in `detail.attempts` |
 | `error_code`, `error` | why it failed |
@@ -279,6 +280,23 @@ Two metrics, filled from every batch:
 | --- | --- |
 | `django_aiogram_events_total{kind}` | every event, by kind — one counter with a label rather than fourteen names to learn |
 | `django_aiogram_event_duration_seconds{kind}` | how long the work took, where it was measured: a send's round trip and a handler's run. Seconds, because that is what a dashboard's arithmetic assumes |
+
+**The bot is not a label by default**, and that is load-bearing rather than an omission: a
+label per bot is a series per bot **per kind**, so a thousand clients turn those two metrics
+into fourteen thousand series — a Prometheus problem rather than a dashboard. Where a
+deployment wants it and knows the cost:
+
+```python
+TELEGRAM_BOT_DEFAULTS = {'METRICS_PER_BOT': True}
+```
+
+Every series then carries `bot`, holding the identity, or `unknown` for a row that named no
+bot — an undecodable payload does not — so a query can tell the two apart. Read once when the
+exporter is built, because a live metric's label set cannot change under it.
+
+The same question per bot is answered by the feed itself, which is indexed by `bot_id` and
+costs nothing per client: `bot.token_revealed`, whose messages were dropped, which client's
+handler raised.
 
 Failures need no metric of their own: `outbound.failed`, `outbound.dropped`, `inbound.failed`
 and the rest are kinds, so `sum(rate(django_aiogram_events_total{kind=~".*failed|.*dropped"}[5m]))`

@@ -169,6 +169,7 @@ def _record(function: str, write: 'Queueing', due_at: datetime.datetime) -> None
         Event(
             kind=EventKind.OUTBOUND_SCHEDULED.value,
             correlation_id=identifier,
+            bot_id=write.bot_id,
             function=function,
             chat_id=as_identifier(kwargs.get('chat_id')),
             detail={**(detail or {}), DUE_AT_DETAIL: due_at.isoformat()},
