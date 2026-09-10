@@ -75,10 +75,14 @@ TELEGRAM_BOT_DEFAULTS = {
 
 1. Add the new key **in front** and deploy. Old rows still read.
 2. Wait until every process is running with both keys, then run
-   `manage.py tgbot_rewrap_tokens`. Each row is rewritten under the new key — and a process
-   still running with the old list alone cannot read a rewritten row, so on a rolling deploy
-   the walk has to wait for the rollout to finish rather than run beside it.
-3. Drop the old key from the list and deploy again.
+   `manage.py tgbot_rewrap_tokens`. Each readable row that is not already current is rewritten
+   under the new key — and a process still running with the old list alone cannot read a
+   rewritten row, so on a rolling deploy the walk has to wait for the rollout to finish rather
+   than run beside it.
+3. **Read the counts it printed** before dropping anything: a row it reported as unreadable or
+   as changed under the walk is a row still holding what it held, and dropping the old key
+   then is dropping the only key that reads it. Run the walk again.
+4. Drop the old key from the list and deploy again.
 
 Doing step 3 before step 2 is the one mistake that costs data: the rows written under the old
 key stop being readable, and the bots in them are reported and left out rather than served —

@@ -90,3 +90,19 @@ def test_a_key_setting_there_is_no_walking_is_a_configuration_error():
         FernetTokenStorage()
 
     assert 'TOKEN_ENCRYPTION_KEYS' in str(refused.value)
+
+
+def test_a_ciphertext_that_is_not_text_is_unreadable_rather_than_a_traceback():
+    """A key can open bytes that are not UTF-8, and `.decode()` raises where callers do not look.
+
+    A `UnicodeDecodeError` escaping the storage would stop a read of twenty bots at whichever
+    row held it — the providers catch `TokenUnreadableError`, which is the answer for a column
+    that cannot be turned back into a token whatever made it so.
+    """
+    with configured(FIRST):
+        wrapped = FernetTokenStorage.PREFIX + Fernet(FIRST.encode()).encrypt(b'\xff\xfe').decode()
+
+        with pytest.raises(TokenUnreadableError) as refused:
+            FernetTokenStorage().read(wrapped)
+
+    assert wrapped not in str(refused.value)

@@ -66,13 +66,17 @@ class FernetTokenStorage(TokenStorage):
 
         try:
             return self._fernet.decrypt(stored.removeprefix(self.PREFIX).encode()).decode()
-        except InvalidToken as error:
+        # `UnicodeDecodeError` alongside the refusal: a ciphertext a key *can* open may still
+        # hold bytes that are not text, and an unreadable column has one answer here whatever
+        # made it unreadable -- a caller catching only `TokenUnreadableError` would otherwise
+        # lose the bots after this one
+        except (InvalidToken, UnicodeDecodeError) as error:
             # the value is deliberately not in the message: an unreadable column is reported
             # into a log, and a ciphertext in a log is a ciphertext in whatever ships the logs
             msg = (
-                'a stored token could not be decrypted: no key in '
-                f'{setting_label(None, "TOKEN_ENCRYPTION_KEYS")} reads it. '
-                'A key that was dropped before the rows were rewrapped is the usual reason.'
+                'a stored token could not be read back: no key in '
+                f'{setting_label(None, "TOKEN_ENCRYPTION_KEYS")} decrypts it, or what came out '
+                'is not text. A key that was dropped before the rows were rewrapped is the usual reason.'
             )
             raise TokenUnreadableError(msg) from error
 
