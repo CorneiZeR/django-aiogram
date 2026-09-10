@@ -311,6 +311,10 @@ class TelegramQueue(models.Model):
     #: with the pools rather than with the queues, so a new client's queue needs no redeploy
     pool = models.CharField(max_length=64, default='default')
     created_at = models.DateTimeField(default=timezone.now)
+    #: the watermark a reconciling supervisor polls, for the reason the profile's says -- and
+    #: here for one of its own: a bot's `QUEUE` is read from the row it points at, so a queue
+    #: renamed while nothing else moved has to be a change the providers can see
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         """Portable everywhere, and one index: the set a container asks for at startup."""

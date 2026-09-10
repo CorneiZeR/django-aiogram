@@ -31,6 +31,11 @@ A new token is stored through `TOKEN_STORAGE`, like every other write — see
 | Limits, Updates, Delivery, Bot behaviour | one line per setting this bot may decide, collapsed until you open them |
 | State | whether it is switched on, and what the supervisor last said about it |
 
+Adding a bot needs that permission too: a new bot has no token to keep, so adding one *is*
+setting a credential. And the field is absent from the form a user without it gets, not just
+from the page — a section that is merely unrendered still posts back, and a token accepted from
+somebody who may not read one is the bot given away.
+
 `view_telegrambot_token` follows the precedent the event feed set with
 `view_telegramevent_payload`: being allowed to switch a bot off is a different question from
 being allowed to read what sends as it. Without it the credentials section is **not rendered at
@@ -70,6 +75,10 @@ The bot changelist is meant to be scanned rather than opened row by row:
 | pool | where this bot's work is done — the axis a container is started with |
 | own settings | which settings this bot decides for itself, because a bot behaving unlike its neighbours is usually carrying an old override |
 | serving | whether anything is serving it: switched on, and not quarantined |
+
+Renaming a queue reaches the bots pointed at it within a poll: the providers watch the three
+tables a resolved bot reads, so the rename is a change they can see rather than one that waits
+for a restart.
 
 Filters cover the switch, the profile, the queue and the pool; **Switch on** and **Switch off**
 are actions, so five hundred clients are one statement rather than five hundred saves. A

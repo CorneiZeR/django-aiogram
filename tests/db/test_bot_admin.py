@@ -309,3 +309,56 @@ def test_a_profile_links_to_the_bots_on_it(client):
     page = client.get('/admin/django_aiogram/telegrambotprofile/').content.decode()
 
     assert f'{BOTS}?profile__id__exact={profile.pk}' in page
+
+
+def test_a_user_without_the_permission_cannot_post_a_token_either(client):
+    """The section is not rendered, and that alone is not a permission boundary.
+
+    The admin builds its form from the form's own declaration, which declares `token` — so a
+    POST carrying one would be accepted and stored, and the bot given away by somebody who may
+    not read its credential. The field is dropped from the form that request gets.
+    """
+    bot = a_bot()
+    client.force_login(a_user('support', 'view_telegrambot', 'change_telegrambot'))
+
+    response = client.post(
+        f'{BOTS}{bot.pk}/change/',
+        {'label': 'renamed', 'token': '999999:CCstolen', 'enabled': 'on'},
+    )
+
+    assert response.status_code == 302, response.content
+    bot.refresh_from_db()
+    assert read_token(bot.token) == TOKEN, 'a user without the permission replaced the credential'
+    assert bot.bot_id == 123456, 'the identity moved with a token nobody was allowed to set'
+
+
+def test_adding_a_bot_needs_the_token_permission(client):
+    """A new bot has no token to keep, so adding one *is* setting a credential."""
+    client.force_login(a_user('support', 'add_telegrambot', 'view_telegrambot', 'change_telegrambot'))
+
+    response = client.get(f'{BOTS}add/')
+
+    assert response.status_code == 403
+    assert not TelegramBot.objects.exists()
+
+
+def test_renaming_a_queue_reaches_the_bots_pointed_at_it(client):
+    """The providers answer from a watermark, and a bot's queue comes from the row it points at.
+
+    A rename that moved no other table would leave every container publishing to the old name
+    until it restarted — and renaming a queue is exactly the kind of edit an operator makes.
+    """
+    from django_aiogram.runtime import providers
+
+    queue = TelegramQueue.objects.create(name='client-a', pool='default')
+    a_bot(queue=queue)
+    providers.forget()
+
+    with override_settings(
+        TELEGRAM_BOT_DEFAULTS={'BOT_PROVIDERS': ('django_aiogram.runtime.providers.from_database',)}
+    ):
+        assert providers.from_database()[0]['QUEUE'] == 'client-a'
+        queue.name = 'client-a-renamed'
+        queue.save()
+
+        assert providers.from_database()[0]['QUEUE'] == 'client-a-renamed', 'the rename was invisible to the cache'

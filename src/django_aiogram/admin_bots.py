@@ -325,7 +325,23 @@ class TelegramBotAdmin(BotAdminBase):
         are on the class beside them.
         """
         kwargs['fields'] = None
-        return super().get_form(request, obj, change=change, **kwargs)
+        built = super().get_form(request, obj, change=change, **kwargs)
+        if may_see_tokens(request):
+            return built
+        # the section is not *rendered* for this user, and that is not enough: `fields=None`
+        # above hands the factory the form's own declaration, which still declares `token`, so
+        # a POST carrying one would be accepted and stored -- the bot given away by somebody
+        # who may not read its credential. Dropped from the class the factory built, which is
+        # this request's own subclass rather than the form every request shares
+        return _without_the_token_field(built)
+
+    def has_add_permission(self, request: 'HttpRequest') -> bool:
+        """Adding a bot means setting its token, so it needs the permission for one.
+
+        Otherwise the add form is one a user cannot fill in: a new bot has no token to keep,
+        and the identity everything else joins on is read out of the one they cannot give.
+        """
+        return bool(super().has_add_permission(request)) and may_see_tokens(request)
 
     @admin.display(description='pool', ordering='queue__pool')
     def pool(self, obj: TelegramBot) -> str:
@@ -387,6 +403,27 @@ class TelegramBotAdmin(BotAdminBase):
         if not obj.token:
             return 'not set'
         return MASK.format(bot_id=obj.bot_id, hidden=HIDDEN)
+
+
+def _without_the_token_field(form: 'type[BotFormBase]') -> 'type[BotFormBase]':
+    """Return the same form with no ``token`` field, for a user who may not set one.
+
+    Taken away in ``__init__`` rather than from ``base_fields``: a form's metaclass rebuilds
+    that mapping from what the class *declared*, so a subclass handing it a filtered copy gets
+    the unfiltered one back -- measured, and the reason this is done to the bound fields.
+    Without it the credentials section is merely not rendered, and a POST carrying a token is
+    still accepted: the bot given away by somebody who may not read its credential.
+
+    Built with ``type()`` rather than a ``class`` statement because the base is decided at run
+    time -- it is whatever `modelform_factory` produced for this request.
+    """
+
+    def drop_it(self: 'BotFormBase', *args: Any, **kwargs: Any) -> None:
+        """Build the form, then take the field away before anything can bind to it."""
+        form.__init__(self, *args, **kwargs)
+        self.fields.pop('token', None)
+
+    return type(form.__name__, (form,), {'__init__': drop_it, '__doc__': form.__doc__})
 
 
 def _bots_link(lookup: str, value: int, count: int) -> str:

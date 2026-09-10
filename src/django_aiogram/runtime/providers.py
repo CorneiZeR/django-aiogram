@@ -76,12 +76,17 @@ def from_database() -> 'tuple[BotRecord, ...]':
     """
     # deferred: importing models reaches the app registry, and this module is imported wherever
     # the settings are read -- including in a process that has none
-    from django_aiogram.models import TelegramBot, TelegramBotProfile  # noqa: PLC0415 - as above
+    from django_aiogram.models import TelegramBot, TelegramBotProfile, TelegramQueue  # noqa: PLC0415 - as above
 
     global _from_table  # noqa: PLW0603 - one table per process, like the rows it caches
+    # all three tables a resolved bot reads, because the watermark is only as good as the set
+    # it watches: a bot's `QUEUE` comes from the queue row it points at, so a queue renamed
+    # while nothing else moved would leave every container publishing to the old name until it
+    # restarted -- and a rename is exactly what an operator does to a queue
     mark = (
         TelegramBot.objects.aggregate(at=Max('updated_at'), n=Count('pk')),
         TelegramBotProfile.objects.aggregate(at=Max('updated_at'), n=Count('pk')),
+        TelegramQueue.objects.aggregate(at=Max('updated_at'), n=Count('pk')),
     )
     with _lock:
         held = _from_table

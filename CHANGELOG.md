@@ -146,7 +146,14 @@
 
   The queue picked in the admin is now the queue the bot publishes to: `TelegramBot.queue` is
   read into `QUEUE` when the row is resolved, below its own overrides. Before this it decided
-  nothing -- routing read the setting and the column was decoration.
+  nothing -- routing read the setting and the column was decoration. `TelegramQueue` gained an
+  `updated_at`, and the providers' watermark watches all three tables a resolved bot reads:
+  without it a renamed queue would leave every container publishing to the old name until it
+  restarted. **Run `manage.py migrate`.**
+
+  Adding a bot needs `view_telegrambot_token`, and the token field is absent from the *form* a
+  user without it gets rather than only from the page: an unrendered section still posts back,
+  and a token accepted from somebody who may not read one is the bot given away.
 
   The list is built to be scanned: the pool, the settings each bot overrides and whether
   anything is serving it, filters over the switch, profile, queue and pool, and **Switch
