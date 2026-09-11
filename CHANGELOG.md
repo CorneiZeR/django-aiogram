@@ -122,6 +122,22 @@
   down, or not migrated here -- declares nothing and refuses nothing; no table at all is a
   different state, where the settings are the whole declaration.
 
+- **Two commands that say what a deployment is actually serving.** `manage.py check` reads
+  settings, and a bot that arrived at run time is a row -- so until now nothing could answer
+  *what will happen* for a deployment whose clients connect themselves.
+
+  `manage.py tgbot_bots` lists every resolved bot with its source, profile digest, queue, mode,
+  switch and lease. The digest is what makes a grouping decision readable: twenty bots
+  configured alike show one digest between them, and a deployment that quietly built twenty
+  groups is paying for twenty transports. `--bot`, `--all` and `--json`; the digest is printed
+  rather than the settings behind it, which hold `REDIS_URL` and its password.
+
+  `manage.py tgbot_queues` lists the declared queues -- from the table and from `QUEUES` --
+  with their pool, depth, in-flight count and how long ago something said it was consuming
+  them, and names the queues holding messages that nobody is reading. `--queue`, `--pool`,
+  `--json`, and `--no-depth` for the form that touches no network. A transport that cannot be
+  reached reads `?` rather than `0`: an unreachable broker is not an empty queue.
+
 - **Every line and every row about a bot says which bot.** `tg_bot_id` is on the send,
   delivery, quarantine and reconciliation lines -- in `extra`, never interpolated: a value in
   the message text is still greppable but is not a *field*, so nothing can filter, group or
