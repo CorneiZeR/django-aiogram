@@ -134,8 +134,10 @@
   The feed's changelist gained a **bot** filter, offered from the configured bots and the rows
   in `TelegramBot` rather than a `SELECT DISTINCT` over a table sized by traffic -- and it
   still narrows to a client who has *gone*, which is one of the questions a feed is kept for.
-  `bot_id` is a column on the list and sortable, because the feed keeps an index leading with
-  it, and the detail page names it too. A consumed row also carries `detail.queue`, so a
+  `bot_id` is a column on the list and on the detail page. It is **not**
+  sortable: the index leading with it is `(bot_id, -id)`, and a header asks for
+  `ORDER BY bot_id DESC, id DESC`, which that cannot serve -- and sorting a feed by bot
+  answers nothing anybody asks, where narrowing to one is the whole point of the filter. A consumed row also carries `detail.queue`, so a
   container serving several says which one a message came from -- in `detail` rather than a
   column, because a column here is a migration on the one table sized by traffic and nothing
   looks for a client's messages by queue.

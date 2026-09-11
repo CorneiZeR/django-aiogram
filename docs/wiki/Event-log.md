@@ -537,7 +537,9 @@ serve), and no substring search — the three searchable columns are matched
 exactly, so each uses its index. Sorting is limited to three columns:
 `created_at`, `kind` and `chat_id`. Sortable, not merely indexed: `short_id` has an index too, for
 the exact search, and is deliberately not sortable because ordering messages by a random code
-answers nothing. The other headers are not links, and an `?o=`
+answers nothing. `bot_id` is the same case for a different reason — its index is `(bot_id, -id)`
+and a header asks for `ORDER BY bot_id DESC, id DESC`, which that cannot provide; *narrowing* to
+one bot is the question anybody has, and that is the filter. The other headers are not links, and an `?o=`
 naming one of them — from a bookmark, or a link shared before this restriction — is
 dropped rather than honoured, because ordering the whole table by `worker` is a
 sequential scan and a sort on every page.
