@@ -134,9 +134,10 @@ DEFAULTS: dict[str, Any] = {
     # encrypting one, so a project that needs it at rest pays for `cryptography` and the
     # rest do not
     # whether the shipped Prometheus exporter labels its series by bot. Off, and that is the
-    # load-bearing default: a label per bot is a series per bot per kind, so a deployment with
-    # a thousand clients turns two metrics into fourteen thousand -- which is a Prometheus
-    # problem rather than a dashboard. On, it is one label and the operator's own decision
+    # load-bearing default: a label per bot is a series per bot *per kind*, and the histogram
+    # multiplies that again by its buckets -- so a deployment with a thousand clients counts
+    # its series in the hundreds of thousands, which is a Prometheus problem rather than a
+    # dashboard. On, it is one label and the operator's own decision
     'METRICS_PER_BOT': False,
     'TOKEN_STORAGE': 'django_aiogram.tokens.PlainTokenStorage',
     # the keys an encrypting storage uses, newest first: the first one writes and every one

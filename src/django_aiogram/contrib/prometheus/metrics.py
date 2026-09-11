@@ -43,10 +43,10 @@ class EventMetrics:
     package's ``connect``, which names it -- so a failure here cannot take the dispatch down
     with it. `test_metrics.py` holds that.
 
-    Metrics, and why there are two rather than fourteen:
+    Metrics, and why there are two rather than one per kind:
 
     * ``django_aiogram_events_total{kind}`` -- one counter for every kind, because a counter
-      per kind is fourteen names to learn and a query per panel, while a label is one of each.
+      per kind is a name to learn and a panel to write for each, while a label is one of each.
       The kinds are a registry with a documented convention, so the label is bounded by code
       rather than by traffic.
     * ``django_aiogram_event_duration_seconds{kind}`` -- observed for every event that carries
@@ -67,9 +67,10 @@ class EventMetrics:
     pod.
 
     **And the bot is a label only where a project asks for one.** ``METRICS_PER_BOT`` is off
-    by default, so the number of series does not grow with the number of bots: a thousand
-    clients would otherwise turn two metrics into fourteen thousand series, which is a
-    Prometheus problem rather than a dashboard. Turned on, every series gains a ``bot`` label
+    by default, so the number of series does not grow with the number of bots: a label per
+    bot is a series per bot *per kind*, and the histogram multiplies that again by its
+    buckets -- a thousand clients counted that way are hundreds of thousands of series, which
+    is a Prometheus problem rather than a dashboard. Turned on, every series gains a ``bot`` label
     carrying the identity -- and a row written by something that did not know which bot it
     was about carries ``unknown`` rather than an empty label, so a query can tell the two
     apart. The feed answers the same question per bot without any of that, and it is where a

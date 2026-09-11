@@ -123,8 +123,9 @@
   different state, where the settings are the whole declaration.
 
 - **Every line and every row about a bot says which bot.** `tg_bot_id` is on the send,
-  delivery, quarantine and reconciliation lines -- in `extra`, never interpolated, because a
-  line carrying it in the text is its own string and cannot be filtered on -- and the feed's
+  delivery, quarantine and reconciliation lines -- in `extra`, never interpolated: a value in
+  the message text is still greppable but is not a *field*, so nothing can filter, group or
+  alert on it -- and the feed's
   `bot_id` column is filled by everything that knew the bot: a send, a queued message, an
   update, an FSM transition. It has existed since the 5.0 tables and nothing wrote it.
 
@@ -139,8 +140,8 @@
 
   **The Prometheus exporter labels by bot only where a project asks.** `METRICS_PER_BOT` is
   off, so the number of series does not grow with the number of bots: a label per bot is a
-  series per bot *per kind*, and a thousand clients would turn two metrics into fourteen
-  thousand series. Turned on, every series carries `bot` -- the identity, or `unknown` for a
+  series per bot *per kind*, and the histogram multiplies that again by its buckets -- a
+  thousand clients counted that way are hundreds of thousands of series. Turned on, every series carries `bot` -- the identity, or `unknown` for a
   row that named none. `E064` reports a value that does not read as a boolean.
 
 - **A token in an error message is redacted even where the deployment never configured it.**

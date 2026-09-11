@@ -278,13 +278,13 @@ Two metrics, filled from every batch:
 
 | | |
 | --- | --- |
-| `django_aiogram_events_total{kind}` | every event, by kind — one counter with a label rather than fourteen names to learn |
+| `django_aiogram_events_total{kind}` | every event, by kind — one counter with a label rather than a metric name per kind |
 | `django_aiogram_event_duration_seconds{kind}` | how long the work took, where it was measured: a send's round trip and a handler's run. Seconds, because that is what a dashboard's arithmetic assumes |
 
 **The bot is not a label by default**, and that is load-bearing rather than an omission: a
-label per bot is a series per bot **per kind**, so a thousand clients turn those two metrics
-into fourteen thousand series — a Prometheus problem rather than a dashboard. Where a
-deployment wants it and knows the cost:
+label per bot is a series per bot **per kind**, and the histogram multiplies that again by its
+buckets — so a thousand clients are counted in hundreds of thousands of series, which is a
+Prometheus problem rather than a dashboard. Where a deployment wants it and knows the cost:
 
 ```python
 TELEGRAM_BOT_DEFAULTS = {'METRICS_PER_BOT': True}

@@ -75,8 +75,9 @@ def a_bot(**kwargs):
 def test_a_send_that_was_refused_says_which_bot_it_was_for(caplog):
     """#123's named case: the value is in `extra`, and not in the message text.
 
-    Interpolating it would make every line its own string — ungreppable, and unusable as a
-    field a log aggregator can filter on, which is the whole reason the rule exists.
+    A value interpolated into the message is still there to `grep`, and that is not the
+    point: it stops being a *field*, so nothing can filter, group or alert on it, and every
+    line becomes its own message string. That is the whole reason the rule exists.
     """
     served = a_bot()
 

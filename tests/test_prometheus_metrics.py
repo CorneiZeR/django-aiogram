@@ -263,8 +263,9 @@ def test_the_package_does_not_import_the_metrics_client():
 def test_the_default_series_count_does_not_grow_with_the_bots(registry):
     """#123's acceptance, and the reason `METRICS_PER_BOT` is off.
 
-    A label per bot is a series per bot *per kind*: a thousand clients turn two metrics into
-    fourteen thousand series, which is a Prometheus problem rather than a dashboard.
+    A label per bot is a series per bot *per kind*, and the histogram multiplies that again
+    by its buckets: a thousand clients counted that way are hundreds of thousands of series,
+    which is a Prometheus problem rather than a dashboard.
     """
     metrics = EventMetrics(registry)
 
