@@ -227,6 +227,16 @@ class Command(BaseCommand):
         )
         parser.add_argument('--chat', type=int, default=None, help='only failures for this chat id.')
         parser.add_argument(
+            '--bot',
+            action='append',
+            default=[],
+            dest='bots',
+            type=int,
+            help='only failures for these identities, however many times it is given. Defaults '
+            "to every bot. An incident is usually one client's, and a replay that swept the "
+            'others would re-send messages nobody asked about.',
+        )
+        parser.add_argument(
             '--correlation-id',
             action='append',
             default=None,
@@ -388,6 +398,11 @@ class Command(BaseCommand):
         rows = rows.filter(created_at__lt=until)
         if options['chat'] is not None:
             rows = rows.filter(chat_id=options['chat'])
+        if options['bots']:
+            # the feed's own column, which is indexed leading with it: an incident is one
+            # client's, and a replay is the one command that *sends* -- sweeping the others
+            # would put messages nobody asked about back on their queues
+            rows = rows.filter(bot_id__in=list(options['bots']))
         return rows.order_by('created_at', 'id')
 
     @staticmethod

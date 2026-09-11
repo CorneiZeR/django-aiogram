@@ -72,6 +72,14 @@ class Command(BaseCommand):
             'limit. A bounded run takes the newest in flight first, because that is the end of the '
             'list a reclaim pops from',
         )
+        parser.add_argument(
+            '--queue',
+            default=None,
+            help='the queue whose in-flight list to drain. Defaults to the one this process is '
+            'configured for, which is every 4.x deployment. A container serving several queues '
+            'has an in-flight list per queue, and reclaiming from the wrong one moves another '
+            "client's messages.",
+        )
         parser.add_argument('--dry-run', action='store_true', help='report what is there, and move nothing')
 
     @staticmethod
@@ -97,6 +105,38 @@ class Command(BaseCommand):
                 raise
             return connection.rpoplpush(source, destination)
 
+    @staticmethod
+    def _keys(queue: 'str | None', worker: str) -> tuple[str, str]:
+        """Return the in-flight list to drain and the queue to drain it into.
+
+        The process's own where no queue is named, which is every deployment with one. Where
+        one *is* named, both keys come from a transport built for that queue rather than from
+        the module-level readers: those answer for the process, and a container serving five
+        clients has an in-flight list per queue -- reclaiming from the wrong one takes another
+        client's messages and puts them on another client's queue.
+        """
+        if not queue:
+            return processing_key(worker), queue_key()
+        # deferred: building a transport for another queue reaches the registry and the
+        # settings, and this module is imported by `manage.py help`
+        from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
+        from django_aiogram.runtime.queues import declared, settings_for  # noqa: PLC0415 - as above
+
+        known = declared()
+        if known and queue not in known:
+            # the same refusal `tgbot_prune_queues` makes about a name nothing declares: a
+            # typo would otherwise read an empty list and report that there is nothing in
+            # flight, which is indistinguishable from the queue being drained already
+            msg = f'{queue!r} is not a declared queue: {", ".join(sorted(known))}.'
+            raise CommandError(msg)
+        settings = settings_for(queue)
+        built = broker_class(settings).configured(settings)
+        inflight = getattr(built, '_inflight', None)
+        if not callable(inflight):
+            msg = f'{type(built).__name__} keeps no per-worker in-flight list to reclaim from.'
+            raise CommandError(msg)
+        return inflight(worker), built.addressed()
+
     def handle(self, *args: Any, **options: Any) -> None:
         """Walk the named worker's in-flight list back onto the queue."""
         _refuse_where_a_name_selects_nothing()
@@ -121,7 +161,7 @@ class Command(BaseCommand):
             )
             raise CommandError(msg)
 
-        source, destination = processing_key(worker), queue_key()
+        source, destination = self._keys(options.get('queue'), worker)
         connection = get_redis()
         try:
             waiting = int(connection.llen(source) or 0)

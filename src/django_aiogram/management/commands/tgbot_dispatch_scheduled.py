@@ -54,17 +54,22 @@ logger = logging.getLogger('django_aiogram')
 
 @dataclass(frozen=True)
 class Bounds:
-    """The four numbers one pass runs by, so the signatures below stop growing.
+    """What one pass runs by, so the signatures below stop growing.
 
-    Every one of them is a bound rather than a target, and each answers a different way for
-    a pass to go wrong: too much work at once, a claim believed too long, a row too old to
-    be worth sending, and a failure repeated too often.
+    The four numbers are each a bound rather than a target, and each answers a different way
+    for a pass to go wrong: too much work at once, a claim believed too long, a row too old
+    to be worth sending, and a failure repeated too often. ``bots`` is not a bound but a
+    *selection* -- which rows this pass is allowed to touch at all -- and it travels with
+    them because every one of these is read together.
     """
 
     limit: int
     lease: int
     grace: int
     attempts: int
+    #: last, because this class is built positionally nowhere today and might be tomorrow:
+    #: a field in the middle of a dataclass rebinds every argument after it
+    bots: tuple[int, ...] = ()
 
 
 class Command(BaseCommand):
@@ -74,6 +79,17 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser: ArgumentParser) -> None:
         """Declare the batch bound, the loop and the two ways to refuse a late row."""
+        parser.add_argument(
+            '--bot',
+            action='append',
+            default=[],
+            dest='bots',
+            type=int,
+            help='move only the rows for these identities, however many times it is given. '
+            'Defaults to every bot, which is every deployment with one. A mover told which '
+            "bots to move for takes only those: claiming another client's row publishes it "
+            'to their queue from a container nobody asked to do it.',
+        )
         parser.add_argument(
             '--limit',
             type=int,
@@ -141,11 +157,12 @@ class Command(BaseCommand):
             lease=max(0, int(options['lease'])),
             grace=max(0, int(options['grace'])),
             attempts=max(0, int(options['max_attempts'])),
+            bots=tuple(options['bots']),
         )
         if options['dry_run']:
             # the clamped limit, like the real pass: the raw one reached a queryset slice,
             # where Django refuses a negative index outright and 0 reported nothing at all
-            self._report_due(bounds.limit)
+            self._report_due(bounds.limit, bounds.bots)
             return
         previous = self._install_sigterm_handler()
         try:
@@ -186,7 +203,7 @@ class Command(BaseCommand):
         # willing to look at them -- invisible until an operator cleared them by hand
         broker = get_broker()
         self._warn_about_a_lease_shorter_than_a_publish(broker, bounds.lease)
-        rows = claim(bounds.limit, lease=bounds.lease)
+        rows = claim(bounds.limit, lease=bounds.lease, bots=bounds.bots)
         if not rows:
             return 0
         published = 0
@@ -342,7 +359,7 @@ class Command(BaseCommand):
         )
         logger.warning('dropped a scheduled send past its grace', extra={'tg_overdue': overdue, 'tg_grace': grace})
 
-    def _report_due(self, limit: int) -> None:
+    def _report_due(self, limit: int, bots: 'tuple[int, ...]' = ()) -> None:
         """Say what a real pass would take, claiming nothing."""
         from django_aiogram.models import TelegramScheduledSend  # noqa: PLC0415 - django.db, not at import
 
@@ -351,9 +368,14 @@ class Command(BaseCommand):
         # claim has lapsed is one the next pass publishes, and reporting it as held would
         # understate what a real pass takes -- the one thing this output is for
         free = unheld(now)
-        due = TelegramScheduledSend.objects.filter(free, due_at__lte=now)
-        waiting = TelegramScheduledSend.objects.filter(free, due_at__gt=now).count()
-        claimed = TelegramScheduledSend.objects.exclude(free).count()
+        rows = TelegramScheduledSend.objects.all()
+        if bots:
+            # the same narrowing the real pass applies: a rehearsal that counted every bot's
+            # rows would promise a pass this one will not make
+            rows = rows.filter(bot_id__in=list(bots))
+        due = rows.filter(free, due_at__lte=now)
+        waiting = rows.filter(free, due_at__gt=now).count()
+        claimed = rows.exclude(free).count()
         self.stdout.write(f'{due.count()} due now, of which a pass would take {limit}.')
         self.stdout.write(f'{waiting} not due yet, {claimed} claimed by a mover.')
         for row in due.order_by('due_at', 'id')[:limit]:

@@ -29,6 +29,8 @@ from django_aiogram.eventlog.records import Event, as_identifier
 from django_aiogram.producer.committing import after_commit
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
     from django_aiogram.models import TelegramScheduledSend
     from django_aiogram.producer.queueing import Queueing
 
@@ -190,6 +192,7 @@ def claim(
     *,
     lease: int = DEFAULT_LEASE,
     now: datetime.datetime | None = None,
+    bots: 'Collection[int] | None' = None,
 ) -> list['TelegramScheduledSend']:
     """Take ownership of up to ``limit`` due rows, and return the ones this call won.
 
@@ -220,6 +223,11 @@ def claim(
     free = unheld(moment)
     lapses = None if lease <= 0 else moment + datetime.timedelta(seconds=lease)
     available = TelegramScheduledSend.objects.filter(free, due_at__lte=moment).order_by('due_at', 'id')
+    if bots:
+        # a mover told which bots to move for takes *only* those: a pass that claimed another
+        # client's row would publish it to that client's queue from a container nobody asked
+        # to do it, and the row would be gone before anyone noticed
+        available = available.filter(bot_id__in=list(bots))
     won = []
     # the ids first, so the loop below is not walking a queryset it is also mutating
     for row in list(available[:limit]):
