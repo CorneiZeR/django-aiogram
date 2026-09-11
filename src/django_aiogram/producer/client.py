@@ -943,9 +943,11 @@ class TelegramBot(RouterShortcuts):
         """
         self._sends[task] = outbound
         task.add_done_callback(self._sends.pop)
-        # the identity is captured here rather than read off the task: a done callback is
-        # handed nothing but the task, and `Outbound` describes a call rather than a bot
-        task.add_done_callback(lambda done: self._log_task_failure(done, self.bot_id))
+        # the identity is read *now* rather than inside the callback: `bot_id` resolves this
+        # bot's settings on every ask, so a token rotated while this send is in flight would
+        # otherwise make the failure line name the new bot for a message sent under the old
+        identity = self.bot_id
+        task.add_done_callback(lambda done: self._log_task_failure(done, identity))
         if on_complete is not None:
             task.add_done_callback(completion(on_complete))
 

@@ -329,3 +329,38 @@ def test_the_bot_label_is_bounded_however_many_identities_arrive(registry):
     assert value(registry, 'django_aiogram_events_total', kind='queue.rejected', bot='1') == 1
     assert value(registry, 'django_aiogram_events_total', kind='queue.rejected', bot='other') == 50
     assert len(metrics._labelled) == MAX_BOT_LABELS
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'METRICS_PER_BOT': True})
+def test_the_capacity_decision_happens_under_the_lock_that_made_it(registry):
+    """Otherwise two batches at the cap both find room, and the bound stops being one.
+
+    Asserted on the property that makes the interleaving impossible rather than with threads:
+    the interleaving needs a read, then a deschedule, then an insert, which a test cannot ask
+    for — the same shape `tests/db/test_lifecycle.py` uses about the lifecycle's own lock.
+    """
+    metrics = EventMetrics(registry)
+    held = []
+
+    class Watching:
+        """A lock that records whether the set was touched while it was held."""
+
+        def __init__(self, inner):
+            self.inner = inner
+
+        def __enter__(self):
+            self.inner.acquire()
+            held.append('in')
+            return self
+
+        def __exit__(self, *exception):
+            held.append('out')
+            self.inner.release()
+            return False
+
+    metrics._naming = Watching(metrics._naming)
+
+    metrics(events=[Event(kind='queue.rejected', bot_id=123456)])
+
+    assert held == ['in', 'out'], held
+    assert metrics._labelled == {'123456'}

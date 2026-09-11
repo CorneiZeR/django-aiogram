@@ -195,3 +195,50 @@ def test_the_detail_page_names_the_bot(client):
     assert page.status_code == 200
     assert '123456' in page.content.decode()
     assert 'bot id' in page.content.decode().lower()
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_failure_line_names_the_bot_the_send_went_out_under(caplog, monkeypatch):
+    """A token rotated while a send is in flight must not rename the send that is failing.
+
+    `bot_id` resolves this bot's settings on every ask, so a callback reading it when the
+    task finishes reports whichever bot the row names *then* — which is a line attributing
+    one client's failure to another.
+    """
+    served = a_bot()
+    try:
+        task = served.loop.create_task(_raising())
+        served._register(task, _an_outbound())
+        # the row moves under the bot while the send is in flight, the way a rotation does
+        monkeypatch.setattr(type(served), 'bot_id', property(lambda self: 999999))
+        with caplog.at_level(logging.ERROR, logger='django_aiogram'):
+            served.loop.run_until_complete(_settled(task))
+    finally:
+        served.close()
+
+    (said,) = [record for record in caplog.records if 'scheduled send failed' in record.getMessage()]
+    assert said.tg_bot_id == 123456, 'the failure was attributed to whichever bot the row named later'
+
+
+async def _raising():
+    """A send that fails, the way one Telegram refused does."""
+    msg = 'refused'
+    raise RuntimeError(msg)
+
+
+async def _settled(task):
+    """Wait for the task and swallow what it raised: the log line is the subject."""
+    import contextlib
+
+    with contextlib.suppress(RuntimeError):
+        await task
+
+
+def _an_outbound():
+    """The call description `_register` keeps, with nothing interesting in it."""
+    import uuid as _uuid
+
+    from django_aiogram.producer.outbound import Outbound
+
+    return Outbound(function='send_message', call_kwargs={'chat_id': 1}, correlation_id=_uuid.uuid4())

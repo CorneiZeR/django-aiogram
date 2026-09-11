@@ -12,6 +12,7 @@ or a view of its own. This only fills a registry in.
 
 import contextlib
 import logging
+import threading
 from typing import TYPE_CHECKING
 
 from prometheus_client import REGISTRY, CollectorRegistry, Counter, Histogram
@@ -108,6 +109,10 @@ class EventMetrics:
         #: bound. Not an LRU: evicting one would start a *new* series for a bot that is still
         #: sending, and the first bots seen are the ones a deployment actually serves
         self._labelled: set[str] = set()
+        #: held across the *whole* decision below. The feed publishes from the writer thread
+        #: and a project may connect other producers to the same signal, so an unguarded
+        #: read-then-insert lets two batches both find room at the cap and admit more than it
+        self._naming = threading.Lock()
         labels = ('kind', 'bot') if self.per_bot else ('kind',)
         self.events = Counter(
             'django_aiogram_events',
@@ -149,12 +154,15 @@ class EventMetrics:
         if not bot_id:
             return 'unknown'
         said = str(bot_id)
-        if said in self._labelled:
+        with self._naming:
+            # membership, capacity and insertion under one lock: interleaved, two threads at
+            # the cap both see room and the bound stops being one
+            if said in self._labelled:
+                return said
+            if len(self._labelled) >= MAX_BOT_LABELS:
+                return 'other'
+            self._labelled.add(said)
             return said
-        if len(self._labelled) >= MAX_BOT_LABELS:
-            return 'other'
-        self._labelled.add(said)
-        return said
 
     def observe(self, event: 'Event') -> None:
         """Record one event, and refuse to be the reason a batch fails.
