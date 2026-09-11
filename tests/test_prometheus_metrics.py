@@ -330,6 +330,14 @@ def test_the_bot_label_is_bounded_however_many_identities_arrive(registry):
     assert value(registry, 'django_aiogram_events_total', kind='queue.rejected', bot='other') == 50
     assert len(metrics._labelled) == MAX_BOT_LABELS
 
+    # and a bot that already has a series keeps it once the set is full: a capacity test moved
+    # in front of the membership test would send every bot to `other` from then on, which is
+    # every real client's traffic disappearing into one series the moment the cap is reached
+    metrics(events=[Event(kind='queue.rejected', bot_id=1)])
+
+    assert value(registry, 'django_aiogram_events_total', kind='queue.rejected', bot='1') == 2
+    assert value(registry, 'django_aiogram_events_total', kind='queue.rejected', bot='other') == 50
+
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'METRICS_PER_BOT': True})
 def test_every_step_of_the_capacity_decision_happens_under_the_lock(registry):
