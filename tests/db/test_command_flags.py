@@ -148,10 +148,16 @@ def test_reclaiming_refuses_two_queues_rather_than_taking_the_last():
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
-def test_reclaiming_refuses_an_empty_queue_rather_than_using_this_process_one():
-    """An empty string would fall through to the process's own list, which is another client's."""
+@pytest.mark.parametrize('given', [[''], '', ['   ']])
+def test_reclaiming_refuses_an_empty_queue_rather_than_using_this_process_one(given):
+    """An empty string would fall through to the process's own list, which is another client's.
+
+    Both shapes, because they arrive by different routes: a list from argparse's `append`,
+    and a bare string from `call_command`. The scalar is the one that used to pass through
+    the falsy check *before* normalisation and reclaim the wrong queue.
+    """
     with pytest.raises(CommandError, match='cannot be empty'):
-        call_command('tgbot_reclaim', worker='dead-worker', queue=[''], stdout=StringIO())
+        call_command('tgbot_reclaim', worker='dead-worker', queue=given, stdout=StringIO())
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker'})

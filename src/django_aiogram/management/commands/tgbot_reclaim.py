@@ -116,14 +116,16 @@ class Command(BaseCommand):
         asking for two runs -- taking the second and saying nothing is how the first client's
         messages stay where they are while the output claims a reclaim happened.
         """
+        if isinstance(given, str):
+            # before the emptiness test below, not after: a programmatic `queue=''` is an
+            # empty *name*, and falling through as "no queue named" would reclaim the
+            # process's own list -- which on a container serving several clients is somebody
+            # else's queue. `call_command('tgbot_reclaim', queue='vip')` is the ordinary form
+            # of this, and it forwards the value as written rather than through argparse's
+            # `append`, so a cardinality check on the raw value counts *characters*
+            given = [given]
         if not given:
             return None
-        if isinstance(given, str):
-            # `call_command('tgbot_reclaim', queue='vip')` is a supported way to run this, and
-            # it forwards the value as written rather than through argparse's `append` -- so
-            # without this the cardinality check below would count the *characters* and refuse
-            # a perfectly good name
-            given = [given]
         if len(given) > 1:
             msg = f'--queue takes one queue; got {", ".join(given)}. Reclaim one at a time.'
             raise CommandError(msg)
