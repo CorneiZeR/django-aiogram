@@ -892,7 +892,8 @@ class TelegramBot(RouterShortcuts):
                 raise last_error
 
         call_kwargs = {**self.settings['DEFAULT_KWARGS'](function), **kwargs}
-        outbound = Outbound(identifier, function, call_kwargs)
+        # the identity now, not when a row is written: see `Outbound.bot_id`
+        outbound = Outbound(identifier, function, call_kwargs, self.bot_id)
         self._schedule(send(), outbound, on_complete, on_refused)
         return identifier
 
@@ -915,9 +916,10 @@ class TelegramBot(RouterShortcuts):
             Event(
                 kind=kind.value,
                 correlation_id=outbound.correlation_id,
-                # this bot, not the process's: a send goes out under one token, and a feed
-                # that cannot say which is one a deployment with twenty clients cannot read
-                bot_id=self.bot_id,
+                # the send's own, not this object's now: the row describes a request that
+                # went out under one token, and a rotation while Telegram answers must not
+                # move it to the replacement -- see `Outbound.bot_id`
+                bot_id=outbound.bot_id,
                 function=outbound.function,
                 chat_id=as_identifier(outbound.call_kwargs.get('chat_id')),
                 error_code=type(error).__name__ if error is not None else '',
@@ -946,8 +948,7 @@ class TelegramBot(RouterShortcuts):
         # the identity is read *now* rather than inside the callback: `bot_id` resolves this
         # bot's settings on every ask, so a token rotated while this send is in flight would
         # otherwise make the failure line name the new bot for a message sent under the old
-        identity = self.bot_id
-        task.add_done_callback(lambda done: self._log_task_failure(done, identity))
+        task.add_done_callback(lambda done: self._log_task_failure(done, outbound.bot_id))
         if on_complete is not None:
             task.add_done_callback(completion(on_complete))
 
@@ -1120,7 +1121,7 @@ class TelegramBot(RouterShortcuts):
             Event(
                 kind=EventKind.OUTBOUND_DROPPED.value,
                 correlation_id=outbound.correlation_id,
-                bot_id=self.bot_id,
+                bot_id=outbound.bot_id,
                 function=outbound.function,
                 chat_id=as_identifier(outbound.call_kwargs.get('chat_id')),
                 error_code='NotScheduled',

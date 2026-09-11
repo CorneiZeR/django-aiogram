@@ -332,35 +332,60 @@ def test_the_bot_label_is_bounded_however_many_identities_arrive(registry):
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'METRICS_PER_BOT': True})
-def test_the_capacity_decision_happens_under_the_lock_that_made_it(registry):
+def test_every_step_of_the_capacity_decision_happens_under_the_lock(registry):
     """Otherwise two batches at the cap both find room, and the bound stops being one.
 
     Asserted on the property that makes the interleaving impossible rather than with threads:
-    the interleaving needs a read, then a deschedule, then an insert, which a test cannot ask
-    for — the same shape `tests/db/test_lifecycle.py` uses about the lifecycle's own lock.
+    the losing interleaving needs a read, then a deschedule, then an insert, which a test
+    cannot ask for — the same shape `tests/db/test_lifecycle.py` uses about its own lock.
+    Every *step* is watched, not only the acquisition: a membership test or a length read
+    left outside the lock is the same race with a lock around the wrong half.
     """
     metrics = EventMetrics(registry)
     held = []
+    seen = []
 
-    class Watching:
-        """A lock that records whether the set was touched while it was held."""
+    class Guarding:
+        """A lock that says whether it is held."""
 
         def __init__(self, inner):
             self.inner = inner
+            self.locked = False
 
         def __enter__(self):
             self.inner.acquire()
+            self.locked = True
             held.append('in')
             return self
 
         def __exit__(self, *exception):
+            self.locked = False
             held.append('out')
             self.inner.release()
             return False
 
-    metrics._naming = Watching(metrics._naming)
+    guard = Guarding(metrics._naming)
+
+    class Watched(set):
+        """A set that records which step happened, and whether the lock was held for it."""
+
+        def __contains__(self, item):
+            seen.append(('contains', guard.locked))
+            return set.__contains__(self, item)
+
+        def __len__(self):
+            seen.append(('len', guard.locked))
+            return set.__len__(self)
+
+        def add(self, item):
+            seen.append(('add', guard.locked))
+            set.add(self, item)
+
+    metrics._naming = guard
+    metrics._labelled = Watched()
 
     metrics(events=[Event(kind='queue.rejected', bot_id=123456)])
 
     assert held == ['in', 'out'], held
-    assert metrics._labelled == {'123456'}
+    assert seen == [('contains', True), ('len', True), ('add', True)], seen
+    assert set(metrics._labelled) == {'123456'}

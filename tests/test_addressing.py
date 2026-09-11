@@ -388,5 +388,9 @@ def test_a_bot_identity_off_the_wire_cannot_fail_the_batch_of_rows_it_travelled_
 
     assert delivery.dispatch(_bytes(a_payload(bot=2**63, kwargs={'chat_id': 1, 'text': 'wide'})))
 
+    # the message reached the handler: a regression that *rejected* the oversized identity
+    # before routing would also record `None` and satisfy the assertion below, while having
+    # thrown the message away
+    assert len(handled) == 1, handled
     assert kept, 'nothing was recorded at all'
     assert all(event.bot_id is None for event in kept), [event.bot_id for event in kept]

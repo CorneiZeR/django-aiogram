@@ -209,7 +209,7 @@ def test_a_failure_line_names_the_bot_the_send_went_out_under(caplog, monkeypatc
     served = a_bot()
     try:
         task = served.loop.create_task(_raising())
-        served._register(task, _an_outbound())
+        served._register(task, _an_outbound(served.bot_id))
         # the row moves under the bot while the send is in flight, the way a rotation does
         monkeypatch.setattr(type(served), 'bot_id', property(lambda self: 999999))
         with caplog.at_level(logging.ERROR, logger='django_aiogram'):
@@ -235,10 +235,40 @@ async def _settled(task):
         await task
 
 
-def _an_outbound():
-    """The call description `_register` keeps, with nothing interesting in it."""
+def _an_outbound(bot_id=None):
+    """The call description `_register` keeps, carrying the bot the send went out under."""
     import uuid as _uuid
 
     from django_aiogram.producer.outbound import Outbound
 
-    return Outbound(function='send_message', call_kwargs={'chat_id': 1}, correlation_id=_uuid.uuid4())
+    return Outbound(
+        function='send_message',
+        call_kwargs={'chat_id': 1},
+        correlation_id=_uuid.uuid4(),
+        bot_id=bot_id,
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_feed_row_names_the_bot_the_send_went_out_under(monkeypatch):
+    """The row, not only the log line: a rotation must not move a failure to the new client.
+
+    `_record_send` used to read the bot's current identity, which resolves its settings on
+    every ask — so a token rotated while Telegram was answering attributed the row to
+    whichever bot the record named by then.
+    """
+    from django_aiogram.eventlog.recorder import recorder
+
+    served = a_bot()
+    try:
+        outbound = _an_outbound(served.bot_id)
+        # the row moves under the bot before the event is written, the way a rotation does
+        monkeypatch.setattr(type(served), 'bot_id', property(lambda self: 999999))
+        served._record_drop(outbound, 'the bot is shutting down')
+        recorder.flush(timeout=5)
+    finally:
+        served.close()
+
+    (row,) = TelegramEvent.objects.filter(kind=EventKind.OUTBOUND_DROPPED.value)
+    assert row.bot_id == 123456, 'the row was attributed to whichever bot the record named later'

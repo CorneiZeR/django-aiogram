@@ -125,7 +125,9 @@
 - **Every line and every row about a bot says which bot.** `tg_bot_id` is on the send,
   delivery, quarantine and reconciliation lines -- in `extra`, never interpolated: a value in
   the message text is still greppable but is not a *field*, so nothing can filter, group or
-  alert on it -- and the feed's
+  alert on it -- and the identity a send is described by is the one it *went out under*:
+  `Outbound` carries it, so a token rotated while Telegram is answering cannot move a failure
+  to the replacement client. and the feed's
   `bot_id` column is filled by everything that knew the bot: a send, a queued message, an
   update, an FSM transition. It has existed since the 5.0 tables and nothing wrote it.
 
