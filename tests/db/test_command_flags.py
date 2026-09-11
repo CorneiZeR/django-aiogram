@@ -84,14 +84,16 @@ def test_pruning_one_bots_history_leaves_the_others():
 @override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG': True})
 def test_a_replay_sends_only_the_bot_it_was_told_about():
     """An incident is one client's, and a replay is the one command that *sends*."""
-    a_row(bot_id=111111)
-    a_row(bot_id=222222)
+    mine = a_row(bot_id=111111)
+    theirs = a_row(bot_id=222222)
     out = StringIO()
 
     call_command('tgbot_replay', since='2000-01-01', bot=[111111], dry_run=True, stdout=out)
 
     said = out.getvalue()
-    assert '1 ' in said, said
+    # the identity, not the count: a regression that selected the *other* bot also reports one
+    assert str(mine.short_id) in said, said
+    assert str(theirs.short_id) not in said, said
     assert TelegramEvent.objects.filter(kind='outbound.replayed').count() == 0
 
 
@@ -162,3 +164,19 @@ def test_a_readable_declaration_with_nothing_in_it_still_refuses_a_name():
     """
     with pytest.raises(CommandError, match='none are declared'):
         call_command('tgbot_reclaim', worker='dead-worker', queue=['client-z'], stdout=StringIO())
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker'})
+def test_a_queue_named_programmatically_as_a_string_is_one_queue():
+    """`call_command('tgbot_reclaim', queue='vip')` is a supported way to run this.
+
+    It forwards the value as written rather than through argparse's `append`, so a command
+    that counted the argument's length would refuse a perfectly good name by counting its
+    characters.
+    """
+    from django_aiogram.models import TelegramQueue
+
+    TelegramQueue.objects.create(name='client-a', pool='default')
+
+    with pytest.raises(CommandError, match='not a declared queue'):
+        call_command('tgbot_reclaim', worker='dead-worker', queue='client-z', stdout=StringIO())

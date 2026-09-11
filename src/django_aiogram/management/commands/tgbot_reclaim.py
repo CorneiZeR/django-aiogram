@@ -108,7 +108,7 @@ class Command(BaseCommand):
             return connection.rpoplpush(source, destination)
 
     @staticmethod
-    def _one_queue(given: list[str]) -> 'str | None':
+    def _one_queue(given: 'str | list[str] | None') -> 'str | None':
         """Return the queue this run drains, refusing anything but exactly one.
 
         ``append`` rather than a plain value, so a second ``--queue`` is *seen*: argparse's
@@ -118,6 +118,12 @@ class Command(BaseCommand):
         """
         if not given:
             return None
+        if isinstance(given, str):
+            # `call_command('tgbot_reclaim', queue='vip')` is a supported way to run this, and
+            # it forwards the value as written rather than through argparse's `append` -- so
+            # without this the cardinality check below would count the *characters* and refuse
+            # a perfectly good name
+            given = [given]
         if len(given) > 1:
             msg = f'--queue takes one queue; got {", ".join(given)}. Reclaim one at a time.'
             raise CommandError(msg)
