@@ -442,6 +442,33 @@ reading a message at a time off a queue all day, and buys a web tier that only e
 pushes almost nothing. Install it in the bot container if you have measured the
 parsing and not before.
 
+## What is this deployment actually serving?
+
+`manage.py check` reads the settings, and a client connected through your own interface is a
+**row** — so for a deployment whose bots arrive at run time, the checks cannot see them at all.
+Two commands can:
+
+```shell
+python manage.py tgbot_bots
+python manage.py tgbot_queues
+```
+
+`tgbot_bots` lists every bot the providers resolve with the things that decide what it does:
+where it came from (a settings section or a row), its **profile digest**, the queue it
+publishes to, its mode, whether it is switched on, and which container holds its lease. The
+digest is the answer to the question grouping raises — twenty bots configured alike should
+show **one** digest between them, and a deployment that quietly built twenty groups is paying
+for twenty transports. `--bot` narrows it, `--all` includes the bots that are switched off,
+`--json` is the form a script reads. It prints the digest rather than the settings behind it,
+because those hold `REDIS_URL` and its password.
+
+`tgbot_queues` lists the declared queues with their pool, their depth, what is in flight and
+how long ago something said it was consuming them — and names the queues that hold messages
+with **nobody reading them**, which is the failure that otherwise looks like a slow bot. It
+asks the transport, so it reaches the network; `--no-depth` is the form that does not, and a
+queue whose transport cannot be reached reads `?` rather than `0`, because an unreachable
+broker is not an empty queue. `--queue` and `--pool` narrow it.
+
 ## Is it working?
 
 `docker ps` answers the wrong question: the process being up says nothing about
