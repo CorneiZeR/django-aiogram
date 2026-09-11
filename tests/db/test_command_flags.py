@@ -186,3 +186,60 @@ def test_a_queue_named_programmatically_as_a_string_is_one_queue():
 
     with pytest.raises(CommandError, match='not a declared queue'):
         call_command('tgbot_reclaim', worker='dead-worker', queue='client-z', stdout=StringIO())
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG': True})
+def test_a_replay_takes_its_arguments_from_its_own_bots_rows():
+    """A correlation id names a message, not a row in the feed.
+
+    Two bots can carry one — a caller reusing an id, a broadcast joined under one thread — and
+    matching on it alone would replay one client's failure with another client's arguments.
+    """
+    from django_aiogram.eventlog.events import new_correlation_id, short_id
+
+    shared = new_correlation_id()
+    for identity, text in ((111111, 'mine'), (222222, 'theirs')):
+        TelegramEvent.objects.create(
+            kind='outbound.queued',
+            correlation_id=shared,
+            short_id=short_id(shared),
+            bot_id=identity,
+            function='send_message',
+            chat_id=1,
+            detail={'chat_id': 1, 'text': text},
+        )
+    failed = a_row(bot_id=111111, correlation_id=shared, short_id=short_id(shared))
+    out = StringIO()
+
+    call_command('tgbot_replay', correlation_id=[str(failed.correlation_id)], bot=[111111], dry_run=True, stdout=out)
+
+    said = out.getvalue()
+    assert 'mine' in said, said
+    assert 'theirs' not in said, said
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG': True})
+def test_a_failure_that_names_no_bot_still_finds_its_arguments():
+    """Every row written before 5.0 names none, and so does anything that did not know.
+
+    Narrowing those to `bot_id=None` would find nothing for an upgraded deployment's whole
+    history — the arguments are there, on a row that knew more than the failure did.
+    """
+    from django_aiogram.eventlog.events import new_correlation_id, short_id
+
+    shared = new_correlation_id()
+    TelegramEvent.objects.create(
+        kind='outbound.queued',
+        correlation_id=shared,
+        short_id=short_id(shared),
+        bot_id=111111,
+        function='send_message',
+        chat_id=1,
+        detail={'chat_id': 1, 'text': 'from before'},
+    )
+    failed = a_row(bot_id=None, correlation_id=shared, short_id=short_id(shared))
+    out = StringIO()
+
+    call_command('tgbot_replay', correlation_id=[str(failed.correlation_id)], dry_run=True, stdout=out)
+
+    assert 'from before' in out.getvalue(), out.getvalue()

@@ -646,6 +646,16 @@ class Command(BaseCommand):
             .filter(correlation_id=row.correlation_id, kind__in=ARGUMENT_KINDS)
             .order_by('-created_at', '-id')
         )
+        if row.bot_id is not None:
+            # the bot as well as the id, where the failure names one: a correlation id is
+            # unique to a *message*, not to the feed, and since 5.0 two bots can carry one --
+            # a caller reusing an id, a broadcast joined under one thread. Matching on the id
+            # alone would replay one client's failure with another client's arguments.
+            #
+            # Only where it names one, though: a row written before 5.0, or by a path that did
+            # not know the bot, carries `None` -- and narrowing to that would find nothing for
+            # every failure in an upgraded deployment's history
+            described = described.filter(bot_id=row.bot_id)
         for candidate in described:
             arguments = {key: value for key, value in (candidate.detail or {}).items() if key != DUE_AT_DETAIL}
             if not arguments:
