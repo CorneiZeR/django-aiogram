@@ -227,9 +227,14 @@ class TelegramEventAdmin(ModelAdminBase):
     ordering = ('-id',)
     # only the columns an index can serve: function, worker and error_code have
     # none, and one click on those headers sorts a table sized by traffic
-    # `bot_id` is here because the feed keeps an index leading with it; `function`, `worker`
-    # and `error_code` have none, and one click on those sorts a table sized by traffic
-    sortable_by = ('created_at', 'kind', 'bot_id', 'chat_id')
+    # only the columns an index can serve: function, worker and error_code have
+    # none, and one click on those headers sorts a table sized by traffic.
+    #
+    # `bot_id` is **not** here although it has an index: Django appends `-pk`, so the header
+    # asks for `ORDER BY bot_id DESC, id DESC`, and `(bot_id, -id)` cannot provide that -- its
+    # reverse is `(bot_id DESC, id ASC)`. Sorting by bot is also not a question anybody has;
+    # *narrowing* to one is, and that is the filter
+    sortable_by = ('created_at', 'kind', 'chat_id')
     # no date_hierarchy: its drilldown truncates created_at for every row, which
     # is a full scan no index can serve
 

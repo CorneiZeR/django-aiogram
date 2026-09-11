@@ -294,6 +294,12 @@ Every series then carries `bot`, holding the identity, or `unknown` for a row th
 bot — an undecodable payload does not — so a query can tell the two apart. Read once when the
 exporter is built, because a live metric's label set cannot change under it.
 
+**And the label is bounded**: after 512 distinct bots, a process counts the rest under `other`.
+A `queue.rejected` row is written *before* a message is routed, so its identity is whatever the
+envelope claimed — and anything able to publish to the queue could otherwise mint a series per
+message. The counts stay right either way, and the feed keeps the real identity, because a row
+is not a series.
+
 **The queue is in `detail`, not a column.** A consumed row carries `detail.queue` — which
 queue the message was taken from, for a container serving several — beside the `detail.queue_ms`
 it waited. Not a column of its own and not a filter: a column here is a migration on the one

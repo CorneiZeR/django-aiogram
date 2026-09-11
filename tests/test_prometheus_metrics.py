@@ -310,3 +310,22 @@ def test_a_flag_nobody_can_read_labels_by_kind_alone(registry, caplog):
 
     assert value(registry, 'django_aiogram_events_total', kind='outbound.sent') == 1
     assert any('METRICS_PER_BOT' in record.getMessage() for record in caplog.records)
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'METRICS_PER_BOT': True})
+def test_the_bot_label_is_bounded_however_many_identities_arrive(registry):
+    """A `queue.rejected` row is recorded before a message is routed.
+
+    Its identity is whatever the envelope claimed, so anything able to publish to the queue
+    could otherwise mint a Prometheus series per message. Past the cap the rest are counted
+    under `other`: the totals stay right and the series stop growing.
+    """
+    from django_aiogram.contrib.prometheus.metrics import MAX_BOT_LABELS
+
+    metrics = EventMetrics(registry)
+
+    metrics(events=[Event(kind='queue.rejected', bot_id=identity) for identity in range(1, MAX_BOT_LABELS + 51)])
+
+    assert value(registry, 'django_aiogram_events_total', kind='queue.rejected', bot='1') == 1
+    assert value(registry, 'django_aiogram_events_total', kind='queue.rejected', bot='other') == 50
+    assert len(metrics._labelled) == MAX_BOT_LABELS

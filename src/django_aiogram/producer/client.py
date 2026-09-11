@@ -503,7 +503,10 @@ class TelegramBot(RouterShortcuts):
             # slow, not absent. Saying so is the whole point of the return value:
             # a caller that drove the update here would collide with the thread
             # the moment it did start
-            logger.warning('the event loop thread did not start in time', extra={'tg_timeout': RUNNER_TIMEOUT})
+            logger.warning(
+                'the event loop thread did not start in time',
+                extra={'tg_bot_id': self.bot_id, 'tg_timeout': RUNNER_TIMEOUT},
+            )
         return True
 
     def _stop_runner(self, drain_timeout: float) -> None:
@@ -543,11 +546,17 @@ class TelegramBot(RouterShortcuts):
         else:
             pending = list(self._updates)
         if pending:
-            logger.info('waiting for updates in flight', extra={'tg_pending': len(pending)})
+            logger.info(
+                'waiting for updates in flight',
+                extra={'tg_bot_id': self.bot_id, 'tg_pending': len(pending)},
+            )
             futures.wait(pending, timeout=max(0.0, drain_timeout))
             unfinished = [future for future in pending if not future.done()]
             if unfinished:
-                logger.warning('cancelling updates still in flight', extra={'tg_pending': len(unfinished)})
+                logger.warning(
+                    'cancelling updates still in flight',
+                    extra={'tg_bot_id': self.bot_id, 'tg_pending': len(unfinished)},
+                )
                 for future in unfinished:
                     future.cancel()
         if loop is not None and not loop.is_closed() and runner.is_alive():
@@ -559,7 +568,10 @@ class TelegramBot(RouterShortcuts):
                 loop.call_soon_threadsafe(loop.stop)
         runner.join(timeout=RUNNER_TIMEOUT)
         if runner.is_alive():
-            logger.warning('the event loop thread did not stop in time', extra={'tg_timeout': RUNNER_TIMEOUT})
+            logger.warning(
+                'the event loop thread did not stop in time',
+                extra={'tg_bot_id': self.bot_id, 'tg_timeout': RUNNER_TIMEOUT},
+            )
             # put it back. `close()` refuses on a running loop and returns, so this
             # orphan is still driving it — and with `_runner` left as None every later
             # `close()` returned in no time without asking it to stop again, leaving the
@@ -931,18 +943,20 @@ class TelegramBot(RouterShortcuts):
         """
         self._sends[task] = outbound
         task.add_done_callback(self._sends.pop)
-        task.add_done_callback(self._log_task_failure)
+        # the identity is captured here rather than read off the task: a done callback is
+        # handed nothing but the task, and `Outbound` describes a call rather than a bot
+        task.add_done_callback(lambda done: self._log_task_failure(done, self.bot_id))
         if on_complete is not None:
             task.add_done_callback(completion(on_complete))
 
     @staticmethod
-    def _log_task_failure(task: 'asyncio.Task[None]') -> None:
+    def _log_task_failure(task: 'asyncio.Task[None]', bot_id: int | None = None) -> None:
         """Report what a finished send raised, since nobody awaits these tasks."""
         if task.cancelled():
             return
         error = task.exception()
         if error is not None:
-            logger.error('scheduled send failed', exc_info=error)
+            logger.error('scheduled send failed', exc_info=error, extra={'tg_bot_id': bot_id})
 
     def _schedule(
         self,
@@ -1138,7 +1152,7 @@ class TelegramBot(RouterShortcuts):
         if not pending:
             return
 
-        logger.info('draining in-flight sends', extra={'tg_pending': len(pending)})
+        logger.info('draining in-flight sends', extra={'tg_bot_id': self.bot_id, 'tg_pending': len(pending)})
         loop.run_until_complete(asyncio.wait(pending, timeout=timeout))
 
         dropped = [task for task in pending if not task.done()]
@@ -1150,7 +1164,7 @@ class TelegramBot(RouterShortcuts):
         loop.run_until_complete(asyncio.gather(*dropped, return_exceptions=True))
         logger.warning(
             'dropped in-flight sends at shutdown',
-            extra={'tg_dropped': len(dropped), 'tg_drain_timeout': timeout},
+            extra={'tg_bot_id': self.bot_id, 'tg_dropped': len(dropped), 'tg_drain_timeout': timeout},
         )
 
     def _accept(self, function: str, correlation_id: uuid.UUID | str | None) -> tuple[uuid.UUID, bool]:

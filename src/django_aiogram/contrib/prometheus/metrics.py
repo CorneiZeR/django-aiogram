@@ -33,6 +33,13 @@ logger = logging.getLogger('django_aiogram')
 #: a real tail above that. The default buckets stop at 10s and start at 5ms
 DURATION_BUCKETS = (0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0)
 
+#: how many distinct bots a process will label before it stops, when `METRICS_PER_BOT` is on.
+#: A bound is required rather than tidy: `queue.rejected` is recorded *before* a message is
+#: routed, so its identity is whatever an envelope claimed -- and anything that can publish to
+#: the queue could otherwise mint a series per message. Beyond this every further bot is
+#: counted under `other`, so the totals stay right while the series stop growing
+MAX_BOT_LABELS = 512
+
 
 class EventMetrics:
     """One counter and one histogram, filled from every batch the feed publishes.
@@ -75,6 +82,13 @@ class EventMetrics:
     was about carries ``unknown`` rather than an empty label, so a query can tell the two
     apart. The feed answers the same question per bot without any of that, and it is where a
     deployment with many clients should ask it.
+
+    **The label is bounded even then.** A ``queue.rejected`` row is recorded before a message
+    is routed, so the identity on it is whatever the envelope *claimed* -- and anything able to
+    publish to the queue could mint a series per message with it. After
+    :data:`MAX_BOT_LABELS` distinct bots this process labels the rest ``other``: the counts
+    stay right, and the series stop growing. The feed keeps the real identity, because a row
+    is not a series.
     """
 
     def __init__(self, registry: CollectorRegistry | None = None) -> None:
@@ -90,6 +104,10 @@ class EventMetrics:
         # this is a decision a process makes when it starts. A suite that overrides the
         # setting builds a new exporter, which is what `connect` does
         self.per_bot = per_bot()
+        #: the identities this process has already labelled, so the set cannot grow without
+        #: bound. Not an LRU: evicting one would start a *new* series for a bot that is still
+        #: sending, and the first bots seen are the ones a deployment actually serves
+        self._labelled: set[str] = set()
         labels = ('kind', 'bot') if self.per_bot else ('kind',)
         self.events = Counter(
             'django_aiogram_events',
@@ -120,6 +138,24 @@ class EventMetrics:
         for event in events:
             self.observe(event)
 
+    def _label_for(self, bot_id: int | None) -> str:
+        """Return the ``bot`` label for one event, bounded and never empty.
+
+        ``unknown`` rather than an empty string where nothing named a bot -- an undecodable
+        payload does not -- because a label nobody can tell from "not set" is one a query
+        cannot exclude. ``other`` past :data:`MAX_BOT_LABELS`, for the reason the class
+        docstring gives: an identity off the wire is a claim, not a fact.
+        """
+        if not bot_id:
+            return 'unknown'
+        said = str(bot_id)
+        if said in self._labelled:
+            return said
+        if len(self._labelled) >= MAX_BOT_LABELS:
+            return 'other'
+        self._labelled.add(said)
+        return said
+
     def observe(self, event: 'Event') -> None:
         """Record one event, and refuse to be the reason a batch fails.
 
@@ -132,9 +168,7 @@ class EventMetrics:
         try:
             said = {'kind': str(event.kind)}
             if self.per_bot:
-                # `unknown` rather than an empty string: an undecodable payload names no bot,
-                # and a label nobody can tell from "not set" is one a query cannot exclude
-                said['bot'] = str(event.bot_id) if event.bot_id else 'unknown'
+                said['bot'] = self._label_for(event.bot_id)
             self.events.labels(**said).inc()
             if event.duration_ms is not None:
                 self.duration.labels(**said).observe(event.duration_ms / 1000)

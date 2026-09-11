@@ -141,8 +141,11 @@
   **The Prometheus exporter labels by bot only where a project asks.** `METRICS_PER_BOT` is
   off, so the number of series does not grow with the number of bots: a label per bot is a
   series per bot *per kind*, and the histogram multiplies that again by its buckets -- a
-  thousand clients counted that way are hundreds of thousands of series. Turned on, every series carries `bot` -- the identity, or `unknown` for a
-  row that named none. `E064` reports a value that does not read as a boolean.
+  thousand clients counted that way are hundreds of thousands of series. Turned on, every series carries `bot` -- the identity, `unknown` for a row
+  that named none, and `other` past 512 distinct bots in one process: a `queue.rejected` row
+  is written before a message is routed, so its identity is whatever the envelope claimed, and
+  anything able to publish to the queue could otherwise mint a series per message. `E064`
+  reports a value that does not read as a boolean.
 
 - **A token in an error message is redacted even where the deployment never configured it.**
   The shape the redaction matches was anchored on a word boundary, and the place a token

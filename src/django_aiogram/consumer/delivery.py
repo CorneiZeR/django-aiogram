@@ -757,7 +757,7 @@ class Delivery(ABC):
                 self._hand_over_parked()
             logger.exception(
                 'handler failed for queued message',
-                extra={'tg_function': envelope.function},
+                extra={'tg_bot_id': envelope.bot_id, 'tg_function': envelope.function},
             )
             # and the acknowledgement belongs to whoever settled it. A handler that reported
             # through `on_complete` before raising has a settlement on the queue and `collect`
