@@ -462,11 +462,17 @@ for twenty transports. `--bot` narrows it, `--all` includes the bots that are sw
 `--json` is the form a script reads. It prints the digest rather than the settings behind it,
 because those hold `REDIS_URL` and its password.
 
-Every command that acts on messages takes the bots or the queue it is meant for: `--bot` on
-`tgbot_replay`, `tgbot_prune_events` and `tgbot_dispatch_scheduled`, `--queue` on
-`tgbot_reclaim`. Each defaults to what a single-bot deployment already had, and a name
-`tgbot_reclaim` cannot find among the declared queues is refused rather than read as an empty
-in-flight list — which is exactly what a drained queue looks like.
+Four commands take the bots or the queue they are meant for: `--bot` on `tgbot_replay`,
+`tgbot_prune_events` and `tgbot_dispatch_scheduled`, `--queue` on `tgbot_reclaim` (and
+`tgbot_webhook` has had `--bot` since the webhook work). Each defaults to what a single-bot
+deployment already had, and a name `tgbot_reclaim` cannot find among the declared queues is
+refused rather than read as an empty in-flight list — which is exactly what a drained queue
+looks like.
+
+**`tgbot_move_events` and `tgbot_backfill_short_ids` take neither**, and that is not an
+omission: one copies a 4.x feed into the 5.x table and the other fills a column in it. Both
+are one-time migrations over the whole table, addressed by `--database` rather than by bot,
+and a half-migrated feed is worse than an unmigrated one.
 
 `tgbot_queues` lists the declared queues with their pool, their depth, what is in flight and
 how long ago something said it was consuming them — and names the queues that hold messages

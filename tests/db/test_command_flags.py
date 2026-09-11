@@ -17,10 +17,13 @@ from django_aiogram.runtime import providers
 
 pytestmark = pytest.mark.django_db
 
+# the feed is *off* here on purpose: these cases write their own rows and read them back, and
+# a recorder left on records the mover's own publish from a test connection the writer thread
+# cannot see -- which counts as a drop and shows up as a `log.dropped` row in whichever case
+# runs next. Measured: it broke `tests/db/test_inbound.py` two files away
 SETTINGS = {
     'BROKER': 'django_aiogram.testing.InMemoryBroker',
     'FSM_STORAGE': 'memory',
-    'EVENT_LOG': True,
 }
 
 
@@ -76,7 +79,9 @@ def test_pruning_one_bots_history_leaves_the_others():
     assert {row.bot_id for row in TelegramEvent.objects.all()} == {222222}
 
 
-@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+# the replay refuses outright with the feed off -- it has no other source -- so its own case
+# turns it on, in a dry run that writes nothing and leaves the recorder with nothing to drop
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG': True})
 def test_a_replay_sends_only_the_bot_it_was_told_about():
     """An incident is one client's, and a replay is the one command that *sends*."""
     a_row(bot_id=111111)
@@ -126,4 +131,34 @@ def test_reclaiming_from_an_undeclared_queue_is_refused():
     TelegramQueue.objects.create(name='client-a', pool='default')
 
     with pytest.raises(CommandError, match='not a declared queue'):
-        call_command('tgbot_reclaim', worker='dead-worker', queue='client-z', stdout=StringIO())
+        call_command('tgbot_reclaim', worker='dead-worker', queue=['client-z'], stdout=StringIO())
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_reclaiming_refuses_two_queues_rather_than_taking_the_last():
+    """A person who typed two names is asking for two runs.
+
+    argparse's default action keeps the last one silently, and taking it without a word is how
+    the first client's messages stay where they are while the output claims a reclaim happened.
+    """
+    with pytest.raises(CommandError, match='takes one queue'):
+        call_command('tgbot_reclaim', worker='dead-worker', queue=['client-a', 'client-b'], stdout=StringIO())
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_reclaiming_refuses_an_empty_queue_rather_than_using_this_process_one():
+    """An empty string would fall through to the process's own list, which is another client's."""
+    with pytest.raises(CommandError, match='cannot be empty'):
+        call_command('tgbot_reclaim', worker='dead-worker', queue=[''], stdout=StringIO())
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker'})
+def test_a_readable_declaration_with_nothing_in_it_still_refuses_a_name():
+    """*Unknown* and *none* are different answers, and only one of them may accept a name.
+
+    A table that could not be read declares unknown, and refusing there would block a reclaim
+    during the outage it is most needed in. A table that was read and holds nothing declares
+    none — and a name against that is a typo.
+    """
+    with pytest.raises(CommandError, match='none are declared'):
+        call_command('tgbot_reclaim', worker='dead-worker', queue=['client-z'], stdout=StringIO())

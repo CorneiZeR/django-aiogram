@@ -74,7 +74,9 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             '--queue',
-            default=None,
+            action='append',
+            default=[],
+            dest='queues',
             help='the queue whose in-flight list to drain. Defaults to the one this process is '
             'configured for, which is every 4.x deployment. A container serving several queues '
             'has an in-flight list per queue, and reclaiming from the wrong one moves another '
@@ -106,6 +108,28 @@ class Command(BaseCommand):
             return connection.rpoplpush(source, destination)
 
     @staticmethod
+    def _one_queue(given: list[str]) -> 'str | None':
+        """Return the queue this run drains, refusing anything but exactly one.
+
+        ``append`` rather than a plain value, so a second ``--queue`` is *seen*: argparse's
+        default action keeps the last one silently, and a person who typed two names is
+        asking for two runs -- taking the second and saying nothing is how the first client's
+        messages stay where they are while the output claims a reclaim happened.
+        """
+        if not given:
+            return None
+        if len(given) > 1:
+            msg = f'--queue takes one queue; got {", ".join(given)}. Reclaim one at a time.'
+            raise CommandError(msg)
+        queue = given[0].strip()
+        if not queue:
+            # an empty string would fall through the "no queue named" branch below and drain
+            # the process's own list, which is another client's on a container serving several
+            msg = "--queue cannot be empty. Leave it out to reclaim this process's own queue."
+            raise CommandError(msg)
+        return queue
+
+    @staticmethod
     def _keys(queue: 'str | None', worker: str) -> tuple[str, str]:
         """Return the in-flight list to drain and the queue to drain it into.
 
@@ -120,14 +144,19 @@ class Command(BaseCommand):
         # deferred: building a transport for another queue reaches the registry and the
         # settings, and this module is imported by `manage.py help`
         from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
-        from django_aiogram.runtime.queues import declared, settings_for  # noqa: PLC0415 - as above
+        from django_aiogram.runtime.queues import declaration, settings_for  # noqa: PLC0415 - as above
 
-        known = declared()
-        if known and queue not in known:
-            # the same refusal `tgbot_prune_queues` makes about a name nothing declares: a
-            # typo would otherwise read an empty list and report that there is nothing in
-            # flight, which is indistinguishable from the queue being drained already
-            msg = f'{queue!r} is not a declared queue: {", ".join(sorted(known))}.'
+        # `declaration` rather than `declared`, for the difference between the two answers it
+        # keeps apart: a table nobody could read declares *unknown*, and refusing there would
+        # block a reclaim during the outage it is most needed in -- while a table that was
+        # read and holds nothing declares *none*, and a name against that is a typo
+        known, readable = declaration()
+        if readable and queue not in known:
+            # the same refusal `tgbot_prune_queues` makes: a typo would otherwise read an
+            # empty list and report that there is nothing in flight, which is
+            # indistinguishable from the queue having been drained already
+            named = ', '.join(sorted(known)) if known else 'none are declared'
+            msg = f'{queue!r} is not a declared queue: {named}.'
             raise CommandError(msg)
         settings = settings_for(queue)
         built = broker_class(settings).configured(settings)
@@ -139,6 +168,10 @@ class Command(BaseCommand):
 
     def handle(self, *args: Any, **options: Any) -> None:
         """Walk the named worker's in-flight list back onto the queue."""
+        # the arguments first, and the transport after: a mistyped flag is a mistake about
+        # this command whatever is configured, and reporting the transport instead tells an
+        # operator to change their deployment when what they have to change is their line
+        queue = self._one_queue(options['queues'])
         _refuse_where_a_name_selects_nothing()
         worker = str(options['worker']).strip()
         if not worker:
@@ -161,7 +194,7 @@ class Command(BaseCommand):
             )
             raise CommandError(msg)
 
-        source, destination = self._keys(options.get('queue'), worker)
+        source, destination = self._keys(queue, worker)
         connection = get_redis()
         try:
             waiting = int(connection.llen(source) or 0)
