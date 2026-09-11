@@ -78,7 +78,7 @@ class Command(BaseCommand):
             dest='bots',
             type=int,
             help='prune only the rows for these identities, however many times it is given. '
-            "Defaults to every bot. For a client who left: their history goes when they do, "
+            'Defaults to every bot. For a client who left: their history goes when they do, '
             'and everybody else keeps theirs.',
         )
         parser.add_argument('--database', default=None, help='the alias to prune; defaults to the configured one')
