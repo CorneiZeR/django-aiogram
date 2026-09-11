@@ -364,3 +364,29 @@ def test_a_write_built_positionally_still_means_what_it_says():
 
     assert write.details == [{'text': 'hi'}]
     assert write.bot_id is None
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_bot_identity_off_the_wire_cannot_fail_the_batch_of_rows_it_travelled_in(monkeypatch):
+    """An envelope is untrusted input, and a Python integer has no width.
+
+    One wider than the feed's column fails the whole batch of rows rather than its own, so
+    the consumer narrows it the way it narrows every other number off the wire.
+    """
+    from django_aiogram.consumer import delivery as delivery_module
+
+    kept = []
+    monkeypatch.setattr(delivery_module.recorder, 'record', kept.append)
+    monkeypatch.setattr(type(delivery_module.recorder), 'active', property(lambda self: True))
+    handled = []
+    # a route that answers for whatever the envelope names: the point here is the number, not
+    # whether this process serves that bot
+    delivery = get_delivery(
+        handler=lambda **call: handled.append(call),
+        route=lambda _bot_id: lambda **call: handled.append(call),
+    )
+
+    assert delivery.dispatch(_bytes(a_payload(bot=2**63, kwargs={'chat_id': 1, 'text': 'wide'})))
+
+    assert kept, 'nothing was recorded at all'
+    assert all(event.bot_id is None for event in kept), [event.bot_id for event in kept]

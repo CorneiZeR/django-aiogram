@@ -777,7 +777,10 @@ class Delivery(ABC):
             Event(
                 kind=kind.value,
                 correlation_id=envelope.correlation_id or new_correlation_id(),
-                bot_id=envelope.bot_id,
+                # through `as_identifier` like every other number off the wire: an envelope
+                # is untrusted input, a Python integer has no width, and one wider than the
+                # column fails the whole batch it travelled in rather than its own row
+                bot_id=as_identifier(envelope.bot_id),
                 function=envelope.function,
                 chat_id=as_identifier(chat_id),
                 worker=worker_identity(),
