@@ -162,7 +162,7 @@ def test_a_deployment_with_no_bots_says_so():
     out = StringIO()
     call_command('tgbot_bots', stdout=out)
 
-    assert 'no bots are configured' in out.getvalue()
+    assert out.getvalue().strip() == 'no bots are configured', out.getvalue()
 
 
 @override_settings(
@@ -207,3 +207,15 @@ def test_a_lease_table_that_cannot_be_read_is_not_nobody_holding_the_bot(monkeyp
     (row,) = listed()
 
     assert row['lease'] == '?', row
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_filter_that_matches_nothing_is_not_a_deployment_with_no_bots():
+    """The first sends an operator to check their `--bot`; the second, their configuration."""
+    a_bot(111111)
+    from io import StringIO
+
+    out = StringIO()
+    call_command('tgbot_bots', bot=[999999], stdout=out)
+
+    assert 'no bot matches --bot 999999' in out.getvalue(), out.getvalue()

@@ -62,7 +62,13 @@ class Command(BaseCommand):
         """Resolve the bots, then print what each of them resolves to."""
         found = self._bots(options)
         if not found:
-            self.stdout.write('no bots are configured')
+            # a filter that matched nothing is not a deployment with no bots: the first sends
+            # an operator to check their `--bot`, the second to check their configuration
+            self.stdout.write(
+                f'no bot matches --bot {", ".join(str(identity) for identity in options["bots"])}'
+                if options['bots']
+                else 'no bots are configured'
+            )
             return
         held = self._leases()
         rows = [self._describe(record, held) for record in found]

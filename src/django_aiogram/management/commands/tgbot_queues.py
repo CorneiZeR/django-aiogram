@@ -59,21 +59,29 @@ class Command(BaseCommand):
         declared, readable = self._queues(options)
         rows = [self._describe(queue, pool, options) for queue, pool in declared]
         if not rows:
-            # *none declared* and *nobody could look* are different answers, and saying the
-            # first for the second sends an operator to look at their settings instead of at
-            # the database that refused
-            said = (
-                'no queues are declared'
-                if readable
-                else 'no queues are declared in the settings, and the table could not be read'
-            )
-            self.stdout.write(said)
+            self.stdout.write(self._nothing_to_show(options, readable=readable))
             return
         if options['json']:
             for row in rows:
                 self.stdout.write(json.dumps(row, ensure_ascii=False, sort_keys=True))
             return
         self._as_a_table(rows)
+
+    @staticmethod
+    def _nothing_to_show(options: dict[str, Any], *, readable: bool) -> str:
+        """Say *why* there is nothing to print, because there are three different reasons.
+
+        A filter that matched nothing sends an operator to check their ``--queue``; a table
+        that could not be read sends them to the database; neither is a deployment that
+        declared no queues. One message for all three would send them to the wrong place two
+        times out of three.
+        """
+        asked = [*options['queues'], *options['pools']]
+        if asked:
+            return f'no declared queue matches {", ".join(asked)}'
+        if not readable:
+            return 'no queues are declared in the settings, and the table could not be read'
+        return 'no queues are declared'
 
     def _queues(self, options: dict[str, Any]) -> tuple[list[tuple[str, str]], bool]:
         """Every declared queue with its pool, narrowed to what was asked for.

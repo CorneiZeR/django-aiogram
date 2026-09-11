@@ -152,7 +152,9 @@ def test_a_deployment_with_no_queues_says_so():
     out = StringIO()
     call_command('tgbot_queues', stdout=out, stderr=StringIO())
 
-    assert 'no queues are declared' in out.getvalue()
+    # the whole line: the unreadable-table message starts with the same words, so a substring
+    # match would pass for the answer this case exists to tell apart
+    assert out.getvalue().strip() == 'no queues are declared', out.getvalue()
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
@@ -176,3 +178,14 @@ def test_a_queue_table_that_cannot_be_read_is_not_a_deployment_with_no_queues(mo
 
     assert 'the table could not be read' in out.getvalue(), out.getvalue()
     assert 'could not read the queue table' in err.getvalue()
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_filter_that_matches_nothing_is_not_a_deployment_with_no_queues():
+    """Three reasons for an empty listing, and one message for all of them misdirects two."""
+    TelegramQueue.objects.create(name='client-a', pool='vip')
+    out = StringIO()
+
+    call_command('tgbot_queues', queue=['client-z'], stdout=out, stderr=StringIO())
+
+    assert 'no declared queue matches client-z' in out.getvalue(), out.getvalue()
