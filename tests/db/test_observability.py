@@ -14,6 +14,7 @@ from django_aiogram.config.enums import EventKind
 from django_aiogram.eventlog.records import Event
 from django_aiogram.models import TelegramBot, TelegramEvent
 from django_aiogram.runtime import providers
+from django_aiogram.runtime.process import generation
 
 pytestmark = pytest.mark.django_db
 
@@ -272,3 +273,46 @@ def test_a_feed_row_names_the_bot_the_send_went_out_under(monkeypatch):
 
     (row,) = TelegramEvent.objects.filter(kind=EventKind.OUTBOUND_DROPPED.value)
     assert row.bot_id == 123456, 'the row was attributed to whichever bot the record named later'
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_the_lines_about_one_send_name_the_bot_it_went_out_under(caplog, monkeypatch):
+    """A send waits and retries, and a token can rotate while it does.
+
+    Every line inside the send describes *that* request, so they read the identity once
+    rather than asking the bot again — asking later attributes one client's traffic to
+    whichever bot the record names by then.
+    """
+    served = a_bot()
+    sent = []
+
+    async def answering(**call):
+        """Answer as Telegram does, after the identity underneath has moved."""
+        monkeypatch.setattr(type(served), 'bot_id', property(lambda self: 999999))
+        sent.append(call)
+
+    served._bot = _answering_bot(answering)
+    served._built_at = generation()
+    try:
+        with caplog.at_level(logging.INFO, logger='django_aiogram'):
+            served.send_raw(chat_id=1, text='hi')
+            served.close()
+    finally:
+        served._bot = None
+
+    (said,) = [record for record in caplog.records if 'message sent' in record.getMessage()]
+    assert said.tg_bot_id == 123456, 'the line named whichever bot the record held by then'
+
+
+def _answering_bot(answer):
+    """A stand-in aiogram bot whose every method answers through `answer`."""
+
+    class Answering:
+        """Whatever is asked of it, answered by the callable handed in."""
+
+        def __getattr__(self, _name):
+            """Return the answering coroutine function for any method asked for."""
+            return answer
+
+    return Answering()

@@ -790,8 +790,12 @@ class TelegramBot(RouterShortcuts):
         """
         check_function(function)
         identifier = resolve_correlation_id(correlation_id)
+        # once, here: everything below describes *this* send, and a token rotated while it
+        # waits or retries must not move the line to the replacement bot. `bot_id` resolves
+        # the record on every ask, which is what makes reading it later the wrong thing
+        identity = self.bot_id
         if not self.enabled:
-            logger.debug('send skipped: bot disabled', extra={'tg_bot_id': self.bot_id, 'tg_function': function})
+            logger.debug('send skipped: bot disabled', extra={'tg_bot_id': identity, 'tg_function': function})
             # the same slot-return as the refusals below: `ENABLED` is read live, so a
             # consumer that took a slot can reach this branch after the setting changed,
             # and without this the bound closes one message at a time until a restart
@@ -833,7 +837,7 @@ class TelegramBot(RouterShortcuts):
                     logger.warning(
                         'rate limited by telegram',
                         extra={
-                            'tg_bot_id': self.bot_id,
+                            'tg_bot_id': identity,
                             'tg_function': function,
                             'tg_retry_after': error.retry_after,
                             'tg_retries': retries,
@@ -848,7 +852,7 @@ class TelegramBot(RouterShortcuts):
                         attempt=retries,
                         error=error,
                     )
-                    logger.exception('send failed', extra={'tg_bot_id': self.bot_id, 'tg_function': function})
+                    logger.exception('send failed', extra={'tg_bot_id': identity, 'tg_function': function})
                     if self._raises_send_failures:
                         raise
                     return
@@ -873,7 +877,7 @@ class TelegramBot(RouterShortcuts):
                             'message_ids': _message_ids(result),
                         },
                     )
-                    logger.info('message sent', extra={'tg_bot_id': self.bot_id, 'tg_function': function})
+                    logger.info('message sent', extra={'tg_bot_id': identity, 'tg_function': function})
                     return
 
             # exhausting the retries used to return silently
@@ -886,14 +890,14 @@ class TelegramBot(RouterShortcuts):
             )
             logger.error(
                 'giving up on message',
-                extra={'tg_bot_id': self.bot_id, 'tg_function': function, 'tg_max_retries': self.max_retries},
+                extra={'tg_bot_id': identity, 'tg_function': function, 'tg_max_retries': self.max_retries},
             )
             if self._raises_send_failures and last_error is not None:
                 raise last_error
 
         call_kwargs = {**self.settings['DEFAULT_KWARGS'](function), **kwargs}
         # the identity now, not when a row is written: see `Outbound.bot_id`
-        outbound = Outbound(identifier, function, call_kwargs, self.bot_id)
+        outbound = Outbound(identifier, function, call_kwargs, identity)
         self._schedule(send(), outbound, on_complete, on_refused)
         return identifier
 
@@ -1003,7 +1007,8 @@ class TelegramBot(RouterShortcuts):
                 logger.warning(
                     'scheduling a send on a loop nothing in this process runs',
                     extra={
-                        'tg_bot_id': self.bot_id,
+                        # the send's own, for the reason `Outbound.bot_id` gives
+                        'tg_bot_id': outbound.bot_id,
                         'tg_function': outbound.function,
                         'tg_correlation_id': str(outbound.correlation_id),
                         'tg_short_id': short_id(outbound.correlation_id),
