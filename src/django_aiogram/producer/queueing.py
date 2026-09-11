@@ -50,6 +50,15 @@ class Queueing:
     #: a deferred publish runs after the caller may have changed a nested value, and the
     #: payload is bytes by then — so a row described later would disagree with the wire
     details: list[dict[str, Any] | None] = field(default_factory=list)
+    #: which bot these messages are for, the same identity the payload carries. Kept here so
+    #: the feed rows can say it: a deployment with twenty clients reads this log to find out
+    #: whose messages were queued or lost, and a column of nulls answers nothing.
+    #:
+    #: **Last, rather than beside the payloads where it belongs by meaning.** A dataclass's
+    #: generated constructor is positional, so a field inserted in the middle rebinds every
+    #: argument after it -- `details` would have become the identity, and the feed would then
+    #: have attributed rows to a list
+    bot_id: int | None = None
 
 
 def _dropped(
@@ -57,6 +66,7 @@ def _dropped(
     messages: list[tuple[uuid.UUID, dict[str, Any]]],
     stage: str,
     error: Exception,
+    bot_id: int | None = None,
 ) -> None:
     """Record every message a failure lost, and where it lost them.
 
@@ -74,6 +84,7 @@ def _dropped(
             Event(
                 kind=EventKind.OUTBOUND_DROPPED.value,
                 correlation_id=identifier,
+                bot_id=bot_id,
                 function=function,
                 chat_id=as_identifier(kwargs.get('chat_id')),
                 error_code=type(error).__name__,
@@ -133,10 +144,11 @@ def serialise(
             ],
             messages=messages,
             queued_at=queued_at,
+            bot_id=bot_id,
             details=[describe(kwargs) if described else None for _, kwargs in messages],
         )
     except Exception as error:
-        _dropped(function, messages, 'serialising', error)
+        _dropped(function, messages, 'serialising', error, bot_id)
         raise
 
 
@@ -155,7 +167,7 @@ def publishing(function: str, write: Queueing) -> 'Iterator[Queueing]':
     try:
         yield write
     except Exception as error:
-        _dropped(function, write.messages, 'queueing', error)
+        _dropped(function, write.messages, 'queueing', error, write.bot_id)
         raise
     if not recorder.active:
         # nothing keeps the table and nothing listens, so there is no event to make
@@ -165,6 +177,7 @@ def publishing(function: str, write: Queueing) -> 'Iterator[Queueing]':
             Event(
                 kind=EventKind.OUTBOUND_QUEUED.value,
                 correlation_id=identifier,
+                bot_id=write.bot_id,
                 created_at=write.queued_at,
                 function=function,
                 chat_id=as_identifier(kwargs.get('chat_id')),

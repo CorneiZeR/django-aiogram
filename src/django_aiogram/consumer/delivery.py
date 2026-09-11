@@ -757,7 +757,7 @@ class Delivery(ABC):
                 self._hand_over_parked()
             logger.exception(
                 'handler failed for queued message',
-                extra={'tg_function': envelope.function},
+                extra={'tg_bot_id': envelope.bot_id, 'tg_function': envelope.function},
             )
             # and the acknowledgement belongs to whoever settled it. A handler that reported
             # through `on_complete` before raising has a settlement on the queue and `collect`
@@ -777,6 +777,10 @@ class Delivery(ABC):
             Event(
                 kind=kind.value,
                 correlation_id=envelope.correlation_id or new_correlation_id(),
+                # through `as_identifier` like every other number off the wire: an envelope
+                # is untrusted input, a Python integer has no width, and one wider than the
+                # column fails the whole batch it travelled in rather than its own row
+                bot_id=as_identifier(envelope.bot_id),
                 function=envelope.function,
                 chat_id=as_identifier(chat_id),
                 worker=worker_identity(),
@@ -785,12 +789,19 @@ class Delivery(ABC):
             )
         )
 
-    @staticmethod
-    def _queue_latency(envelope: Envelope) -> dict[str, Any]:
-        """How long the message waited, when the producer said when it was queued."""
-        if not envelope.queued_at:
-            return {}
-        return {'queue_ms': int((time.time() - envelope.queued_at) * 1000)}
+    def _queue_latency(self, envelope: Envelope) -> dict[str, Any]:
+        """Where the message was and how long it waited, as far as either is known.
+
+        The queue by name, because a container serving several is the normal shape since 5.0
+        and a row that does not say which one leaves an operator guessing. In `detail` rather
+        than in a column of its own: a column on this table is a migration on the one table
+        whose size is set by traffic, and nothing queries the feed *by* queue -- the bot is
+        the dimension a client's messages are found under, and that has a column and an index.
+        """
+        said: dict[str, Any] = {'queue': self.queue_key} if self.queue_key else {}
+        if envelope.queued_at:
+            said['queue_ms'] = int((time.time() - envelope.queued_at) * 1000)
+        return said
 
     def _record_undecodable(self, raw: bytes, reason: str) -> None:
         """Record a payload nothing could read.

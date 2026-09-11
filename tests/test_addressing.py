@@ -346,3 +346,51 @@ def test_a_consumer_taking_only_the_queue_is_still_told_which_queue():
 
     assert isinstance(built, QueuedOnly)
     assert built.settings is served, 'the queue it was asked for did not reach it'
+
+
+def test_a_write_built_positionally_still_means_what_it_says():
+    """`Queueing` and `Event` both grew a `bot_id`, and both are built positionally somewhere.
+
+    A field inserted in the middle of a dataclass rebinds every argument after it — here
+    `details` would have become the identity, and the feed would have attributed rows to a
+    list. So the order is the contract, and this is what says so.
+    """
+    import uuid as _uuid
+
+    from django_aiogram.producer.queueing import Queueing
+
+    identifier = _uuid.uuid4()
+    write = Queueing([b'payload'], [(identifier, {'chat_id': 1})], 1234.0, [{'text': 'hi'}])
+
+    assert write.details == [{'text': 'hi'}]
+    assert write.bot_id is None
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_bot_identity_off_the_wire_cannot_fail_the_batch_of_rows_it_travelled_in(monkeypatch):
+    """An envelope is untrusted input, and a Python integer has no width.
+
+    One wider than the feed's column fails the whole batch of rows rather than its own, so
+    the consumer narrows it the way it narrows every other number off the wire.
+    """
+    from django_aiogram.consumer import delivery as delivery_module
+
+    kept = []
+    monkeypatch.setattr(delivery_module.recorder, 'record', kept.append)
+    monkeypatch.setattr(type(delivery_module.recorder), 'active', property(lambda self: True))
+    handled = []
+    # a route that answers for whatever the envelope names: the point here is the number, not
+    # whether this process serves that bot
+    delivery = get_delivery(
+        handler=lambda **call: handled.append(call),
+        route=lambda _bot_id: lambda **call: handled.append(call),
+    )
+
+    assert delivery.dispatch(_bytes(a_payload(bot=2**63, kwargs={'chat_id': 1, 'text': 'wide'})))
+
+    # the message reached the handler: a regression that *rejected* the oversized identity
+    # before routing would also record `None` and satisfy the assertion below, while having
+    # thrown the message away
+    assert len(handled) == 1, handled
+    assert kept, 'nothing was recorded at all'
+    assert all(event.bot_id is None for event in kept), [event.bot_id for event in kept]

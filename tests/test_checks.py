@@ -81,6 +81,7 @@ HUMAN_BOOLEANS = {
     'EVENT_LOG_SYNC': 'off',
     'REQUIRE_CRASH_SAFE': 0,
     'TRANSACTIONAL': 'yes',
+    'METRICS_PER_BOT': 'true',
 }
 
 #: the check each of those earns when it cannot be read. There is no deriving this from the
@@ -95,6 +96,7 @@ BOOLEAN_IDS = {
     'EVENT_LOG_SYNC': 'E042',
     'REQUIRE_CRASH_SAFE': 'E046',
     'TRANSACTIONAL': 'E049',
+    'METRICS_PER_BOT': 'E064',
 }
 
 

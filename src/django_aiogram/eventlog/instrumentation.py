@@ -80,6 +80,10 @@ class Inbound:
     chat_id: int | None
     user_id: int | None
     started: float
+    #: which bot received it. One dispatcher serves every bot in the process since 5.0, so
+    #: without this an inbound row cannot say whose update it was -- and `bot` is in the data
+    #: aiogram hands the middleware, which is where it comes from
+    bot_id: int | None = None
 
 
 class RecordingMiddleware(BaseMiddleware):
@@ -102,6 +106,7 @@ class RecordingMiddleware(BaseMiddleware):
             chat_id=getattr(data.get('event_chat'), 'id', None),
             user_id=getattr(data.get('event_from_user'), 'id', None),
             started=time.monotonic(),
+            bot_id=getattr(data.get('bot'), 'id', None),
         )
         identifier = inbound.correlation_id
         data['correlation_id'] = identifier
@@ -110,6 +115,7 @@ class RecordingMiddleware(BaseMiddleware):
             Event(
                 kind=EventKind.INBOUND_RECEIVED.value,
                 correlation_id=identifier,
+                bot_id=inbound.bot_id,
                 update_id=inbound.update_id,
                 function=event_type(event),
                 chat_id=inbound.chat_id,
@@ -151,6 +157,7 @@ class RecordingMiddleware(BaseMiddleware):
             Event(
                 kind=kind.value,
                 correlation_id=inbound.correlation_id,
+                bot_id=inbound.bot_id,
                 update_id=inbound.update_id,
                 chat_id=inbound.chat_id,
                 user_id=inbound.user_id,
@@ -180,6 +187,9 @@ class RecordingStorage(BaseStorage):
             Event(
                 kind=EventKind.FSM_TRANSITION.value,
                 correlation_id=current_correlation_id() or new_correlation_id(),
+                # the store's key carries it, which is what keeps one person's state with each
+                # bot rather than shared between them -- see `runtime.process`
+                bot_id=key.bot_id,
                 chat_id=key.chat_id,
                 user_id=key.user_id,
                 detail={'to': state_name(state), 'destiny': key.destiny, 'thread_id': key.thread_id},

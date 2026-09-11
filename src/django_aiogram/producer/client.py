@@ -503,7 +503,10 @@ class TelegramBot(RouterShortcuts):
             # slow, not absent. Saying so is the whole point of the return value:
             # a caller that drove the update here would collide with the thread
             # the moment it did start
-            logger.warning('the event loop thread did not start in time', extra={'tg_timeout': RUNNER_TIMEOUT})
+            logger.warning(
+                'the event loop thread did not start in time',
+                extra={'tg_bot_id': self.bot_id, 'tg_timeout': RUNNER_TIMEOUT},
+            )
         return True
 
     def _stop_runner(self, drain_timeout: float) -> None:
@@ -543,11 +546,17 @@ class TelegramBot(RouterShortcuts):
         else:
             pending = list(self._updates)
         if pending:
-            logger.info('waiting for updates in flight', extra={'tg_pending': len(pending)})
+            logger.info(
+                'waiting for updates in flight',
+                extra={'tg_bot_id': self.bot_id, 'tg_pending': len(pending)},
+            )
             futures.wait(pending, timeout=max(0.0, drain_timeout))
             unfinished = [future for future in pending if not future.done()]
             if unfinished:
-                logger.warning('cancelling updates still in flight', extra={'tg_pending': len(unfinished)})
+                logger.warning(
+                    'cancelling updates still in flight',
+                    extra={'tg_bot_id': self.bot_id, 'tg_pending': len(unfinished)},
+                )
                 for future in unfinished:
                     future.cancel()
         if loop is not None and not loop.is_closed() and runner.is_alive():
@@ -559,7 +568,10 @@ class TelegramBot(RouterShortcuts):
                 loop.call_soon_threadsafe(loop.stop)
         runner.join(timeout=RUNNER_TIMEOUT)
         if runner.is_alive():
-            logger.warning('the event loop thread did not stop in time', extra={'tg_timeout': RUNNER_TIMEOUT})
+            logger.warning(
+                'the event loop thread did not stop in time',
+                extra={'tg_bot_id': self.bot_id, 'tg_timeout': RUNNER_TIMEOUT},
+            )
             # put it back. `close()` refuses on a running loop and returns, so this
             # orphan is still driving it — and with `_runner` left as None every later
             # `close()` returned in no time without asking it to stop again, leaving the
@@ -778,8 +790,12 @@ class TelegramBot(RouterShortcuts):
         """
         check_function(function)
         identifier = resolve_correlation_id(correlation_id)
+        # once, here: everything below describes *this* send, and a token rotated while it
+        # waits or retries must not move the line to the replacement bot. `bot_id` resolves
+        # the record on every ask, which is what makes reading it later the wrong thing
+        identity = self.bot_id
         if not self.enabled:
-            logger.debug('send skipped: bot disabled', extra={'tg_function': function})
+            logger.debug('send skipped: bot disabled', extra={'tg_bot_id': identity, 'tg_function': function})
             # the same slot-return as the refusals below: `ENABLED` is read live, so a
             # consumer that took a slot can reach this branch after the setting changed,
             # and without this the bound closes one message at a time until a restart
@@ -821,6 +837,7 @@ class TelegramBot(RouterShortcuts):
                     logger.warning(
                         'rate limited by telegram',
                         extra={
+                            'tg_bot_id': identity,
                             'tg_function': function,
                             'tg_retry_after': error.retry_after,
                             'tg_retries': retries,
@@ -835,7 +852,7 @@ class TelegramBot(RouterShortcuts):
                         attempt=retries,
                         error=error,
                     )
-                    logger.exception('send failed', extra={'tg_function': function})
+                    logger.exception('send failed', extra={'tg_bot_id': identity, 'tg_function': function})
                     if self._raises_send_failures:
                         raise
                     return
@@ -860,7 +877,7 @@ class TelegramBot(RouterShortcuts):
                             'message_ids': _message_ids(result),
                         },
                     )
-                    logger.info('message sent', extra={'tg_function': function})
+                    logger.info('message sent', extra={'tg_bot_id': identity, 'tg_function': function})
                     return
 
             # exhausting the retries used to return silently
@@ -873,18 +890,18 @@ class TelegramBot(RouterShortcuts):
             )
             logger.error(
                 'giving up on message',
-                extra={'tg_function': function, 'tg_max_retries': self.max_retries},
+                extra={'tg_bot_id': identity, 'tg_function': function, 'tg_max_retries': self.max_retries},
             )
             if self._raises_send_failures and last_error is not None:
                 raise last_error
 
         call_kwargs = {**self.settings['DEFAULT_KWARGS'](function), **kwargs}
-        outbound = Outbound(identifier, function, call_kwargs)
+        # the identity now, not when a row is written: see `Outbound.bot_id`
+        outbound = Outbound(identifier, function, call_kwargs, identity)
         self._schedule(send(), outbound, on_complete, on_refused)
         return identifier
 
-    @staticmethod
-    def _record_send(kind: EventKind, outbound: 'Outbound', **fields: Any) -> None:
+    def _record_send(self, kind: EventKind, outbound: 'Outbound', **fields: Any) -> None:
         """Record one stage of an outbound message.
 
         Called from inside the send coroutine, which is the only place that
@@ -903,6 +920,10 @@ class TelegramBot(RouterShortcuts):
             Event(
                 kind=kind.value,
                 correlation_id=outbound.correlation_id,
+                # the send's own, not this object's now: the row describes a request that
+                # went out under one token, and a rotation while Telegram answers must not
+                # move it to the replacement -- see `Outbound.bot_id`
+                bot_id=outbound.bot_id,
                 function=outbound.function,
                 chat_id=as_identifier(outbound.call_kwargs.get('chat_id')),
                 error_code=type(error).__name__ if error is not None else '',
@@ -928,18 +949,21 @@ class TelegramBot(RouterShortcuts):
         """
         self._sends[task] = outbound
         task.add_done_callback(self._sends.pop)
-        task.add_done_callback(self._log_task_failure)
+        # the identity is read *now* rather than inside the callback: `bot_id` resolves this
+        # bot's settings on every ask, so a token rotated while this send is in flight would
+        # otherwise make the failure line name the new bot for a message sent under the old
+        task.add_done_callback(lambda done: self._log_task_failure(done, outbound.bot_id))
         if on_complete is not None:
             task.add_done_callback(completion(on_complete))
 
     @staticmethod
-    def _log_task_failure(task: 'asyncio.Task[None]') -> None:
+    def _log_task_failure(task: 'asyncio.Task[None]', bot_id: int | None = None) -> None:
         """Report what a finished send raised, since nobody awaits these tasks."""
         if task.cancelled():
             return
         error = task.exception()
         if error is not None:
-            logger.error('scheduled send failed', exc_info=error)
+            logger.error('scheduled send failed', exc_info=error, extra={'tg_bot_id': bot_id})
 
     def _schedule(
         self,
@@ -983,6 +1007,8 @@ class TelegramBot(RouterShortcuts):
                 logger.warning(
                     'scheduling a send on a loop nothing in this process runs',
                     extra={
+                        # the send's own, for the reason `Outbound.bot_id` gives
+                        'tg_bot_id': outbound.bot_id,
                         'tg_function': outbound.function,
                         'tg_correlation_id': str(outbound.correlation_id),
                         'tg_short_id': short_id(outbound.correlation_id),
@@ -1090,8 +1116,7 @@ class TelegramBot(RouterShortcuts):
         """Create the task, named so shutdown can say which message it canceled."""
         return loop.create_task(coroutine, name=f'{TASK_PREFIX}{outbound.correlation_id.hex}')
 
-    @staticmethod
-    def _record_drop(outbound: 'Outbound', reason: str) -> None:
+    def _record_drop(self, outbound: 'Outbound', reason: str) -> None:
         """Record a send that never reached Telegram, and used to leave only a log line.
 
         Carries the call, not just its id: a direct `send_raw` was never queued,
@@ -1101,6 +1126,7 @@ class TelegramBot(RouterShortcuts):
             Event(
                 kind=EventKind.OUTBOUND_DROPPED.value,
                 correlation_id=outbound.correlation_id,
+                bot_id=outbound.bot_id,
                 function=outbound.function,
                 chat_id=as_identifier(outbound.call_kwargs.get('chat_id')),
                 error_code='NotScheduled',
@@ -1134,7 +1160,7 @@ class TelegramBot(RouterShortcuts):
         if not pending:
             return
 
-        logger.info('draining in-flight sends', extra={'tg_pending': len(pending)})
+        logger.info('draining in-flight sends', extra={'tg_bot_id': self.bot_id, 'tg_pending': len(pending)})
         loop.run_until_complete(asyncio.wait(pending, timeout=timeout))
 
         dropped = [task for task in pending if not task.done()]
@@ -1146,7 +1172,7 @@ class TelegramBot(RouterShortcuts):
         loop.run_until_complete(asyncio.gather(*dropped, return_exceptions=True))
         logger.warning(
             'dropped in-flight sends at shutdown',
-            extra={'tg_dropped': len(dropped), 'tg_drain_timeout': timeout},
+            extra={'tg_bot_id': self.bot_id, 'tg_dropped': len(dropped), 'tg_drain_timeout': timeout},
         )
 
     def _accept(self, function: str, correlation_id: uuid.UUID | str | None) -> tuple[uuid.UUID, bool]:

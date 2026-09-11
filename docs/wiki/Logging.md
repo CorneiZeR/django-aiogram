@@ -52,7 +52,7 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_queue` | which queue a line is about, where a container serves several |
 | `tg_fate` | what a failure to serve a bot was: `revoked`, `conflict`, `transient` or `unknown` |
 | `tg_bots` | how many bots a held-back answer is keeping, when a provider read none |
-| `tg_bot_id` | which bot a message names, by the number in its token. Present where a message is for a bot this process does not serve, which it leaves in flight rather than acknowledging |
+| `tg_bot_id` | which bot the line is about, by the number in its token. On the lines a bot's identity is known at: every send and its outcome, the drain and the loop-thread warnings, a delivery and a handler that raised, a quarantine, a reconciliation, an intent, a webhook that could not resolve its bot. A line written before anything knew which bot it was about — an undecodable payload, the queue watcher — carries none, and that is the honest answer rather than a guess. In `extra` and never interpolated into the message: a value in the text is still there to `grep`, but it is not a **field** — nothing can filter, group or alert on it, and every line becomes its own message string rather than one an aggregator can count |
 | `tg_short_id` | that id as the admin shows it: twelve characters to paste into the log's search box |
 | `tg_alternative` | the awaitable method a synchronous send from a loop should move to |
 | `tg_pending` | work still in flight at shutdown: sends, or the updates a webhook process is answering |

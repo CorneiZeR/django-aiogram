@@ -257,3 +257,143 @@ def test_the_package_does_not_import_the_metrics_client():
     finished = run_python(code, check=True)
 
     assert finished.stdout.strip() == 'False', 'importing the package pulled prometheus_client'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_the_default_series_count_does_not_grow_with_the_bots(registry):
+    """#123's acceptance, and the reason `METRICS_PER_BOT` is off.
+
+    A label per bot is a series per bot *per kind*, and the histogram multiplies that again
+    by its buckets: a thousand clients counted that way are hundreds of thousands of series,
+    which is a Prometheus problem rather than a dashboard.
+    """
+    metrics = EventMetrics(registry)
+
+    metrics(events=[Event(kind='outbound.sent', bot_id=123456), Event(kind='outbound.sent', bot_id=654321)])
+
+    assert value(registry, 'django_aiogram_events_total', kind='outbound.sent') == 2
+    assert 'bot' not in metrics.events._labelnames, metrics.events._labelnames
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'METRICS_PER_BOT': True})
+def test_a_project_that_asks_for_it_gets_a_label_per_bot(registry):
+    """Knowingly: the exporter is imported by a project, so the cardinality is their call."""
+    metrics = EventMetrics(registry)
+
+    metrics(events=[Event(kind='outbound.sent', bot_id=123456), Event(kind='outbound.sent', bot_id=654321)])
+
+    assert value(registry, 'django_aiogram_events_total', kind='outbound.sent', bot='123456') == 1
+    assert value(registry, 'django_aiogram_events_total', kind='outbound.sent', bot='654321') == 1
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'METRICS_PER_BOT': True})
+def test_a_row_that_names_no_bot_is_labelled_unknown(registry):
+    """An undecodable payload names no bot, and an empty label is one a query cannot exclude."""
+    metrics = EventMetrics(registry)
+
+    metrics(events=[Event(kind='queue.undecodable')])
+
+    assert value(registry, 'django_aiogram_events_total', kind='queue.undecodable', bot='unknown') == 1
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'METRICS_PER_BOT': 'nonsense'})
+def test_a_flag_nobody_can_read_labels_by_kind_alone(registry, caplog):
+    """`E064` is the finding; the exporter's own answer is the safe half of the choice.
+
+    A traceback out of the receiver that counts sends would take the batch with it, which is
+    the one thing this exporter promises not to do.
+    """
+    with caplog.at_level(logging.WARNING, logger='django_aiogram'):
+        metrics = EventMetrics(registry)
+
+    metrics(events=[Event(kind='outbound.sent', bot_id=123456)])
+
+    assert value(registry, 'django_aiogram_events_total', kind='outbound.sent') == 1
+    assert any('METRICS_PER_BOT' in record.getMessage() for record in caplog.records)
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'METRICS_PER_BOT': True})
+def test_the_bot_label_is_bounded_however_many_identities_arrive(registry):
+    """A `queue.rejected` row is recorded before a message is routed.
+
+    Its identity is whatever the envelope claimed, so anything able to publish to the queue
+    could otherwise mint a Prometheus series per message. Past the cap the rest are counted
+    under `other`: the totals stay right and the series stop growing.
+    """
+    from django_aiogram.contrib.prometheus.metrics import MAX_BOT_LABELS
+
+    metrics = EventMetrics(registry)
+
+    metrics(events=[Event(kind='queue.rejected', bot_id=identity) for identity in range(1, MAX_BOT_LABELS + 51)])
+
+    assert value(registry, 'django_aiogram_events_total', kind='queue.rejected', bot='1') == 1
+    assert value(registry, 'django_aiogram_events_total', kind='queue.rejected', bot='other') == 50
+    assert len(metrics._labelled) == MAX_BOT_LABELS
+
+    # and a bot that already has a series keeps it once the set is full: a capacity test moved
+    # in front of the membership test would send every bot to `other` from then on, which is
+    # every real client's traffic disappearing into one series the moment the cap is reached
+    metrics(events=[Event(kind='queue.rejected', bot_id=1)])
+
+    assert value(registry, 'django_aiogram_events_total', kind='queue.rejected', bot='1') == 2
+    assert value(registry, 'django_aiogram_events_total', kind='queue.rejected', bot='other') == 50
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'METRICS_PER_BOT': True})
+def test_every_step_of_the_capacity_decision_happens_under_the_lock(registry):
+    """Otherwise two batches at the cap both find room, and the bound stops being one.
+
+    Asserted on the property that makes the interleaving impossible rather than with threads:
+    the losing interleaving needs a read, then a deschedule, then an insert, which a test
+    cannot ask for — the same shape `tests/db/test_lifecycle.py` uses about its own lock.
+    Every *step* is watched, not only the acquisition: a membership test or a length read
+    left outside the lock is the same race with a lock around the wrong half.
+    """
+    metrics = EventMetrics(registry)
+    held = []
+    seen = []
+
+    class Guarding:
+        """A lock that says whether it is held."""
+
+        def __init__(self, inner):
+            self.inner = inner
+            self.locked = False
+
+        def __enter__(self):
+            self.inner.acquire()
+            self.locked = True
+            held.append('in')
+            return self
+
+        def __exit__(self, *exception):
+            self.locked = False
+            held.append('out')
+            self.inner.release()
+            return False
+
+    guard = Guarding(metrics._naming)
+
+    class Watched(set):
+        """A set that records which step happened, and whether the lock was held for it."""
+
+        def __contains__(self, item):
+            seen.append(('contains', guard.locked))
+            return set.__contains__(self, item)
+
+        def __len__(self):
+            seen.append(('len', guard.locked))
+            return set.__len__(self)
+
+        def add(self, item):
+            seen.append(('add', guard.locked))
+            set.add(self, item)
+
+    metrics._naming = guard
+    metrics._labelled = Watched()
+
+    metrics(events=[Event(kind='queue.rejected', bot_id=123456)])
+
+    assert held == ['in', 'out'], held
+    assert seen == [('contains', True), ('len', True), ('add', True)], seen
+    assert set(metrics._labelled) == {'123456'}

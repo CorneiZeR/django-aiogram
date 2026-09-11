@@ -102,6 +102,7 @@ CHECKS: tuple[Check, ...] = (
     Check('E003', 'RAISE_EXCEPTION', _a_readable_boolean),
     Check('E017', 'ALLOW_PICKLE', _a_readable_boolean),
     Check('E049', 'TRANSACTIONAL', _a_readable_boolean),
+    Check('E064', 'METRICS_PER_BOT', _a_readable_boolean, process=True),
     Check('E004', 'TOKEN', _a_string),
     Check('E052', 'TOKEN', _a_token_with_an_identity),
     Check('E005', 'REDIS_URL', _a_string),
