@@ -45,15 +45,20 @@ class Queueing:
     payloads: list[bytes]
     messages: list[tuple[uuid.UUID, dict[str, Any]]]
     queued_at: float
-    #: which bot these messages are for, the same identity the payload carries. Kept here so
-    #: the feed rows can say it: a deployment with twenty clients reads this log to find out
-    #: whose messages were queued or lost, and a column of nulls answers nothing
-    bot_id: int | None = None
     #: what the ``queued`` row will say about each call's arguments, or ``None`` per message
     #: where nothing reads them. Summarized beside the payload rather than at publish time:
     #: a deferred publish runs after the caller may have changed a nested value, and the
     #: payload is bytes by then — so a row described later would disagree with the wire
     details: list[dict[str, Any] | None] = field(default_factory=list)
+    #: which bot these messages are for, the same identity the payload carries. Kept here so
+    #: the feed rows can say it: a deployment with twenty clients reads this log to find out
+    #: whose messages were queued or lost, and a column of nulls answers nothing.
+    #:
+    #: **Last, rather than beside the payloads where it belongs by meaning.** A dataclass's
+    #: generated constructor is positional, so a field inserted in the middle rebinds every
+    #: argument after it -- `details` would have become the identity, and the feed would then
+    #: have attributed rows to a list
+    bot_id: int | None = None
 
 
 def _dropped(

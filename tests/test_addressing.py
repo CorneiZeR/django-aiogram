@@ -346,3 +346,21 @@ def test_a_consumer_taking_only_the_queue_is_still_told_which_queue():
 
     assert isinstance(built, QueuedOnly)
     assert built.settings is served, 'the queue it was asked for did not reach it'
+
+
+def test_a_write_built_positionally_still_means_what_it_says():
+    """`Queueing` and `Event` both grew a `bot_id`, and both are built positionally somewhere.
+
+    A field inserted in the middle of a dataclass rebinds every argument after it — here
+    `details` would have become the identity, and the feed would have attributed rows to a
+    list. So the order is the contract, and this is what says so.
+    """
+    import uuid as _uuid
+
+    from django_aiogram.producer.queueing import Queueing
+
+    identifier = _uuid.uuid4()
+    write = Queueing([b'payload'], [(identifier, {'chat_id': 1})], 1234.0, [{'text': 'hi'}])
+
+    assert write.details == [{'text': 'hi'}]
+    assert write.bot_id is None
