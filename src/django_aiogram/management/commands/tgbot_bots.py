@@ -27,6 +27,9 @@ if TYPE_CHECKING:
 
 #: what a bot with no lease shows, so the column is never empty
 NOBODY = '—'
+#: what the lease column shows when the table could not be read at all, which is not the same
+#: answer as "nobody holds it"
+UNREADABLE = '?'
 
 
 class Command(BaseCommand):
@@ -77,19 +80,26 @@ class Command(BaseCommand):
 
         found = list(desired())
         if options['all']:
-            found += list(switched_off())
+            # the identities `desired` already answered for are not asked again: a section and
+            # a switched-off row may name one bot, and `switched_off` applies none of the
+            # precedence `desired` does -- so without this the listing would show that bot
+            # twice, with different settings, and neither line would say which one wins
+            seen = {record.bot_id for record in found}
+            found += [record for record in switched_off() if record.bot_id not in seen]
         wanted = set(options['bots'])
         if wanted:
             found = [record for record in found if record.bot_id in wanted]
         return sorted(found, key=lambda record: (record.bot_id or 0, record.alias))
 
-    @staticmethod
-    def _leases() -> dict[int, str]:
-        """Who holds each bot's lease, or nothing where the table cannot be read.
+    def _leases(self) -> 'dict[int, str] | None':
+        """Who holds each bot's lease, or ``None`` where the table could not be read.
 
-        Nothing rather than a refusal: a lease says which container is *polling* a bot, and a
-        deployment on webhooks takes none at all -- so an unreadable table costs one column
-        rather than the listing.
+        ``None`` rather than an empty mapping, and the difference is the column: *nobody holds
+        this bot* and *nobody could look* are different answers, and printing the first for
+        the second is how an operator concludes a bot is unserved while it is being served.
+
+        A failure costs that column rather than the listing: a lease says which container is
+        polling a bot, and a deployment on webhooks takes none at all.
         """
         from django.db import DatabaseError  # noqa: PLC0415 - as above
         from django.utils import timezone  # noqa: PLC0415 - as above
@@ -99,11 +109,12 @@ class Command(BaseCommand):
         try:
             live = TelegramBotLease.objects.filter(expires_at__gt=timezone.now())
             return dict(live.values_list('bot_id', 'holder'))
-        except DatabaseError:
-            return {}
+        except DatabaseError as refused:
+            self.stderr.write(f'could not read the bot leases: {refused}')
+            return None
 
     @staticmethod
-    def _describe(record: 'BotRecord', held: dict[int, str]) -> dict[str, Any]:
+    def _describe(record: 'BotRecord', held: 'dict[int, str] | None') -> dict[str, Any]:
         """Say what one bot resolves to, in the terms an operator is asking about."""
         # deferred with the rest: the profile reads the transport's own options off `BROKER`
         from django_aiogram.runtime.profiles import profile_of  # noqa: PLC0415 - as above
@@ -121,7 +132,7 @@ class Command(BaseCommand):
             'queue': named(record) or NOBODY,
             'mode': str(record['MODE']),
             'enabled': bool(record['ENABLED']),
-            'lease': held.get(identity or 0, NOBODY),
+            'lease': UNREADABLE if held is None else held.get(identity or 0, NOBODY),
         }
 
     def _as_a_table(self, rows: list[dict[str, Any]]) -> None:

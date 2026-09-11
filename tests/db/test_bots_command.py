@@ -160,3 +160,47 @@ def test_a_deployment_with_no_bots_says_so():
     call_command('tgbot_bots', stdout=out)
 
     assert 'no bots are configured' in out.getvalue()
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={
+        **SETTINGS,
+        'BOT_PROVIDERS': ('django_aiogram.runtime.providers.from_settings', *FROM_DB),
+        'TOKEN': '111111:AAaa',
+    }
+)
+def test_one_identity_is_listed_once_even_when_a_disabled_row_repeats_it():
+    """`switched_off` applies none of the precedence `desired` does.
+
+    A section and a switched-off row may name one bot, and a listing showing it twice with
+    different settings says nothing about which of them wins.
+    """
+    a_bot(111111, enabled=False)
+
+    rows = listed(all=True)
+
+    assert [row['bot_id'] for row in rows] == [111111], rows
+    assert rows[0]['source'] == 'settings', rows
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_lease_table_that_cannot_be_read_is_not_nobody_holding_the_bot(monkeypatch):
+    """Two different answers: *nobody holds this* and *nobody could look*.
+
+    Printing the first for the second is how an operator concludes a bot is unserved while
+    another container is serving it perfectly.
+    """
+    from django.db import DatabaseError
+
+    a_bot(111111)
+
+    def refuse(*_args, **_kwargs):
+        """Refuse the way a database that is not migrated does."""
+        msg = 'no such table'
+        raise DatabaseError(msg)
+
+    monkeypatch.setattr('django_aiogram.models.TelegramBotLease.objects.filter', refuse)
+
+    (row,) = listed()
+
+    assert row['lease'] == '?', row

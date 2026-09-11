@@ -63,12 +63,34 @@ def test_the_listing_can_be_narrowed_by_queue_and_by_pool():
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
-def test_nothing_is_asked_of_the_transport_when_the_depth_is_not_wanted():
-    """`--no-depth` is the form that answers over no network at all."""
+def test_nothing_is_asked_of_the_transport_when_the_depth_is_not_wanted(monkeypatch):
+    """`--no-depth` is the form that answers over no network at all.
+
+    Asserted by making the transport itself the failure: reading `?` in the output proves
+    nothing, because a command that *did* ask and then could not answer prints the same
+    thing.
+    """
     TelegramQueue.objects.create(name='client-a', pool='vip')
+
+    touched = []
+
+    def note(*_args, **_kwargs):
+        """Record that something reached for a transport, and answer nothing useful.
+
+        Recorded rather than raised: the command turns a transport that refuses into `?`,
+        which is the same output `--no-depth` produces — so an exception here would be
+        swallowed and the case would pass for the wrong reason.
+        """
+        touched.append('asked')
+        msg = 'not reachable'
+        raise ConnectionError(msg)
+
+    monkeypatch.setattr('django_aiogram.broker.registry.broker_class', note)
+    monkeypatch.setattr('django_aiogram.runtime.queues.settings_for', note)
 
     (row,) = listed(no_depth=True)
 
+    assert touched == [], 'the transport was asked although --no-depth was given'
     assert row['depth'] == '?'
     assert row['consumer'] == '?'
 
