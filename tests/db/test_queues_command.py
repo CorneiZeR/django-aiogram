@@ -189,3 +189,27 @@ def test_a_filter_that_matches_nothing_is_not_a_deployment_with_no_queues():
     call_command('tgbot_queues', queue=['client-z'], stdout=out, stderr=StringIO())
 
     assert 'no declared queue matches client-z' in out.getvalue(), out.getvalue()
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_filter_with_an_unreadable_table_overstates_neither(monkeypatch):
+    """Both halves at once, because either alone says more than is known.
+
+    The settings did not match, and what the table declares is nobody's guess — so a flat
+    "no declared queue matches" would be a definite answer about rows nothing could read.
+    """
+    from django.db import DatabaseError
+
+    def refuse(*_args, **_kwargs):
+        """Refuse the way an unmigrated database does."""
+        msg = 'no such table'
+        raise DatabaseError(msg)
+
+    monkeypatch.setattr('django_aiogram.models.TelegramQueue.objects.values_list', refuse)
+    out = StringIO()
+
+    call_command('tgbot_queues', queue=['client-z'], stdout=out, stderr=StringIO())
+
+    said = out.getvalue()
+    assert 'nothing in the settings matches client-z' in said, said
+    assert 'the queue table could not be read' in said, said

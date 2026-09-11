@@ -76,9 +76,14 @@ class Command(BaseCommand):
         declared no queues. One message for all three would send them to the wrong place two
         times out of three.
         """
-        asked = [*options['queues'], *options['pools']]
+        asked = ', '.join([*options['queues'], *options['pools']])
+        if asked and not readable:
+            # both at once, because either alone overstates: the settings did not match, and
+            # what the table declares is unknown -- so "no declared queue matches" would be a
+            # definite answer about rows nobody could read
+            return f'nothing in the settings matches {asked}, and the queue table could not be read'
         if asked:
-            return f'no declared queue matches {", ".join(asked)}'
+            return f'no declared queue matches {asked}'
         if not readable:
             return 'no queues are declared in the settings, and the table could not be read'
         return 'no queues are declared'
