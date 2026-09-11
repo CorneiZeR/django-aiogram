@@ -56,9 +56,18 @@ class Command(BaseCommand):
 
     def handle(self, **options: Any) -> None:
         """Read the declared queues and say what is in them."""
-        rows = [self._describe(queue, pool, options) for queue, pool in self._queues(options)]
+        declared, readable = self._queues(options)
+        rows = [self._describe(queue, pool, options) for queue, pool in declared]
         if not rows:
-            self.stdout.write('no queues are declared')
+            # *none declared* and *nobody could look* are different answers, and saying the
+            # first for the second sends an operator to look at their settings instead of at
+            # the database that refused
+            said = (
+                'no queues are declared'
+                if readable
+                else 'no queues are declared in the settings, and the table could not be read'
+            )
+            self.stdout.write(said)
             return
         if options['json']:
             for row in rows:
@@ -66,7 +75,7 @@ class Command(BaseCommand):
             return
         self._as_a_table(rows)
 
-    def _queues(self, options: dict[str, Any]) -> list[tuple[str, str]]:
+    def _queues(self, options: dict[str, Any]) -> tuple[list[tuple[str, str]], bool]:
         """Every declared queue with its pool, narrowed to what was asked for.
 
         The settings' `QUEUES` are declared too and have no pool of their own: a deployment
@@ -78,6 +87,7 @@ class Command(BaseCommand):
         from django_aiogram.runtime.queues import in_settings  # noqa: PLC0415 - as above
 
         found: dict[str, str] = dict.fromkeys(in_settings(), '')
+        readable = True
         try:
             from django_aiogram.models import TelegramQueue  # noqa: PLC0415 - as above
 
@@ -86,11 +96,12 @@ class Command(BaseCommand):
             # a table that is not migrated, or a database that blinked: the settings' own
             # queues are still worth listing, and a listing that raised would say nothing
             self.stderr.write('could not read the queue table; listing what the settings declare')
+            readable = False
         wanted, pools = set(options['queues']), set(options['pools'])
         rows = [(name, pool) for name, pool in sorted(found.items()) if not wanted or name in wanted]
         if pools:
             rows = [(name, pool) for name, pool in rows if pool in pools]
-        return rows
+        return rows, readable
 
     def _describe(self, queue: str, pool: str, options: dict[str, Any]) -> dict[str, Any]:
         """Say what is in one queue, and who is reading it."""

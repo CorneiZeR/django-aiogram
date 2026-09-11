@@ -148,6 +148,9 @@ def test_the_profile_digest_is_not_the_settings_it_was_built_from():
     out = StringIO()
     call_command('tgbot_bots', stdout=out)
 
+    # the positive half first: an empty listing carries no password either, and the negative
+    # assertion alone would pass for a command that printed nothing at all
+    assert '111111' in out.getvalue(), out.getvalue()
     assert 'swordfish' not in out.getvalue()
 
 

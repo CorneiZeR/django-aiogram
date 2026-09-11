@@ -153,3 +153,26 @@ def test_a_deployment_with_no_queues_says_so():
     call_command('tgbot_queues', stdout=out, stderr=StringIO())
 
     assert 'no queues are declared' in out.getvalue()
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_queue_table_that_cannot_be_read_is_not_a_deployment_with_no_queues(monkeypatch):
+    """Two different answers again: *none declared* and *nobody could look*.
+
+    Saying the first for the second sends an operator to their settings instead of to the
+    database that refused.
+    """
+    from django.db import DatabaseError
+
+    def refuse(*_args, **_kwargs):
+        """Refuse the way an unmigrated database does."""
+        msg = 'no such table'
+        raise DatabaseError(msg)
+
+    monkeypatch.setattr('django_aiogram.models.TelegramQueue.objects.values_list', refuse)
+    out, err = StringIO(), StringIO()
+
+    call_command('tgbot_queues', stdout=out, stderr=err)
+
+    assert 'the table could not be read' in out.getvalue(), out.getvalue()
+    assert 'could not read the queue table' in err.getvalue()
