@@ -50,6 +50,7 @@ class Command(BaseCommand):
                 stranded=True,
                 guarantee=True,
                 consumes=not options['no_consumer'],
+                queues=options['queues'],
             )
         except BrokerDependencyError as error:
             # same refusal as the module form, in the shape a command reports with: BROKER
@@ -57,10 +58,47 @@ class Command(BaseCommand):
             # the install line on one line and the exit code non-zero, where a traceback out
             # of a probe says "unhealthy" without saying what to do about it
             raise CommandError(str(error)) from error
+        # *before* the verdict, because an unhealthy container is exactly when somebody needs
+        # to know which clients' bots are quarantined -- raising first printed these only on
+        # the healthy path, which is the path nobody is reading them on.
+        #
+        # Only in this form: the bots are *rows*, and the module form must not populate an app
+        # registry to answer a container's probe -- see the note at the top of `healthcheck.py`
+        for line in self._quarantined():
+            self.stdout.write(self.style.WARNING(line))
+        # and the probe's own warnings, also before the verdict: with several queues one can
+        # fail while another warns, and raising first threw away everything the *other*
+        # queues said -- the lines an operator needs most on the run that failed
+        for warning in report.warnings:
+            self.stdout.write(self.style.WARNING(warning))
         if not report.ok:
             raise CommandError(report.message)
         # plain when nothing was examined: a disabled process is not a healthy bot, and
         # this command has never colored that line green
         self.stdout.write(self.style.SUCCESS(report.message) if report.checked else report.message)
-        for warning in report.warnings:
-            self.stdout.write(self.style.WARNING(warning))
+
+    @staticmethod
+    def _quarantined() -> list[str]:
+        """Name the bots a supervisor has stopped serving, with the reason it wrote.
+
+        A probe that says *healthy* while three clients' bots are quarantined is answering a
+        narrower question than the person reading it asked. It does not change the verdict:
+        the container is doing what it can, and a revoked token is fixed by a person rather
+        than by a restart.
+        """
+        # deferred: the ORM, and this command is imported by `manage.py help`
+        from django.core.exceptions import ImproperlyConfigured  # noqa: PLC0415 - as above
+        from django.db import DatabaseError  # noqa: PLC0415 - as above
+
+        from django_aiogram.models import TelegramBot  # noqa: PLC0415 - as above
+
+        try:
+            held = TelegramBot.objects.exclude(quarantine_reason='').values_list('bot_id', 'quarantine_reason')
+            return [f'bot {identity} is quarantined: {reason}' for identity, reason in held]
+        except (DatabaseError, ImproperlyConfigured):
+            # three deployments end up here and none of them is an unhealthy bot container: a
+            # project whose bots live in `settings.py` and never migrated this table, one with
+            # no database configured at all -- `DATABASES` empty is `ImproperlyConfigured`
+            # rather than a database error -- and one whose database blinked. The verdict
+            # above stands for all three
+            return []

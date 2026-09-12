@@ -4,6 +4,7 @@ The heartbeat is the only thing another process can observe about the consumer
 thread, and `tgbot_healthcheck` is what reads it.
 """
 
+import contextlib
 import re
 import textwrap
 import time
@@ -1361,3 +1362,204 @@ def test_a_receiver_is_not_unhealthy_over_a_setting_it_never_reads(redis_server)
 
     # and it is still the first thing a container *with* a consumer meets
     assert not check().ok
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_named_queue_with_messages_and_no_consumer_fails(redis_server):
+    """#125's named case, and the signal a multi-queue deployment has no other way to get.
+
+    A queue nobody serves is silent: every message in it is delivered *eventually*, which
+    looks exactly like a slow bot until somebody notices what never arrived.
+    """
+    redis_server.rpush('vip', b'{}')
+
+    report = check(queues=['vip'])
+
+    assert not report.ok, report
+    assert 'no live consumer' in report.message, report.message
+    assert 'vip' in report.message
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_named_queue_with_a_live_consumer_is_not_reported(redis_server):
+    """The other half of the same promise: a queue being served is not an alarm."""
+    redis_server.rpush('vip', b'{}')
+    redis_server.set(f'vip:heartbeat:{WORKER}', str(int(time.time())), ex=90)
+
+    report = check(queues=['vip'])
+
+    assert report.ok, report.message
+    assert '1 queued' in report.message
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_an_empty_queue_with_no_consumer_warns_rather_than_fails(redis_server):
+    """A queue declared for a client who has not written yet is waiting, not broken."""
+    report = check(queues=['vip'])
+
+    assert report.ok, report.message
+    assert report.warnings, report
+    assert 'nothing is consuming it' in report.warnings[0]
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+@pytest.mark.parametrize('order', [('default', 'vip'), ('vip', 'default')])
+def test_the_worst_of_several_queues_decides_the_verdict(redis_server, order):
+    """A container serving five clients is healthy or not *per client*.
+
+    A report that summed the depths would hide the one queue filling up behind four empty
+    ones — so each queue gets a line, and any failure fails the container.
+
+    Both orders, because one of them is the test that matters: with the failing queue last, a
+    verdict overwritten on each iteration still comes out false.
+    """
+    redis_server.rpush('vip', b'{}')
+    redis_server.set(f'default:heartbeat:{WORKER}', str(int(time.time())), ex=90)
+
+    report = check(queues=list(order))
+
+    assert not report.ok, report.message
+    # the whole line for each: a report that named both queues and said the same thing about
+    # them would satisfy a substring check while hiding which one is in trouble
+    assert 'default: 0 queued, consumer' in report.message, report.message
+    assert 'vip: 1 message(s) waiting and no live consumer' in report.message, report.message
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_naming_a_queue_asks_about_that_queue_rather_than_this_process_one(redis_server):
+    """Otherwise `--queue` would be decoration: the probe would answer the same thing twice."""
+    redis_server.rpush(QUEUE, b'{}')
+    redis_server.set(f'{QUEUE}:heartbeat:{WORKER}', str(int(time.time())), ex=90)
+
+    report = check(queues=['vip'])
+
+    assert '0 queued' in report.message or 'empty' in report.message, report.message
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'HEARTBEAT_INTERVAL': 'nonsense'})
+def test_an_unreadable_interval_is_a_verdict_rather_than_a_traceback(redis_server):
+    """A container probe answers; it does not raise.
+
+    `HEARTBEAT_INTERVAL` is read while judging a named queue's heartbeat, and an unreadable
+    one used to escape the guard — which a compose file reads as a crash loop with nothing in
+    it to act on.
+    """
+    redis_server.rpush('vip', b'{}')
+
+    report = check(queues=['vip'])
+
+    assert not report.ok, report
+    assert 'HEARTBEAT_INTERVAL' in report.message, report.message
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_heartbeat_nothing_can_decode_is_a_verdict_too(redis_server):
+    """Bytes on the wire are not ours to promise anything about.
+
+    A `REDIS_URL` shared with a cache backend makes redis-py decode this key, and what comes
+    back may be neither a number nor text — `UnicodeDecodeError` is a `ValueError`, which is
+    why the order of the two clauses matters.
+    """
+    redis_server.rpush('vip', b'{}')
+    redis_server.set(f'vip:heartbeat:{WORKER}', b'\xff\xfe', ex=90)
+
+    report = check(queues=['vip'])
+
+    assert not report.ok, report
+    assert 'liveness' in report.message or 'no live consumer' in report.message, report.message
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_the_sweep_for_a_named_queue_walks_that_queues_own_keys(redis_server):
+    """`--stranded` and `--guarantee` are the command's, and they have to hold per queue too.
+
+    A deployment that asked for the sweep and got nothing would read the silence as "no
+    stranded lists" rather than as "nobody looked" — and a sweep pointed at the process's own
+    keyspace reports a reassuring zero about the queue it was not asked about.
+    """
+    redis_server.set(f'vip:heartbeat:{WORKER}', str(int(time.time())), ex=90)
+    redis_server.rpush('vip:processing:a-dead-worker', b'{}')
+    # two in the *other* queue's keyspace, so the count says which keyspace was walked: one
+    # message either way would read the same whichever pattern the sweep used
+    redis_server.rpush(f'{QUEUE}:processing:another-dead-worker', b'{}', b'{}')
+
+    report = check(queues=['vip'], stranded=True)
+
+    assert report.ok, report.message
+    assert report.warnings, report
+    assert '1 message(s) are in flight' in report.warnings[0], report.warnings
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_queue_whose_name_is_a_glob_is_still_swept(redis_server):
+    """A client's queue is a name somebody typed, and `[` is a character class to `SCAN`.
+
+    Unescaped, the sweep for `vip[blue]` matches nothing this package ever writes — and
+    reports itself *complete*, which is the one answer a wrong pattern must not give.
+    """
+    queue = 'vip[blue]'
+    redis_server.set(f'{queue}:heartbeat:{WORKER}', str(int(time.time())), ex=90)
+    redis_server.rpush(f'{queue}:processing:a-dead-worker', b'{}')
+
+    report = check(queues=[queue], stranded=True)
+
+    assert report.ok, report.message
+    assert report.warnings, report
+    assert '1 message(s) are in flight' in report.warnings[0], report.warnings
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_run_that_fails_still_says_what_the_other_queues_warned_about(redis_server):
+    """One queue can fail while another warns, and the failing run is when both are needed.
+
+    Raising first threw away everything the other queues said — on exactly the run somebody
+    is reading the output of.
+    """
+    redis_server.rpush('vip', b'{}')
+
+    with pytest.raises(CommandError):
+        healthcheck(queue=['quiet', 'vip'])
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_the_warning_from_the_healthy_queue_is_printed_on_the_failing_run(redis_server):
+    """The same run, read for its output rather than its exception."""
+    redis_server.rpush('vip', b'{}')
+    out = StringIO()
+
+    with contextlib.suppress(CommandError):
+        call_command('tgbot_healthcheck', queue=['quiet', 'vip'], stdout=out)
+
+    assert 'quiet: nothing is consuming it' in out.getvalue(), out.getvalue()
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_named_queue_over_the_limit_fails_even_with_a_live_consumer(redis_server):
+    """The depth limit is read first, and a consumer being alive does not excuse a backlog.
+
+    The documented table says so in its own row, and a probe that passed a queue because
+    somebody is reading it would be reporting *eventually* as healthy.
+    """
+    redis_server.rpush('vip', b'{}', b'{}', b'{}')
+    redis_server.set(f'vip:heartbeat:{WORKER}', str(int(time.time())), ex=90)
+
+    report = check(queues=['vip'], max_queue=2)
+
+    assert not report.ok, report.message
+    assert 'over the limit' in report.message, report.message
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_named_queue_with_the_limit_off_is_judged_by_its_consumer_alone(redis_server):
+    """`0` turns the depth check off rather than allowing nothing.
+
+    It is what `HEALTHCHECK_MAX_QUEUE` has always meant, and reading it as a zero-message
+    limit would fail every queue that has anything in it at all.
+    """
+    redis_server.rpush('vip', b'{}', b'{}', b'{}')
+    redis_server.set(f'vip:heartbeat:{WORKER}', str(int(time.time())), ex=90)
+
+    report = check(queues=['vip'], max_queue=0)
+
+    assert report.ok, report.message
+    assert '3 queued' in report.message, report.message

@@ -40,7 +40,9 @@ from django_aiogram.broker.base import Broker
 from django_aiogram.broker.exceptions import BrokerDependencyError, BrokerError
 from django_aiogram.broker.registry import get_broker
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
+from django_aiogram.eventlog.events import worker_identity
 from django_aiogram.redis import (
+    _escaped,
     get_redis,
     heartbeat_ttl,
     processing_key,
@@ -49,6 +51,8 @@ from django_aiogram.redis import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from redis import Redis
 
 try:  # redis-py is an extra since 4.0: a Kafka or RabbitMQ deployment installs none of it
@@ -289,13 +293,30 @@ class _Sweep:
     unavailable: str | None = None
 
 
-def check(
+@dataclass(frozen=True)
+class _Asked:
+    """What one probe was asked for, so the three functions below share one signature.
+
+    Every field is a caller's decision rather than a fact about the deployment: the two
+    limits, whether to pay for the expensive reads, and whether a consumer is expected here
+    at all.
+    """
+
+    max_queue: int | None = None
+    max_age: int | None = None
+    stranded: bool = False
+    guarantee: bool = False
+    consumes: bool = True
+
+
+def check(  # noqa: PLR0913 - the probe's flags are its contract, and both entry points pass all of them
     *,
     max_queue: int | None = None,
     max_age: int | None = None,
     stranded: bool = False,
     guarantee: bool = False,
     consumes: bool = True,
+    queues: Sequence[str] | None = None,
 ) -> Report:
     """Read Redis, then ask the broker for consumer liveness and queue depth, in that order.
 
@@ -314,6 +335,13 @@ def check(
     still read -- a receiver has to *send* what its handlers produce, so a queue it cannot
     reach is a real failure -- and only the consumer's own liveness is left unasked.
 
+    ``queues`` names the queues to ask about, for a container serving several: each is
+    probed through a transport built for *that* queue, and the report is the worst verdict
+    with every queue's line in it. Left out, the process's own configuration is probed, which
+    is every deployment with one queue. The names come from the caller -- a flag, or a
+    compose file -- rather than from the table, because this module reads no models: see the
+    note at the top about what populating the app registry costs a container probe.
+
     ``stranded`` and ``guarantee`` are off by default and the management command turns
     them on, which is the one place the two entry points differ. Both cost more than
     everything else here and neither can change the verdict: the scan is up to twenty
@@ -327,6 +355,30 @@ def check(
         # nothing is meant to be running here, so nothing is wrong
         return Report(ok=True, message='disabled in this process; nothing to check', checked=False)
 
+    asked = _Asked(
+        max_queue=max_queue,
+        max_age=max_age,
+        stranded=stranded,
+        guarantee=guarantee,
+        consumes=consumes,
+    )
+    if queues:
+        return _each(queues, asked)
+
+    try:
+        broker = get_broker()
+    except _UnhealthyError as refusal:
+        return Report(ok=False, message=str(refusal))
+    return _probe(broker, asked)
+
+
+def _probe(broker: Broker, asked: _Asked) -> Report:
+    """Ask one transport the three questions, and say what they came to.
+
+    Split from :func:`check` so a named queue and the process's own are asked the *same*
+    questions: a second copy here is how one of them ends up with a threshold or a warning
+    the other does not have.
+    """
     try:
         # inside the guard: these are read before Redis is touched, so an unreadable one is
         # the first thing the probe meets rather than the last.
@@ -334,12 +386,11 @@ def check(
         # The heartbeat's two only where a consumer is expected: a container with none reads
         # neither, so an unreadable `HEARTBEAT_INTERVAL` would make it unhealthy over a
         # setting it never asks about -- restarting a receiver for a number nothing in it uses
-        queue_limit = _setting_int('HEALTHCHECK_MAX_QUEUE') if max_queue is None else max_queue
-        broker = get_broker()
+        queue_limit = _setting_int('HEALTHCHECK_MAX_QUEUE') if asked.max_queue is None else asked.max_queue
         age = None
-        if consumes:
+        if asked.consumes:
             ttl = heartbeat_ttl(max(1, _setting_int('HEARTBEAT_INTERVAL')))
-            age = _liveness_age(broker, limit=ttl if max_age is None else max_age, ttl=ttl)
+            age = _liveness_age(broker, limit=ttl if asked.max_age is None else asked.max_age, ttl=ttl)
         queued = _depth(broker, limit=queue_limit)
     except _UnhealthyError as refusal:
         return Report(ok=False, message=str(refusal))
@@ -348,9 +399,9 @@ def check(
     # or this container saying it has none. Reported as such rather than as an age of zero,
     # which would read as a fresh heartbeat
     observed = f'{age}s old' if age is not None else 'not observable from outside'
-    reported = 'not run here' if not consumes else observed
+    reported = 'not run here' if not asked.consumes else observed
     healthy = f'healthy: consumer {reported}, {queued} queued'
-    if guarantee:
+    if asked.guarantee:
         # its own client, and only here: the two reports below are the only Redis-shaped
         # things this probe does, and building one in the default path is what made the
         # whole probe impossible to start without the driver
@@ -359,26 +410,177 @@ def check(
     # the per-worker in-flight list is one transport's bookkeeping, and a transport that
     # answers `needs_identity` false has none — scanning for keys that cannot exist would
     # report a reassuring zero about a question this deployment does not have
-    if stranded and consumes and broker.needs_identity:
-        sweep = _stranded()
-        if sweep.found:
-            # not a failure: another worker may be sending them right now. But an
-            # invisible pile is how a stranded list stays stranded
-            warnings.append(
-                f'{sweep.found if sweep.complete else f"at least {sweep.found}"} '
-                'message(s) are in flight under other worker names. If one of those '
-                'workers is gone, `manage.py tgbot_reclaim --worker <name>` requeues them.'
-            )
-        if not sweep.complete:
-            # said out loud rather than left in the log, because the line above is what an
-            # operator reads: a zero from a sweep that never ran looks exactly like a zero
-            # from one that walked the whole keyspace
-            detail = sweep.unavailable or f'it stopped after {STRANDED_SCAN_ROUNDS} SCAN rounds'
-            warnings.append(
-                f'the scan for stranded in-flight lists did not finish: {detail}. '
-                'A pile under another worker name may not be in the count above.'
-            )
+    if asked.stranded and asked.consumes and broker.needs_identity:
+        warnings += _stranded_warnings(_stranded())
     return Report(ok=True, message=healthy, warnings=tuple(warnings))
+
+
+def _each(queues: Sequence[str], asked: _Asked) -> Report:
+    """Probe each named queue in turn, and report the worst of what they said.
+
+    One line per queue rather than a single number, because a container serving five clients
+    is healthy or not *per client*: a report that summed the depths would hide the one queue
+    that is filling up behind four that are empty.
+
+    The verdict is the worst one: any queue that failed fails the container, which is what a
+    restart is for -- the process is not serving what it was told to serve. Warnings carry
+    their queue's name with them, for the same reason the lines do.
+    """
+    lines: list[str] = []
+    warnings: list[str] = []
+    worst = True
+    for queue in queues:
+        report = _one_queue(queue, asked)
+        worst = worst and report.ok
+        lines.append(f'{queue}: {report.message}')
+        warnings += [f'{queue}: {warning}' for warning in report.warnings]
+    return Report(ok=worst, message='; '.join(lines), warnings=tuple(warnings))
+
+
+def _one_queue(queue: str, asked: _Asked) -> Report:
+    """Probe one named queue through a transport built for it.
+
+    The settings are this process's with the queue's name in them, which is what
+    `runtime.queues.settings_for` produces -- so the transport's own options travel with it
+    and a named queue on Kafka or RabbitMQ is built the same way the consumer builds it.
+
+    **The verdict is not the same as for this container's own queue**, and that is the point
+    of asking about a named one. A queue nothing is consuming is a *failure* while it holds
+    messages -- they are going nowhere and nobody is coming -- and a *warning* while it is
+    empty, because a queue declared for a client who has not written yet is a deployment
+    waiting rather than a deployment broken. The process's own queue keeps the stricter rule
+    it always had: a container whose consumer is not turning is one to restart.
+    """
+    # deferred: `settings_for` reads the settings and the broker registry, and this module is
+    # imported by a container probe that must not pay for either until it has work to do
+    from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
+    from django_aiogram.runtime.queues import settings_for  # noqa: PLC0415 - as above
+
+    try:
+        settings = settings_for(queue)
+        broker = broker_class(settings).configured(settings)
+    except Exception as refused:  # noqa: BLE001 - whatever a driver raises, this queue is the answer
+        return Report(ok=False, message=f'the transport could not be built: {refused}')
+    # one boundary around the whole probe, rather than one per read: every refusal below is a
+    # verdict about this queue, and a probe that let any of them out would answer a container
+    # with a traceback. `_setting_int` is inside it for that reason -- an unreadable
+    # `HEALTHCHECK_MAX_QUEUE` used to escape from the line that read it
+    try:
+        limit = _setting_int('HEALTHCHECK_MAX_QUEUE') if asked.max_queue is None else asked.max_queue
+        queued = _depth(broker, limit=limit)
+        if not asked.consumes:
+            # this container runs no consumer by design, so nothing here can say whether
+            # another one is turning -- and the depth above is the half still worth reading
+            unasked = Report(ok=True, message=f'{queued} queued, consumer not asked about')
+            return _with_the_expensive_reads(unasked, broker, asked)
+        return _with_the_expensive_reads(_served(broker, queued=queued, asked=asked), broker, asked)
+    except _UnhealthyError as refusal:
+        return Report(ok=False, message=str(refusal))
+
+
+def _with_the_expensive_reads(report: Report, broker: Broker, asked: _Asked) -> Report:
+    """Add what ``--stranded`` and ``--guarantee`` say about *this* queue, if they were asked for.
+
+    The command turns both on and the container form leaves them off, and that has to hold for
+    a named queue too: a deployment that asked for the sweep and got nothing would read the
+    silence as "no stranded lists" rather than as "nobody looked". The sweep walks this
+    queue's own in-flight keys, which is why it is given the broker.
+    """
+    warnings = list(report.warnings)
+    message = report.message
+    if asked.guarantee:
+        message = f'{message}, {_guarantee()}'
+    if asked.stranded and asked.consumes and broker.needs_identity:
+        warnings += _stranded_warnings(_stranded(broker))
+    return Report(ok=report.ok, message=message, warnings=tuple(warnings), checked=report.checked)
+
+
+def _stranded_warnings(sweep: _Sweep) -> list[str]:
+    """Turn one sweep into the lines an operator reads, which both probes share.
+
+    Written once because the two callers must not drift: a warning that said *at least* on one
+    path and a bare number on the other would be two different promises about the same read.
+    """
+    said: list[str] = []
+    if sweep.found:
+        # not a failure: another worker may be sending them right now. But an invisible pile
+        # is how a stranded list stays stranded
+        said.append(
+            f'{sweep.found if sweep.complete else f"at least {sweep.found}"} '
+            'message(s) are in flight under other worker names. If one of those '
+            'workers is gone, `manage.py tgbot_reclaim --worker <name>` requeues them.'
+        )
+    if not sweep.complete:
+        # said out loud rather than left in the log, because the line above is what an
+        # operator reads: a zero from a sweep that never ran looks exactly like a zero from
+        # one that walked the whole keyspace
+        detail = sweep.unavailable or f'it stopped after {STRANDED_SCAN_ROUNDS} SCAN rounds'
+        said.append(
+            f'the scan for stranded in-flight lists did not finish: {detail}. '
+            'A pile under another worker name may not be in the count above.'
+        )
+    return said
+
+
+def _served(broker: Broker, *, queued: int, asked: _Asked) -> Report:
+    """Say whether anything is consuming this queue, weighed against what is waiting.
+
+    The one question a multi-queue deployment cannot answer any other way, and what the
+    heartbeat keys are for: a queue nobody serves is silent until somebody notices the
+    messages that never arrived.
+    """
+    try:
+        report = broker.liveness()
+        # inside the guard with it: `_setting_int` refuses an unreadable `HEARTBEAT_INTERVAL`
+        # by raising, and a probe that let that out would answer a container with a traceback
+        # rather than with a verdict -- which is the one thing this module promises not to do
+        ttl = heartbeat_ttl(max(1, _setting_int('HEARTBEAT_INTERVAL')))
+    # the same set the default path narrows to, and in the same order: `UnicodeDecodeError`
+    # *is* a `ValueError`, so a heartbeat this client could not decode has to be caught before
+    # the clause that reads as a settings problem. See `_liveness_age`, which is where the
+    # reasoning for each of these lives -- a second, narrower set here is how one path grows a
+    # traceback the other cannot have
+    except UnicodeDecodeError as refusal:
+        return Report(ok=False, message=f'could not read the consumer liveness: {refusal}')
+    except (ImproperlyConfigured, ValueError, _RedisError, BrokerError, _UnhealthyError) as refusal:
+        return Report(ok=False, message=f'could not read the consumer liveness: {refusal}')
+    if not report.reported:
+        # the transport tracks its own consumers, so nobody outside can say: the depth is the
+        # whole answer here, and guessing would be worse than reporting less
+        said = report.detail or 'tracked by the transport'
+        return Report(ok=True, message=f'{queued} queued, consumer {said}')
+    limit = ttl if asked.max_age is None else asked.max_age
+    if report.age is not None and report.age <= limit:
+        return Report(ok=True, message=f'{queued} queued, consumer {int(report.age)}s old')
+    stale = 'never reported' if report.age is None else f'last reported {int(report.age)}s ago'
+    if queued:
+        return Report(ok=False, message=f'{queued} message(s) waiting and no live consumer: {stale}')
+    return Report(
+        ok=True,
+        message=f'empty, and no live consumer: {stale}',
+        warnings=(f'nothing is consuming it ({stale}); anything sent to it would wait',),
+    )
+
+
+def _inflight_keys(broker: Broker | None) -> tuple[str, str]:
+    """Return the in-flight pattern to sweep and this worker's own key inside it.
+
+    From the broker where one is given, because a named queue keys its in-flight lists under
+    its own name -- the module-level readers answer for the process, which is a different
+    queue. A transport that keeps no such lists never reaches here: the caller asks
+    ``needs_identity`` first.
+    """
+    if broker is None:
+        return processing_pattern(), processing_key()
+    addressed = getattr(broker, 'addressed', None)
+    queue = addressed() if callable(addressed) else ''
+    if not queue:
+        return processing_pattern(), processing_key()
+    # escaped, for the reason `processing_pattern` gives about the process's own key: a queue
+    # named `vip[blue]` is a character class to `SCAN MATCH`, and the sweep would then report
+    # zero stranded lists *and* report itself complete -- the one answer a wrong pattern must
+    # not give. Only the name; the trailing `*` is the wildcard
+    return f'{_escaped(queue)}:processing:*', f'{queue}:processing:{worker_identity()}'
 
 
 def _guarantee() -> str:
@@ -437,7 +639,7 @@ def _guarantee() -> str:
     return 'at-least-once'
 
 
-def _stranded() -> _Sweep:
+def _stranded(broker: Broker | None = None) -> _Sweep:
     """Count what is in flight under a worker name that is not this one.
 
     Read rather than acted on: a message under another name may be one another worker
@@ -464,8 +666,10 @@ def _stranded() -> _Sweep:
         logger.warning('could not scan for stranded in-flight lists', extra={'tg_reason': str(refusal)})
         return _Sweep(found=0, complete=False, unavailable=str(refusal))
 
-    pattern = processing_pattern()
-    mine = processing_key()
+    # the *named* queue's keys where one was asked about, and the process's own otherwise:
+    # `processing_pattern` answers for this container's configuration, so a sweep for another
+    # queue would walk the wrong keyspace and report a reassuring zero about it
+    pattern, mine = _inflight_keys(broker)
     # SCAN may return the same key more than once when the keyspace changes
     # size mid-iteration, and counting one twice would invent a backlog
     seen: set[str] = set()
@@ -530,6 +734,18 @@ def add_limit_flags(parser: argparse.ArgumentParser) -> None:
             "which is also the key's TTL and so the most that can be observed"
         ),
     )
+    parser.add_argument(
+        '--queue',
+        action='append',
+        default=[],
+        dest='queues',
+        help=(
+            'ask about this queue rather than the one this process is configured for; '
+            'repeatable, and the worst answer decides. A named queue holding messages with no '
+            'live consumer fails, and an empty one with none warns -- which is the question a '
+            'container serving several clients has and a single-queue probe cannot answer'
+        ),
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -587,6 +803,7 @@ def main(argv: list[str] | None = None) -> int:
             stranded=options.stranded,
             guarantee=options.guarantee,
             consumes=not options.no_consumer,
+            queues=options.queues,
         )
     except BrokerDependencyError as error:
         # the deployment this module was rewritten for: BROKER names a transport whose driver

@@ -332,3 +332,57 @@ def test_a_queue_table_nobody_could_read_still_permits_a_name(monkeypatch):
     call_command('tgbot_reclaim', worker='dead-worker', queue='client-z', stdout=out)
 
     assert 'Nothing in flight' in out.getvalue(), out.getvalue()
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_the_healthcheck_names_the_bots_a_supervisor_stopped_serving():
+    """A probe that says *healthy* while three clients' bots are quarantined answers a
+    narrower question than the person reading it asked.
+
+    It does not change the verdict: the container is doing what it can, and a revoked token
+    is fixed by a person rather than by a restart.
+    """
+    from django_aiogram.models import TelegramBot
+    from django_aiogram.tokens import store_token
+
+    TelegramBot.objects.create(
+        bot_id=111111,
+        token=store_token('111111:AAaa'),
+        quarantine_reason='revoked: TelegramUnauthorizedError',
+    )
+    out = StringIO()
+
+    call_command('tgbot_healthcheck', no_consumer=True, stdout=out)
+
+    said = out.getvalue()
+    # the whole reason: a command that replaced what the supervisor wrote with a generic
+    # word would still contain both halves asserted separately
+    assert 'bot 111111 is quarantined: revoked: TelegramUnauthorizedError' in said, said
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_the_quarantined_bots_are_named_even_when_the_verdict_is_unhealthy():
+    """An unhealthy container is exactly when somebody needs to know which clients are down.
+
+    Printing them after the verdict meant printing them only on the healthy path — the one
+    path nobody is reading them on.
+    """
+    from django_aiogram.models import TelegramBot
+    from django_aiogram.tokens import store_token
+
+    TelegramBot.objects.create(
+        bot_id=111111,
+        token=store_token('111111:AAaa'),
+        quarantine_reason='revoked: TelegramUnauthorizedError',
+    )
+    out = StringIO()
+
+    # a transport that cannot be built is the simplest unhealthy verdict there is, and the
+    # point here is the *order* of the two outputs rather than which failure produced it
+    with (
+        override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'BROKER': 'no.such.module.Broker'}),
+        pytest.raises(CommandError),
+    ):
+        call_command('tgbot_healthcheck', no_consumer=True, queue=['vip'], stdout=out)
+
+    assert 'bot 111111 is quarantined: revoked: TelegramUnauthorizedError' in out.getvalue(), out.getvalue()

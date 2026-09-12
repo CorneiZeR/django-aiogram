@@ -496,6 +496,44 @@ in recently, and the queue is not piling up. A warning — a stranded in-flight 
 the one it has — goes to stderr *without* changing the verdict, so a healthy probe
 can write to both streams and still exit 0.
 
+### Several queues in one container
+
+```shell
+python manage.py tgbot_healthcheck --queue client-a --queue client-b
+
+# the module form calls no django.setup(), so it needs the settings module in its environment
+DJANGO_SETTINGS_MODULE=myproject.settings python -m django_aiogram.healthcheck \
+    --queue client-a --queue client-b
+```
+
+Each named queue is probed through a transport built for *it*, one line each, and the worst
+answer decides — a container serving five clients is healthy or not per client, and a report
+that summed the depths would hide the one queue filling up behind four empty ones.
+
+The verdict for a named queue is not the one for this container's own, deliberately:
+
+| what the probe finds | what it says |
+| --- | --- |
+| more waiting than `--max-queue` allows | **fails**, whether or not anything is consuming it — that limit is read first. `0` turns the check off rather than allowing nothing, which is also what `HEALTHCHECK_MAX_QUEUE` means |
+| messages waiting and no live consumer | **fails** — they are going nowhere and nobody is coming |
+| empty and no live consumer | **warns** — a queue declared for a client who has not written yet is waiting, not broken |
+| a live consumer, within the limit | healthy, with the depth and how old the consumer's last word is |
+
+This is the question a multi-queue deployment has no other way to ask — and *who* answers it
+is the transport's business, not this package's. A Redis list has nothing that knows a
+consumer exists, so the consumer writes a heartbeat key with a TTL; a Redis stream's consumer
+group already records when each member last spoke, so nothing is written and nothing expires;
+RabbitMQ and Kafka report that liveness is not observable from outside at all, and a named
+queue on those is judged by its depth alone. `manage.py tgbot_queues` reads the same answer for
+a person rather than for a container, and its **consumer** column says `tracked` for exactly
+that case.
+
+**The command form also names the quarantined bots**, with the reason a supervisor wrote — a
+probe that says *healthy* while three clients' bots are quarantined is answering a narrower
+question than the person reading it asked. It does not change the verdict: a revoked token is
+fixed by a person, not by a restart. The module form says nothing about them on purpose, and
+that is the next paragraph.
+
 It opens no client of its own to do it, which is why it runs on all four transports:
 the driver is an extra, and a probe that imported redis-py could not start on an
 image built for Kafka or RabbitMQ.
