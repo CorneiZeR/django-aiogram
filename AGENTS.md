@@ -7,8 +7,14 @@ integrating the package into a project, see the wiki page
 ## What this is
 
 A Django app that runs aiogram in a neighbouring container and queues Telegram
-messages through Redis. The Django processes never poll; they push a payload
-onto a Redis list, and the bot container consumes it.
+messages through whichever transport `BROKER` names — a Redis list or stream, an
+AMQP queue, a Kafka topic. The Django processes never poll; they publish a
+payload and the bot container consumes it.
+
+Since 5.0 it serves **any number of bots**, from `TELEGRAM_BOTS` and from rows a
+project's own clients create, and a queued message names the bot it is for. Bots
+whose settings agree share a transport, a dispatcher and a consumer thread; what
+they must agree on is computed, never configured.
 
 ```text
 src/django_aiogram/
@@ -237,6 +243,22 @@ Packaging-only work does not need the Redis suite, and vice versa.
   `tgbot_replay` is the only place in the package that writes a row that way,
   and the reason is written where it does it — 4.1 built that row on the
   recorder first, which drops rather than waits.
+- **A provider says what it read, or raises.** A reader of the configured bots
+  never answers "nothing" to mean "I could not look": a database that blinked
+  would deregister every bot in the process. The supervisor keeps what it has
+  when a read raises, and an answer of *no bots at all* is held for one pass
+  before it is believed. This is the read-side twin of the rule below about a
+  write that raised.
+- **Level-triggered, never edge-triggered.** Nothing in `runtime/` acts on "what
+  changed": every pass reads the whole desired set and compares. A control
+  message says *read again*, never *set the token to X*, so a duplicate costs
+  nothing, a loss costs one interval, and a reordered pair cannot leave a process
+  serving the wrong bots.
+- **A field on a public record goes last.** `Event`, `Sent`, `Taken`,
+  `Queueing`, `Outbound` — a project may be unpacking or constructing them
+  positionally, so a field in the middle rebinds everything after it. Last is a
+  break only for code unpacking every value at once, and `Upgrading.md` is where
+  that is said out loud.
 - **Values go in `extra`, not in the message.** `logger.warning('rate limited',
   extra={'tg_function': name})`, never an f-string. Keys are `tg_`-prefixed so
   they cannot collide with `LogRecord` attributes.
