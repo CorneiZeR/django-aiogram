@@ -150,8 +150,9 @@
   `None` is the one queue the broker addresses, which is what every caller before this passed
   and what a `Broker` somebody else wrote still gets. `Taken.queue` names which queue a message
   came off -- last on the `NamedTuple`, like `Sent.bot_id`, so `Taken(payload, handle)` still
-  builds one and only unpacking both values at once has to change -- because the budget is per
-  queue and a message that cannot say where it came from cannot be counted against one.
+  builds one and only unpacking both values at once has to change, which the upgrading page
+  says out loud -- because the budget is per queue and a message that cannot say where it came
+  from cannot be counted against one.
 
   The consumer keeps a count per queue and reads only the queues below their bound, so a
   saturated client is not read from while everybody else is, and nothing is taken and given
