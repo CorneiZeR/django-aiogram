@@ -122,6 +122,24 @@
   down, or not migrated here -- declares nothing and refuses nothing; no table at all is a
   different state, where the settings are the whole declaration.
 
+- **The commands act on the bots and queues they are told about.** `--bot` on
+  `tgbot_replay`, `tgbot_prune_events` and `tgbot_dispatch_scheduled`, and `--queue` on
+  `tgbot_reclaim`; each defaults to what a single-bot install already had. A replay that swept
+  every client during one client's incident re-sends messages nobody asked about; a mover that
+  claimed another client's row publishes it to their queue from a container nobody asked to do
+  it; a reclaim aimed at the wrong queue takes one client's in-flight messages and puts them on
+  another's. `--queue` on `tgbot_reclaim` refuses a name the declared set does not hold --
+  a typo otherwise reads as an empty in-flight list, which is what a drained queue looks like.
+  A queue table nobody could read declares *unknown* rather than *none*, and a name is
+  permitted there: refusing would block a reclaim during exactly the outage it is needed in.
+  A repeated or empty `--queue` is refused too, rather than silently taking the last one or
+  the process's own queue.
+
+  Two commands take neither, and the reason is the same for both: `tgbot_move_events` copies a
+  4.x feed into the 5.x table and `tgbot_backfill_short_ids` fills a column in it. Both are
+  one-time data migrations over the whole table, and a half-migrated feed is worse than an
+  unmigrated one.
+
 - **Two commands that say what a deployment is actually serving.** `manage.py check` reads
   settings, and a bot that arrived at run time is a row -- so until now nothing could answer
   *what will happen* for a deployment whose clients connect themselves.

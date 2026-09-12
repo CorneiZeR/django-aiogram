@@ -71,6 +71,16 @@ class Command(BaseCommand):
             default=0,
             help='stop after this many chunks, so a nightly run has a bounded blast radius. 0 means no limit',
         )
+        parser.add_argument(
+            '--bot',
+            action='append',
+            default=[],
+            dest='bots',
+            type=int,
+            help='prune only the rows for these identities, however many times it is given. '
+            'Defaults to every bot. For a client who left: their history goes when they do, '
+            'and everybody else keeps theirs.',
+        )
         parser.add_argument('--database', default=None, help='the alias to prune; defaults to the configured one')
         parser.add_argument('--dry-run', action='store_true', help='report what would be deleted, and delete nothing')
 
@@ -89,6 +99,11 @@ class Command(BaseCommand):
             raise CommandError(msg)
         cutoff = timezone.now() - datetime.timedelta(days=days)
         rows = TelegramEvent.objects.using(alias)
+        if options['bots']:
+            # narrowed once, here: every read below is taken from this queryset -- the
+            # watermark, the low end and each batch -- so a run told which bots to prune
+            # cannot delete another client's history through one of them
+            rows = rows.filter(bot_id__in=list(options['bots']))
 
         # where the walk stops: nothing older than the cutoff lives above this id.
         # `dja_event_recent` covers the cutoff range, so neither form touches the

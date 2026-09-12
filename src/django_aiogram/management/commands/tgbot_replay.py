@@ -227,6 +227,16 @@ class Command(BaseCommand):
         )
         parser.add_argument('--chat', type=int, default=None, help='only failures for this chat id.')
         parser.add_argument(
+            '--bot',
+            action='append',
+            default=[],
+            dest='bots',
+            type=int,
+            help='only failures for these identities, however many times it is given. Defaults '
+            "to every bot. An incident is usually one client's, and a replay that swept the "
+            'others would re-send messages nobody asked about.',
+        )
+        parser.add_argument(
             '--correlation-id',
             action='append',
             default=None,
@@ -388,6 +398,11 @@ class Command(BaseCommand):
         rows = rows.filter(created_at__lt=until)
         if options['chat'] is not None:
             rows = rows.filter(chat_id=options['chat'])
+        if options['bots']:
+            # the feed's own column, which is indexed leading with it: an incident is one
+            # client's, and a replay is the one command that *sends* -- sweeping the others
+            # would put messages nobody asked about back on their queues
+            rows = rows.filter(bot_id__in=list(options['bots']))
         return rows.order_by('created_at', 'id')
 
     @staticmethod
@@ -631,6 +646,16 @@ class Command(BaseCommand):
             .filter(correlation_id=row.correlation_id, kind__in=ARGUMENT_KINDS)
             .order_by('-created_at', '-id')
         )
+        if row.bot_id is not None:
+            # the bot as well as the id, where the failure names one: a correlation id is
+            # unique to a *message*, not to the feed, and since 5.0 two bots can carry one --
+            # a caller reusing an id, a broadcast joined under one thread. Matching on the id
+            # alone would replay one client's failure with another client's arguments.
+            #
+            # Only where it names one, though: a row written before 5.0, or by a path that did
+            # not know the bot, carries `None` -- and narrowing to that would find nothing for
+            # every failure in an upgraded deployment's history
+            described = described.filter(bot_id=row.bot_id)
         for candidate in described:
             arguments = {key: value for key, value in (candidate.detail or {}).items() if key != DUE_AT_DETAIL}
             if not arguments:
