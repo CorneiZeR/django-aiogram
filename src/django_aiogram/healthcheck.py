@@ -40,6 +40,7 @@ from django_aiogram.broker.base import Broker
 from django_aiogram.broker.exceptions import BrokerDependencyError, BrokerError
 from django_aiogram.broker.registry import get_broker
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
+from django_aiogram.eventlog.events import worker_identity
 from django_aiogram.redis import (
     get_redis,
     heartbeat_ttl,
@@ -409,24 +410,7 @@ def _probe(broker: Broker, asked: _Asked) -> Report:
     # answers `needs_identity` false has none — scanning for keys that cannot exist would
     # report a reassuring zero about a question this deployment does not have
     if asked.stranded and asked.consumes and broker.needs_identity:
-        sweep = _stranded()
-        if sweep.found:
-            # not a failure: another worker may be sending them right now. But an
-            # invisible pile is how a stranded list stays stranded
-            warnings.append(
-                f'{sweep.found if sweep.complete else f"at least {sweep.found}"} '
-                'message(s) are in flight under other worker names. If one of those '
-                'workers is gone, `manage.py tgbot_reclaim --worker <name>` requeues them.'
-            )
-        if not sweep.complete:
-            # said out loud rather than left in the log, because the line above is what an
-            # operator reads: a zero from a sweep that never ran looks exactly like a zero
-            # from one that walked the whole keyspace
-            detail = sweep.unavailable or f'it stopped after {STRANDED_SCAN_ROUNDS} SCAN rounds'
-            warnings.append(
-                f'the scan for stranded in-flight lists did not finish: {detail}. '
-                'A pile under another worker name may not be in the count above.'
-            )
+        warnings += _stranded_warnings(_stranded())
     return Report(ok=True, message=healthy, warnings=tuple(warnings))
 
 
@@ -476,16 +460,65 @@ def _one_queue(queue: str, asked: _Asked) -> Report:
         broker = broker_class(settings).configured(settings)
     except Exception as refused:  # noqa: BLE001 - whatever a driver raises, this queue is the answer
         return Report(ok=False, message=f'the transport could not be built: {refused}')
-    limit = _setting_int('HEALTHCHECK_MAX_QUEUE') if asked.max_queue is None else asked.max_queue
+    # one boundary around the whole probe, rather than one per read: every refusal below is a
+    # verdict about this queue, and a probe that let any of them out would answer a container
+    # with a traceback. `_setting_int` is inside it for that reason -- an unreadable
+    # `HEALTHCHECK_MAX_QUEUE` used to escape from the line that read it
     try:
+        limit = _setting_int('HEALTHCHECK_MAX_QUEUE') if asked.max_queue is None else asked.max_queue
         queued = _depth(broker, limit=limit)
+        if not asked.consumes:
+            # this container runs no consumer by design, so nothing here can say whether
+            # another one is turning -- and the depth above is the half still worth reading
+            unasked = Report(ok=True, message=f'{queued} queued, consumer not asked about')
+            return _with_the_expensive_reads(unasked, broker, asked)
+        return _with_the_expensive_reads(_served(broker, queued=queued, asked=asked), broker, asked)
     except _UnhealthyError as refusal:
         return Report(ok=False, message=str(refusal))
-    if not asked.consumes:
-        # this container runs no consumer by design, so nothing here can say whether another
-        # one is turning -- and the depth above is the half still worth reading
-        return Report(ok=True, message=f'{queued} queued, consumer not asked about')
-    return _served(broker, queued=queued, asked=asked)
+
+
+def _with_the_expensive_reads(report: Report, broker: Broker, asked: _Asked) -> Report:
+    """Add what ``--stranded`` and ``--guarantee`` say about *this* queue, if they were asked for.
+
+    The command turns both on and the container form leaves them off, and that has to hold for
+    a named queue too: a deployment that asked for the sweep and got nothing would read the
+    silence as "no stranded lists" rather than as "nobody looked". The sweep walks this
+    queue's own in-flight keys, which is why it is given the broker.
+    """
+    warnings = list(report.warnings)
+    message = report.message
+    if asked.guarantee:
+        message = f'{message}, {_guarantee()}'
+    if asked.stranded and asked.consumes and broker.needs_identity:
+        warnings += _stranded_warnings(_stranded(broker))
+    return Report(ok=report.ok, message=message, warnings=tuple(warnings), checked=report.checked)
+
+
+def _stranded_warnings(sweep: _Sweep) -> list[str]:
+    """Turn one sweep into the lines an operator reads, which both probes share.
+
+    Written once because the two callers must not drift: a warning that said *at least* on one
+    path and a bare number on the other would be two different promises about the same read.
+    """
+    said: list[str] = []
+    if sweep.found:
+        # not a failure: another worker may be sending them right now. But an invisible pile
+        # is how a stranded list stays stranded
+        said.append(
+            f'{sweep.found if sweep.complete else f"at least {sweep.found}"} '
+            'message(s) are in flight under other worker names. If one of those '
+            'workers is gone, `manage.py tgbot_reclaim --worker <name>` requeues them.'
+        )
+    if not sweep.complete:
+        # said out loud rather than left in the log, because the line above is what an
+        # operator reads: a zero from a sweep that never ran looks exactly like a zero from
+        # one that walked the whole keyspace
+        detail = sweep.unavailable or f'it stopped after {STRANDED_SCAN_ROUNDS} SCAN rounds'
+        said.append(
+            f'the scan for stranded in-flight lists did not finish: {detail}. '
+            'A pile under another worker name may not be in the count above.'
+        )
+    return said
 
 
 def _served(broker: Broker, *, queued: int, asked: _Asked) -> Report:
@@ -526,6 +559,23 @@ def _served(broker: Broker, *, queued: int, asked: _Asked) -> Report:
         message=f'empty, and no live consumer: {stale}',
         warnings=(f'nothing is consuming it ({stale}); anything sent to it would wait',),
     )
+
+
+def _inflight_keys(broker: Broker | None) -> tuple[str, str]:
+    """Return the in-flight pattern to sweep and this worker's own key inside it.
+
+    From the broker where one is given, because a named queue keys its in-flight lists under
+    its own name -- the module-level readers answer for the process, which is a different
+    queue. A transport that keeps no such lists never reaches here: the caller asks
+    ``needs_identity`` first.
+    """
+    if broker is None:
+        return processing_pattern(), processing_key()
+    addressed = getattr(broker, 'addressed', None)
+    queue = addressed() if callable(addressed) else ''
+    if not queue:
+        return processing_pattern(), processing_key()
+    return f'{queue}:processing:*', f'{queue}:processing:{worker_identity()}'
 
 
 def _guarantee() -> str:
@@ -584,7 +634,7 @@ def _guarantee() -> str:
     return 'at-least-once'
 
 
-def _stranded() -> _Sweep:
+def _stranded(broker: Broker | None = None) -> _Sweep:
     """Count what is in flight under a worker name that is not this one.
 
     Read rather than acted on: a message under another name may be one another worker
@@ -611,8 +661,10 @@ def _stranded() -> _Sweep:
         logger.warning('could not scan for stranded in-flight lists', extra={'tg_reason': str(refusal)})
         return _Sweep(found=0, complete=False, unavailable=str(refusal))
 
-    pattern = processing_pattern()
-    mine = processing_key()
+    # the *named* queue's keys where one was asked about, and the process's own otherwise:
+    # `processing_pattern` answers for this container's configuration, so a sweep for another
+    # queue would walk the wrong keyspace and report a reassuring zero about it
+    pattern, mine = _inflight_keys(broker)
     # SCAN may return the same key more than once when the keyspace changes
     # size mid-iteration, and counting one twice would invent a backlog
     seen: set[str] = set()

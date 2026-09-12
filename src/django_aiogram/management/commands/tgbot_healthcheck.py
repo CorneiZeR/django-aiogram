@@ -58,14 +58,16 @@ class Command(BaseCommand):
             # the install line on one line and the exit code non-zero, where a traceback out
             # of a probe says "unhealthy" without saying what to do about it
             raise CommandError(str(error)) from error
-        if not report.ok:
-            raise CommandError(report.message)
-        # after the verdict, and only in this form: the quarantined bots are *rows*, and the
-        # module form must not populate an app registry to answer a container's probe -- see
-        # the note at the top of `healthcheck.py`. A command is already inside Django, so it
-        # can say what a probe alone cannot
+        # *before* the verdict, because an unhealthy container is exactly when somebody needs
+        # to know which clients' bots are quarantined -- raising first printed these only on
+        # the healthy path, which is the path nobody is reading them on.
+        #
+        # Only in this form: the bots are *rows*, and the module form must not populate an app
+        # registry to answer a container's probe -- see the note at the top of `healthcheck.py`
         for line in self._quarantined():
             self.stdout.write(self.style.WARNING(line))
+        if not report.ok:
+            raise CommandError(report.message)
         # plain when nothing was examined: a disabled process is not a healthy bot, and
         # this command has never colored that line green
         self.stdout.write(self.style.SUCCESS(report.message) if report.checked else report.message)

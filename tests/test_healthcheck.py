@@ -1402,16 +1402,20 @@ def test_an_empty_queue_with_no_consumer_warns_rather_than_fails(redis_server):
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
-def test_the_worst_of_several_queues_decides_the_verdict(redis_server):
+@pytest.mark.parametrize('order', [('default', 'vip'), ('vip', 'default')])
+def test_the_worst_of_several_queues_decides_the_verdict(redis_server, order):
     """A container serving five clients is healthy or not *per client*.
 
     A report that summed the depths would hide the one queue filling up behind four empty
     ones — so each queue gets a line, and any failure fails the container.
+
+    Both orders, because one of them is the test that matters: with the failing queue last, a
+    verdict overwritten on each iteration still comes out false.
     """
     redis_server.rpush('vip', b'{}')
     redis_server.set(f'default:heartbeat:{WORKER}', str(int(time.time())), ex=90)
 
-    report = check(queues=['default', 'vip'])
+    report = check(queues=list(order))
 
     assert not report.ok, report.message
     # the whole line for each: a report that named both queues and said the same thing about
@@ -1462,3 +1466,24 @@ def test_a_heartbeat_nothing_can_decode_is_a_verdict_too(redis_server):
 
     assert not report.ok, report
     assert 'liveness' in report.message or 'no live consumer' in report.message, report.message
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_the_sweep_for_a_named_queue_walks_that_queues_own_keys(redis_server):
+    """`--stranded` and `--guarantee` are the command's, and they have to hold per queue too.
+
+    A deployment that asked for the sweep and got nothing would read the silence as "no
+    stranded lists" rather than as "nobody looked" — and a sweep pointed at the process's own
+    keyspace reports a reassuring zero about the queue it was not asked about.
+    """
+    redis_server.set(f'vip:heartbeat:{WORKER}', str(int(time.time())), ex=90)
+    redis_server.rpush('vip:processing:a-dead-worker', b'{}')
+    # two in the *other* queue's keyspace, so the count says which keyspace was walked: one
+    # message either way would read the same whichever pattern the sweep used
+    redis_server.rpush(f'{QUEUE}:processing:another-dead-worker', b'{}', b'{}')
+
+    report = check(queues=['vip'], stranded=True)
+
+    assert report.ok, report.message
+    assert report.warnings, report
+    assert '1 message(s) are in flight' in report.warnings[0], report.warnings
