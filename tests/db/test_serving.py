@@ -381,3 +381,38 @@ def test_a_queue_arriving_in_a_lane_is_told_to_it_rather_than_restarting_it():
 
     assert log == [('started', ('client-1',)), ('serving', ('client-1', 'client-2'))], log
     assert len(consumers.running) == 1, 'the lane was split rather than followed'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=STREAMS)
+def test_a_consumer_that_cannot_take_the_new_queues_is_stopped_rather_than_left_behind(caplog):
+    """A lane that is *wrong* is worse than a lane that is behind.
+
+    A `DELIVERY` written before there were lanes takes no set, so telling it about the queue
+    that arrived fails. Leaving it reading the old one would leave the new queue's backlog with
+    nobody on it while the container believed it was being served; it is stopped instead, and
+    the next pass builds a consumer for the whole lane -- or is refused by name where the class
+    cannot serve one.
+    """
+
+    class Legacy(Fake):
+        """One that predates `serve`, which is what a project's own consumer may be."""
+
+        serve = None
+
+    log = []
+    consumers = Consumers(build=lambda queues: Legacy(queues, log), join_timeout=1.0)
+    TelegramQueue.objects.create(name='client-1', pool='vip')
+    consumers.reconcile(served_by(pools=['vip']))
+
+    TelegramQueue.objects.create(name='client-2', pool='vip')
+    with caplog.at_level('ERROR', logger='django_aiogram'):
+        consumers.reconcile(served_by(pools=['vip']))
+
+    assert log == [('started', ('client-1',)), ('stopped', ('client-1',))], log
+    assert consumers.running == {}, 'the lane went on running with the queues it could serve'
+
+    # and what it had taken is settled by the pass that finds its thread gone, which is where
+    # every other stopped consumer is settled
+    consumers.reconcile(served_by(pools=['vip']))
+
+    assert ('collected', ('client-1',)) in log

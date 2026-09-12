@@ -20,6 +20,7 @@ from django_aiogram.broker.exceptions import QueueMultiplexingUnavailableError
 from django_aiogram.broker.registry import get_broker
 from django_aiogram.consumer.delivery import BlpopDelivery
 from django_aiogram.consumer.serving import lanes
+from django_aiogram.eventlog.recorder import recorder
 from django_aiogram.runtime.queues import settings_for
 from django_aiogram.wire.envelope import pack
 from django_aiogram.wire.serializers import get_serializer
@@ -119,7 +120,12 @@ def test_the_budget_is_kept_per_queue_under_one_consumer(redis_server):
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={**STREAMS, 'MAX_IN_FLIGHT': 1})
 def test_the_counts_come_back_to_nothing_on_every_queue(redis_server):
-    """Each queue's slot is given back by its own send finishing, and by nothing else."""
+    """Each queue's slot is given back by its own send finishing, and by nothing else.
+
+    Asserted per queue rather than on the total: a completion charged to the wrong queue leaves
+    one count negative and another still held, and those add up to the zero a total would
+    report.
+    """
     handler = Deferring()
     delivery = consuming(handler)
     publish('vip', 'for vip')
@@ -130,7 +136,8 @@ def test_the_counts_come_back_to_nothing_on_every_queue(redis_server):
         finished()
     delivery.collect()
 
-    assert delivery.in_flight() == 0, delivery.in_flight()
+    assert delivery.in_flight('vip') == 0, delivery.in_flight('vip')
+    assert delivery.in_flight('bulk') == 0, delivery.in_flight('bulk')
     assert delivery.at_capacity() is False
 
 
@@ -197,3 +204,22 @@ def test_a_queue_that_arrives_is_served_without_stopping_the_others(redis_server
 
     assert [text for text, _ in handler.pending] == ['for the new queue']
     assert delivery.in_flight('bulk') == 1
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**STREAMS, 'EVENT_LOG': True})
+def test_the_feed_says_which_queue_a_message_came_off(redis_server, monkeypatch):
+    """One consumer reads several, so the row cannot say the one it was built from.
+
+    A container serving twenty clients writes every consumed message into one feed, and a row
+    naming the lane's first queue for all of them is a row an operator cannot use.
+    """
+    written = []
+    monkeypatch.setattr(recorder, 'record', written.append)
+    handler = Deferring()
+    delivery = consuming(handler)
+    publish('bulk', 'off the bulk queue')
+
+    delivery.consume_pending()
+
+    queues = [event.detail.get('queue') for event in written]
+    assert queues == ['bulk'], queues

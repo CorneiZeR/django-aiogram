@@ -182,12 +182,16 @@ class Consumers:
         try:
             consumer.serve(serving)
         except Exception:
-            # one lane's problem: the consumer goes on reading what it was reading, and the
-            # next pass tries again. A `DELIVERY` a project wrote may not take a set at all
+            # stopped rather than left reading the old set, and that is the whole difference
+            # between a lane that is behind and a lane that is wrong: a consumer that cannot
+            # take the new queues would leave their backlogs with nobody on them while the
+            # container believed it was serving them. The next pass builds this lane again,
+            # where a `DELIVERY` that cannot serve a set is refused by name
             logger.exception(
-                'could not change the queues a consumer serves; it keeps the ones it has',
+                'could not change the queues a consumer serves; stopping it so the next pass rebuilds it',
                 extra={'tg_queue': ', '.join(serving)},
             )
+            self._stopped.append((lane, *self._stop(lane)))
 
     def stop(self) -> None:
         """Stop every consumer and wait for its thread, which is a shutdown's half of this.

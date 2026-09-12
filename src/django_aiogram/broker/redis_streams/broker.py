@@ -360,10 +360,16 @@ class RedisStreamsBroker(Broker):
         """Hand back something this consumer already holds: a spare entry, then a pending one.
 
         The spares first, because they were delivered by the read before this one and waiting
-        behind a recovery scan would hold a message that is already in hand.
+        behind a recovery scan would hold a message that is already in hand -- and only the
+        spares for a stream still being read: the set may have moved since they were delivered,
+        and an entry from a stream this consumer no longer serves is not its to hand over. Those
+        are released, which makes them reclaimable now rather than after an idle threshold.
         """
-        if self._spare:
+        while self._spare:
             taken = self._spare.popleft()
+            if taken.queue not in keys:
+                self.release(taken.handle)
+                continue
             self._unsettled.add(taken.handle)
             return taken
         for key in keys:

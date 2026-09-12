@@ -39,6 +39,9 @@ from django_aiogram.wire.serializers import JsonSerializer
 REDIS_URL = os.environ.get('DJANGO_AIOGRAM_TEST_REDIS_URL', '')
 AMQP_URL = os.environ.get('DJANGO_AIOGRAM_TEST_AMQP_URL', '')
 AMQP_QUEUE = 'conformance'
+#: what the multiplexed case reads beside it, named here so the AMQP fixture can delete both --
+#: a queue this suite declared on somebody's broker and left behind is a message left behind
+SECOND_QUEUE = f'{AMQP_QUEUE}-also'
 KAFKA_BOOTSTRAP = os.environ.get('DJANGO_AIOGRAM_TEST_KAFKA_BOOTSTRAP', '')
 SETTINGS = {
     'TOKEN': '42:x',
@@ -234,7 +237,9 @@ def _against_rabbitmq(path):
     quietly passing: a transport whose contract nobody checked is worse than one that says so.
 
     The queue is deleted and redeclared per case, because these assertions are about counts
-    and a message left by the previous one would answer them wrongly.
+    and a message left by the previous one would answer them wrongly. Both of them: the
+    multiplexed case declares a second queue beside it, and a server left holding that queue
+    and its message would answer the next run's counts wrongly too.
     """
     if not AMQP_URL:
         pytest.skip('set DJANGO_AIOGRAM_TEST_AMQP_URL to run the contract against RabbitMQ')
@@ -244,7 +249,8 @@ def _against_rabbitmq(path):
     from django_aiogram.broker.rabbitmq.client import close_connections
 
     scrub = pika.BlockingConnection(pika.URLParameters(AMQP_URL)).channel()
-    scrub.queue_delete(queue=AMQP_QUEUE)
+    for queue in (AMQP_QUEUE, SECOND_QUEUE):
+        scrub.queue_delete(queue=queue)
     with override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS):
         broker = import_string(path)()
         broker.conformance_path = path
@@ -252,7 +258,8 @@ def _against_rabbitmq(path):
             yield broker
         finally:
             close_connections()
-            scrub.queue_delete(queue=AMQP_QUEUE)
+            for queue in (AMQP_QUEUE, SECOND_QUEUE):
+                scrub.queue_delete(queue=queue)
             scrub.connection.close()
 
 
@@ -420,6 +427,7 @@ def test_several_queues_are_read_over_the_one_connection(broker: Broker):
     if not type(broker).MULTIPLEXES:
         pytest.skip(f'{type(broker).__name__} reads one queue per connection, and says so')
     mine = broker.addressed()
+    # the same name the AMQP fixture deletes, so this case leaves nothing on a real broker
     second = f'{mine}-also'
     beside = type(broker).configured({**SETTINGS, 'QUEUE': second})
     broker.publish([payload(21)])

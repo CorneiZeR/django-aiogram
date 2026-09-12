@@ -63,10 +63,12 @@ class Broker(ABC):
 
     #: whether this transport can read **several queues over one connection**. A container
     #: serving twenty client queues otherwise holds twenty connections and twenty consumer
-    #: threads, and three of the four shipped transports do not have to: RabbitMQ consumes
-    #: several queues on one channel, Kafka subscribes to several topics on one consumer, and
-    #: Redis Streams reads several streams in one ``XREADGROUP``. A crash-safe Redis list
-    #: cannot, because ``BLMOVE`` takes one source.
+    #: threads, and two of the four shipped transports do not have to: RabbitMQ consumes
+    #: several queues on one channel, and Redis Streams reads several streams in one
+    #: ``XREADGROUP``. A crash-safe Redis list cannot, because ``BLMOVE`` takes one source.
+    #: Kafka subscribes to several topics on one consumer and this package does not use that
+    #: yet -- its own offset bookkeeping is keyed by partition -- so it answers ``False`` too,
+    #: and this is about what a transport *does here* rather than what the server allows.
     #:
     #: A capability rather than an assumption: left ``False``, a transport is served one
     #: consumer per queue exactly as before, which is what keeps a broker somebody else wrote

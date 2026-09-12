@@ -149,14 +149,16 @@
   `Broker.take(timeout, queues)`, `take_nowait(queues)` and `reclaim(queues)` take the set;
   `None` is the one queue the broker addresses, which is what every caller before this passed
   and what a `Broker` somebody else wrote still gets. `Taken.queue` names which queue a message
-  came off -- last on the `NamedTuple`, like `Sent.bot_id` -- because the budget is per queue
-  and a message that cannot say where it came from cannot be counted against one.
+  came off -- last on the `NamedTuple`, like `Sent.bot_id`, so `Taken(payload, handle)` still
+  builds one and only unpacking both values at once has to change -- because the budget is per
+  queue and a message that cannot say where it came from cannot be counted against one.
 
   The consumer keeps a count per queue and reads only the queues below their bound, so a
   saturated client is not read from while everybody else is, and nothing is taken and given
-  back. A `DELIVERY` of your own takes `queues=None` to serve a set, hands `self.readable()` to
-  the broker and `Taken.queue` to `dispatch`; one that does not take the argument is refused by
-  name rather than served one queue of several. A queue arriving in a group that is already
+  back. A `DELIVERY` of your own adds `queues=None` to its `__init__` and hands it to
+  `Delivery.__init__`; its `run()` then passes `self.readable()` -- this consumer's queues
+  minus the ones at their bound -- to `take`, and `Taken.queue` to `dispatch`. One that does
+  not take the argument is refused by name rather than served one queue of several. A queue arriving in a group that is already
   running is told to that consumer instead of restarting it, so one client connecting does not
   pause the others.
 

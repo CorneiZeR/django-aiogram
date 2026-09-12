@@ -235,6 +235,12 @@ class RabbitMQBroker(Broker):
         channel = self._channel(asked)
         self._notice_a_new_channel(channel)
         self._cancel(channel)
+        # what the subscriptions already handed over, before they are cancelled: a drain that
+        # cancelled first would report an empty queue while this channel still held those
+        # messages unacknowledged, and they would come back only when it closed
+        held = self._buffered(channel, asked)
+        if held is not None:
+            return held
         self._unsubscribe(channel)
         for queue in asked:
             method, _properties, body = channel.basic_get(queue, auto_ack=False)
@@ -260,14 +266,57 @@ class RabbitMQBroker(Broker):
         self._notice_a_new_channel(channel)
         self._cancel(channel)
         self._subscribe(channel, queues)
-        if not self._delivered:
-            # pika's own name for "give the connection its turn": callbacks run inside it, and
-            # it returns when one has been served or the time is up
-            channel.connection.process_data_events(time_limit=max(0.001, timeout))
-        if not self._delivered:
+        held = self._buffered(channel, queues)
+        if held is not None:
+            return held
+        # pika's own name for "give the connection its turn": callbacks run inside it, and it
+        # returns when one has been served or the time is up
+        channel.connection.process_data_events(time_limit=max(0.001, timeout))
+        return self._buffered(channel, queues)
+
+    def _buffered(self, channel: 'BlockingChannel', queues: tuple[str, ...]) -> Taken | None:
+        """Hand back the oldest delivery for one of these queues, giving the rest back.
+
+        The callbacks fill one deque for every queue subscribed, and the set may have moved
+        since: a container whose client went away calls `Delivery.serve` while a read is
+        blocked, and what arrived for that queue is no longer this consumer's to deliver --
+        counted under another queue's budget, it would be counted wrong. Those are nacked with
+        requeue, which puts them back where a consumer that *is* serving them will find them.
+
+        Order is kept for everything else: what is not handed back now stays in front of
+        whatever the next turn delivers.
+        """
+        kept: deque[tuple[str, Any, bytes]] = deque()
+        found: tuple[str, Any, bytes] | None = None
+        while self._delivered:
+            entry = self._delivered.popleft()
+            queue, method, body = entry
+            if queue not in queues:
+                self._give_back(channel, method, queue)
+                continue
+            if found is None:
+                found = entry
+            else:
+                kept.append(entry)
+        self._delivered = kept
+        if found is None:
             return None
-        queue, method, body = self._delivered.popleft()
+        queue, method, body = found
         return self._issued(method, body, queue)
+
+    def _give_back(self, channel: 'BlockingChannel', method: object, queue: str) -> None:
+        """Nack one delivery for a queue this consumer no longer serves, so somebody else can.
+
+        Never counted and never settled here: it was delivered by a subscription and nothing
+        above this module was told about it, so there is no slot to return and no handle in
+        flight -- only a message to put back.
+        """
+        try:
+            channel.basic_nack(method.delivery_tag, requeue=True)  # type: ignore[attr-defined]  # pika is an extra, see `_issued`
+        except Exception:
+            # it goes back when this channel closes either way; saying so is the whole of what
+            # can be done about a nack that did not land
+            logger.exception('could not give back a delivery for a queue this consumer left', extra={'tg_key': queue})
 
     def _subscribe(self, channel: 'BlockingChannel', queues: tuple[str, ...]) -> None:
         """Consume exactly these queues on this channel, rebuilding only when the set moves."""

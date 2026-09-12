@@ -466,13 +466,18 @@ class KafkaBroker(Broker):
 
     # ---------------------------------------------------------------- operations
 
-    def reclaim(self, queues: 'Seq[str] | None' = None) -> int | None:  # noqa: ARG002 - the contract's, and the group does this on every topic
+    def reclaim(self, queues: 'Seq[str] | None' = None) -> int | None:
         """``None``: an uncommitted offset is redelivered by the group, not by this package.
 
         A consumer that dies stops sending heartbeats, the group rebalances, and its partitions
         go to another member from the last committed offset — so everything it had taken and
         not settled is delivered again without anybody reclaiming anything.
+
+        A set of topics is refused before that answer, as it is on :meth:`take`: nothing here
+        would have to be *done* for several, but answering a caller that believes this consumer
+        covers three of them would be agreeing with it.
         """
+        self.one_queue(queues)
         return None
 
     def depth(self) -> int:

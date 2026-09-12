@@ -250,11 +250,20 @@ class Delivery(ABC):
         """Name the queue a message came off, as this consumer keeps its books.
 
         A transport reading several fills :attr:`Taken.queue`; one reading its own leaves it
-        empty, and there is exactly one queue it can have come from. A name this consumer is
-        not serving -- which nothing shipped produces -- is counted under the first of its
-        queues rather than growing the books a message at a time.
+        empty, and there is exactly one queue it can have come from.
+
+        Against the books rather than against the queues served *now*: a read begun before
+        :meth:`serve` took a queue away can still answer from it, and that message's slot
+        belongs to the count it will be given back to. A name in neither -- which nothing
+        shipped produces -- is counted under the first queue rather than growing the books a
+        message at a time.
         """
-        return taken.queue if taken.queue in self.queues else self.queues[0]
+        return taken.queue if self._counted_under(taken.queue) else self.queues[0]
+
+    def _counted_under(self, on_queue: str) -> bool:
+        """Whether this consumer keeps a count for that queue, served now or still settling."""
+        with self._books:
+            return on_queue in self._in_flight
 
     def readable(self) -> 'tuple[str, ...] | None':
         """Which of this consumer's queues a read may ask for, dropping those at their budget.
@@ -748,7 +757,9 @@ class Delivery(ABC):
         """
         if handle is None:
             handle = raw
-        on_queue = on_queue if on_queue in self.queues else self.queues[0]
+        # against the books, so a message read from a queue `serve` has since taken away is
+        # still counted where its slot will be given back -- see `_queue_of`
+        on_queue = on_queue if self._counted_under(on_queue) else self.queues[0]
         envelope, acknowledge = self._read(raw)
         if envelope is None:
             return acknowledge
@@ -759,6 +770,7 @@ class Delivery(ABC):
                 EventKind.QUEUE_REJECTED,
                 envelope,
                 error='not a Telegram API method',
+                on_queue=on_queue,
             )
             logger.exception(
                 'dropping queued message naming a method that is not Telegram API',
@@ -775,7 +787,7 @@ class Delivery(ABC):
                 extra={'tg_bot_id': envelope.bot_id, 'tg_key': self.processing_key},
             )
             return False
-        self._record(EventKind.OUTBOUND_CONSUMED, envelope)
+        self._record(EventKind.OUTBOUND_CONSUMED, envelope, on_queue=on_queue)
         # by keyword, the way 2.x splatted it: a handler taking **kwargs
         # only — which every documented recipe does — refuses a positional.
         #
@@ -908,8 +920,8 @@ class Delivery(ABC):
         # soon as the coroutine is scheduled, long before Telegram has seen it
         return not deferring
 
-    def _record(self, kind: EventKind, envelope: Envelope, error: str = '') -> None:
-        """Record what the consumer did with one message."""
+    def _record(self, kind: EventKind, envelope: Envelope, error: str = '', on_queue: str = '') -> None:
+        """Record what the consumer did with one message, and which queue it came off."""
         chat_id = envelope.kwargs.get('chat_id')
         recorder.record(
             Event(
@@ -923,11 +935,11 @@ class Delivery(ABC):
                 chat_id=as_identifier(chat_id),
                 worker=worker_identity(),
                 error=error,
-                detail=self._queue_latency(envelope),
+                detail=self._queue_latency(envelope, on_queue),
             )
         )
 
-    def _queue_latency(self, envelope: Envelope) -> dict[str, Any]:
+    def _queue_latency(self, envelope: Envelope, on_queue: str = '') -> dict[str, Any]:
         """Where the message was and how long it waited, as far as either is known.
 
         The queue by name, because a container serving several is the normal shape since 5.0
@@ -935,8 +947,13 @@ class Delivery(ABC):
         than in a column of its own: a column on this table is a migration on the one table
         whose size is set by traffic, and nothing queries the feed *by* queue -- the bot is
         the dimension a client's messages are found under, and that has a column and an index.
+
+        The queue the *message* came off, not the one this consumer was built from: one
+        consumer reads several since it learnt to multiplex, and recording the first of them
+        for all of them would say every client's messages came off one queue.
         """
-        said: dict[str, Any] = {'queue': self.queue_key} if self.queue_key else {}
+        came_off = on_queue or self.queue_key
+        said: dict[str, Any] = {'queue': came_off} if came_off else {}
         if envelope.queued_at:
             said['queue_ms'] = int((time.time() - envelope.queued_at) * 1000)
         return said
