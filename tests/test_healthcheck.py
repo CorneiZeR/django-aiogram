@@ -1531,3 +1531,19 @@ def test_the_warning_from_the_healthy_queue_is_printed_on_the_failing_run(redis_
         call_command('tgbot_healthcheck', queue=['quiet', 'vip'], stdout=out)
 
     assert 'quiet: nothing is consuming it' in out.getvalue(), out.getvalue()
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_named_queue_over_the_limit_fails_even_with_a_live_consumer(redis_server):
+    """The depth limit is read first, and a consumer being alive does not excuse a backlog.
+
+    The documented table says so in its own row, and a probe that passed a queue because
+    somebody is reading it would be reporting *eventually* as healthy.
+    """
+    redis_server.rpush('vip', b'{}', b'{}', b'{}')
+    redis_server.set(f'vip:heartbeat:{WORKER}', str(int(time.time())), ex=90)
+
+    report = check(queues=['vip'], max_queue=2)
+
+    assert not report.ok, report.message
+    assert 'over the limit' in report.message, report.message

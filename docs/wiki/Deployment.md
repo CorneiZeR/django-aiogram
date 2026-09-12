@@ -514,13 +514,19 @@ The verdict for a named queue is not the one for this container's own, deliberat
 
 | what the probe finds | what it says |
 | --- | --- |
+| more waiting than `--max-queue` allows | **fails**, whether or not anything is consuming it — that limit is read first |
 | messages waiting and no live consumer | **fails** — they are going nowhere and nobody is coming |
 | empty and no live consumer | **warns** — a queue declared for a client who has not written yet is waiting, not broken |
-| a live consumer | healthy, with the depth and the heartbeat's age |
+| a live consumer, within the limit | healthy, with the depth and how old the consumer's last word is |
 
-This is the question a multi-queue deployment has no other way to ask, and the heartbeat keys
-are what answer it. `manage.py tgbot_queues` reads the same signal for a person rather than for
-a container.
+This is the question a multi-queue deployment has no other way to ask — and *who* answers it
+is the transport's business, not this package's. A Redis list has nothing that knows a
+consumer exists, so the consumer writes a heartbeat key with a TTL; a Redis stream's consumer
+group already records when each member last spoke, so nothing is written and nothing expires;
+RabbitMQ and Kafka report that liveness is not observable from outside at all, and a named
+queue on those is judged by its depth alone. `manage.py tgbot_queues` reads the same answer for
+a person rather than for a container, and its **consumer** column says `tracked` for exactly
+that case.
 
 **The command form also names the quarantined bots**, with the reason a supervisor wrote — a
 probe that says *healthy* while three clients' bots are quarantined is answering a narrower
