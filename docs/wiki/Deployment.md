@@ -496,6 +496,35 @@ in recently, and the queue is not piling up. A warning — a stranded in-flight 
 the one it has — goes to stderr *without* changing the verdict, so a healthy probe
 can write to both streams and still exit 0.
 
+### Several queues in one container
+
+```shell
+python manage.py tgbot_healthcheck --queue client-a --queue client-b
+python -m django_aiogram.healthcheck --queue client-a --queue client-b
+```
+
+Each named queue is probed through a transport built for *it*, one line each, and the worst
+answer decides — a container serving five clients is healthy or not per client, and a report
+that summed the depths would hide the one queue filling up behind four empty ones.
+
+The verdict for a named queue is not the one for this container's own, deliberately:
+
+| what the probe finds | what it says |
+| --- | --- |
+| messages waiting and no live consumer | **fails** — they are going nowhere and nobody is coming |
+| empty and no live consumer | **warns** — a queue declared for a client who has not written yet is waiting, not broken |
+| a live consumer | healthy, with the depth and the heartbeat's age |
+
+This is the question a multi-queue deployment has no other way to ask, and the heartbeat keys
+are what answer it. `manage.py tgbot_queues` reads the same signal for a person rather than for
+a container.
+
+**The command form also names the quarantined bots**, with the reason a supervisor wrote — a
+probe that says *healthy* while three clients' bots are quarantined is answering a narrower
+question than the person reading it asked. It does not change the verdict: a revoked token is
+fixed by a person, not by a restart. The module form says nothing about them on purpose, and
+that is the next paragraph.
+
 It opens no client of its own to do it, which is why it runs on all four transports:
 the driver is an extra, and a probe that imported redis-py could not start on an
 image built for Kafka or RabbitMQ.

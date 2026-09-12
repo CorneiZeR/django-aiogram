@@ -1361,3 +1361,69 @@ def test_a_receiver_is_not_unhealthy_over_a_setting_it_never_reads(redis_server)
 
     # and it is still the first thing a container *with* a consumer meets
     assert not check().ok
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_named_queue_with_messages_and_no_consumer_fails(redis_server):
+    """#125's named case, and the signal a multi-queue deployment has no other way to get.
+
+    A queue nobody serves is silent: every message in it is delivered *eventually*, which
+    looks exactly like a slow bot until somebody notices what never arrived.
+    """
+    redis_server.rpush('vip', b'{}')
+
+    report = check(queues=['vip'])
+
+    assert not report.ok, report
+    assert 'no live consumer' in report.message, report.message
+    assert 'vip' in report.message
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_named_queue_with_a_live_consumer_is_not_reported(redis_server):
+    """The other half of the same promise: a queue being served is not an alarm."""
+    redis_server.rpush('vip', b'{}')
+    redis_server.set(f'vip:heartbeat:{WORKER}', str(int(time.time())), ex=90)
+
+    report = check(queues=['vip'])
+
+    assert report.ok, report.message
+    assert '1 queued' in report.message
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_an_empty_queue_with_no_consumer_warns_rather_than_fails(redis_server):
+    """A queue declared for a client who has not written yet is waiting, not broken."""
+    report = check(queues=['vip'])
+
+    assert report.ok, report.message
+    assert report.warnings, report
+    assert 'nothing is consuming it' in report.warnings[0]
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_the_worst_of_several_queues_decides_the_verdict(redis_server):
+    """A container serving five clients is healthy or not *per client*.
+
+    A report that summed the depths would hide the one queue filling up behind four empty
+    ones — so each queue gets a line, and any failure fails the container.
+    """
+    redis_server.rpush('vip', b'{}')
+    redis_server.set(f'default:heartbeat:{WORKER}', str(int(time.time())), ex=90)
+
+    report = check(queues=['default', 'vip'])
+
+    assert not report.ok, report.message
+    assert 'default:' in report.message
+    assert 'vip:' in report.message
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_naming_a_queue_asks_about_that_queue_rather_than_this_process_one(redis_server):
+    """Otherwise `--queue` would be decoration: the probe would answer the same thing twice."""
+    redis_server.rpush(QUEUE, b'{}')
+    redis_server.set(f'{QUEUE}:heartbeat:{WORKER}', str(int(time.time())), ex=90)
+
+    report = check(queues=['vip'])
+
+    assert '0 queued' in report.message or 'empty' in report.message, report.message

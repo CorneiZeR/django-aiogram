@@ -122,6 +122,21 @@
   down, or not migrated here -- declares nothing and refuses nothing; no table at all is a
   different state, where the settings are the whole declaration.
 
+- **The healthcheck answers per queue, and says when a queue has nobody reading it.**
+  `--queue`, repeatable, on both forms of the probe: each named queue is asked through a
+  transport built for it, one line each, and the worst answer decides. A named queue holding
+  messages with **no live consumer fails** -- they are going nowhere and nobody is coming --
+  and an empty one with none **warns**, because a queue declared for a client who has not
+  written yet is waiting rather than broken. That is the signal a multi-queue deployment has
+  no other way to get: a queue nobody serves is silent until somebody notices the messages
+  that never arrived.
+
+  `manage.py tgbot_healthcheck` also names the quarantined bots with the reason a supervisor
+  wrote, without changing the verdict -- a revoked token is fixed by a person, not by a
+  restart. `python -m django_aiogram.healthcheck` does not, and cannot: it reads no models,
+  which is what lets a container probe answer in hundredths of a second rather than paying for
+  `AppConfig.ready()`.
+
 - **The commands act on the bots and queues they are told about.** `--bot` on
   `tgbot_replay`, `tgbot_prune_events` and `tgbot_dispatch_scheduled`, and `--queue` on
   `tgbot_reclaim`; each defaults to what a single-bot install already had. A replay that swept

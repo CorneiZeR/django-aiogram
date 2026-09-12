@@ -332,3 +332,28 @@ def test_a_queue_table_nobody_could_read_still_permits_a_name(monkeypatch):
     call_command('tgbot_reclaim', worker='dead-worker', queue='client-z', stdout=out)
 
     assert 'Nothing in flight' in out.getvalue(), out.getvalue()
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_the_healthcheck_names_the_bots_a_supervisor_stopped_serving():
+    """A probe that says *healthy* while three clients' bots are quarantined answers a
+    narrower question than the person reading it asked.
+
+    It does not change the verdict: the container is doing what it can, and a revoked token
+    is fixed by a person rather than by a restart.
+    """
+    from django_aiogram.models import TelegramBot
+    from django_aiogram.tokens import store_token
+
+    TelegramBot.objects.create(
+        bot_id=111111,
+        token=store_token('111111:AAaa'),
+        quarantine_reason='revoked: TelegramUnauthorizedError',
+    )
+    out = StringIO()
+
+    call_command('tgbot_healthcheck', no_consumer=True, stdout=out)
+
+    said = out.getvalue()
+    assert 'bot 111111 is quarantined' in said, said
+    assert 'revoked' in said, said
