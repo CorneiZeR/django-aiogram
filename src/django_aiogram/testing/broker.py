@@ -87,21 +87,26 @@ class InMemoryBroker(Broker):
 
     # ------------------------------------------------------------------ consumer
 
-    def take(self, timeout: float) -> Taken | None:
+    def take(self, timeout: float, queues: 'Sequence[str] | None' = None) -> Taken | None:
         """Take one, waiting up to ``timeout`` seconds for it to arrive.
 
         A real wait rather than an immediate ``None``, because the consumer's loop is built
         around one: a broker that returned at once would spin it at the speed of the CPU and
         make every timing assumption in `Delivery` untestable here.
+
+        One queue: this broker *is* its contents, and its contents belong to the instance, so
+        there is no second queue for it to read. See :attr:`MULTIPLEXES`.
         """
+        self.one_queue(queues)
         deadline = min(float(timeout), self.call_ceiling)
         with self._ready:
             if not self._ready.wait_for(lambda: bool(self._waiting), timeout=max(0.0, deadline)):
                 return None
             return self._issue()
 
-    def take_nowait(self) -> Taken | None:
+    def take_nowait(self, queues: 'Sequence[str] | None' = None) -> Taken | None:
         """Take one if one is there, and answer ``None`` if none is."""
+        self.one_queue(queues)
         with self._ready:
             return self._issue() if self._waiting else None
 
@@ -149,12 +154,13 @@ class InMemoryBroker(Broker):
 
     # ---------------------------------------------------------------- operations
 
-    def reclaim(self) -> int:
+    def reclaim(self, queues: 'Sequence[str] | None' = None) -> int:
         """Put everything this instance holds back on the queue, and say how many.
 
         A number rather than ``None``: this broker keeps its own books, so the question does
         apply -- there is simply nobody else who could answer it.
         """
+        self.one_queue(queues)
         with self._ready:
             count = len(self._inflight)
             for payload in reversed(list(self._inflight.values())):

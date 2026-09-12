@@ -22,31 +22,83 @@ if TYPE_CHECKING:
 
     from django_aiogram.consumer.delivery import Delivery
 
-__all__ = ('Consumers', 'settle')
+__all__ = ('Consumers', 'lanes', 'named', 'settle')
 
 logger = logging.getLogger('django_aiogram')
 
 
+def named(consumer: 'Delivery | None', lane: str) -> str:
+    """Name a lane for a log line: the queues it serves, or its key where nothing knows them.
+
+    A lane's key is a connection's digest where several queues share one, and an operator
+    reading `tg_queue` wants the names they configured rather than eight hex characters.
+    """
+    serving = tuple(getattr(consumer, 'queues', ()) or ())
+    return ', '.join(serving) if serving else lane
+
+
+def lanes(queues: 'Iterable[str]') -> 'dict[str, tuple[str, ...]]':
+    """Group the queues a container serves into the consumers that will read them.
+
+    One consumer per *connection* where the transport can read several queues over one, and one
+    per queue where it cannot -- which is what a Redis list deployment has always had. Twenty
+    client queues on RabbitMQ are then one connection and one thread instead of twenty of each.
+
+    The key is what the container holds a consumer under, and it has to hold still while the
+    membership moves: a lane keyed by the queues in it would be a different lane the moment a
+    client arrived, so every queue already in it would be stopped and started again. So a
+    multiplexed lane is keyed by the connection its queues share, and a lane of one by the
+    queue itself -- the name every log line and every existing case already says.
+
+    A queue whose settings cannot be resolved is a lane of its own, because the answer to
+    "which connection is this?" is the refusal `Consumers.reconcile` reports per queue: one
+    queue's misconfiguration must not decide the shape of everybody else's.
+    """
+    # deferred: all three reach the settings, and this module is imported from the command
+    from django_aiogram.broker.registry import broker_class  # noqa: PLC0415 - as above
+    from django_aiogram.runtime.profiles import connection_of  # noqa: PLC0415 - as above
+    from django_aiogram.runtime.queues import settings_for  # noqa: PLC0415 - as above
+
+    grouped: dict[str, tuple[str, ...]] = {}
+    for queue in dict.fromkeys(queues):
+        try:
+            settings = settings_for(queue)
+            transport = broker_class(settings, verify_driver=False)
+            key = connection_of(settings).digest if transport.MULTIPLEXES else queue
+        except Exception:  # noqa: BLE001 - whatever it was, `reconcile` meets it again with a queue name on it
+            # not swallowed: `reconcile` builds this lane and reports the same failure with the
+            # queue's name on it, which is where an operator can act on it
+            logger.debug('could not group a queue by its connection; serving it on its own', extra={'tg_queue': queue})
+            key = queue
+        grouped[key] = (*grouped.get(key, ()), queue)
+    return grouped
+
+
 class Consumers:
-    """One consumer per queue this container serves, started and stopped by name.
+    """The consumers this container is running, started and stopped by lane.
+
+    A lane is the set of queues one consumer reads: all of them that share a connection where
+    the transport can multiplex, and one queue otherwise -- :func:`lanes` decides, and the key
+    it hands back is what a consumer is held under here.
 
     ``build`` is handed in rather than inherited: the command knows how to build a consumer
-    for a queue -- which class, which handler, which route -- and this knows when there should
-    be one.
+    for a set of queues -- which class, which handler, which route -- and this knows when there
+    should be one.
     """
 
     def __init__(
         self,
-        build: 'Callable[[str], Delivery]',
+        build: 'Callable[[tuple[str, ...]], Delivery]',
         join_timeout: float,
         ready: 'dict[str, Delivery] | None' = None,
     ) -> None:
         """Hold the consumers already built; the first pass starts them and builds the rest.
 
-        ``ready`` is the startup set, built before anything was started so that a refusal --
-        `REQUIRE_CRASH_SAFE` on a transport that cannot promise it -- stops the container
-        instead of being logged per queue. A queue that *arrives* later is built here, where
-        the same refusal is one queue's problem and the container keeps serving the others.
+        ``ready`` is the startup set, keyed by lane and built before anything was started so
+        that a refusal -- `REQUIRE_CRASH_SAFE` on a transport that cannot promise it -- stops
+        the container instead of being logged per queue. A queue that *arrives* later is built
+        here, where the same refusal is one lane's problem and the container keeps serving the
+        others.
         """
         self.build = build
         self.join_timeout = join_timeout
@@ -61,7 +113,7 @@ class Consumers:
         #: behind the joins -- doing transport work while `bot.close()` runs, with nothing
         #: left to stop it
         self._done = False
-        #: the consumer and the thread serving each queue, by queue name
+        #: the consumer and the thread serving each lane, by the key :func:`lanes` gave it
         self.running: dict[str, tuple[Delivery, threading.Thread]] = {}
         self._lock = threading.Lock()
 
@@ -72,46 +124,70 @@ class Consumers:
         pass tries it again -- because a container that stopped consuming everything because
         one queue was misconfigured is the outage the whole set was meant to survive.
         """
-        asked = list(dict.fromkeys(wanted))
+        asked = lanes(wanted)
         with self._lock:
             if self._done:
                 logger.info('not reconciling the queues: the shutdown had already begun')
                 return
-            for queue in [held for held in self.running if held not in asked]:
+            for lane in [held for held in self.running if held not in asked]:
                 # settled here where the thread has actually gone, and kept where it has not:
                 # this is a queue that went away while the container runs, so nothing later
                 # would collect for it -- but `collect` on a consumer whose thread is still
                 # inside `run` would be two threads settling one in-flight list and calling
                 # one transport
-                self._stopped.append((queue, *self._stop(queue)))
+                self._stopped.append((lane, *self._stop(lane)))
             self._settle_what_has_stopped()
-            for queue in asked:
-                if queue in self.running:
+            for lane, serving in asked.items():
+                if lane in self.running:
+                    self._follow(lane, serving)
                     continue
-                if self._still_turning(queue):
+                if self._still_turning(lane):
                     # left the set, its stop timed out, and now it is back: starting a
                     # replacement while the old thread is inside `run` puts two consumers on
                     # one queue, both taking and both settling. It starts on the pass after
                     # the old thread has gone, which is one interval later at worst
                     logger.warning(
                         'not starting a queue whose previous consumer is still running',
-                        extra={'tg_queue': queue},
+                        extra={'tg_queue': ', '.join(serving)},
                     )
                     continue
                 consumer = None
                 try:
-                    consumer = self._ready.pop(queue, None) or self.build(queue)
-                    self.running[queue] = (consumer, consumer.start_thread())
+                    consumer = self._ready.pop(lane, None) or self.build(serving)
+                    self.running[lane] = (consumer, consumer.start_thread())
                 except Exception:
                     # a consumer that was built has already reclaimed, so dropping it here
                     # would strand whatever it took: only it can settle its own in-flight
                     # list. Stopped and settled before the queue is left for the next pass
                     if consumer is not None:
-                        settle(consumer, queue)
+                        settle(consumer, ', '.join(serving))
                     logger.exception(
                         'could not start consuming a queue; the next pass will try again',
-                        extra={'tg_queue': queue},
+                        extra={'tg_queue': ', '.join(serving)},
                     )
+
+    def _follow(self, lane: str, serving: tuple[str, ...]) -> None:
+        """Tell a running consumer which queues its lane holds now, if the set has moved.
+
+        Told rather than restarted, which is the whole reason a lane has a key of its own: a
+        client's queue arriving would otherwise stop the consumer reading the other nineteen,
+        and every one of those would pause for the length of a join over somebody else's
+        arrival.
+
+        Held under the caller's lock, like everything else that reads `running`.
+        """
+        consumer, _thread = self.running[lane]
+        if tuple(getattr(consumer, 'queues', ())) == serving:
+            return
+        try:
+            consumer.serve(serving)
+        except Exception:
+            # one lane's problem: the consumer goes on reading what it was reading, and the
+            # next pass tries again. A `DELIVERY` a project wrote may not take a set at all
+            logger.exception(
+                'could not change the queues a consumer serves; it keeps the ones it has',
+                extra={'tg_queue': ', '.join(serving)},
+            )
 
     def stop(self) -> None:
         """Stop every consumer and wait for its thread, which is a shutdown's half of this.
@@ -123,8 +199,8 @@ class Consumers:
         """
         with self._lock:
             self._done = True
-            for queue in list(self.running):
-                self._stopped.append((queue, *self._stop(queue)))
+            for lane in list(self.running):
+                self._stopped.append((lane, *self._stop(lane)))
             for consumer in self._ready.values():
                 consumer.stop()
 
@@ -143,12 +219,12 @@ class Consumers:
                 consumer.collect()
             self._settle_what_has_stopped()
 
-    def _still_turning(self, queue: str) -> bool:
-        """Whether a consumer this container stopped for that queue is still inside ``run``.
+    def _still_turning(self, lane: str) -> bool:
+        """Whether a consumer this container stopped for that lane is still inside ``run``.
 
         Held under the caller's lock.
         """
-        return any(name == queue and thread.is_alive() for name, _, thread in self._stopped)
+        return any(name == lane and thread.is_alive() for name, _, thread in self._stopped)
 
     def _settle_what_has_stopped(self) -> None:
         """Settle every stopped consumer whose thread has actually exited, and forget it.
@@ -163,16 +239,16 @@ class Consumers:
         Held under the caller's lock.
         """
         for entry in list(self._stopped):
-            queue, consumer, thread = entry
+            lane, consumer, thread = entry
             if thread.is_alive():
                 continue
             self._stopped.remove(entry)
             try:
                 consumer.collect()
             except Exception:
-                logger.exception('could not settle a stopped consumer', extra={'tg_queue': queue})
+                logger.exception('could not settle a stopped consumer', extra={'tg_queue': named(consumer, lane)})
 
-    def _stop(self, queue: str) -> 'tuple[Delivery, threading.Thread]':
+    def _stop(self, lane: str) -> 'tuple[Delivery, threading.Thread]':
         """Stop one consumer, wait out its thread, and hand both back for settling.
 
         Dropped from the running set even where the thread outlives the join: a consumer this
@@ -180,7 +256,7 @@ class Consumers:
         a restart, and the warning is what an operator has instead. The thread comes back with
         it because whether it is still turning decides whether anything may settle it.
         """
-        consumer, thread = self.running.pop(queue)
+        consumer, thread = self.running.pop(lane)
         consumer.stop()
         thread.join(timeout=self.join_timeout)
         if thread.is_alive():
@@ -188,7 +264,7 @@ class Consumers:
             # grep for it, and a message that moved would be one nobody finds
             logger.warning(
                 'the delivery consumer did not stop in time',
-                extra={'tg_queue': queue, 'tg_timeout': self.join_timeout},
+                extra={'tg_queue': named(consumer, lane), 'tg_timeout': self.join_timeout},
             )
         return consumer, thread
 

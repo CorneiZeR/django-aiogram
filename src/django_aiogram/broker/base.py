@@ -19,7 +19,7 @@ from typing import Any, ClassVar
 
 from django.core.exceptions import ImproperlyConfigured
 
-from django_aiogram.broker.exceptions import BrokerDependencyError
+from django_aiogram.broker.exceptions import BrokerDependencyError, QueueMultiplexingUnavailableError
 from django_aiogram.broker.models import Liveness, Taken
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.settings import conf, setting_label
@@ -60,6 +60,18 @@ class Broker(ABC):
     #: this broker — which is why the keys live here and not in the package-wide defaults:
     #: `REDIS_MESSAGES_KEY` means nothing to Kafka, and a topic means nothing to a list.
     OPTIONS: ClassVar[Mapping[str, Any]] = {}
+
+    #: whether this transport can read **several queues over one connection**. A container
+    #: serving twenty client queues otherwise holds twenty connections and twenty consumer
+    #: threads, and three of the four shipped transports do not have to: RabbitMQ consumes
+    #: several queues on one channel, Kafka subscribes to several topics on one consumer, and
+    #: Redis Streams reads several streams in one ``XREADGROUP``. A crash-safe Redis list
+    #: cannot, because ``BLMOVE`` takes one source.
+    #:
+    #: A capability rather than an assumption: left ``False``, a transport is served one
+    #: consumer per queue exactly as before, which is what keeps a broker somebody else wrote
+    #: working until it opts in.
+    MULTIPLEXES: ClassVar[bool] = False
 
     #: which of this broker's own options names the queue this transport reads and writes:
     #: a list key, a stream, an AMQP queue, a topic. The name rather than the value, for the
@@ -140,6 +152,23 @@ class Broker(ABC):
         built: Broker = cls()
         built.settings = settings
         return built
+
+    def one_queue(self, queues: 'Seq[str] | None') -> str:
+        """Read a queue set as the single queue this broker reads, or refuse it.
+
+        What a transport that cannot multiplex calls at the top of :meth:`take`: ``None`` and
+        the queue this instance addresses are the same request, and anything else is a caller
+        that believes several backlogs are being served when one is.
+
+        Shared here rather than written four times, because the refusal has to be identical --
+        a consumer chooses between multiplexing and a consumer per queue by asking
+        :attr:`MULTIPLEXES`, and a transport that answered the question differently from the
+        way it refuses would be found out at run time rather than at startup.
+        """
+        mine = self.addressed()
+        if queues is None or tuple(queues) == (mine,):
+            return mine
+        raise QueueMultiplexingUnavailableError(type(self).__name__, tuple(queues))
 
     def opt(self, key: str) -> object:
         """Read one of this broker's own options as *this instance* was configured.
@@ -307,17 +336,31 @@ class Broker(ABC):
     # ------------------------------------------------------------------ consumer
 
     @abstractmethod
-    def take(self, timeout: float) -> Taken | None:
+    def take(self, timeout: float, queues: 'Seq[str] | None' = None) -> Taken | None:
         """Take one message, waiting up to ``timeout`` seconds, or return ``None``.
 
         Must return rather than block for ever, however the transport spells that: the
         consumer checks for shutdown between takes, and a liveness marker refreshed only
         between them would expire under a consumer that is perfectly well.
+
+        ``queues`` names **which queues to read**, and ``None`` -- every caller before 5.0,
+        and every caller serving one queue since -- means the one this broker addresses. A set
+        is read together over the one connection, and only a transport whose
+        :attr:`MULTIPLEXES` says it can may be asked: :meth:`one_queue` is the refusal the
+        others make, and the message it carries says what to do instead.
+
+        A message taken from a set **names its queue** in :attr:`Taken.queue`, because the
+        consumer's budget is per queue and a message that cannot say where it came from cannot
+        be counted against one.
         """
 
     @abstractmethod
-    def take_nowait(self) -> Taken | None:
-        """Take one message if one is there, and return ``None`` if none is."""
+    def take_nowait(self, queues: 'Seq[str] | None' = None) -> Taken | None:
+        """Take one message if one is there, and return ``None`` if none is.
+
+        ``queues`` means what it means on :meth:`take`, and for the same reason: the drain at
+        shutdown empties whatever the consumer was serving, which is all of them.
+        """
 
     @abstractmethod
     def ack(self, handle: object) -> None:
@@ -338,12 +381,15 @@ class Broker(ABC):
     # ---------------------------------------------------------------- operations
 
     @abstractmethod
-    def reclaim(self) -> int | None:
+    def reclaim(self, queues: 'Seq[str] | None' = None) -> int | None:
         """Put back what this worker left in flight, and say how many.
 
         ``None`` means the question does not apply — the transport returns an unsettled
         message to the group itself when a consumer disconnects, so there is nothing for a
         restart to reclaim and nothing for an operator to run by hand.
+
+        ``queues`` means what it means on :meth:`take`: a consumer serving several has to
+        recover what it left on each of them, and the count is their total.
         """
 
     @abstractmethod

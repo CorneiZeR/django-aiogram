@@ -14,6 +14,7 @@ is also the cheaper one where it does have to cross. See
 
 import asyncio
 import logging
+from collections import deque
 from collections.abc import Mapping
 from collections.abc import Sequence as Seq
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -29,6 +30,8 @@ from django_aiogram.broker.rabbitmq.client import (
 from django_aiogram.broker.rabbitmq.exceptions import QueueRefusedError
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from pika.adapters.blocking_connection import BlockingChannel
 
 __all__ = ('RabbitMQBroker',)
@@ -60,6 +63,10 @@ class RabbitMQBroker(Broker):
     #: importable module, and the extra that installs it
     REQUIRES: ClassVar[tuple[str, str] | None] = ('pika', 'rabbitmq')
 
+    #: several ``basic_consume`` on one channel, which is all AMQP asks for -- so a container
+    #: serving twenty client queues holds the connection it already had
+    MULTIPLEXES: ClassVar[bool] = True
+
     #: this transport's own settings. Both names are required: a URL carries credentials and
     #: a host, and neither has a default worth baking in, while the queue is where messages
     #: go — the same reason the stream key has none
@@ -87,12 +94,44 @@ class RabbitMQBroker(Broker):
         #: — `message_count` counts only what is ready, measured — and the contract asks what
         #: *this worker* holds, which is exactly what this knows
         self._unsettled: set[object] = set()
+        #: the queues a multiplexed consumer is subscribed to on the current channel, and the
+        #: messages those subscriptions have handed over. pika delivers through callbacks, so
+        #: the deque is where a `take` reads from after giving the connection its turn
+        self._subscribed: tuple[str, ...] = ()
+        #: the channel those subscriptions were registered on. Its own rather than the
+        #: generator consumer's: the two are separate paths, and reading one for the other
+        #: dropped every subscription -- and everything already delivered through it -- on the
+        #: take after the one that registered them. Measured against a real broker: the second
+        #: queue's message was delivered, cleared and never seen again
+        self._subscribed_channel: Any = None
+        #: the queues this instance reads, as the last take asked for them. Kept because every
+        #: other call needs the same channel: settling by delivery tag on a channel opened for
+        #: a *different* set is settling on a different channel, which AMQP requeues the whole
+        #: set over -- measured against a real broker, as a take that never saw its second
+        #: queue again
+        self._serving: tuple[str, ...] = ()
+        self._delivered: deque[tuple[str, Any, bytes]] = deque()
 
     def _queue(self) -> str:
         """Name the queue this broker publishes to and consumes from."""
         return self.addressed()
 
-    def _channel(self) -> 'BlockingChannel':
+    def _queues(self, queues: 'Seq[str] | None') -> tuple[str, ...]:
+        """Name the queues a read is for: those asked for, or the one this broker addresses."""
+        if not queues:
+            return (self._queue(),)
+        return tuple(dict.fromkeys(str(one) for one in queues))
+
+    def _working_set(self) -> tuple[str, ...]:
+        """Which queues this instance's channel must carry: what it reads, and what it writes to.
+
+        Its own queue is always in it, since that is where a publish goes, and declaring one
+        more is idempotent -- what decides which queues are *consumed* is the subscription,
+        not the declaration.
+        """
+        return tuple(dict.fromkeys((*self._serving, self._queue())))
+
+    def _channel(self, queues: 'Seq[str] | None' = None) -> 'BlockingChannel':
         """Reach this thread's channel, declaring the queue on first use.
 
         The deadline comes from :meth:`call_timeout`, which is the only reader of
@@ -103,7 +142,7 @@ class RabbitMQBroker(Broker):
         """
         return channel_for_thread(
             str(self.opt('RABBITMQ_URL')),
-            self._queue(),
+            self._queues(queues) if queues else self._working_set(),
             # the same `or` idiom the deadline no longer uses, and kept on purpose: 0 *is* this
             # option's declared default and its meaning, so nothing a project writes changes hands
             # here except a value `int` would refuse outright. Refusing it by name needs a rule per
@@ -154,13 +193,20 @@ class RabbitMQBroker(Broker):
 
     # ------------------------------------------------------------------ consumer
 
-    def take(self, timeout: float) -> Taken | None:
+    def take(self, timeout: float, queues: 'Seq[str] | None' = None) -> Taken | None:
         """Wait up to ``timeout`` for one message, or answer ``None``.
 
         ``consume`` with an inactivity timeout, which yields ``(None, None, None)`` when
         nothing arrived — measured — so the consumer gets its turn back and can check whether
         it is shutting down.
+
+        Several queues take :meth:`_multiplexed` instead, because ``consume`` is a generator
+        over **one** queue: AMQP's way of reading several is a ``basic_consume`` each and the
+        connection's own turn, which is the same channel and the same socket.
         """
+        if queues is not None and tuple(queues) != (self._queue(),):
+            return self._multiplexed(timeout, self._queues(queues))
+        self._serving = (self._queue(),)
         channel = self._channel()
         self._notice_a_new_channel(channel)
         if self._consumer is None or self._consumer_timeout != timeout:
@@ -173,21 +219,92 @@ class RabbitMQBroker(Broker):
             return None
         return self._issued(method, body)
 
-    def take_nowait(self) -> Taken | None:
+    def take_nowait(self, queues: 'Seq[str] | None' = None) -> Taken | None:
         """Take one message if one is ready, without waiting.
 
         ``basic_get`` rather than the consumer above, and the open consumer is cancelled
         first: a queue being consumed hands messages to that consumer, so a `basic_get`
         beside it would be racing the drain it is meant to be doing. Cancelling costs a
         round trip on a path that runs at shutdown, not in the loop.
+
+        Several queues are asked in turn, which is what a drain wants: the first that has
+        anything answers, and nothing is left waiting behind a queue that is empty.
         """
-        channel = self._channel()
+        asked = self._queues(queues)
+        self._serving = asked
+        channel = self._channel(asked)
         self._notice_a_new_channel(channel)
         self._cancel(channel)
-        method, _properties, body = channel.basic_get(self._queue(), auto_ack=False)
-        return self._issued(method, body)
+        self._unsubscribe(channel)
+        for queue in asked:
+            method, _properties, body = channel.basic_get(queue, auto_ack=False)
+            taken = self._issued(method, body, queue)
+            if taken is not None:
+                return taken
+        return None
 
-    def _issued(self, method: object, body: bytes | None) -> Taken | None:
+    def _multiplexed(self, timeout: float, queues: tuple[str, ...]) -> Taken | None:
+        """Read whichever of these queues has something, over the one channel.
+
+        A ``basic_consume`` per queue and then ``process_data_events``, which is how pika
+        hands a blocking connection its turn: the callbacks fill :attr:`_delivered` and this
+        takes the oldest. One socket, one turn, however many queues -- and a queue with a
+        backlog cannot starve a quiet one of the *read*, because the server pushes from all of
+        them into the same channel.
+
+        The subscriptions are kept between calls and rebuilt only when the set moves, since a
+        consumer that resubscribed per take would cancel and re-register on every loop.
+        """
+        self._serving = queues
+        channel = self._channel(queues)
+        self._notice_a_new_channel(channel)
+        self._cancel(channel)
+        self._subscribe(channel, queues)
+        if not self._delivered:
+            # pika's own name for "give the connection its turn": callbacks run inside it, and
+            # it returns when one has been served or the time is up
+            channel.connection.process_data_events(time_limit=max(0.001, timeout))
+        if not self._delivered:
+            return None
+        queue, method, body = self._delivered.popleft()
+        return self._issued(method, body, queue)
+
+    def _subscribe(self, channel: 'BlockingChannel', queues: tuple[str, ...]) -> None:
+        """Consume exactly these queues on this channel, rebuilding only when the set moves."""
+        if self._subscribed == queues:
+            return
+        if self._subscribed:
+            # the whole set at once: a channel's consumers are cancelled together here rather
+            # than one at a time, and what is already delivered stays in hand
+            channel.cancel()
+        for queue in queues:
+            channel.basic_consume(queue, self._delivery_into(queue), auto_ack=False)
+        self._subscribed = queues
+        self._subscribed_channel = channel
+
+    def _delivery_into(self, queue: str) -> 'Callable[[object, object, object, bytes], None]':
+        """Make the callback that files a delivery under the queue it came from.
+
+        A closure over the name rather than reading ``method.routing_key``: what a message was
+        published *with* is not what it was consumed *from* once an exchange is involved, and
+        the consumer's budget is kept under the queue it is reading.
+        """
+
+        def arrived(_channel: object, method: object, _properties: object, body: bytes) -> None:
+            """File one delivery under its queue, for the take that asked for the turn."""
+            self._delivered.append((queue, method, body))
+
+        return arrived
+
+    def _unsubscribe(self, channel: 'BlockingChannel') -> None:
+        """Cancel the multiplexed subscriptions, for a drain that uses ``basic_get`` instead."""
+        if not self._subscribed:
+            return
+        self._subscribed = ()
+        self._subscribed_channel = None
+        channel.cancel()
+
+    def _issued(self, method: object, body: bytes | None, queue: str = '') -> Taken | None:
         """Hand out a message, remembering which channel's tag this is.
 
         A delivery tag is an integer the *channel* assigned, and it means nothing on another
@@ -203,7 +320,7 @@ class RabbitMQBroker(Broker):
         tag = method.delivery_tag  # type: ignore[attr-defined]  # the parameter is `object`, see above
         generation = channel_generation()
         self._unsettled.add((generation, tag))
-        return Taken(body, (generation, tag))
+        return Taken(body, (generation, tag), queue)
 
     def _notice_a_new_channel(self, channel: 'BlockingChannel') -> None:
         """Forget what belonged to the channel this broker was using before.
@@ -226,6 +343,13 @@ class RabbitMQBroker(Broker):
             self._consumer = None
             self._consumer_timeout = None
             self._consumer_channel = None
+        if self._subscribed and self._subscribed_channel is not channel:
+            # the subscriptions belonged to the channel that is gone, and so did anything it
+            # had handed over: RabbitMQ requeues an unacknowledged delivery when its channel
+            # drops, so those messages are back on their queues for whoever takes them next
+            self._subscribed = ()
+            self._subscribed_channel = None
+            self._delivered.clear()
         current = channel_generation()
         self._unsettled = {held for held in self._unsettled if _position(held)[0] == current}
 
@@ -311,7 +435,7 @@ class RabbitMQBroker(Broker):
         self._channel().queue_delete(queue=self._queue())
         return True
 
-    def reclaim(self) -> int | None:
+    def reclaim(self, queues: 'Seq[str] | None' = None) -> int | None:  # noqa: ARG002 - the contract's, and there is nothing here to reclaim on any queue
         """``None``: the broker does this itself, so there is nothing for a restart to do.
 
         An unacknowledged message returns to the queue when the channel that held it drops,

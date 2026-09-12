@@ -796,12 +796,25 @@ python manage.py start_tgbot --pools vip
 - Given neither, it serves the one queue its settings name, which is every
   deployment before 5.0.
 
-**One consumer per queue, each with its own transport and its own
-`MAX_IN_FLIGHT`.** That is the point rather than an implementation detail: a
-backlog on one queue is a backlog on one queue. The cost is a connection and a
-thread per queue — the transports that could multiplex several queues over one
-connection do not do so yet, so a container serving twenty queues holds twenty
-connections. Serve them from a few containers by pool rather than all from one.
+**A budget per queue, whatever shape the consumers run in.** That is the point
+rather than an implementation detail: a backlog on one queue is a backlog on one
+queue, and `MAX_IN_FLIGHT` is applied to each of them separately. A queue at its
+bound simply stops being read from until one of its sends finishes; the others
+keep being read.
+
+**What it costs depends on the transport.** RabbitMQ and Redis Streams read
+several queues over the connection they already have — several `basic_consume`
+on one channel, one `XREADGROUP` naming several streams — so a container serving
+twenty queues on either holds **one** connection and **one** consumer thread.
+A queue arriving in such a group is told to the consumer that is already
+running, so the clients it was already serving are not paused.
+
+A crash-safe Redis list cannot: `BLMOVE` takes one source, and reading several
+keys would mean `BLPOP`, which loses the message between the pop and the send.
+Kafka can in principle and does not yet — this package's offset bookkeeping is
+per partition, and a second topic makes it a `(topic, partition)` question. On
+those two a container serving twenty queues holds twenty connections and twenty
+threads, so serve them from a few containers by pool rather than all from one.
 
 ## Not using containers
 

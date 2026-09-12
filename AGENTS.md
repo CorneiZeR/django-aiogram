@@ -60,7 +60,7 @@ src/django_aiogram/
                         live in a transport, so it lives above the broker contract
     consumer/
         delivery.py     BlpopDelivery, the one consumer
-        serving.py      the consumers a container runs, one per queue it serves
+        serving.py      the consumers a container runs, one per lane of queues
         webhook.py      the view an update arrives at
         routers.py      autodiscover
     wire/

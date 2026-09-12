@@ -22,6 +22,7 @@ from django.test import override_settings
 from django.utils.module_loading import import_string
 
 from django_aiogram.broker.base import Broker
+from django_aiogram.broker.exceptions import QueueMultiplexingUnavailableError
 from django_aiogram.broker.registry import SHIPPED
 from django_aiogram.wire.serializers import JsonSerializer
 
@@ -400,6 +401,59 @@ def test_the_handle_is_opaque_and_round_trips(broker: Broker):
     broker.ack(taken.handle)
 
     assert broker.take_nowait() is None, 'the message survived being settled by its handle'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_broker_says_whether_it_can_read_several_queues_at_once(broker: Broker):
+    """Whatever the answer, there has to be one — a consumer chooses its shape from it."""
+    assert isinstance(type(broker).MULTIPLEXES, bool)
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_several_queues_are_read_over_the_one_connection(broker: Broker):
+    """A container serving three queues holds one connection, and hears from all of them.
+
+    The point of the capability, asserted the only way it can be from outside: a message on
+    each queue, one broker reading both, and each answer naming the queue it came off --
+    because the consumer keeps a budget per queue and cannot count what will not say.
+    """
+    if not type(broker).MULTIPLEXES:
+        pytest.skip(f'{type(broker).__name__} reads one queue per connection, and says so')
+    mine = broker.addressed()
+    second = f'{mine}-also'
+    beside = type(broker).configured({**SETTINGS, 'QUEUE': second})
+    broker.publish([payload(21)])
+    beside.publish([payload(22)])
+
+    seen: dict[str, bytes] = {}
+    # a few turns rather than two: a transport may hand back nothing while it joins, and this
+    # is about what arrives rather than about how many reads it took
+    for _ in range(6):
+        taken = broker.take(0.5, (mine, second))
+        if taken is None:
+            continue
+        seen[taken.queue] = taken.payload
+        broker.ack(taken.handle)
+        if len(seen) == 2:
+            break
+
+    assert seen == {mine: payload(21), second: payload(22)}, 'a queue in the set was not read'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_transport_that_reads_one_queue_refuses_a_set_rather_than_reading_one(broker: Broker):
+    """The refusal that keeps a container honest about how many backlogs it is serving.
+
+    Its own queue is not a set: a consumer hands its queues down whether or not there is one of
+    them, and a transport that refused that would refuse every single-queue deployment.
+    """
+    if type(broker).MULTIPLEXES:
+        pytest.skip(f'{type(broker).__name__} reads several queues, which the case above asserts')
+    mine = broker.addressed()
+
+    assert broker.take_nowait((mine,)) is None, 'a transport refused the one queue it addresses'
+    with pytest.raises(QueueMultiplexingUnavailableError, match='several queues'):
+        broker.take(0.01, (mine, f'{mine}-also'))
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)

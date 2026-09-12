@@ -67,6 +67,15 @@ _SOCKET_FLOOR, _SOCKET_CEILING = 0.01, 300.0
 class KafkaBroker(Broker):
     """One topic, one consumer group, and offsets committed only where they are contiguous."""
 
+    #: **not yet**, although Kafka itself subscribes to several topics on one consumer. What
+    #: stands in the way is this broker's own bookkeeping rather than the driver: the unsettled
+    #: and settled offsets, the rewinds and the epoch behind every handle are all keyed by
+    #: partition, and a second topic makes each of those a `(topic, partition)` question --
+    #: which is the commit arithmetic this transport is most delicate about. Left for a change
+    #: of its own, so a container serving several Kafka queues keeps a consumer per queue and
+    #: nothing about what it already does changes
+    MULTIPLEXES: ClassVar[bool] = False
+
     #: importable module, and the extra that installs it
     REQUIRES: ClassVar[tuple[str, str] | None] = ('confluent_kafka', 'kafka')
 
@@ -224,7 +233,7 @@ class KafkaBroker(Broker):
 
     # ------------------------------------------------------------------ consumer
 
-    def take(self, timeout: float) -> Taken | None:
+    def take(self, timeout: float, queues: 'Seq[str] | None' = None) -> Taken | None:
         """``poll`` for one message, waiting up to ``timeout`` seconds and no longer.
 
         The handle is ``(partition, offset, epoch)``: Kafka names a message by where it sits,
@@ -236,10 +245,13 @@ class KafkaBroker(Broker):
         budget of its own instead, which this did at first, makes a `take(0.05)` block for
         `KAFKA_TIMEOUT`: the caller's arithmetic about how long a loop iteration can take is
         then wrong by two orders of magnitude, and the consumer's heartbeat is what pays for it.
+
+        One topic, for now: see :attr:`MULTIPLEXES`.
         """
+        self.one_queue(queues)
         return self._wrap(self._polled(max(0.001, timeout)))
 
-    def take_nowait(self) -> Taken | None:
+    def take_nowait(self, queues: 'Seq[str] | None' = None) -> Taken | None:
         """Take one if one is there — after waiting for the group to say what "there" is.
 
         This is the one place Kafka cannot answer the contract's question immediately, and
@@ -258,6 +270,7 @@ class KafkaBroker(Broker):
         Worth knowing before putting this on a request path. `take` is the method the consumer
         loop uses, and it has a timeout of its own.
         """
+        self.one_queue(queues)
         return self._wrap(self._polled(_FETCH_BUDGET, joining=self._timeout()))
 
     def _polled(self, timeout: float, *, joining: float | None = None) -> object:
@@ -453,7 +466,7 @@ class KafkaBroker(Broker):
 
     # ---------------------------------------------------------------- operations
 
-    def reclaim(self) -> int | None:
+    def reclaim(self, queues: 'Seq[str] | None' = None) -> int | None:  # noqa: ARG002 - the contract's, and the group does this on every topic
         """``None``: an uncommitted offset is redelivered by the group, not by this package.
 
         A consumer that dies stops sending heartbeats, the group rebalances, and its partitions

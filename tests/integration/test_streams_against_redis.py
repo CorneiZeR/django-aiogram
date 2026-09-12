@@ -113,7 +113,14 @@ def test_a_dead_consumers_work_is_reclaimed_under_any_name(broker, server, redis
         taken = broker.take_nowait()
         assert taken is not None
         server.xclaim(
-            STREAM, GROUP, 'the-worker-that-died', min_idle_time=0, message_ids=[taken.handle], idle=IDLE_PAST_THE_TTL
+            STREAM,
+            GROUP,
+            'the-worker-that-died',
+            min_idle_time=0,
+            # the id out of the handle: this broker settles by `(stream, id)` since it learnt
+            # to read several streams at once, and `XCLAIM` here is asked about one stream
+            message_ids=[taken.handle.identifier],
+            idle=IDLE_PAST_THE_TTL,
         )
 
         # a different process, and deliberately a different consumer name
@@ -164,7 +171,7 @@ def test_trimming_stops_at_the_oldest_unacknowledged_entry(broker, server, redis
 
         assert server.xlen(STREAM) == 2, 'trimming did not drop the acknowledged entry'
         assert broker.inflight_depth() == 1, 'trimming dropped an unacknowledged entry'
-        assert held.handle in [entry[0] for entry in server.xrange(STREAM)], (
+        assert held.handle.identifier in [entry[0] for entry in server.xrange(STREAM)], (
             'the entry still in flight is no longer in the stream'
         )
 

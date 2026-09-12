@@ -89,19 +89,33 @@ Without it, `manage.py start_tgbot` refuses to build the consumer where more tha
 configured, and says so by name — rather than delivering every addressed message through the
 process's own bot, under a token the producer did not name.
 
-**Serving several queues asks for one more.** A container told `--queues` or `--pools` runs one
-consumer per queue, and each is told which queue it is for:
+**Serving several queues asks for one more.** A container told `--queues` or `--pools` tells
+each consumer which queue — or which queues — it is for:
 
 ```python
 class QueuedDelivery(Delivery):
-    def __init__(self, handler, route=None, settings=None):
-        super().__init__(handler, route, settings)
+    def __init__(self, handler, route=None, settings=None, queues=None):
+        super().__init__(handler, route, settings, queues)
 ```
 
 `self.settings` is that queue's resolved settings, and `self.broker` is already built from
 them — so a `run()` written against `self.broker` needs no change. A consumer that takes
 neither argument is refused the same way and for the same shape of reason: it would take every
 message from the process's own queue while the container believes it is serving another.
+
+`queues` is the set read over **one** connection, where the transport can
+(`Broker.MULTIPLEXES`). A `run()` of your own hands it down and counts what comes back:
+
+```python
+taken = self.broker.take(self.read_timeout, self.readable())
+if taken is not None and self.dispatch(taken.payload, taken.handle, taken.queue):
+    self.acknowledge(taken.handle)
+```
+
+`readable()` is this consumer's queues minus the ones already at their budget — a bound is per
+queue, so a saturated one stops being read while the rest are — and `Taken.queue` names which
+queue a message came off, which is what its send is counted against. Both are `None` and `''`
+for a consumer serving one queue, which is what every `run()` written before 5.0 passes.
 
 ```python
 from django_aiogram.consumer.delivery import Delivery

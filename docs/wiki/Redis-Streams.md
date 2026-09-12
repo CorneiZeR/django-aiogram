@@ -70,6 +70,18 @@ that survives repetition is the ordering rather than the ratio: Streams ≤ list
 RabbitMQ. Three scripts cover the four, since one baseline measures both Redis transports:
 `scripts/measurements` re-takes them.
 
+## Several streams in one read
+
+One `XREADGROUP` names as many streams as it likes, so a container serving twenty queues reads
+them over the connection it already has and holds one consumer thread rather than twenty. The
+group is created on each stream by the read that first names it, which is what lets a client's
+queue arrive while the container runs.
+
+`count=1` is **per stream**, so a read naming three can be delivered three entries. All of them
+are in this consumer's pending list from that moment, so the extras are kept and handed out
+before the next read rather than left to a `reclaim` an idle threshold away. The handle a
+multiplexed read hands out names its stream, since `XACK` settles against a key.
+
 ## Where it shows through
 
 - The stream grows. Nothing here trims it: `XADD MAXLEN` would cut exactly the entries a

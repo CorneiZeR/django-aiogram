@@ -124,6 +124,15 @@ meant a setting nothing here reads shortened the poll: measured, `REDIS_TIMEOUT:
 setting. The name is unchanged because a queued message is still a queued message; what it means is
 the transport's own.
 
+## One topic per consumer, for now
+
+Kafka subscribes to several topics on one consumer, and this package does not use that yet: the
+unsettled and settled offsets, the rewinds and the epoch behind every handle are keyed by
+partition, and a second topic makes each of those a `(topic, partition)` question -- which is
+the commit arithmetic on this page, and it gets a change of its own rather than a corner of
+another one. A container serving three queues here runs three consumers, exactly as it always
+has.
+
 ## Where it shows through
 
 - **What a payload may weigh is smallest here, by a wide margin, and it is the one to check

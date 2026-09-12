@@ -94,7 +94,7 @@ def test_a_held_message_occupies_one_of_the_queue_slots():
     delivery.dispatch(a_message(123456, 'sent'))
     delivery.dispatch(a_message(123456, 'waiting'))
 
-    assert delivery._in_flight == 2, delivery._in_flight
+    assert delivery.in_flight() == 2, delivery.in_flight()
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': 1, 'MAX_IN_FLIGHT': 10})
@@ -114,7 +114,7 @@ def test_the_counts_come_back_to_nothing():
     handler.pending[1][1]()
     delivery.collect()
 
-    assert delivery._in_flight == 0, delivery._in_flight
+    assert delivery.in_flight() == 0, delivery.in_flight()
     assert delivery._sending == {}, delivery._sending
 
 
@@ -201,7 +201,7 @@ def test_a_refused_send_gives_both_slots_back_and_the_message_is_not_acknowledge
     handler.refusals['waiting']()
     delivery.collect()
 
-    assert delivery._in_flight == 0, delivery._in_flight
+    assert delivery.in_flight() == 0, delivery.in_flight()
     assert delivery._sending == {}, delivery._sending
 
 
@@ -248,7 +248,7 @@ def test_two_held_messages_do_not_reserve_the_budget_they_are_waiting_for():
         finished()
     delivery.collect()
 
-    assert delivery._in_flight == 0, delivery._in_flight
+    assert delivery.in_flight() == 0, delivery.in_flight()
     assert delivery._sending == {}, delivery._sending
 
 
@@ -302,7 +302,7 @@ def test_a_handler_that_reports_and_then_raises_settles_its_message_once():
     delivery.collect()
 
     assert calls == ['reports then raises']
-    assert delivery._in_flight == 0, delivery._in_flight
+    assert delivery.in_flight() == 0, delivery.in_flight()
     assert delivery._sending == {}, delivery._sending
 
 
@@ -321,7 +321,7 @@ def test_a_handler_that_reports_both_ways_settles_its_message_once():
     handler.refusals['both']()
     delivery.collect()
 
-    assert delivery._in_flight == 0, delivery._in_flight
+    assert delivery.in_flight() == 0, delivery.in_flight()
     assert delivery._sending == {}, delivery._sending
 
 
@@ -374,7 +374,7 @@ def test_a_handler_that_refused_before_raising_does_not_acknowledge_at_all():
 
     assert took is False, 'a message the handler refused was acknowledged by the caller'
     assert acknowledged == [], acknowledged
-    assert delivery._in_flight == 0, delivery._in_flight
+    assert delivery.in_flight() == 0, delivery.in_flight()
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT_PER_BOT': 1, 'MAX_IN_FLIGHT': 0})

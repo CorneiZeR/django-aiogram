@@ -37,11 +37,13 @@ import time
 from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Callable, Mapping
-from typing import Any
+from collections.abc import Sequence as Seq
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from django.utils.module_loading import import_string
 
 from django_aiogram.api import check_function
+from django_aiogram.broker.exceptions import QueueMultiplexingUnavailableError
 from django_aiogram.broker.registry import get_broker
 from django_aiogram.config.enums import EventKind
 from django_aiogram.config.settings import conf, take_ceiling
@@ -59,9 +61,30 @@ from django_aiogram.runtime.control import apply_control, is_control
 from django_aiogram.wire.envelope import Envelope, UnknownEnvelopeVersionError, unpack
 from django_aiogram.wire.serializers import PickleReadRefusedError, SerializationError, loads
 
+if TYPE_CHECKING:
+    from django_aiogram.broker.models import Taken
+
 logger = logging.getLogger('django_aiogram')
 
 Handler = Callable[..., Any]
+
+
+class _Pending(NamedTuple):
+    """One decoded message on its way to a handler, and everything settling it needs.
+
+    Held together because it travels together: a message may be handed over now, or parked
+    until its bot has room and handed over later, and the four things that go to the handler
+    plus the queue its send is counted against move as one either way.
+    """
+
+    envelope: 'Envelope'
+    call: dict[str, Any]
+    handle: object
+    handler: Handler
+    #: which of the consumer's queues it came off, which is the budget its send is bounded by
+    on_queue: str
+
+
 #: answers with the handler for one bot's identity. Raising is how it says this process serves
 #: no such bot, which `Delivery._handler_for` turns into a message left in flight
 Route = Callable[[int], Handler]
@@ -105,7 +128,11 @@ class Delivery(ABC):
     """Consumes whichever transport `BROKER` names, until stopped."""
 
     def __init__(
-        self, handler: Handler, route: 'Route | None' = None, settings: 'Mapping[str, Any] | None' = None
+        self,
+        handler: Handler,
+        route: 'Route | None' = None,
+        settings: 'Mapping[str, Any] | None' = None,
+        queues: 'Seq[str] | None' = None,
     ) -> None:
         """Take what each decoded message is handed to once it arrives.
 
@@ -120,9 +147,13 @@ class Delivery(ABC):
         be answered as though it were `send_raw`, which is why the contract says so out loud.
 
         ``settings`` is which queue this consumer is *for*, and ``None`` is the process's own.
-        A container serving several queues runs one of these per queue, each with its own
-        transport and its own in-flight budget -- which is the point of them being separate: a
-        backlog on one queue is then a backlog on one queue.
+
+        ``queues`` is the rest of them, where the transport can read several over one
+        connection: a container serving twenty client queues then holds one connection and one
+        thread rather than twenty of each. The budget stays **per queue** whichever shape it
+        runs in -- a backlog on one queue is a backlog on one queue -- and a transport that
+        cannot multiplex is refused here rather than at the first read, so a container is never
+        wrong about how many backlogs it is serving.
         """
         self.handler = handler
         self.route = route
@@ -138,8 +169,24 @@ class Delivery(ABC):
         #: one the producer refused outright, which releases the slot and leaves the
         #: message for a redelivery. Filled from the bot's event loop, drained on this
         #: thread, because every Redis call in this class belongs to the consumer
-        self._finished: queue.SimpleQueue[tuple[object, bool, int | None]] = queue.SimpleQueue()
-        self._in_flight = 0
+        self._finished: queue.SimpleQueue[tuple[object, bool, int | None, str]] = queue.SimpleQueue()
+        #: which queues this consumer serves. One of them for every deployment before 5.0 and
+        #: for every transport that reads one queue per connection
+        self.queues: tuple[str, ...] = tuple(queues) if queues else (self._own_queue(),)
+        if len(self.queues) > 1 and not type(self.broker).MULTIPLEXES:
+            raise QueueMultiplexingUnavailableError(type(self.broker).__name__, self.queues)
+        #: what a read asks for, and ``None`` where there is one queue -- which is the call
+        #: every transport has always been given, and what keeps a `Broker` somebody else
+        #: wrote out of a signature it never agreed to
+        self._asked: tuple[str, ...] | None = self.queues if len(self.queues) > 1 else None
+        #: sends in flight **per queue**, because the bound is per queue: one client's backlog
+        #: must not stop the container reading for everybody else
+        self._in_flight: dict[str, int] = dict.fromkeys(self.queues, 0)
+        #: over the books above, and over which queues are served. Everything that counts a
+        #: send runs on the consumer's own thread, but :meth:`serve` does not -- a queue
+        #: arriving while the container runs reaches this from the pass that noticed it, and a
+        #: dict growing under a reader is what that would otherwise be
+        self._books = threading.Lock()
         # asked once: a handler that cannot take the callback is acknowledged the
         # moment it returns, which is the behavior every existing caller has
         self._defers = defers_completion(handler)
@@ -167,7 +214,7 @@ class Delivery(ABC):
         #: because a release is a documented no-op on the transport that has an in-flight list
         #: -- there the message would sit until a restart reclaimed it. Each holds one of the
         #: queue's slots, so `MAX_IN_FLIGHT` bounds this as well
-        self._parked: deque[tuple[Envelope, dict[str, Any], object, Handler]] = deque()
+        self._parked: deque[_Pending] = deque()
 
     @property
     def crash_safe(self) -> bool:
@@ -190,6 +237,44 @@ class Delivery(ABC):
         """
         addressed = getattr(self.broker, 'addressed', None)
         return addressed() if callable(addressed) else queue_key()
+
+    def _own_queue(self) -> str:
+        """Name the one queue this consumer serves when nothing named a set.
+
+        The transport's own answer, which is what a read without a queue set reaches anyway --
+        so the budget is kept under the name the messages actually came off.
+        """
+        return self.queue_key
+
+    def _queue_of(self, taken: 'Taken') -> str:
+        """Name the queue a message came off, as this consumer keeps its books.
+
+        A transport reading several fills :attr:`Taken.queue`; one reading its own leaves it
+        empty, and there is exactly one queue it can have come from. A name this consumer is
+        not serving -- which nothing shipped produces -- is counted under the first of its
+        queues rather than growing the books a message at a time.
+        """
+        return taken.queue if taken.queue in self.queues else self.queues[0]
+
+    def readable(self) -> 'tuple[str, ...] | None':
+        """Which of this consumer's queues a read may ask for, dropping those at their budget.
+
+        Public for the reason :attr:`stopping` is: a `Delivery` a project wrote has a ``run``
+        of its own, and this is what it hands the broker.
+
+        A queue at its bound is simply not read from until a send finishes, which is how the
+        per-queue budget survives one connection: the alternative -- taking the message and
+        giving it back -- spins against a saturated queue's backlog, and parking it would put
+        the bound past itself one message per read.
+
+        ``None`` where there is one queue, which is the call every transport has always been
+        given. Where every queue is at its budget, `hold_for_capacity` has already stopped the
+        loop before this is asked.
+        """
+        if self._asked is None:
+            return None
+        readable = tuple(one for one in self._asked if not self.at_capacity(one))
+        return readable or self._asked
 
     @property
     def processing_key(self) -> str:
@@ -260,7 +345,7 @@ class Delivery(ABC):
         a transport that returns an unsettled message to its group needs no reclaiming.
         """
         try:
-            count = self.broker.reclaim()
+            count = self.broker.reclaim(self._asked)
         except Exception:
             # run() is the thread target, so anything escaping here — a Redis
             # that is not up yet, for one — would end the consumer for good
@@ -309,11 +394,11 @@ class Delivery(ABC):
         """
         while True:
             try:
-                raw, delivered, bot_id = self._finished.get_nowait()
+                raw, delivered, bot_id, on_queue = self._finished.get_nowait()
             except queue.Empty:
                 self._hand_over_parked()
                 return
-            self._took_a_slot_back(bot_id)
+            self._took_a_slot_back(bot_id, on_queue)
             if delivered:
                 self.acknowledge(raw)
 
@@ -344,7 +429,9 @@ class Delivery(ABC):
 
         return claim
 
-    def _release_for(self, handle: object, bot_id: 'int | None', claim: 'Callable[[], bool]') -> Callable[[], None]:
+    def _release_for(
+        self, handle: object, bot_id: 'int | None', claim: 'Callable[[], bool]', on_queue: str
+    ) -> Callable[[], None]:
         """Give back the slot a refused send took, without acknowledging the message.
 
         The slot has to come back — `_hand_over` took one before the handler ran — but
@@ -357,7 +444,7 @@ class Delivery(ABC):
         def once() -> None:
             """Give the slot back, once, if nothing else has settled this message."""
             if claim():
-                self._finished.put((handle, False, bot_id))
+                self._finished.put((handle, False, bot_id, on_queue))
 
         return once
 
@@ -366,19 +453,21 @@ class Delivery(ABC):
         handle: object,
         bot_id: 'int | None',
         claim: 'Callable[[], bool]',
+        on_queue: str,
     ) -> Callable[[], None]:
         """One report per message, however many times the send says it finished."""
 
         def once() -> None:
             """Report the first finish and drop every later one."""
             if claim():
-                self._finished.put((handle, True, bot_id))
+                self._finished.put((handle, True, bot_id, on_queue))
 
         return once
 
-    def _took_a_slot_back(self, bot_id: 'int | None') -> None:
-        """One send is over: give its slot back to the queue and to its bot."""
-        self._in_flight -= 1
+    def _took_a_slot_back(self, bot_id: 'int | None', on_queue: str) -> None:
+        """One send is over: give its slot back to the queue it came off and to its bot."""
+        with self._books:
+            self._in_flight[on_queue] = self._in_flight.get(on_queue, 1) - 1
         self._one_less_sending(bot_id)
 
     def _one_less_sending(self, bot_id: 'int | None') -> None:
@@ -418,15 +507,15 @@ class Delivery(ABC):
         while self._at_its_own_capacity(bot_id) and not self._stop.is_set():
             self.heartbeat()
             try:
-                raw, delivered, settled = self._finished.get(timeout=1)
+                raw, delivered, settled, on_queue = self._finished.get(timeout=1)
             except queue.Empty:
                 continue
-            self._took_a_slot_back(settled)
+            self._took_a_slot_back(settled, on_queue)
             if delivered:
                 self.acknowledge(raw)
         return not self._stop.is_set()
 
-    def _park(self, envelope: 'Envelope', call: dict[str, Any], handle: object, handler: Handler) -> None:
+    def _park(self, pending: _Pending) -> None:
         """Keep a message whose bot is at its budget, and hold a queue slot for it.
 
         Kept rather than released, because `release` is a documented no-op on the transport
@@ -440,11 +529,12 @@ class Delivery(ABC):
         """
         # the queue's slot, and only that: what the message is waiting for is one of *this
         # bot's* sends to end, so a reservation here would be one nothing can release
-        self._in_flight += 1
-        self._parked.append((envelope, call, handle, handler))
+        with self._books:
+            self._in_flight[pending.on_queue] = self._in_flight.get(pending.on_queue, 0) + 1
+        self._parked.append(pending)
         logger.debug(
             'holding a message for a bot at its own in-flight budget',
-            extra={'tg_bot_id': envelope.bot_id, 'tg_queue': self.queue_key},
+            extra={'tg_bot_id': pending.envelope.bot_id, 'tg_queue': pending.on_queue},
         )
 
     def _hand_over_parked(self) -> None:
@@ -459,18 +549,65 @@ class Delivery(ABC):
             return
         waiting, self._parked = self._parked, deque()
         while waiting:
-            envelope, call, handle, handler = waiting.popleft()
-            if self._at_its_own_capacity(envelope.bot_id):
-                self._parked.append((envelope, call, handle, handler))
+            pending = waiting.popleft()
+            if self._at_its_own_capacity(pending.envelope.bot_id):
+                self._parked.append(pending)
                 continue
             # the queue's slot it has been holding is the one the send will use, so that count
             # is not touched again -- see `_hand_over`'s `counted`
-            if self._hand_over(envelope, call, handle, handler, counted=True):
-                self.acknowledge(handle)
+            if self._hand_over(pending, counted=True):
+                self.acknowledge(pending.handle)
 
-    def at_capacity(self) -> bool:
-        """Whether this consumer is already holding as many sends as it may."""
-        return bool(self._limit) and self._in_flight >= self._limit
+    def serve(self, queues: 'Seq[str]') -> None:
+        """Read exactly these queues from the next read on, without stopping.
+
+        What a container calls when a client's queue arrives or goes away while it runs: the
+        alternative is stopping the consumer and starting another, which on a multiplexing
+        transport would pause every *other* queue in the group for the length of a join.
+
+        A queue that goes away keeps its count until its sends finish -- they are still in
+        flight, and the transport still has to be told about them -- but nothing new is read
+        from it. One that arrives starts at zero.
+        """
+        asked = tuple(dict.fromkeys(queues))
+        if not asked:
+            return
+        if len(asked) > 1 and not type(self.broker).MULTIPLEXES:
+            raise QueueMultiplexingUnavailableError(type(self.broker).__name__, asked)
+        with self._books:
+            for queue in asked:
+                self._in_flight.setdefault(queue, 0)
+            self.queues = asked
+            self._asked = asked if len(asked) > 1 else None
+
+    def in_flight(self, on_queue: str = '') -> int:
+        """How many sends this consumer is holding, on one queue or across all of them.
+
+        Public because the bound is: a project's own `Delivery` reads it to decide anything it
+        paces itself, and a case asserting the count comes back to nothing should not have to
+        reach into the books to do it.
+        """
+        with self._books:
+            if on_queue:
+                return self._in_flight.get(on_queue, 0)
+            return sum(self._in_flight.values())
+
+    def at_capacity(self, on_queue: str = '') -> bool:
+        """Whether this consumer is already holding as many sends as it may.
+
+        Per queue, and ``''`` asks about the consumer as a whole -- which is every queue it
+        serves being at its own bound, since one that is not can still be read from. With one
+        queue the two questions are the same, which is what every caller before 5.0 asked.
+        """
+        if not self._limit:
+            return False
+        with self._books:
+            if on_queue:
+                return self._in_flight.get(on_queue, 0) >= self._limit
+            # every queue it is *serving*: one it no longer reads may still be settling sends,
+            # and waiting for those to end before reading anything would be a stop by another
+            # name
+            return all(self._in_flight.get(queue, 0) >= self._limit for queue in self.queues)
 
     def hold_for_capacity(self) -> None:
         """Stop taking messages while too many are still in flight.
@@ -489,10 +626,10 @@ class Delivery(ABC):
         while self.at_capacity() and not self._stop.is_set():
             self.heartbeat()
             try:
-                raw, delivered, bot_id = self._finished.get(timeout=1)
+                raw, delivered, bot_id, on_queue = self._finished.get(timeout=1)
             except queue.Empty:
                 continue
-            self._took_a_slot_back(bot_id)
+            self._took_a_slot_back(bot_id, on_queue)
             if delivered:
                 self.acknowledge(raw)
             self._hand_over_parked()
@@ -577,8 +714,13 @@ class Delivery(ABC):
         apply_control(payload)
         return True
 
-    def dispatch(self, raw: bytes, handle: object | None = None) -> bool:
+    def dispatch(self, raw: bytes, handle: object | None = None, on_queue: str = '') -> bool:
         """Decode one message and hand it to the handler.
+
+        ``on_queue`` is which of this consumer's queues the message came off, and it is what
+        its send is counted against: the budget is per queue, and a consumer reading several
+        over one connection has to say which one rather than have it inferred. Left out -- as
+        every caller before 5.0 left it out -- it is the one queue this consumer serves.
 
         A bad payload is one message's problem, so everything short of a kill is
         logged and dropped: the consumer has to survive it to deliver the rest.
@@ -606,6 +748,7 @@ class Delivery(ABC):
         """
         if handle is None:
             handle = raw
+        on_queue = on_queue if on_queue in self.queues else self.queues[0]
         envelope, acknowledge = self._read(raw)
         if envelope is None:
             return acknowledge
@@ -649,6 +792,7 @@ class Delivery(ABC):
             'correlation_id': envelope.correlation_id,
             'queued_at': envelope.queued_at,
         }
+        pending = _Pending(envelope, call, handle, handler, on_queue)
         if self._at_its_own_capacity(envelope.bot_id):
             if not self._limit:
                 # nothing bounds the queue, so nothing would bound the holding either: a
@@ -663,9 +807,9 @@ class Delivery(ABC):
             else:
                 # not acknowledged and not released: it is held here until this bot has room,
                 # and a crash in between leaves it where every other in-flight message is
-                self._park(envelope, call, handle, handler)
+                self._park(pending)
                 return False
-        return self._hand_over(envelope, call, handle, handler)
+        return self._hand_over(pending)
 
     def _handler_for(self, envelope: Envelope) -> Handler:
         """Return the handler for the bot this message names, or the one for no bot at all.
@@ -695,15 +839,7 @@ class Delivery(ABC):
             raise LookupError(msg)
         return self.handler
 
-    def _hand_over(
-        self,
-        envelope: Envelope,
-        call: dict[str, Any],
-        handle: object,
-        handler: Handler,
-        *,
-        counted: bool = False,
-    ) -> bool:
+    def _hand_over(self, pending: _Pending, *, counted: bool = False) -> bool:
         """Call the handler, and say whether the message may be acknowledged.
 
         Cancellation is the reason this is not one ``except``: it is a
@@ -713,6 +849,7 @@ class Delivery(ABC):
         request, so leaving it risks a duplicate rather than a loss. This worker has to
         keep reading either way.
         """
+        envelope, call, handle, on_queue = pending.envelope, pending.call, pending.handle, pending.on_queue
         deferring = self._defers
         # one claim for the callbacks and for the two exception paths below: whoever settles
         # this message first is the only one that may give its slots back
@@ -723,25 +860,26 @@ class Delivery(ABC):
             # payload can carry this name — as a keyword that is "got multiple
             # values", a TypeError landing in the failure branch below, which
             # acknowledges a message nothing sent. Assigning simply wins
-            call['on_complete'] = self._completion_for(handle, envelope.bot_id, settling)
+            call['on_complete'] = self._completion_for(handle, envelope.bot_id, settling, on_queue)
             if self._releases:
                 # its pair, so a producer that refuses the send gives the slot back
-                call['on_refused'] = self._release_for(handle, envelope.bot_id, settling)
+                call['on_refused'] = self._release_for(handle, envelope.bot_id, settling, on_queue)
             if not counted:
                 # a message handed over from the park is already holding the queue's slot --
                 # the one `_park` took -- and counting it twice would leave that budget short
                 # by one for the life of the process
-                self._in_flight += 1
+                with self._books:
+                    self._in_flight[on_queue] = self._in_flight.get(on_queue, 0) + 1
             # this bot's count moves either way: a parked message was *waiting* for a send to
             # end, and now it is one
             self._sending[envelope.bot_id] = self._sending.get(envelope.bot_id, 0) + 1
         try:
-            handler(**call)
+            pending.handler(**call)
         except asyncio.CancelledError:
             if deferring and settling():
                 # only where nothing has settled it: a handler that reported and *then* was
                 # cancelled has already put its settlement on the queue
-                self._took_a_slot_back(envelope.bot_id)
+                self._took_a_slot_back(envelope.bot_id, on_queue)
                 self._hand_over_parked()
             logger.warning(
                 'a queued send was cancelled; leaving it in flight',
@@ -753,7 +891,7 @@ class Delivery(ABC):
             # already, and returning the slots a second time is what makes the count drift
             ours = not deferring or settling()
             if deferring and ours:
-                self._took_a_slot_back(envelope.bot_id)
+                self._took_a_slot_back(envelope.bot_id, on_queue)
                 self._hand_over_parked()
             logger.exception(
                 'handler failed for queued message',
@@ -827,11 +965,11 @@ class Delivery(ABC):
                 # the blocking loop waits here; a drain has no thread to wait on,
                 # so it stops instead of scheduling past the bound
                 return
-            taken = self.broker.take_nowait()
+            taken = self.broker.take_nowait(self.readable())
             if taken is None:
                 self.collect()
                 return
-            if self.dispatch(taken.payload, taken.handle):
+            if self.dispatch(taken.payload, taken.handle, self._queue_of(taken)):
                 self.acknowledge(taken.handle)
             self.collect()
 
@@ -868,7 +1006,7 @@ class BlpopDelivery(Delivery):
             if not reclaimed:
                 reclaimed = self.reclaim()
             try:
-                taken = self.broker.take(timeout)
+                taken = self.broker.take(timeout, self.readable())
             except Exception:
                 # a dropped connection must not kill the worker thread
                 logger.exception('blocking pop failed, retrying', extra={'tg_key': self.queue_key})
@@ -876,7 +1014,7 @@ class BlpopDelivery(Delivery):
                 continue
             if taken is None:
                 continue
-            if self.dispatch(taken.payload, taken.handle):
+            if self.dispatch(taken.payload, taken.handle, self._queue_of(taken)):
                 self.acknowledge(taken.handle)
         # sends that finished while the last read was blocking still have to
         # leave the in-flight list, or every stop redelivers them
@@ -931,7 +1069,10 @@ def delivery_class() -> type[Delivery]:
 
 
 def get_delivery(
-    handler: Handler, route: 'Route | None' = None, settings: 'Mapping[str, Any] | None' = None
+    handler: Handler,
+    route: 'Route | None' = None,
+    settings: 'Mapping[str, Any] | None' = None,
+    queues: 'Seq[str] | None' = None,
 ) -> Delivery:
     """Build the consumer ``DELIVERY`` names, with the handlers it delivers through.
 
@@ -947,6 +1088,10 @@ def get_delivery(
     ``settings`` is the same contract one release later, for the queue rather than the bot: a
     consumer that cannot be told which queue it serves is refused where a queue other than the
     process's own was asked for, and left alone otherwise.
+
+    ``queues`` is the same again, for a lane of several read over one connection -- and a class
+    that does not take it is refused rather than built for one of them, since a container
+    believing it serves three queues and serving one leaves two backlogs with nobody on them.
     """
     resolved = delivery_class()
     named = f'{resolved.__module__}.{resolved.__qualname__}'
@@ -955,6 +1100,7 @@ def get_delivery(
     # instead -- silently, while the container believed it was serving another
     takes_route = accepts_keyword(resolved.__init__, 'route')
     takes_settings = accepts_keyword(resolved.__init__, 'settings')
+    takes_queues = accepts_keyword(resolved.__init__, 'queues')
     if route is not None and not takes_route:
         raise DeliveryNotConfiguredError(
             named,
@@ -969,10 +1115,18 @@ def get_delivery(
             'its own: every message would be taken from the process-wide queue instead. Add '
             '`settings=None` to its __init__ and hand it to `Delivery.__init__`.',
         )
-    if takes_route and takes_settings:
-        return resolved(handler, route=route, settings=settings)
+    if queues is not None and not takes_queues:
+        raise DeliveryNotConfiguredError(
+            named,
+            'whose __init__ takes no `queues`, and this container serves several of them over '
+            'one connection: every message would be taken from one queue while the rest went '
+            'unread. Add `queues=None` to its __init__ and hand it to `Delivery.__init__`.',
+        )
+    given: dict[str, Any] = {}
     if takes_route:
-        return resolved(handler, route=route)
+        given['route'] = route
     if takes_settings:
-        return resolved(handler, settings=settings)
-    return resolved(handler)
+        given['settings'] = settings
+    if takes_queues and queues is not None:
+        given['queues'] = queues
+    return resolved(handler, **given)

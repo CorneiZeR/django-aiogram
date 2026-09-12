@@ -34,6 +34,7 @@ import django_aiogram
 ARGUMENTS = {
     'BrokerDependencyError': {'broker': 'pkg.mod.Broker', 'module': 'pika', 'extra': 'rabbitmq'},
     'WorkerDepthUnavailableError': {'broker': 'KafkaBroker', 'worker': 'bot-7'},
+    'QueueMultiplexingUnavailableError': {'broker': 'RedisListBroker', 'queues': ('vip', 'bulk')},
     'DeliveryNotConfiguredError': {'path': 'myapp.delivery.Missing', 'detail': 'which cannot be imported: x'},
     'ProduceRefusedError': {'topic': 'telegram-outbound', 'reason': 'Unknown topic or partition'},
     'QueueRefusedError': {'queue': 'telegram-outbound', 'reason': 'NO_ROUTE'},

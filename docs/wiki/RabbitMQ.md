@@ -64,6 +64,17 @@ rather than the multiple.
 
 `scripts/measurements/amqp_driver_choice.py` re-takes all of it.
 
+## Several queues on one channel
+
+A container serving twenty client queues holds **one** connection here: the consumer opens a
+`basic_consume` per queue on the channel it already has and gives the connection its turn with
+`process_data_events`, so a queue with a backlog cannot starve a quiet one of the read. Each
+message says which queue it came off, and the in-flight budget stays per queue.
+
+The queues in one container's set are declared on that channel when it is opened, and the set
+is the channel's identity — a container asked to serve a queue more opens a channel for the new
+set rather than consuming on a stale one.
+
 ## What bounds a read
 
 `BLPOP_TIMEOUT` is what the consumer asks for, and `RABBITMQ_TIMEOUT` caps it together with
