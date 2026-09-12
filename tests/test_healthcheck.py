@@ -1547,3 +1547,19 @@ def test_a_named_queue_over_the_limit_fails_even_with_a_live_consumer(redis_serv
 
     assert not report.ok, report.message
     assert 'over the limit' in report.message, report.message
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_named_queue_with_the_limit_off_is_judged_by_its_consumer_alone(redis_server):
+    """`0` turns the depth check off rather than allowing nothing.
+
+    It is what `HEALTHCHECK_MAX_QUEUE` has always meant, and reading it as a zero-message
+    limit would fail every queue that has anything in it at all.
+    """
+    redis_server.rpush('vip', b'{}', b'{}', b'{}')
+    redis_server.set(f'vip:heartbeat:{WORKER}', str(int(time.time())), ex=90)
+
+    report = check(queues=['vip'], max_queue=0)
+
+    assert report.ok, report.message
+    assert '3 queued' in report.message, report.message

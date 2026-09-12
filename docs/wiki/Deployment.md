@@ -514,7 +514,7 @@ The verdict for a named queue is not the one for this container's own, deliberat
 
 | what the probe finds | what it says |
 | --- | --- |
-| more waiting than `--max-queue` allows | **fails**, whether or not anything is consuming it — that limit is read first |
+| more waiting than `--max-queue` allows | **fails**, whether or not anything is consuming it — that limit is read first. `0` turns the check off rather than allowing nothing, which is also what `HEALTHCHECK_MAX_QUEUE` means |
 | messages waiting and no live consumer | **fails** — they are going nowhere and nobody is coming |
 | empty and no live consumer | **warns** — a queue declared for a client who has not written yet is waiting, not broken |
 | a live consumer, within the limit | healthy, with the depth and how old the consumer's last word is |
