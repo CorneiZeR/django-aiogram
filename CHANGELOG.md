@@ -140,11 +140,17 @@
 - **Several queues over one connection, where the transport can.** A container serving twenty
   client queues held twenty connections and twenty consumer threads, because a consumer was one
   queue's. `Broker.MULTIPLEXES` is the capability and each transport answers it: RabbitMQ
-  consumes several queues on one channel, Redis Streams reads several streams in one
-  `XREADGROUP`, and a crash-safe Redis list cannot -- `BLMOVE` takes one source -- so there a
-  consumer per queue stays the honest answer. Kafka can in principle and does not yet: the
-  offsets, the rewinds and the epoch behind every handle are keyed by partition, and a second
-  topic makes each of those a `(topic, partition)` question.
+  consumes several queues on one channel, Kafka subscribes to several topics on one consumer,
+  Redis Streams reads several streams in one `XREADGROUP`, and a crash-safe Redis list cannot
+  -- `BLMOVE` takes one source, and the move is what makes it crash-safe -- so there a consumer
+  per queue stays the honest answer.
+
+  Kafka's bookkeeping moved with it: the unsettled and settled offsets, the rewinds, and the
+  handle a message is settled by are keyed by `(topic, partition)` rather than by partition
+  alone, because partition 0 is a different place on every topic. A commit against the wrong
+  one would move an offset on a queue nobody had read -- the settled message coming back and
+  the unsettled one being skipped -- which is asserted by replacing the consumer and reading
+  what comes back, since the in-flight counts cannot see it.
 
   `Broker.take(timeout, queues)`, `take_nowait(queues)` and `reclaim(queues)` take the set;
   `None` is the one queue the broker addresses, which is what every caller before this passed

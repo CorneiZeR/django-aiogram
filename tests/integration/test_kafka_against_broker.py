@@ -270,18 +270,22 @@ def test_the_awaited_halves_work_off_the_loop(broker, kafka_bootstrap, kafka_top
 
 
 def test_a_handle_from_another_broker_is_refused(broker, kafka_bootstrap, kafka_topic):
-    """A position is a pair, so anything else came from a different transport."""
+    """A position names a place, so anything else came from a different transport."""
     with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
-        with pytest.raises(TypeError, match='partition, offset, epoch'):
+        with pytest.raises(TypeError, match='topic, partition, offset, epoch'):
             broker.ack(b'a redis payload')
 
-        with pytest.raises(TypeError, match='partition, offset, epoch'):
+        with pytest.raises(TypeError, match='topic, partition, offset, epoch'):
             broker.release(7)
 
         # a pair is the shape this broker used to hand out, and it is no longer enough: the
-        # rewind count is what makes a position mean something
-        with pytest.raises(TypeError, match='partition, offset, epoch'):
+        # rewind count is what makes a position mean something, and the topic is what makes the
+        # partition mean somewhere now that one consumer reads several
+        with pytest.raises(TypeError, match='topic, partition, offset, epoch'):
             broker.ack((0, 0))
+
+        with pytest.raises(TypeError, match='topic, partition, offset, epoch'):
+            broker.ack((0, 0, 0))
 
 
 def test_a_single_publish_does_not_wait_for_a_batch(broker):
@@ -461,7 +465,8 @@ def test_a_settle_from_another_thread_fails_rather_than_corrupting_the_offsets(b
 def test_a_handle_this_broker_is_not_holding_settles_nothing(broker, kafka_bootstrap, kafka_topic):
     """The shape of a handle is not enough: it has to be one that was handed out and not returned.
 
-    `_position` checks that a handle is a `(partition, offset, epoch)` triple and nothing more,
+    `_position` checks that a handle is a `(topic, partition, offset, epoch)` tuple and nothing
+    more,
     so a duplicate — or a tuple somebody built — with the right epoch would otherwise reach
     `commit` or `seek`. A second `ack` would put an already-committed offset back among the
     settled ones, and a `release` for an offset nobody took would move the live consumer to it.
@@ -474,11 +479,12 @@ def test_a_handle_this_broker_is_not_holding_settles_nothing(broker, kafka_boots
         broker.publish([payload(1), payload(2)])
         first = broker.take_nowait()
         assert first is not None, 'the first message was not delivered'
-        partition, offset, epoch = first.handle
+        topic, partition, offset, epoch = first.handle
         broker.ack(first.handle)
 
         broker.ack(first.handle)  # the same send reported twice
-        broker.release((partition, offset, epoch))  # and a release for what is already settled
+        # and a release for what is already settled
+        broker.release((topic, partition, offset, epoch))
 
         assert broker.inflight_depth() == 0, 'a settled offset came back into the in-flight count'
         second = broker.take_nowait()
@@ -557,3 +563,62 @@ def test_a_produced_record_survives_the_broker_going_away(
 
         assert taken is not None, 'an acknowledged produce did not survive the broker restarting'
         assert taken.payload == payload(12), 'something came back, but not the record produced'
+
+
+def test_two_topics_settle_separately_under_one_consumer(broker, kafka_bootstrap, kafka_topic):
+    """Partition 0 is a different place on every topic, which is what the handle has to carry.
+
+    One consumer subscribed to both and a message on each; one of them is settled and the other
+    is not, and then the consumer is replaced. What comes back is the whole assertion: a commit
+    that named the topic this broker was *built from* rather than the one the handle names would
+    move the offset on the wrong queue -- the settled message would come back and the unsettled
+    one would be skipped, which is the loss this keying exists to prevent. Measured by making
+    that mistake on purpose: the counts alone cannot see it, only the redelivery can.
+
+    The second topic is created and dropped here rather than by a fixture, because it exists
+    only for this case -- the rest of the file is about one topic's order.
+    """
+    from confluent_kafka.admin import AdminClient, NewTopic
+
+    beside = f'{kafka_topic}-also'
+    admin = AdminClient({'bootstrap.servers': kafka_bootstrap})
+    for future in admin.create_topics([NewTopic(beside, num_partitions=1, replication_factor=1)]).values():
+        future.result(timeout=30)
+    try:
+        with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
+            broker.publish([payload(1)])
+            KafkaBroker.configured(settings_for(kafka_bootstrap, beside)).publish([payload(2)])
+            both = (kafka_topic, beside)
+
+            seen = _read_until(broker, both, expected=2)
+            assert sorted(seen) == sorted(both), f'one topic was never read: {sorted(seen)}'
+
+            # only the one on the second topic, so what is committed and what is not are on
+            # different topics and a commit against the wrong one is visible
+            broker.ack(seen[beside].handle)
+            assert broker.inflight_depth() == 1, "settling one topic's message settled the other"
+
+            close_clients()  # the group hands both partitions to the consumer built below
+            again = _read_until(KafkaBroker(), both, expected=1)
+
+            assert sorted(again) == [kafka_topic], f'the wrong topic came back: {sorted(again)}'
+            assert again[kafka_topic].payload == payload(1)
+    finally:
+        close_clients()
+        for future in admin.delete_topics([beside]).values():
+            future.result(timeout=30)
+
+
+def _read_until(broker, topics, *, expected):
+    """Read both topics until this many distinct ones have answered, or the budget is out.
+
+    A budget rather than a count of reads: joining a group is a round trip -- measured at three
+    seconds against a local broker -- and a rebalance after a consumer is replaced is another.
+    """
+    seen = {}
+    deadline = time.monotonic() + 30
+    while len(seen) < expected and time.monotonic() < deadline:
+        taken = broker.take(0.5, topics)
+        if taken is not None:
+            seen[taken.queue] = taken
+    return seen

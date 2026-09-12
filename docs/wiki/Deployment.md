@@ -802,18 +802,17 @@ queue, and `MAX_IN_FLIGHT` is applied to each of them separately. A queue at its
 bound simply stops being read from until one of its sends finishes; the others
 keep being read.
 
-**What it costs depends on the transport.** RabbitMQ and Redis Streams read
-several queues over the connection they already have — several `basic_consume`
-on one channel, one `XREADGROUP` naming several streams — so a container serving
-twenty queues on either holds **one** connection and **one** consumer thread.
-A queue arriving in such a group is told to the consumer that is already
-running, so the clients it was already serving are not paused.
+**What it costs depends on the transport.** RabbitMQ, Kafka and Redis Streams
+read several queues over the connection they already have — several
+`basic_consume` on one channel, one `subscribe` naming several topics, one
+`XREADGROUP` naming several streams — so a container serving twenty queues on
+any of them holds **one** connection and **one** consumer thread. A queue
+arriving in such a group is told to the consumer that is already running, so the
+clients it was already serving are not paused.
 
 A crash-safe Redis list cannot: `BLMOVE` takes one source, and reading several
 keys would mean `BLPOP`, which loses the message between the pop and the send.
-Kafka can in principle and does not yet — this package's offset bookkeeping is
-per partition, and a second topic makes it a `(topic, partition)` question. On
-those two a container serving twenty queues holds twenty connections and twenty
+There a container serving twenty queues holds twenty connections and twenty
 threads, so serve them from a few containers by pool rather than all from one.
 
 ## Not using containers

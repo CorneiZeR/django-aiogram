@@ -207,6 +207,10 @@ def _against_kafka(path):
     # A transport's contract is that the topic exists; making it is the operator's job, or the
     # broker's `auto.create.topics.enable`, and here it is the fixture's
     _make_kafka_topic(unique)
+    # and the one the multiplexed case reads beside it, for the same reason: a subscription
+    # naming a topic that does not exist yet leaves the consumer with no assignment at all,
+    # so the case would time out on the topic it *can* read
+    _make_kafka_topic(f'{unique}-also')
     with override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS):
         broker = import_string(path)()
         broker.conformance_path = path
@@ -434,9 +438,11 @@ def test_several_queues_are_read_over_the_one_connection(broker: Broker):
     beside.publish([payload(22)])
 
     seen: dict[str, bytes] = {}
-    # a few turns rather than two: a transport may hand back nothing while it joins, and this
-    # is about what arrives rather than about how many reads it took
-    for _ in range(6):
+    # a budget rather than two reads: a transport may hand back nothing while it joins -- Kafka
+    # measured three seconds for an assignment -- and this is about what arrives rather than
+    # about how many reads it took or how long the first one waited
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
         taken = broker.take(0.5, (mine, second))
         if taken is None:
             continue

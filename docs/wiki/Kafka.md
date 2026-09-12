@@ -124,14 +124,20 @@ meant a setting nothing here reads shortened the poll: measured, `REDIS_TIMEOUT:
 setting. The name is unchanged because a queued message is still a queued message; what it means is
 the transport's own.
 
-## One topic per consumer, for now
+## Several topics on one consumer
 
-Kafka subscribes to several topics on one consumer, and this package does not use that yet: the
-unsettled and settled offsets, the rewinds and the epoch behind every handle are keyed by
-partition, and a second topic makes each of those a `(topic, partition)` question -- which is
-the commit arithmetic on this page, and it gets a change of its own rather than a corner of
-another one. A container serving three queues here runs three consumers, exactly as it always
-has.
+A container serving twenty client queues subscribes one consumer to all of them, so it holds
+one client and is one member of the group however many queues it reads.
+
+Everything this broker remembers about an offset is keyed by **`(topic, partition)`** for that
+reason, the handle included: partition 0 is a different place on every topic, and a commit that
+named the wrong one would move an offset on a queue nobody had read — the settled message would
+come back and the unsettled one would be skipped. That is asserted by replacing the consumer
+and reading what comes back, in `tests/integration/test_kafka_against_broker.py`; the in-flight
+counts alone cannot see it.
+
+A poll answers from whichever subscribed topic has something, and the set is resubscribed only
+when it moves.
 
 ## Where it shows through
 

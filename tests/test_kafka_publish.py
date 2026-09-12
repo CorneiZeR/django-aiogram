@@ -300,7 +300,7 @@ def test_take_does_not_poll_again_for_time_it_already_spent_joining(broker, monk
     after that makes `take(0.3)` come back at 0.6.
     """
     consumer = AssignedAfter(after=2)
-    monkeypatch.setattr(broker, '_consumer', lambda: consumer)
+    monkeypatch.setattr(broker, '_consumer', lambda queues=None: consumer)
 
     # one second, because the join polls in slices of `_JOIN_SLICE` and this needs the
     # assignment to land with time to spare: two slices is 0.4s, leaving 0.6s for the poll that
@@ -326,7 +326,7 @@ def test_take_does_not_spend_longer_than_it_was_given_on_joining(broker, monkeyp
     bound, so the case cannot pass by accident.
     """
     consumer = NeverAssigned()
-    monkeypatch.setattr(broker, '_consumer', lambda: consumer)
+    monkeypatch.setattr(broker, '_consumer', lambda queues=None: consumer)
 
     started = time.monotonic()
     assert broker.take(0.05) is None
@@ -343,7 +343,7 @@ def test_take_nowait_still_gives_the_join_its_own_budget(broker, monkeypatch):
     about a topic with something in it — which is exactly what it exists not to do.
     """
     consumer = NeverAssigned()
-    monkeypatch.setattr(broker, '_consumer', lambda: consumer)
+    monkeypatch.setattr(broker, '_consumer', lambda queues=None: consumer)
 
     started = time.monotonic()
     assert broker.take_nowait() is None

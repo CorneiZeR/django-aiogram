@@ -34,6 +34,8 @@ from django_aiogram.config.settings import SETTINGS_NAME
 logger = logging.getLogger('django_aiogram')
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from confluent_kafka import Consumer, Producer
 else:  # the annotations below are evaluated at runtime in a `|` union
     Consumer = Producer = Any
@@ -132,8 +134,12 @@ def shared_producer(bootstrap: str) -> 'Producer':
         return _producer[1]
 
 
-def consumer_for_thread(bootstrap: str, topic: str, group: str, timeout: float) -> 'Consumer':
+def consumer_for_thread(bootstrap: str, topic: 'str | Sequence[str]', group: str, timeout: float) -> 'Consumer':
     """Reach the calling thread's consumer, subscribed to ``topic`` as a member of ``group``.
+
+    One topic or several: Kafka subscribes a consumer to a list, so a container serving several
+    queues reads them all through the one client -- and the identity below carries the whole
+    set, so a consumer subscribed to two is not handed to a caller that wants three.
 
     ``enable.auto.commit`` is off, and that is the whole reason this transport can promise
     anything: a committed offset means "this message has been sent", and letting librdkafka
@@ -145,7 +151,8 @@ def consumer_for_thread(bootstrap: str, topic: str, group: str, timeout: float) 
     """
     from confluent_kafka import Consumer as KafkaConsumer  # noqa: PLC0415 - the driver is an extra
 
-    identity = (bootstrap, topic, group, timeout)
+    topics = (topic,) if isinstance(topic, str) else tuple(topic)
+    identity = (bootstrap, topics, group, timeout)
     existing: Consumer | None = getattr(_local, 'consumer', None)
     if existing is not None and getattr(_local, 'identity', None) == identity:
         return existing
@@ -162,7 +169,7 @@ def consumer_for_thread(bootstrap: str, topic: str, group: str, timeout: float) 
             'socket.timeout.ms': int(timeout * 1000),
         }
     )
-    consumer.subscribe([topic])
+    consumer.subscribe(list(topics))
     _local.identity, _local.consumer = identity, consumer
     return consumer
 

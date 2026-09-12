@@ -80,11 +80,10 @@ class QueueMultiplexingUnavailableError(BrokerError):
     """A transport asked to read several queues over the connection it has for one.
 
     ``MULTIPLEXES`` is the capability, and it is answered per transport rather than assumed:
-    RabbitMQ consumes several queues on one channel and Redis Streams reads several streams in
-    one ``XREADGROUP``. A crash-safe Redis list cannot -- ``BLMOVE`` takes one source -- and
-    Kafka could but does not yet, its offsets being keyed by partition. On those two a
-    container serving three queues runs three consumers, which is what it has always done and
-    what `Deployment.md` says the cost of.
+    RabbitMQ consumes several queues on one channel, Kafka subscribes to several topics on one
+    consumer, and Redis Streams reads several streams in one ``XREADGROUP``. A crash-safe Redis
+    list cannot -- ``BLMOVE`` takes one source -- so there a container serving three queues runs
+    three consumers, which is what it has always done and what `Deployment.md` says the cost of.
 
     Raised rather than quietly reading one of them: a consumer that believed it was serving
     three queues and was in fact serving one would leave two backlogs with nobody on them, and

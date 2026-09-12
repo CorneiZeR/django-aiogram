@@ -41,6 +41,10 @@ __all__ = ('KafkaBroker',)
 
 logger = logging.getLogger('django_aiogram')
 
+#: where a message sits, as everything this broker remembers is keyed: the topic and the
+#: partition together, because a partition number means a different place on every topic
+_Spot = tuple[str, int]
+
 #: what `committed()` answers for a partition nothing has committed yet
 _NO_OFFSET = -1001
 
@@ -67,14 +71,12 @@ _SOCKET_FLOOR, _SOCKET_CEILING = 0.01, 300.0
 class KafkaBroker(Broker):
     """One topic, one consumer group, and offsets committed only where they are contiguous."""
 
-    #: **not yet**, although Kafka itself subscribes to several topics on one consumer. What
-    #: stands in the way is this broker's own bookkeeping rather than the driver: the unsettled
-    #: and settled offsets, the rewinds and the epoch behind every handle are all keyed by
-    #: partition, and a second topic makes each of those a `(topic, partition)` question --
-    #: which is the commit arithmetic this transport is most delicate about. Left for a change
-    #: of its own, so a container serving several Kafka queues keeps a consumer per queue and
-    #: nothing about what it already does changes
-    MULTIPLEXES: ClassVar[bool] = False
+    #: one ``subscribe`` names as many topics as it likes, so a container serving twenty
+    #: queues reads them through the consumer it already has. Everything this broker keeps
+    #: about an offset is keyed by ``(topic, partition)`` for that reason: a partition number
+    #: means nothing on its own once there is a second topic, and a commit that named the
+    #: wrong one would move an offset on a queue nobody had read
+    MULTIPLEXES: ClassVar[bool] = True
 
     #: importable module, and the extra that installs it
     REQUIRES: ClassVar[tuple[str, str] | None] = ('confluent_kafka', 'kafka')
@@ -96,8 +98,8 @@ class KafkaBroker(Broker):
         #: offsets taken and not yet settled, and offsets settled out of order, per partition.
         #: Both are needed to know what may be committed: the lowest unsettled offset is the
         #: ceiling, and anything settled above it waits for it
-        self._unsettled: dict[int, set[int]] = {}
-        self._settled: dict[int, set[int]] = {}
+        self._unsettled: dict[_Spot, set[int]] = {}
+        self._settled: dict[_Spot, set[int]] = {}
         #: where each partition has been rewound to, in the order it happened. A handle carries
         #: how many rewinds its partition had seen when it was issued, so settling can ask
         #: whether any rewind *since* then reached its offset — see `_settleable`.
@@ -115,16 +117,35 @@ class KafkaBroker(Broker):
         #: The count of what was dropped is kept in `_rewound`, and a handle older than that
         #: count is refused *as rewound* rather than as unknown -- which is the diagnosis an
         #: earlier attempt at pruning lost, and the reason this is a base rather than a reset.
-        self._rewinds: dict[int, list[int]] = {}
+        self._rewinds: dict[_Spot, list[int]] = {}
         #: how many rewinds each partition saw before `_rewinds` was last compacted, so a
         #: handle's epoch stays comparable across a compaction: epochs count every rewind ever,
         #: while the list holds only the ones that can still matter
-        self._rewound: dict[int, int] = {}
+        self._rewound: dict[_Spot, int] = {}
+        #: the topics this instance reads, as the last take asked for them. Kept for the reason
+        #: the AMQP broker keeps its queues: settling reaches the consumer, and a consumer
+        #: built for a different subscription is a different consumer
+        self._serving: tuple[str, ...] = ()
         self._lock = threading.Lock()
 
     def _topic(self) -> str:
-        """Name the topic this broker produces to and consumes from."""
+        """Name the topic this broker produces to, and reads where nothing named a set."""
         return self.addressed()
+
+    def _topics(self, queues: 'Seq[str] | None') -> tuple[str, ...]:
+        """Name the topics a read is for: those asked for, or the one this broker addresses."""
+        if not queues:
+            return (self._topic(),)
+        return tuple(dict.fromkeys(str(one) for one in queues))
+
+    def _subscription(self) -> tuple[str, ...]:
+        """Name the topics this instance's consumer is subscribed to, its own included.
+
+        Its own is always in it for the same reason the AMQP channel declares its queue: a
+        settle reaches the consumer, and one built for a subscription this instance is not
+        using would be a second client in the group.
+        """
+        return tuple(dict.fromkeys((*self._serving, self._topic())))
 
     def _bootstrap(self) -> str:
         """Name the servers to reach, as librdkafka spells them."""
@@ -162,9 +183,14 @@ class KafkaBroker(Broker):
         """Return the same number, for the callers inside this class that read it per call."""
         return self.deadline()
 
-    def _consumer(self) -> 'Consumer':
-        """Reach this thread's consumer, subscribed on first use."""
-        return consumer_for_thread(self._bootstrap(), self._topic(), str(self.opt('KAFKA_GROUP')), self._timeout())
+    def _consumer(self, queues: 'Seq[str] | None' = None) -> 'Consumer':
+        """Reach this thread's consumer, subscribed on first use.
+
+        ``queues`` is what a read asks for; every other caller gets the subscription this
+        instance is already using, since settling has to reach the consumer holding the offset.
+        """
+        topics = self._topics(queues) if queues else self._subscription()
+        return consumer_for_thread(self._bootstrap(), topics, str(self.opt('KAFKA_GROUP')), self._timeout())
 
     # ------------------------------------------------------------------ producer
 
@@ -246,10 +272,12 @@ class KafkaBroker(Broker):
         `KAFKA_TIMEOUT`: the caller's arithmetic about how long a loop iteration can take is
         then wrong by two orders of magnitude, and the consumer's heartbeat is what pays for it.
 
-        One topic, for now: see :attr:`MULTIPLEXES`.
+        ``queues`` subscribes this consumer to several topics, which is one client and one
+        group member however many there are -- and the poll answers from whichever of them has
+        something. Changing the set is a resubscribe, so it is done only when it moves.
         """
-        self.one_queue(queues)
-        return self._wrap(self._polled(max(0.001, timeout)))
+        self._serving = self._topics(queues)
+        return self._wrap(self._polled(max(0.001, timeout), queues=queues))
 
     def take_nowait(self, queues: 'Seq[str] | None' = None) -> Taken | None:
         """Take one if one is there — after waiting for the group to say what "there" is.
@@ -270,10 +298,10 @@ class KafkaBroker(Broker):
         Worth knowing before putting this on a request path. `take` is the method the consumer
         loop uses, and it has a timeout of its own.
         """
-        self.one_queue(queues)
-        return self._wrap(self._polled(_FETCH_BUDGET, joining=self._timeout()))
+        self._serving = self._topics(queues)
+        return self._wrap(self._polled(_FETCH_BUDGET, joining=self._timeout(), queues=queues))
 
-    def _polled(self, timeout: float, *, joining: float | None = None) -> object:
+    def _polled(self, timeout: float, *, joining: float | None = None, queues: 'Seq[str] | None' = None) -> object:
         """Poll, and let a consumer that has not joined its group finish joining first.
 
         Any message that arrives while waiting is returned rather than dropped — a poll is how
@@ -286,7 +314,7 @@ class KafkaBroker(Broker):
         the 1.5-second fetch budget that method allows itself. `take` passes nothing, because a
         method with a timeout in its signature has to honour it.
         """
-        consumer = self._consumer()
+        consumer = self._consumer(queues)
         deadline = time.monotonic() + timeout
         if not consumer.assignment():
             # in slices rather than one long poll: librdkafka makes progress inside `poll`, and
@@ -328,11 +356,15 @@ class KafkaBroker(Broker):
         payload = message.value()  # type: ignore[attr-defined]  # as above
         if payload is None:
             return None
+        topic = message.topic()  # type: ignore[attr-defined]  # as above
         partition, offset = message.partition(), message.offset()  # type: ignore[attr-defined]  # as above
+        spot = (topic, partition)
         with self._lock:
-            self._unsettled.setdefault(partition, set()).add(offset)
-            epoch = self._rewound.get(partition, 0) + len(self._rewinds.get(partition, ()))
-        return Taken(payload, (partition, offset, epoch))
+            self._unsettled.setdefault(spot, set()).add(offset)
+            epoch = self._rewound.get(spot, 0) + len(self._rewinds.get(spot, ()))
+        # the topic in the handle as well as in the record: a commit names a topic, and a
+        # partition number on its own means a different place on every one of them
+        return Taken(payload, (topic, partition, offset, epoch), topic)
 
     def ack(self, handle: object) -> None:
         """Settle this message, and commit as far as the settled offsets reach.
@@ -345,24 +377,24 @@ class KafkaBroker(Broker):
         Nothing is committed when the lowest unsettled offset is the one just settled's
         neighbour; the next `ack` that closes the gap commits both.
         """
-        partition, offset, epoch = _position(handle)
+        spot, offset, epoch = _position(handle)
         with self._lock:
-            if not self._settleable(partition, offset, epoch):
+            if not self._settleable(spot, offset, epoch):
                 return
-            self._unsettled.get(partition, set()).discard(offset)
-            self._settled.setdefault(partition, set()).add(offset)
+            self._unsettled.get(spot, set()).discard(offset)
+            self._settled.setdefault(spot, set()).add(offset)
             # the ceiling is the lowest offset still outstanding, and *nothing* outstanding
             # means there is no ceiling — every settled offset may be committed. Taking the
             # just-settled offset as the ceiling instead, which this did at first, leaves the
             # last message of a batch uncommitted for ever: settle 1 then 0 and the commit
             # stops at 0, so 1 is redelivered on the next restart
-            outstanding = self._unsettled.get(partition) or set()
-            settled = self._settled[partition]
+            outstanding = self._unsettled.get(spot) or set()
+            settled = self._settled[spot]
             candidates = settled if not outstanding else {value for value in settled if value < min(outstanding)}
             highest = max(candidates, default=None)
             if highest is None:
                 return
-            self._settled[partition] = {value for value in settled if value > highest}
+            self._settled[spot] = {value for value in settled if value > highest}
 
             from confluent_kafka import TopicPartition  # noqa: PLC0415 - the driver is an extra
 
@@ -374,7 +406,8 @@ class KafkaBroker(Broker):
             #
             # `highest + 1`: a committed offset is the *next* one to read, measured —
             # committing message 0 makes `committed()` answer 1
-            self._consumer().commit(offsets=[TopicPartition(self._topic(), partition, highest + 1)], asynchronous=False)
+            topic, partition = spot
+            self._consumer().commit(offsets=[TopicPartition(topic, partition, highest + 1)], asynchronous=False)
 
     def release(self, handle: object) -> None:
         """Rewind to this message, so it and everything after it are delivered again.
@@ -389,9 +422,9 @@ class KafkaBroker(Broker):
         """
         from confluent_kafka import TopicPartition  # noqa: PLC0415 - the driver is an extra
 
-        partition, offset, epoch = _position(handle)
+        spot, offset, epoch = _position(handle)
         with self._lock:
-            if not self._settleable(partition, offset, epoch):
+            if not self._settleable(spot, offset, epoch):
                 return
             # the seek first, and the bookkeeping only if it worked. Rewinding is the part
             # that can fail — a consumer without this partition assigned answers
@@ -400,24 +433,24 @@ class KafkaBroker(Broker):
             # makes the message unsettleable by the thread that actually holds it.
             #
             # Inside the lock as well, so an `ack` cannot commit between the two
-            self._consumer().seek(TopicPartition(self._topic(), partition, offset))
+            self._consumer().seek(TopicPartition(*spot, offset))
             for tracked in (self._unsettled, self._settled):
-                held = tracked.get(partition)
+                held = tracked.get(spot)
                 if held is not None:
-                    tracked[partition] = {value for value in held if value < offset}
+                    tracked[spot] = {value for value in held if value < offset}
             # recorded so that settling can tell a handle this rewind invalidated from one it
             # left alone. Everything at or above `offset` will be delivered again; everything
             # below it is still in flight and still this worker's to settle
-            rewinds = self._rewinds.setdefault(partition, [])
+            rewinds = self._rewinds.setdefault(spot, [])
             rewinds.append(offset)
-            if not self._unsettled.get(partition) and not self._settled.get(partition):
+            if not self._unsettled.get(spot) and not self._settled.get(spot):
                 # nothing of this partition is in flight and nothing is waiting to be
                 # committed, so no handle this broker still expects can be judged by any of
                 # these — only handles it has already given up on, which the count refuses
-                self._rewound[partition] = self._rewound.get(partition, 0) + len(rewinds)
+                self._rewound[spot] = self._rewound.get(spot, 0) + len(rewinds)
                 rewinds.clear()
 
-    def _settleable(self, partition: int, offset: int, epoch: int) -> bool:
+    def _settleable(self, spot: '_Spot', offset: int, epoch: int) -> bool:
         """Say whether this handle may settle anything at all; call with the lock held.
 
         Two questions, and a handle has to pass both. The first is whether any rewind since this
@@ -450,8 +483,8 @@ class KafkaBroker(Broker):
         or a handle from somewhere else, which `_position` already refuses when it is not even
         the right shape.
         """
-        dropped = self._rewound.get(partition, 0)
-        since = self._rewinds.get(partition, ())[max(0, epoch - dropped) :]
+        dropped = self._rewound.get(spot, 0)
+        since = self._rewinds.get(spot, ())[max(0, epoch - dropped) :]
         # a handle older than the compaction point is refused without asking where the rewinds
         # went: compaction only happens after at least one of them, and the entries that could
         # have judged this handle are the ones that were dropped. Refusing is the safe answer
@@ -459,25 +492,23 @@ class KafkaBroker(Broker):
         if epoch < dropped or any(position <= offset for position in since):
             logger.warning(
                 'a message finished after its partition was rewound, so it will be redelivered',
-                extra={'tg_key': self._topic()},
+                extra={'tg_key': spot[0], 'tg_partition': spot[1]},
             )
             return False
-        return offset in self._unsettled.get(partition, set())
+        return offset in self._unsettled.get(spot, set())
 
     # ---------------------------------------------------------------- operations
 
-    def reclaim(self, queues: 'Seq[str] | None' = None) -> int | None:
+    def reclaim(self, queues: 'Seq[str] | None' = None) -> int | None:  # noqa: ARG002 - the contract's, and the group does this on every topic it holds
         """``None``: an uncommitted offset is redelivered by the group, not by this package.
 
         A consumer that dies stops sending heartbeats, the group rebalances, and its partitions
         go to another member from the last committed offset — so everything it had taken and
         not settled is delivered again without anybody reclaiming anything.
 
-        A set of topics is refused before that answer, as it is on :meth:`take`: nothing here
-        would have to be *done* for several, but answering a caller that believes this consumer
-        covers three of them would be agreeing with it.
+        Whatever set is asked for: the group's own recovery covers every topic this consumer
+        was subscribed to, so there is nothing more to do for three than for one.
         """
-        self.one_queue(queues)
         return None
 
     def depth(self) -> int:
@@ -660,20 +691,24 @@ def _left(deadline: float) -> float:
     return max(0.001, deadline - time.monotonic())
 
 
-def _position(handle: object) -> tuple[int, int, int]:
-    """Read a partition, offset and rewind count out of an opaque handle.
+def _position(handle: object) -> 'tuple[_Spot, int, int]':
+    """Read a place, an offset and a rewind count out of an opaque handle.
 
     Kafka names a message by where it sits, and the rewind count says whether that position
     still means what it did — so a handle of any other shape belongs to another broker, and the
     same refusal the Redis list and RabbitMQ make applies here.
+
+    The place is ``(topic, partition)`` since this consumer learnt to read several topics: a
+    partition number is a different place on each of them, and a commit is what would have gone
+    to the wrong one.
     """
-    triple = 3  # where the message sits, and which rewind of that partition it belongs to
-    wrong = not isinstance(handle, tuple) or len(handle) != triple or not all(isinstance(p, int) for p in handle)
-    if wrong:
+    quad = 4  # the topic, the partition, the offset, and which rewind of that place it belongs to
+    parts = handle if isinstance(handle, tuple) else ()
+    if len(parts) != quad or not isinstance(parts[0], str) or not all(isinstance(one, int) for one in parts[1:]):
         msg = (
-            'this broker settles by position, so a handle must be the (partition, offset, epoch) '
-            f'triple it handed out, not {type(handle).__name__}'
+            'this broker settles by position, so a handle must be the (topic, partition, offset, '
+            f'epoch) tuple it handed out, not {type(handle).__name__}'
         )
         raise TypeError(msg)
-    partition, offset, epoch = cast('tuple[int, int, int]', handle)
-    return partition, offset, epoch
+    topic, partition, offset, epoch = cast('tuple[str, int, int, int]', handle)
+    return (topic, partition), offset, epoch
