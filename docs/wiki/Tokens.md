@@ -4,6 +4,10 @@ A token is the bot. Anyone holding it can read every message the bot receives an
 and Telegram has no way to tell that apart from the real thing — so where the token is kept is
 a decision, and since 5.0 it is one this package can be told about.
 
+It matters most where the tokens are not yours: a deployment whose clients connect their own
+bot holds a credential per client. **[Dynamic bots](Dynamic-bots.md)** is where those arrive
+from, and **[Admin](Admin.md)** is the permission one is read behind.
+
 ## Where a token comes from
 
 Two places, and they are not the same kind of secret:

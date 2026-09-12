@@ -124,7 +124,8 @@ updates stop arriving.
 
 One URL for every bot would leave the update's own contents as the only clue about which bot
 it is for, and one shared secret would let a leak from one client's bot post as every other.
-So the path carries the identity and each bot has its own secret:
+So the path carries the identity and each bot has its own secret — the identity being the
+number in its token, which **[Multiple bots](Multiple-bots.md)** explains:
 
 ```python
 # urls.py
