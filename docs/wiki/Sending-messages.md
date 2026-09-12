@@ -23,6 +23,23 @@ bot.send('send_photo', chat_id=CHAT_ID, photo=URL, caption='look')
 bot.send('send_chat_action', chat_id=CHAT_ID, action='typing')
 ```
 
+## Which bot it goes through
+
+`bot` is the one a single-bot project has. A project with several reaches the rest by alias,
+and everything on this page works the same through either:
+
+```python
+from django_aiogram import bot, bots
+
+bots['support'].send(chat_id=CHAT_ID, text='from the support bot')
+bots.by_id(123456789).send(chat_id=CHAT_ID, text='from whoever that is')
+```
+
+A queued message **names the bot that made it**, so a container serving several delivers each
+through the right token — and a bot whose token has no identity queues a message that names
+none, which a consumer delivers through the bot it has. That is what makes a rolling upgrade
+from 4.1 work; **[Multiple bots](Multiple-bots.md)** has the rest.
+
 ## Checked before it is sent
 
 A method name is a string, so `bot.send('send_mesage', ...)` passes every type checker and

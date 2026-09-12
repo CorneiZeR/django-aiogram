@@ -138,3 +138,95 @@ def test_a_documented_settings_block_configures_what_it_says(name, settings):
     with override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost', **settings}):
         for key in driven:
             assert readers[key](settings[key]), f'{name}: {key}'
+
+
+#: the multi-bot blocks, which are the ones a reader copies to serve a second client
+BOTS_BLOCK = re.compile(r'^TELEGRAM_BOTS = (\{.*?^\})', re.DOTALL | re.MULTILINE)
+#: what a token looks like, so a page writing `'...'` where one goes is read as the placeholder
+#: it is rather than as a credential this could not parse
+TOKEN_SHAPE = re.compile(r'\d+:\S+')
+
+
+def a_token(alias: str) -> str:
+    """A token shaped like Telegram's, for a documented section that reads one from the env.
+
+    The pages write `os.environ['SUPPORT_TOKEN']`, which is what a project should write and
+    what nothing here can evaluate. Substituting a token of our own keeps the example on the
+    page honest *and* lets this drive it: what is under test is that the section resolves --
+    the alias, the identity, the override winning over the default -- and none of that is
+    about which characters the credential has.
+    """
+    return f'{abs(hash(alias)) % 900000 + 100000}:AA{alias}'
+
+
+def documented_bots(source: str, alias: str):
+    """Read one documented section into the values it names, env lookups included."""
+    tree = ast.parse(source, mode='eval').body
+
+    def value(node):
+        """Resolve one node: a literal, an enum member, or a token read from the environment."""
+        if isinstance(node, ast.Subscript | ast.Call):
+            # `os.environ['X']` and `os.environ.get('X')`: a credential, whichever way it is read
+            return a_token(alias)
+        return resolve(node)
+
+    written = {resolve(key): value(item) for key, item in zip(tree.keys, tree.values, strict=True)}
+    if not TOKEN_SHAPE.fullmatch(str(written.get('TOKEN', ''))):
+        # a page that writes `'...'` where the credential goes, which is the right thing for a
+        # page to write and not something this can resolve. The shape is what is under test
+        written['TOKEN'] = a_token(alias)
+    return written
+
+
+def multi_bot_examples():
+    """Every `TELEGRAM_BOTS = {...}` block the documentation tells a project to write."""
+    for path in DOCS:
+        if not path.is_file():
+            continue
+        for match in BOTS_BLOCK.finditer(path.read_text(encoding='utf-8')):
+            try:
+                sections = ast.parse(match.group(1), mode='eval').body
+                written = {
+                    resolve(alias): documented_bots(ast.unparse(section), resolve(alias))
+                    for alias, section in zip(sections.keys, sections.values, strict=True)
+                }
+            except (SyntaxError, ValueError):
+                continue  # a fragment written for a reader, with prose inside it
+            yield path.name, written
+
+
+BOT_EXAMPLES = list(multi_bot_examples())
+
+
+def test_there_is_a_documented_multi_bot_block_to_check():
+    """An empty parametrize is a guard that is not there -- see the two cases above it."""
+    assert BOT_EXAMPLES, 'no TELEGRAM_BOTS example was found in the docs'
+
+
+@pytest.mark.parametrize(
+    ('name', 'written'),
+    BOT_EXAMPLES,
+    ids=lambda value: value if isinstance(value, str) else '',
+)
+def test_a_documented_multi_bot_block_resolves_to_the_bots_it_names(name, written):
+    """The page tells a project to write these sections; the package has to read them as bots.
+
+    Driven through the resolver rather than compared as text, because what a page promises is
+    behaviour: every alias resolves to a bot, every bot has the identity its token carries, and
+    every setting a section names wins over the shared default -- which is the whole of what
+    `TELEGRAM_BOTS` is for, and the one thing a reader cannot check by looking.
+    """
+    from django_aiogram.config.bots import aliases, record
+
+    # a value each section overrides, so "the override wins" is asserted against something
+    defaults = {'REDIS_URL': 'redis://localhost:6379/0', 'RATE_LIMIT': {'overall_per_second': 1}}
+    with override_settings(TELEGRAM_BOT_DEFAULTS=defaults, TELEGRAM_BOTS=written):
+        assert sorted(aliases()) == sorted(written), f'{name}: the aliases did not resolve'
+        for alias, section in written.items():
+            found = record(alias)
+            assert found.bot_id == int(section['TOKEN'].split(':')[0]), f'{name}: {alias} has the wrong identity'
+            for key, value in section.items():
+                assert found[key] == value, f'{name}: {alias} did not keep its own {key}'
+            for key, value in defaults.items():
+                if key not in section:
+                    assert found[key] == value, f'{name}: {alias} did not inherit {key}'

@@ -120,6 +120,8 @@ the same pull request as the code they describe and published from `master`.
 | [Handlers](https://corneizer.github.io/django-aiogram/latest/Handlers/) | routers, filters, FSM, the async ORM |
 | [Sending messages](https://corneizer.github.io/django-aiogram/latest/Sending-messages/) | routes, keyboards, files, errors |
 | [Testing](https://corneizer.github.io/django-aiogram/latest/Testing/) | your suite without a broker, asserting what was queued |
+| [Multiple bots](https://corneizer.github.io/django-aiogram/latest/Multiple-bots/) | aliases, identities, what a set of bots shares and what it costs |
+| [Dynamic bots](https://corneizer.github.io/django-aiogram/latest/Dynamic-bots/) | bots that arrive while it runs: providers, reconciliation, quarantine, leases |
 | [API](https://corneizer.github.io/django-aiogram/latest/API/) | the instance, its internals, and what stays public |
 | [Delivery](https://corneizer.github.io/django-aiogram/latest/Delivery/) | how queued messages reach Telegram |
 | [Redis list](https://corneizer.github.io/django-aiogram/latest/Redis-list/) | the default transport: what it guarantees, and why the worker's name matters |
