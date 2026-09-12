@@ -500,7 +500,10 @@ can write to both streams and still exit 0.
 
 ```shell
 python manage.py tgbot_healthcheck --queue client-a --queue client-b
-python -m django_aiogram.healthcheck --queue client-a --queue client-b
+
+# the module form calls no django.setup(), so it needs the settings module in its environment
+DJANGO_SETTINGS_MODULE=myproject.settings python -m django_aiogram.healthcheck \
+    --queue client-a --queue client-b
 ```
 
 Each named queue is probed through a transport built for *it*, one line each, and the worst
