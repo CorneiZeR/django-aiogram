@@ -83,6 +83,18 @@ def payload(chat_id: int) -> bytes:
 #: contract loosely is exactly the thing this file exists to catch
 CONFORMANT = (*SHIPPED, 'django_aiogram.testing.InMemoryBroker')
 
+#: what each transport answers about reading several queues over one connection, pinned here
+#: rather than read off the class. The multiplexed case skips a transport that says ``False``,
+#: so a regression from ``True`` would turn that case into a skip and the refusal case into one
+#: asserting the wrong behaviour -- both green, and nothing saying the capability had gone
+MULTIPLEXING = {
+    'django_aiogram.broker.rabbitmq.RabbitMQBroker': True,
+    'django_aiogram.broker.kafka.KafkaBroker': True,
+    'django_aiogram.broker.redis_streams.RedisStreamsBroker': True,
+    'django_aiogram.broker.redis_list.RedisListBroker': False,
+    'django_aiogram.testing.InMemoryBroker': False,
+}
+
 
 @pytest.fixture(params=sorted(CONFORMANT), ids=lambda path: path.rsplit('.', 1)[-1])
 def broker(request):
@@ -412,6 +424,19 @@ def test_the_handle_is_opaque_and_round_trips(broker: Broker):
     broker.ack(taken.handle)
 
     assert broker.take_nowait() is None, 'the message survived being settled by its handle'
+
+
+@pytest.mark.parametrize('path', sorted(CONFORMANT))
+def test_each_shipped_transport_answers_what_it_did_about_reading_several_queues(path):
+    """The capability by name, so losing one is a failure rather than two quiet skips.
+
+    Every case below that is *about* multiplexing chooses its branch from `MULTIPLEXES`, so a
+    transport that stopped answering ``True`` would skip the case that checks it and run the
+    one that checks the refusal -- a suite that goes green over a capability that has gone.
+    """
+    assert MULTIPLEXING[path] == import_string(path).MULTIPLEXES, (
+        f'{path} changed its answer about reading several queues over one connection'
+    )
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)

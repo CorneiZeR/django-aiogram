@@ -93,7 +93,7 @@ def test_a_queue_added_to_the_pool_is_served_without_a_restart():
         consumers.reconcile(served_by([], ['vip']))
 
     assert log == [('started', ('client-1',)), ('started', ('client-2',))]
-    assert sorted(consumers.running) == ['client-1', 'client-2']
+    assert sorted(consumers.serving()) == ['client-1', 'client-2']
 
 
 def test_a_queue_that_left_the_pool_stops_being_consumed():
@@ -110,7 +110,7 @@ def test_a_queue_that_left_the_pool_stops_being_consumed():
 
     assert ('stopped', ('client-1',)) in log
     assert ('collected', ('client-1',)) in log, 'what the stopped consumer had in flight was left unsettled'
-    assert list(consumers.running) == ['client-2']
+    assert list(consumers.serving()) == ['client-2']
 
 
 def test_a_pass_that_cannot_read_the_queues_changes_nothing(monkeypatch, caplog):
@@ -152,7 +152,7 @@ def test_a_pass_that_cannot_read_the_queues_changes_nothing(monkeypatch, caplog)
             watcher.join(timeout=2)
 
     assert reads, 'the watcher never read the queues'
-    assert list(consumers.running) == ['client-1'], 'a failed read took the consumer down'
+    assert list(consumers.serving()) == ['client-1'], 'a failed read took the consumer down'
     assert log == [('started', ('client-1',))]
     assert 'could not re-read the queues to serve' in caplog.text
 
@@ -181,7 +181,7 @@ def test_one_queue_that_cannot_be_consumed_does_not_stop_the_others(caplog):
         consumers.reconcile(['broken', 'fine'])
 
     assert log == [('started', ('fine',))]
-    assert list(consumers.running) == ['fine']
+    assert list(consumers.serving()) == ['fine']
     assert any(record.tg_queue == 'broken' for record in caplog.records if hasattr(record, 'tg_queue'))
 
     consumers.reconcile(['broken', 'fine'])

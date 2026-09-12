@@ -127,7 +127,10 @@ the transport's own.
 ## Several topics on one consumer
 
 A container serving twenty client queues subscribes one consumer to all of them, so it holds
-one client and is one member of the group however many queues it reads.
+one client and is one member of the group however many queues it reads — for the queues that
+share a lane, which is those whose settings agree on everything but the queue name. Two queues
+on different bootstrap servers or different groups are two consumers, because they are two
+clients by definition.
 
 Everything this broker remembers about an offset is keyed by **`(topic, partition)`** for that
 reason, the handle included: partition 0 is a different place on every topic, and a commit that

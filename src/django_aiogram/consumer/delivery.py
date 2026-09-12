@@ -175,10 +175,12 @@ class Delivery(ABC):
         self.queues: tuple[str, ...] = tuple(queues) if queues else (self._own_queue(),)
         if len(self.queues) > 1 and not type(self.broker).MULTIPLEXES:
             raise QueueMultiplexingUnavailableError(type(self.broker).__name__, self.queues)
-        #: what a read asks for, and ``None`` where there is one queue -- which is the call
-        #: every transport has always been given, and what keeps a `Broker` somebody else
-        #: wrote out of a signature it never agreed to
-        self._asked: tuple[str, ...] | None = self.queues if len(self.queues) > 1 else None
+        #: what a read asks for, and ``None`` only where the one queue served is the one this
+        #: broker addresses anyway -- which is the call every transport has always been given,
+        #: and what keeps a `Broker` somebody else wrote out of a signature it never agreed to.
+        #: A single queue that is *not* the broker's own is named, or the read would take from
+        #: whatever the transport was configured with and the queue asked for would go unread
+        self._asked: tuple[str, ...] | None = None if self.queues == (self._own_queue(),) else self.queues
         #: sends in flight **per queue**, because the bound is per queue: one client's backlog
         #: must not stop the container reading for everybody else
         self._in_flight: dict[str, int] = dict.fromkeys(self.queues, 0)
@@ -587,7 +589,7 @@ class Delivery(ABC):
             for queue in asked:
                 self._in_flight.setdefault(queue, 0)
             self.queues = asked
-            self._asked = asked if len(asked) > 1 else None
+            self._asked = None if asked == (self._own_queue(),) else asked
 
     def in_flight(self, on_queue: str = '') -> int:
         """How many sends this consumer is holding, on one queue or across all of them.

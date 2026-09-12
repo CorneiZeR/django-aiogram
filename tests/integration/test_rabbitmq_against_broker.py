@@ -599,3 +599,32 @@ def test_a_confirmed_publish_survives_the_broker_going_away(amqp_url, amqp_conta
 
         assert taken is not None, 'a confirmed publish did not survive the broker restarting'
         assert taken.payload == payload(11), 'something came back, but not the message published'
+
+
+def test_a_send_that_finished_across_a_queue_set_change_is_still_settled(broker, broker_channel, amqp_url):
+    """A client arriving or leaving must not turn finished sends into duplicates.
+
+    `Delivery.serve` moves the set while sends are in flight, and a channel keyed by that set
+    would be replaced on the next read: closing it requeues every unacknowledged delivery, and
+    the acknowledgement that follows names a generation that is gone. The message a real person
+    has already received is then delivered again.
+
+    So the set is not part of the channel's identity, and this is the sequence that proves it:
+    take from two queues, read from one, and settle what the first read handed over.
+    """
+    beside = f'{AMQP_QUEUE}-also'
+    broker_channel.queue_declare(queue=beside, durable=True)
+    try:
+        with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
+            broker.publish([payload(1)])
+            taken = broker.take(1.0, (AMQP_QUEUE, beside))
+            assert taken is not None, 'the message was not delivered in the first place'
+
+            # the set shrinks, which is what a client going away does to a lane
+            assert broker.take(0.5, (AMQP_QUEUE,)) is None, 'something else was waiting on the queue'
+            broker.ack(taken.handle)
+
+            assert broker.inflight_depth() == 0, 'the settle was refused, so the message will come back'
+            assert broker.take_nowait((AMQP_QUEUE,)) is None, 'a finished send was redelivered'
+    finally:
+        broker_channel.queue_delete(queue=beside)

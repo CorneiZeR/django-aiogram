@@ -22,22 +22,29 @@ if TYPE_CHECKING:
 
     from django_aiogram.consumer.delivery import Delivery
 
-__all__ = ('Consumers', 'lanes', 'named', 'settle')
+__all__ = ('Consumers', 'Lane', 'lane_name', 'lanes', 'settle')
+
+#: what a consumer is held under: one queue by name, or the profile every queue in the lane
+#: shares a connection through. Tagged, so a queue called like a profile cannot be one
+Lane = tuple[str, object]
 
 logger = logging.getLogger('django_aiogram')
 
 
-def named(consumer: 'Delivery | None', lane: str) -> str:
+def lane_name(consumer: 'Delivery | None', lane: 'Lane') -> str:
     """Name a lane for a log line: the queues it serves, or its key where nothing knows them.
 
-    A lane's key is a connection's digest where several queues share one, and an operator
-    reading `tg_queue` wants the names they configured rather than eight hex characters.
+    A lane's key is a profile where several queues share a connection, and an operator reading
+    `tg_queue` wants the names they configured rather than a profile's repr.
     """
     serving = tuple(getattr(consumer, 'queues', ()) or ())
-    return ', '.join(serving) if serving else lane
+    if serving:
+        return ', '.join(serving)
+    kind, held = lane
+    return str(held) if kind == 'queue' else f'the queues on {held!r}'
 
 
-def lanes(queues: 'Iterable[str]') -> 'dict[str, tuple[str, ...]]':
+def lanes(queues: 'Iterable[str]') -> 'dict[Lane, tuple[str, ...]]':
     """Group the queues a container serves into the consumers that will read them.
 
     One consumer per *connection* where the transport can read several queues over one, and one
@@ -47,8 +54,10 @@ def lanes(queues: 'Iterable[str]') -> 'dict[str, tuple[str, ...]]':
     The key is what the container holds a consumer under, and it has to hold still while the
     membership moves: a lane keyed by the queues in it would be a different lane the moment a
     client arrived, so every queue already in it would be stopped and started again. So a
-    multiplexed lane is keyed by the connection its queues share, and a lane of one by the
-    queue itself -- the name every log line and every existing case already says.
+    multiplexed lane is keyed by the *profile* its queues share and a lane of one by the queue
+    itself, each tagged with which of the two it is -- a `Profile` rather than its digest, and
+    tagged rather than bare, because either shortcut is a way for two different lanes to land
+    on one key and be served by one consumer built from the wrong settings.
 
     A queue whose settings cannot be resolved is a lane of its own, because the answer to
     "which connection is this?" is the refusal `Consumers.reconcile` reports per queue: one
@@ -59,17 +68,18 @@ def lanes(queues: 'Iterable[str]') -> 'dict[str, tuple[str, ...]]':
     from django_aiogram.runtime.profiles import connection_of  # noqa: PLC0415 - as above
     from django_aiogram.runtime.queues import settings_for  # noqa: PLC0415 - as above
 
-    grouped: dict[str, tuple[str, ...]] = {}
+    grouped: dict[Lane, tuple[str, ...]] = {}
     for queue in dict.fromkeys(queues):
+        key: Lane = ('queue', queue)
         try:
             settings = settings_for(queue)
             transport = broker_class(settings, verify_driver=False)
-            key = connection_of(settings).digest if transport.MULTIPLEXES else queue
+            if transport.MULTIPLEXES:
+                key = ('connection', connection_of(settings))
         except Exception:  # noqa: BLE001 - whatever it was, `reconcile` meets it again with a queue name on it
             # not swallowed: `reconcile` builds this lane and reports the same failure with the
             # queue's name on it, which is where an operator can act on it
             logger.debug('could not group a queue by its connection; serving it on its own', extra={'tg_queue': queue})
-            key = queue
         grouped[key] = (*grouped.get(key, ()), queue)
     return grouped
 
@@ -90,7 +100,7 @@ class Consumers:
         self,
         build: 'Callable[[tuple[str, ...]], Delivery]',
         join_timeout: float,
-        ready: 'dict[str, Delivery] | None' = None,
+        ready: 'dict[Lane, Delivery] | None' = None,
     ) -> None:
         """Hold the consumers already built; the first pass starts them and builds the rest.
 
@@ -107,14 +117,14 @@ class Consumers:
         #: finished: the sends drained on the way out report themselves into a queue only
         #: their own consumer reads, and a consumer dropped at `stop` takes those with it --
         #: every message the drain delivered would be sent again by the next container
-        self._stopped: list[tuple[str, Delivery, threading.Thread]] = []
+        self._stopped: list[tuple[Lane, Delivery, threading.Thread]] = []
         #: set by `stop`, and never cleared: a pass can be inside a database read when the
         #: shutdown begins, and one that came back afterwards would start a daemon consumer
         #: behind the joins -- doing transport work while `bot.close()` runs, with nothing
         #: left to stop it
         self._done = False
         #: the consumer and the thread serving each lane, by the key :func:`lanes` gave it
-        self.running: dict[str, tuple[Delivery, threading.Thread]] = {}
+        self.running: dict[Lane, tuple[Delivery, threading.Thread]] = {}
         self._lock = threading.Lock()
 
     def reconcile(self, wanted: 'Iterable[str]') -> None:
@@ -166,7 +176,7 @@ class Consumers:
                         extra={'tg_queue': ', '.join(serving)},
                     )
 
-    def _follow(self, lane: str, serving: tuple[str, ...]) -> None:
+    def _follow(self, lane: 'Lane', serving: tuple[str, ...]) -> None:
         """Tell a running consumer which queues its lane holds now, if the set has moved.
 
         Told rather than restarted, which is the whole reason a lane has a key of its own: a
@@ -223,7 +233,7 @@ class Consumers:
                 consumer.collect()
             self._settle_what_has_stopped()
 
-    def _still_turning(self, lane: str) -> bool:
+    def _still_turning(self, lane: 'Lane') -> bool:
         """Whether a consumer this container stopped for that lane is still inside ``run``.
 
         Held under the caller's lock.
@@ -250,9 +260,9 @@ class Consumers:
             try:
                 consumer.collect()
             except Exception:
-                logger.exception('could not settle a stopped consumer', extra={'tg_queue': named(consumer, lane)})
+                logger.exception('could not settle a stopped consumer', extra={'tg_queue': lane_name(consumer, lane)})
 
-    def _stop(self, lane: str) -> 'tuple[Delivery, threading.Thread]':
+    def _stop(self, lane: 'Lane') -> 'tuple[Delivery, threading.Thread]':
         """Stop one consumer, wait out its thread, and hand both back for settling.
 
         Dropped from the running set even where the thread outlives the join: a consumer this
@@ -268,9 +278,21 @@ class Consumers:
             # grep for it, and a message that moved would be one nobody finds
             logger.warning(
                 'the delivery consumer did not stop in time',
-                extra={'tg_queue': named(consumer, lane), 'tg_timeout': self.join_timeout},
+                extra={'tg_queue': lane_name(consumer, lane), 'tg_timeout': self.join_timeout},
             )
         return consumer, thread
+
+    def serving(self) -> tuple[str, ...]:
+        """Every queue this container is consuming now, whichever lane it is in.
+
+        The question a reader of `running` usually has, answered without their having to know
+        what a lane is keyed by -- and answered from the consumers themselves, so a lane whose
+        set moved says what it is reading rather than what it was built for.
+        """
+        with self._lock:
+            return tuple(
+                queue for consumer, _thread in self.running.values() for queue in getattr(consumer, 'queues', ())
+            )
 
     def consumers(self) -> 'tuple[Delivery, ...]':
         """Every consumer running now, for a caller that has to reach all of them."""

@@ -805,10 +805,17 @@ keep being read.
 **What it costs depends on the transport.** RabbitMQ, Kafka and Redis Streams
 read several queues over the connection they already have — several
 `basic_consume` on one channel, one `subscribe` naming several topics, one
-`XREADGROUP` naming several streams — so a container serving twenty queues on
-any of them holds **one** connection and **one** consumer thread. A queue
-arriving in such a group is told to the consumer that is already running, so the
-clients it was already serving are not paused.
+`XREADGROUP` naming several streams — so twenty queues on any of them are
+**one** connection and **one** consumer thread. A queue arriving there is told
+to the consumer that is already running, so the clients it was already serving
+are not paused.
+
+That is per **lane**, and a lane is the queues whose settings agree on
+everything but which queue they name: the transport, the server, the serializer,
+`MAX_IN_FLIGHT`. Queues that disagree cannot share a connection and get a
+consumer each, which is the same arithmetic the runtime groups bots by. A
+container whose twenty client queues are configured alike — the ordinary case,
+since they differ by name and nothing else — is one connection.
 
 A crash-safe Redis list cannot: `BLMOVE` takes one source, and reading several
 keys would mean `BLPOP`, which loses the message between the pop and the send.

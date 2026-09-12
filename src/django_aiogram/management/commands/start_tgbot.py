@@ -23,7 +23,7 @@ from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import UpdateMode
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 from django_aiogram.consumer.delivery import Delivery, get_delivery
-from django_aiogram.consumer.serving import Consumers, lanes, settle
+from django_aiogram.consumer.serving import Consumers, Lane, lane_name, lanes, settle
 from django_aiogram.consumer.webhook import MODES, current_mode
 from django_aiogram.eventlog.events import worker_identity
 from django_aiogram.eventlog.recorder import recorder
@@ -54,8 +54,8 @@ def _split(written: str) -> list[str]:
 
 
 def _built_for(
-    serving: 'dict[str, tuple[str, ...]]', build: 'Callable[[tuple[str, ...]], Delivery]'
-) -> dict[str, 'Delivery']:
+    serving: 'dict[Lane, tuple[str, ...]]', build: 'Callable[[tuple[str, ...]], Delivery]'
+) -> dict['Lane', 'Delivery']:
     """Build the startup set, one consumer per lane, settling what was built if one refuses.
 
     The whole set is built before anything is started, so a refusal -- `REQUIRE_CRASH_SAFE` on
@@ -66,13 +66,13 @@ def _built_for(
     reclaimed: a refusal on the third queue would otherwise strand what the first two took,
     and nothing in this process could acknowledge those messages again.
     """
-    ready: dict[str, Delivery] = {}
+    ready: dict[Lane, Delivery] = {}
     try:
         for lane, queues in serving.items():
             ready[lane] = build(queues)
     except BaseException:
         for lane, built in ready.items():
-            settle(built, lane)
+            settle(built, lane_name(built, lane))
         raise
     return ready
 

@@ -104,6 +104,16 @@ class RabbitMQBroker(Broker):
         #: take after the one that registered them. Measured against a real broker: the second
         #: queue's message was delivered, cleared and never seen again
         self._subscribed_channel: Any = None
+        #: the consumer tag each subscribed queue was registered under, so one can be cancelled
+        #: without touching the others: `channel.cancel()` cancels every consumer on the
+        #: channel, which on a set that merely lost one queue would stop reading for the rest
+        self._tags: dict[str, str] = {}
+        #: the queues declared on the channel this broker is using. Declaring is idempotent and
+        #: cheap, and doing it here rather than when the channel is opened is what keeps the
+        #: channel's identity free of the queue set -- see `channel_for_thread`
+        self._declared: set[str] = set()
+        #: which channel generation those declarations were made on
+        self._declared_on: int | None = None
         #: the queues this instance reads, as the last take asked for them. Kept because every
         #: other call needs the same channel: settling by delivery tag on a channel opened for
         #: a *different* set is settling on a different channel, which AMQP requeues the whole
@@ -122,17 +132,23 @@ class RabbitMQBroker(Broker):
             return (self._queue(),)
         return tuple(dict.fromkeys(str(one) for one in queues))
 
-    def _working_set(self) -> tuple[str, ...]:
-        """Which queues this instance's channel must carry: what it reads, and what it writes to.
+    def _declare(self, channel: 'BlockingChannel', queues: 'Seq[str]') -> None:
+        """Declare each of these queues on this channel, once per channel.
 
-        Its own queue is always in it, since that is where a publish goes, and declaring one
-        more is idempotent -- what decides which queues are *consumed* is the subscription,
-        not the declaration.
+        Durable, so a broker restart does not lose the queue itself -- the messages in it are
+        marked persistent by the publisher. Remembered per channel rather than per process,
+        because a replaced channel is a replaced connection and the server may have been
+        restarted under it.
         """
-        return tuple(dict.fromkeys((*self._serving, self._queue())))
+        for queue in queues:
+            if queue in self._declared:
+                continue
+            channel.queue_declare(queue=queue, durable=True)
+            self._declared.add(queue)
+            self._declared_on = channel_generation()
 
     def _channel(self, queues: 'Seq[str] | None' = None) -> 'BlockingChannel':
-        """Reach this thread's channel, declaring the queue on first use.
+        """Reach this thread's channel, declaring the queues it is for on first use.
 
         The deadline comes from :meth:`call_timeout`, which is the only reader of
         ``RABBITMQ_TIMEOUT``. It used to be read again here with an `or 10` on it, and the two
@@ -140,9 +156,8 @@ class RabbitMQBroker(Broker):
         pika 10 while :attr:`call_ceiling` said 0, so `W004` and the consumer's cap were computed
         from a deadline no publish, get or confirm on this channel ever carried.
         """
-        return channel_for_thread(
+        channel = channel_for_thread(
             str(self.opt('RABBITMQ_URL')),
-            self._queues(queues) if queues else self._working_set(),
             # the same `or` idiom the deadline no longer uses, and kept on purpose: 0 *is* this
             # option's declared default and its meaning, so nothing a project writes changes hands
             # here except a value `int` would refuse outright. Refusing it by name needs a rule per
@@ -150,6 +165,9 @@ class RabbitMQBroker(Broker):
             int(str(self.opt('RABBITMQ_PREFETCH') or 0)),
             self.deadline(),
         )
+        self._notice_a_new_channel(channel)
+        self._declare(channel, self._queues(queues) if queues else (self._queue(),))
+        return channel
 
     # ------------------------------------------------------------------ producer
 
@@ -208,7 +226,6 @@ class RabbitMQBroker(Broker):
             return self._multiplexed(timeout, self._queues(queues))
         self._serving = (self._queue(),)
         channel = self._channel()
-        self._notice_a_new_channel(channel)
         if self._consumer is None or self._consumer_timeout != timeout:
             self._cancel(channel)
             self._consumer = channel.consume(self._queue(), inactivity_timeout=max(0.001, timeout))
@@ -233,7 +250,6 @@ class RabbitMQBroker(Broker):
         asked = self._queues(queues)
         self._serving = asked
         channel = self._channel(asked)
-        self._notice_a_new_channel(channel)
         self._cancel(channel)
         # what the subscriptions already handed over, before they are cancelled: a drain that
         # cancelled first would report an empty queue while this channel still held those
@@ -263,7 +279,6 @@ class RabbitMQBroker(Broker):
         """
         self._serving = queues
         channel = self._channel(queues)
-        self._notice_a_new_channel(channel)
         self._cancel(channel)
         self._subscribe(channel, queues)
         held = self._buffered(channel, queues)
@@ -319,15 +334,23 @@ class RabbitMQBroker(Broker):
             logger.exception('could not give back a delivery for a queue this consumer left', extra={'tg_key': queue})
 
     def _subscribe(self, channel: 'BlockingChannel', queues: tuple[str, ...]) -> None:
-        """Consume exactly these queues on this channel, rebuilding only when the set moves."""
+        """Consume exactly these queues on this channel, touching only what changed.
+
+        One consumer cancelled and one registered, rather than ``channel.cancel()`` and a fresh
+        set: cancelling every consumer to add a queue stops reading for the clients that were
+        already being served, and this is the path a container takes whenever one of them
+        arrives or goes away.
+        """
         if self._subscribed == queues:
             return
-        if self._subscribed:
-            # the whole set at once: a channel's consumers are cancelled together here rather
-            # than one at a time, and what is already delivered stays in hand
-            channel.cancel()
+        for queue in [held for held in self._subscribed if held not in queues]:
+            tag = self._tags.pop(queue, '')
+            if tag:
+                channel.basic_cancel(tag)
         for queue in queues:
-            channel.basic_consume(queue, self._delivery_into(queue), auto_ack=False)
+            if queue in self._tags:
+                continue
+            self._tags[queue] = channel.basic_consume(queue, self._delivery_into(queue), auto_ack=False)
         self._subscribed = queues
         self._subscribed_channel = channel
 
@@ -351,7 +374,9 @@ class RabbitMQBroker(Broker):
             return
         self._subscribed = ()
         self._subscribed_channel = None
-        channel.cancel()
+        for tag in self._tags.values():
+            channel.basic_cancel(tag)
+        self._tags.clear()
 
     def _issued(self, method: object, body: bytes | None, queue: str = '') -> Taken | None:
         """Hand out a message, remembering which channel's tag this is.
@@ -392,13 +417,18 @@ class RabbitMQBroker(Broker):
             self._consumer = None
             self._consumer_timeout = None
             self._consumer_channel = None
-        if self._subscribed and self._subscribed_channel is not channel:
+        if self._subscribed_channel is not None and self._subscribed_channel is not channel:
             # the subscriptions belonged to the channel that is gone, and so did anything it
             # had handed over: RabbitMQ requeues an unacknowledged delivery when its channel
             # drops, so those messages are back on their queues for whoever takes them next
             self._subscribed = ()
             self._subscribed_channel = None
+            self._tags.clear()
             self._delivered.clear()
+        if self._declared and channel_generation() != self._declared_on:
+            # a new channel is a new connection, and the server may have been restarted under
+            # it: what this instance declared belonged to the one that is gone
+            self._declared.clear()
         current = channel_generation()
         self._unsettled = {held for held in self._unsettled if _position(held)[0] == current}
 

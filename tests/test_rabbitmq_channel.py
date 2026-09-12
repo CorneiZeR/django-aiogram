@@ -25,14 +25,26 @@ SETTINGS = {
 }
 
 
+class _Channel:
+    """Enough of a channel for the broker to declare a queue on, and nothing more."""
+
+    def __init__(self):
+        """Hold what was declared, which is what a case about declaring would read."""
+        self.declared = []
+
+    def queue_declare(self, queue, *, durable=False):
+        """Record the declaration the broker makes on first use of this channel."""
+        self.declared.append((queue, durable))
+
+
 @pytest.fixture
 def recorded(monkeypatch):
     """Everything `channel_for_thread` is called with, without opening a connection."""
     calls = []
 
-    def record(url, queue, prefetch, blocked_timeout):
-        calls.append({'url': url, 'queue': queue, 'prefetch': prefetch, 'timeout': blocked_timeout})
-        return object()
+    def record(url, prefetch, blocked_timeout):
+        calls.append({'url': url, 'prefetch': prefetch, 'timeout': blocked_timeout})
+        return _Channel()
 
     monkeypatch.setattr(rabbitmq, 'channel_for_thread', record)
     return calls

@@ -171,6 +171,9 @@ def test_queues_sharing_a_connection_are_one_lane(redis_server):
     grouped = lanes(['vip', 'bulk'])
 
     assert list(grouped.values()) == [('vip', 'bulk')], grouped
+    # keyed by the profile the two share rather than by a name, so a queue cannot be mistaken
+    # for a connection and two connections cannot be mistaken for each other
+    assert [kind for kind, _held in grouped] == ['connection']
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=MEMORY)
@@ -178,7 +181,7 @@ def test_a_transport_that_reads_one_queue_gets_a_lane_each():
     """Which is every deployment before this, and the Redis list's answer for good."""
     grouped = lanes(['vip', 'bulk'])
 
-    assert grouped == {'vip': ('vip',), 'bulk': ('bulk',)}
+    assert grouped == {('queue', 'vip'): ('vip',), ('queue', 'bulk'): ('bulk',)}
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=MEMORY)
@@ -223,3 +226,23 @@ def test_the_feed_says_which_queue_a_message_came_off(redis_server, monkeypatch)
 
     queues = [event.detail.get('queue') for event in written]
     assert queues == ['bulk'], queues
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=STREAMS)
+def test_a_lane_that_shrinks_to_one_queue_goes_on_reading_that_queue(redis_server):
+    """The queue that is left is not necessarily the one this consumer's settings name.
+
+    A lane built for `vip` and `bulk` is built from `vip`'s settings, so its transport is
+    addressed at `vip`. When `vip` goes away the consumer serves `bulk` alone -- and a read
+    that stopped naming the queue then would take from `vip`, which nobody asked for, while
+    `bulk`'s backlog sat there with a consumer that believed it was serving it.
+    """
+    handler = Deferring()
+    delivery = consuming(handler)
+    delivery.serve(('bulk',))
+    publish('bulk', 'the queue that is left')
+    publish('vip', 'the queue that went away')
+
+    delivery.consume_pending()
+
+    assert [text for text, _ in handler.pending] == ['the queue that is left']
