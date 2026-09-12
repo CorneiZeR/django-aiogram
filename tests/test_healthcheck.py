@@ -1414,8 +1414,10 @@ def test_the_worst_of_several_queues_decides_the_verdict(redis_server):
     report = check(queues=['default', 'vip'])
 
     assert not report.ok, report.message
-    assert 'default:' in report.message
-    assert 'vip:' in report.message
+    # the whole line for each: a report that named both queues and said the same thing about
+    # them would satisfy a substring check while hiding which one is in trouble
+    assert 'default: 0 queued, consumer' in report.message, report.message
+    assert 'vip: 1 message(s) waiting and no live consumer' in report.message, report.message
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
@@ -1427,3 +1429,36 @@ def test_naming_a_queue_asks_about_that_queue_rather_than_this_process_one(redis
     report = check(queues=['vip'])
 
     assert '0 queued' in report.message or 'empty' in report.message, report.message
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'HEARTBEAT_INTERVAL': 'nonsense'})
+def test_an_unreadable_interval_is_a_verdict_rather_than_a_traceback(redis_server):
+    """A container probe answers; it does not raise.
+
+    `HEARTBEAT_INTERVAL` is read while judging a named queue's heartbeat, and an unreadable
+    one used to escape the guard — which a compose file reads as a crash loop with nothing in
+    it to act on.
+    """
+    redis_server.rpush('vip', b'{}')
+
+    report = check(queues=['vip'])
+
+    assert not report.ok, report
+    assert 'HEARTBEAT_INTERVAL' in report.message, report.message
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_heartbeat_nothing_can_decode_is_a_verdict_too(redis_server):
+    """Bytes on the wire are not ours to promise anything about.
+
+    A `REDIS_URL` shared with a cache backend makes redis-py decode this key, and what comes
+    back may be neither a number nor text — `UnicodeDecodeError` is a `ValueError`, which is
+    why the order of the two clauses matters.
+    """
+    redis_server.rpush('vip', b'{}')
+    redis_server.set(f'vip:heartbeat:{WORKER}', b'\xff\xfe', ex=90)
+
+    report = check(queues=['vip'])
+
+    assert not report.ok, report
+    assert 'liveness' in report.message or 'no live consumer' in report.message, report.message

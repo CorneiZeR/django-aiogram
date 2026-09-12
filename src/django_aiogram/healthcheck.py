@@ -497,14 +497,24 @@ def _served(broker: Broker, *, queued: int, asked: _Asked) -> Report:
     """
     try:
         report = broker.liveness()
-    except (_RedisError, BrokerError) as refusal:
+        # inside the guard with it: `_setting_int` refuses an unreadable `HEARTBEAT_INTERVAL`
+        # by raising, and a probe that let that out would answer a container with a traceback
+        # rather than with a verdict -- which is the one thing this module promises not to do
+        ttl = heartbeat_ttl(max(1, _setting_int('HEARTBEAT_INTERVAL')))
+    # the same set the default path narrows to, and in the same order: `UnicodeDecodeError`
+    # *is* a `ValueError`, so a heartbeat this client could not decode has to be caught before
+    # the clause that reads as a settings problem. See `_liveness_age`, which is where the
+    # reasoning for each of these lives -- a second, narrower set here is how one path grows a
+    # traceback the other cannot have
+    except UnicodeDecodeError as refusal:
+        return Report(ok=False, message=f'could not read the consumer liveness: {refusal}')
+    except (ImproperlyConfigured, ValueError, _RedisError, BrokerError, _UnhealthyError) as refusal:
         return Report(ok=False, message=f'could not read the consumer liveness: {refusal}')
     if not report.reported:
         # the transport tracks its own consumers, so nobody outside can say: the depth is the
         # whole answer here, and guessing would be worse than reporting less
         said = report.detail or 'tracked by the transport'
         return Report(ok=True, message=f'{queued} queued, consumer {said}')
-    ttl = heartbeat_ttl(max(1, _setting_int('HEARTBEAT_INTERVAL')))
     limit = ttl if asked.max_age is None else asked.max_age
     if report.age is not None and report.age <= limit:
         return Report(ok=True, message=f'{queued} queued, consumer {int(report.age)}s old')

@@ -355,5 +355,6 @@ def test_the_healthcheck_names_the_bots_a_supervisor_stopped_serving():
     call_command('tgbot_healthcheck', no_consumer=True, stdout=out)
 
     said = out.getvalue()
-    assert 'bot 111111 is quarantined' in said, said
-    assert 'revoked' in said, said
+    # the whole reason: a command that replaced what the supervisor wrote with a generic
+    # word would still contain both halves asserted separately
+    assert 'bot 111111 is quarantined: revoked: TelegramUnauthorizedError' in said, said
