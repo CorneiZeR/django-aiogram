@@ -279,7 +279,7 @@ token, a broker or a running loop.
 
 | | |
 | --- | --- |
-| `capture_sends(bot=None, queue=None)` | a context manager; the block's queued sends, as records with `function`, `kwargs`, `correlation_id`, `queued_at` and `bot_id`. `bot` and `queue` narrow what it captures |
+| `capture_sends(bot=None, *, queue=None)` | a context manager; the block's queued sends, as records with `function`, `kwargs`, `correlation_id`, `queued_at` and `bot_id`. `bot` and `queue` narrow what it captures |
 | `Captured.for_bot(bot)` | the sends one bot made, by alias or identity; raises `NotCapturedError` for a bot this capture is not watching |
 | `NotCapturedError` | an `AssertionError`, so a wrong question fails the test rather than passing it |
 | `InMemoryBroker` | a real `Broker` with no server — point `BROKER` at `'django_aiogram.testing.InMemoryBroker'` for a whole suite |

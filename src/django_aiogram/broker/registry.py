@@ -56,14 +56,15 @@ class _Scope:
     def answers_for(self, settings: 'Mapping[str, Any] | None', *, whole_group: bool) -> bool:
         """Whether this override is the transport those settings should use.
 
-        ``whole_group`` asks on behalf of a :class:`~django_aiogram.runtime.groups.RuntimeGroup`
-        rather than one bot, and a scope narrowed to *bots* answers no to it: a group serves
-        every bot on its profile, and twenty bots configured alike share one -- so installing
-        one client's capture as the group's transport would capture the other nineteen.
+        Every field the scope names has to match. ``whole_group`` asks on behalf of a
+        :class:`~django_aiogram.runtime.groups.RuntimeGroup` rather than one bot, and a scope
+        narrowed to *bots* answers no to it: a group serves every bot on its profile, and
+        twenty bots configured alike share one -- so installing one client's capture as the
+        group's transport would capture the other nineteen.
         """
         if self.queue is None and not self.bots:
             return True
-        if whole_group and not self.queue:
+        if whole_group and self.bots:
             return False
         if settings is None:
             # the process-wide defaults rather than a bot's: a narrowed override is about
@@ -74,9 +75,12 @@ class _Scope:
         from django_aiogram.config.bots import parse_bot_id  # noqa: PLC0415 - as above
         from django_aiogram.runtime.queues import named  # noqa: PLC0415 - as above
 
-        if self.queue is not None and named(settings) == self.queue:
-            return True
-        return bool(self.bots) and parse_bot_id(settings.get('TOKEN')) in self.bots
+        # every field that was named has to match, rather than any of them: a block that says
+        # *this bot on this queue* is narrower than either half, and reading it as an either-or
+        # would capture the bot's sends on some other queue -- and everybody else's on this one
+        if self.queue is not None and named(settings) != self.queue:
+            return False
+        return not self.bots or parse_bot_id(settings.get('TOKEN')) in self.bots
 
 
 #: a broker handed in rather than resolved, for the length of a test. Consulted *before*

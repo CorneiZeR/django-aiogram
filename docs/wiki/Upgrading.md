@@ -94,6 +94,12 @@ field, so a message queued for the new bot would be delivered through the old on
 token, and a chat it may not be in. Nothing raises and nothing is dropped, which is what makes
 this worth doing in order.
 
+**A captured send says which bot made it.** `Sent` carries `bot_id`, added at the end, so
+`sent[0].kwargs` and every attribute you already read are unchanged — but the record is five
+values now, and `function, kwargs, correlation_id, queued_at = sent[0]` raises `ValueError`.
+Read the fields by name. See **[Testing](Testing.md#several-bots)** for `for_bot` and the
+narrowed captures.
+
 If you ship a `Broker` of your own, `option`, `call_timeout` and `broker_class` now take the
 settings to read from. Calling them is unchanged — the argument is optional and falls back to
 the shared settings. An **override** is not: `def option(cls, key, settings=None)` and

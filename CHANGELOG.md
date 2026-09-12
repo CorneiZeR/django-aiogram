@@ -138,7 +138,9 @@
   `AppConfig.ready()`.
 
 - **The testing helpers know which bot a send was made through.** Each record carries
-  `bot_id`, `sent.for_bot('support')` reads one bot's sends by alias or by identity, and
+  `bot_id` -- at the end of the `NamedTuple`, so every attribute reads as before and only
+  unpacking all four values at once has to change, which the upgrading page says out loud.
+  `sent.for_bot('support')` reads one bot's sends by alias or by identity, and
   `capture_sends(bot='support')` or `capture_sends(queue='vip')` narrows the capture itself --
   every other bot then keeps the transport it was configured with, so one client's sends can be
   captured while another's keep flowing. `capture_telegram_sends` is the fixture that narrows,

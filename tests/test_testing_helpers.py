@@ -37,6 +37,8 @@ TWO_BOTS = {'a': {'TOKEN': A_TOKEN}, 'b': {'TOKEN': B_TOKEN}}
 #: the same two, one per queue. `QUEUES` declares both, or the group of the uncaptured bot
 #: refuses to publish to a queue nothing consumes
 LANES = {'a': {'TOKEN': A_TOKEN, 'QUEUE': 'vip'}, 'b': {'TOKEN': B_TOKEN, 'QUEUE': 'bulk'}}
+#: both on one queue, which is where a scope read as an either-or captures the wrong bot
+SHARED_LANE = {'a': {'TOKEN': A_TOKEN, 'QUEUE': 'vip'}, 'b': {'TOKEN': B_TOKEN, 'QUEUE': 'vip'}}
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
@@ -364,3 +366,36 @@ def test_a_capture_for_one_bot_is_not_its_groups_transport():
         assert len(group.broker.messages) == 1
 
     assert sent.kwargs == []
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**MULTI, 'QUEUES': ('vip',)}, TELEGRAM_BOTS=SHARED_LANE)
+def test_naming_a_bot_and_a_queue_means_both_of_them():
+    """Both bots are on `vip`, so a scope that answered on *either* half would capture `b` too.
+
+    Which is the whole difference between "this bot on this queue" and "this bot or this
+    queue": the narrower reading is the one a case asking for both wrote down.
+    """
+    with capture_sends(bot='a', queue='vip') as sent:
+        bots['a'].send(chat_id=1, text='to a')
+        bots['b'].send(chat_id=2, text='to b')
+        elsewhere = bots['b'].broker.messages
+
+    assert sent.kwargs == [{'chat_id': 1, 'text': 'to a'}]
+    assert len(elsewhere) == 1, "b's send on the same queue did not reach its own transport"
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**MULTI, 'QUEUES': ('vip', 'bulk')}, TELEGRAM_BOTS=LANES)
+def test_a_queue_capture_refuses_a_bot_from_another_queue():
+    """A capture on a queue watches whichever bots name it, so one that does not is outside it.
+
+    The same refusal as a capture narrowed to bots, and for the same reason: `b` queued its
+    message somewhere this capture cannot see, and an empty list would read as *nothing was
+    sent*.
+    """
+    with capture_sends(queue='vip') as sent:
+        bots['a'].send(chat_id=1, text='vip')
+        bots['b'].send(chat_id=2, text='bulk')
+
+    assert [one.kwargs for one in sent.for_bot('a')] == [{'chat_id': 1, 'text': 'vip'}]
+    with pytest.raises(NotCapturedError, match="queue 'vip'"):
+        sent.for_bot('b')

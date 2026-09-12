@@ -20,6 +20,8 @@ from django_aiogram.wire.serializers import loads
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from django_aiogram.config.bots import BotRecord
+
 __all__ = ('Captured', 'NotCapturedError', 'Sent', 'capture_sends')
 
 #: the string a project writes into ``BROKER`` to use this transport for a whole test settings
@@ -65,15 +67,23 @@ class Captured:
     on to run the consumer over the very same messages.
     """
 
-    def __init__(self, broker: InMemoryBroker, watching: 'frozenset[int] | None' = None) -> None:
-        """Hold the queue this reads from, and which bots it was asked to watch.
+    def __init__(
+        self,
+        broker: InMemoryBroker,
+        watching: 'frozenset[int] | None' = None,
+        queue: str | None = None,
+    ) -> None:
+        """Hold the queue this reads from, and what it was asked to watch.
 
-        ``watching`` is ``None`` for a capture that was not narrowed -- every bot in the
-        process -- and a set of identities otherwise. It is what :meth:`for_bot` refuses on:
-        a question about a bot outside it has no true answer here.
+        ``watching`` is ``None`` for a capture that was not narrowed to bots -- every bot in
+        the process -- and a set of identities otherwise. ``queue`` is the queue it was
+        narrowed to, which watches a *set of bots nobody wrote down*: whichever ones name that
+        queue. Both are what :meth:`for_bot` refuses on, because a question about a bot outside
+        either has no true answer here.
         """
         self._broker = broker
         self._watching = watching
+        self._queue = queue
 
     @property
     def payloads(self) -> tuple[bytes, ...]:
@@ -109,7 +119,9 @@ class Captured:
 
         Refuses a bot this capture was not watching rather than answering with an empty list:
         the empty list is what a passing assertion is made of, and a case that asserted
-        *nothing was sent* about a bot nobody was capturing would pass for ever.
+        *nothing was sent* about a bot nobody was capturing would pass for ever. A capture
+        narrowed to a queue refuses on the same ground -- it is watching the bots that name
+        that queue, whichever those are, and a bot on another one is outside it.
         """
         identity = _identity(bot)
         if self._watching is not None and identity not in self._watching:
@@ -119,7 +131,29 @@ class Captured:
                 'Pass that bot to capture_sends(), or ask the capture that is watching it.'
             )
             raise NotCapturedError(msg)
+        if self._queue is not None:
+            self._refuse_off_queue(bot, identity)
         return [one for one in self._decoded() if one.bot_id == identity]
+
+    def _refuse_off_queue(self, bot: 'int | str', identity: int) -> None:
+        """Refuse a bot whose queue is not the one this capture is on.
+
+        The queue a bot names is what put it inside or outside the capture, so the question is
+        answered from the bot's own resolved settings -- and a bot nothing is configured as
+        cannot be shown to be on this queue, which is a refusal rather than a guess.
+        """
+        # deferred: the settings, and this module is imported by a project's conftest
+        from django_aiogram.runtime.queues import named  # noqa: PLC0415 - as above
+
+        found = _record_for(bot)
+        on = None if found is None else named(found)
+        if on != self._queue:
+            where = f'queue {on!r}' if found is not None else 'no bot these settings configure'
+            msg = (
+                f'this capture is on queue {self._queue!r}, and bot {identity} is {where}. '
+                'Capture that queue instead, or ask a capture that is watching this bot.'
+            )
+            raise NotCapturedError(msg)
 
     @property
     def kwargs(self) -> list[dict[str, Any]]:
@@ -143,6 +177,22 @@ class Captured:
         return calls
 
 
+def _record_for(bot: 'int | str') -> 'BotRecord | None':
+    """Return the configured bot a test named, or ``None`` where nothing configures it.
+
+    An alias that resolves to nothing is refused where it is written, by the same reader the
+    runtime uses. An identity is looked up among the configured bots instead, and answers
+    ``None`` when none of them carries it -- a payload can name a bot this process does not
+    serve, and that is a fact about the deployment rather than a mistake in the case.
+    """
+    # deferred: the settings, and this module is imported by a project's conftest
+    from django_aiogram.config.bots import record, records  # noqa: PLC0415 - as above
+
+    if isinstance(bot, str):
+        return record(bot)
+    return next((found for found in records() if found.bot_id == bot), None)
+
+
 def _identity(bot: 'int | str') -> int:
     """Return the identity a test named, whether it wrote the number or the alias.
 
@@ -153,11 +203,8 @@ def _identity(bot: 'int | str') -> int:
     """
     if isinstance(bot, int):
         return bot
-    # deferred: the settings, and this module is imported by a project's conftest
-    from django_aiogram.config.bots import record  # noqa: PLC0415 - as above
-
-    found = record(bot)
-    if found.bot_id is None:
+    found = _record_for(bot)
+    if found is None or found.bot_id is None:
         msg = f'the bot {bot!r} has no identity in its token, so nothing it sends can name it.'
         raise NotCapturedError(msg)
     return found.bot_id
@@ -185,10 +232,10 @@ def capture_sends(
     queue nothing had written to. Measured, by writing it that way first.
 
     ``bot`` narrows it to one bot, by identity or by the alias it is configured under, and
-    ``queue`` to one queue: every other bot then goes on using the transport it was
-    configured with, so a case can capture one client's sends while another's keep flowing.
-    Left out, the capture stands for every bot, which is what a single-bot project's suite
-    already has.
+    ``queue`` to one queue; given both, it is that bot on that queue and nothing else. Every
+    other bot then goes on using the transport it was configured with, so a case can capture
+    one client's sends while another's keep flowing. Left out, the capture stands for every
+    bot, which is what a single-bot project's suite already has.
 
     Asking a narrowed capture about a bot it is *not* watching raises
     :class:`NotCapturedError` rather than answering with an empty list -- see
@@ -207,4 +254,4 @@ def capture_sends(
     watching = None if bot is None else frozenset({_identity(bot)})
     broker = InMemoryBroker()
     with use_broker(broker, queue=queue, bots=watching):
-        yield Captured(broker, watching)
+        yield Captured(broker, watching, queue)
