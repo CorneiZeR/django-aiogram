@@ -137,6 +137,21 @@
   which is what lets a container probe answer in hundredths of a second rather than paying for
   `AppConfig.ready()`.
 
+- **The testing helpers know which bot a send was made through.** Each record carries
+  `bot_id` -- at the end of the `NamedTuple`, so every attribute reads as before and only
+  unpacking all four values at once has to change, which the upgrading page says out loud.
+  `sent.for_bot('support')` reads one bot's sends by alias or by identity, and
+  `capture_sends(bot='support')` or `capture_sends(queue='vip')` narrows the capture itself --
+  every other bot then keeps the transport it was configured with, so one client's sends can be
+  captured while another's keep flowing. `capture_telegram_sends` is the fixture that narrows,
+  and a `TestCase` sets `capture_bot` or `capture_queue` on the class. `use_broker` takes the
+  same `bots=` and `queue=`.
+
+  Asking a narrowed capture about a bot it is not watching raises `NotCapturedError` rather
+  than answering with an empty list: the empty list is what a passing assertion is made of, so
+  a suite that asserted nothing was sent about a bot nobody was capturing would go green for
+  ever. A single-bot suite writes none of this and keeps working unchanged.
+
 - **The commands act on the bots and queues they are told about.** `--bot` on
   `tgbot_replay`, `tgbot_prune_events` and `tgbot_dispatch_scheduled`, and `--queue` on
   `tgbot_reclaim`; each defaults to what a single-bot install already had. A replay that swept

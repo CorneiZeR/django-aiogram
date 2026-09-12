@@ -82,7 +82,16 @@ FOUR_ONE_COROUTINES = ('aoutcome',)
 #: exists: the names below are supported the way `bot.send` is, so that the wire format and the
 #: transport key stop being things other people's tests can depend on. Pinned by import rather
 #: than through the bot, because none of them hangs off the client
-TESTING_HELPERS = ('Captured', 'InMemoryBroker', 'SendCaptureMixin', 'Sent', 'capture_sends')
+TESTING_HELPERS = (
+    'Captured',
+    'InMemoryBroker',
+    # 5.0: a narrowed capture refuses a bot it is not watching, and a project's suite catches
+    # that refusal by name
+    'NotCapturedError',
+    'SendCaptureMixin',
+    'Sent',
+    'capture_sends',
+)
 
 #: what `import django_aiogram` gives you. `redis_conn` and `get_redis` left in 4.0: one
 #: transport's client is not the package's business to export, and both are still importable
@@ -480,13 +489,17 @@ def test_the_fixture_and_the_seam_under_it_are_still_there():
     """The two halves that are not classes: the pytest fixture and the registry's override.
 
     `Testing.md` tells a project to write `pytest_plugins = ('django_aiogram.testing.plugin',)`
-    and reach for `telegram_sends`; `use_broker` is what the helper is built on and what a
-    project's own fixtures reach for when they want the same thing by hand.
+    and reach for `telegram_sends` -- or for `capture_telegram_sends`, which narrows the
+    capture to one bot; `use_broker` is what both are built on and what a project's own
+    fixtures reach for when they want the same thing by hand.
     """
     from django_aiogram.broker.registry import use_broker
-    from django_aiogram.testing.plugin import telegram_sends
+    from django_aiogram.testing.plugin import capture_telegram_sends, telegram_sends
 
     assert callable(use_broker)
+    assert any(
+        hasattr(capture_telegram_sends, name) for name in ('_pytestfixturefunction', '_fixture_function_marker')
+    ), 'capture_telegram_sends stopped being a fixture'
     # pytest wraps a fixture in an object that carries the marker; the attribute it hangs it
     # on has changed name across releases, so ask for either rather than pinning pytest's
     assert any(hasattr(telegram_sends, name) for name in ('_pytestfixturefunction', '_fixture_function_marker')), (

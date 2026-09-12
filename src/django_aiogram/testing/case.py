@@ -28,11 +28,24 @@ class SendCaptureMixin:
 
     Mixed in **before** ``TestCase``, so its ``setUp`` runs first and the capture is already
     up when the case's own ``setUp`` queues anything.
+
+    A multi-bot case narrows it by setting :attr:`capture_bot` or :attr:`capture_queue` on the
+    class, which is the only place a ``TestCase`` has to say so -- ``setUp`` runs before the
+    method and cannot be passed anything. Every other bot then keeps the transport it was
+    configured with, and ``self.sent.for_bot(...)`` refuses a bot outside the capture instead
+    of answering with an empty list.
     """
 
     #: what the block queued, replaced per test. Declared so a reader of the class knows it
     #: is there without running one
     sent: Captured
+
+    #: which bot the capture is narrowed to, by identity or by the alias it is configured
+    #: under. ``None`` -- the default, and what a single-bot suite keeps -- captures every bot
+    capture_bot: 'int | str | None' = None
+
+    #: which queue it is narrowed to. ``None`` captures whichever queue each bot names
+    capture_queue: str | None = None
 
     #: `TestCase` supplies this; declared so the mixin type-checks on its own, since it is a
     #: plain object until something mixes it into a case
@@ -40,7 +53,7 @@ class SendCaptureMixin:
 
     def setUp(self) -> None:
         """Start the capture, then let the case's own setup run inside it."""
-        self._capture = capture_sends()
+        self._capture = capture_sends(self.capture_bot, queue=self.capture_queue)
         self.sent = self._capture.__enter__()
         self.addCleanup(self._stop)
         super().setUp()  # type: ignore[misc]

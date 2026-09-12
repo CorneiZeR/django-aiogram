@@ -10,7 +10,10 @@ from django_aiogram import conf
 # tells a project to write, and it is only honoured in the *rootdir* `conftest.py` -- which
 # this is not, the rootdir being the repository. Importing the fixture here is the same
 # registration by hand, and `test_testing_helpers.py` is what uses it
-from django_aiogram.testing.plugin import telegram_sends  # noqa: F401 - a fixture, reached by name
+from django_aiogram.testing.plugin import (  # noqa: F401 - fixtures, reached by name
+    capture_telegram_sends,
+    telegram_sends,
+)
 
 # `django_aiogram.bot` is the singleton instance, so the class lives in
 # `client`; patching the wrong one silently leaves the real connection in place.

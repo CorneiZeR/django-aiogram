@@ -122,6 +122,35 @@ class ApprovalTests(SendCaptureMixin, TestCase):
         assert self.sent.kwargs == [{'chat_id': 42, 'text': 'Order approved'}]
 ```
 
+### Several bots
+
+`sent.for_bot('support')` sorts a capture out afterwards, by alias or by the identity in the
+token:
+
+```python
+def test_each_client_is_told_its_own_thing():
+    with capture_sends() as sent:
+        broadcast(order)
+
+    assert [one.kwargs for one in sent.for_bot('support')] == [{'chat_id': 42, 'text': 'Done'}]
+```
+
+`capture_sends(bot='support')` narrows the capture itself, and `capture_sends(queue='vip')`
+narrows it to one queue. Every other bot then keeps the transport it was configured with, so
+one client's sends can be captured while another's keep flowing.
+
+A narrowed capture **refuses** a bot it is not watching — `NotCapturedError`, rather than the
+empty list that would make `assert sent.for_bot('other') == []` pass for ever.
+
+The fixture and the mixin narrow too: `capture_telegram_sends(bot='support')` starts one for
+the rest of the test, and a `TestCase` sets `capture_bot` (or `capture_queue`) on the class,
+since `setUp` runs before the method and cannot be passed anything.
+
+```python
+class SupportTests(SendCaptureMixin, TestCase):
+    capture_bot = 'support'
+```
+
 ### The whole suite on an in-memory broker
 
 Where the consumer is what a test drives — delivery, acknowledgement, reclaiming — point
@@ -148,6 +177,8 @@ For a fixture of your own that wants the same thing without the capture,
 `django_aiogram.broker.registry.use_broker(broker)` is the seam underneath: it makes an
 instance this process's broker for the length of a block, ahead of `BROKER` rather than
 through it, so an `override_settings(TELEGRAM_BOT_DEFAULTS=...)` inside the block cannot take it away.
+It takes the same narrowing — `use_broker(broker, bots=[123456], queue='vip')` — and a block
+that names neither stands for every bot, which is what a single-bot suite has always had.
 
 ### Reading the queue by hand
 

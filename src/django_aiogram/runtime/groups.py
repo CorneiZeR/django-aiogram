@@ -54,7 +54,11 @@ class RuntimeGroup:
         An override from :func:`~django_aiogram.broker.registry.use_broker` wins over it and is
         never cached here: a capture is for the length of a block, and a group outlives one.
         """
-        held = overriding()
+        # this group's own settings, so a capture scoped to one queue answers for that queue
+        # and leaves every other group on the transport it was configured with. Asked as the
+        # group rather than as a bot: this transport is shared by every bot on the profile, so
+        # a capture narrowed to one of them must not become the one the rest publish through
+        held = overriding(self.settings, whole_group=True)
         if held is not None:
             return held
         # the registry's lock rather than one of this group's own, and that is what closes a
