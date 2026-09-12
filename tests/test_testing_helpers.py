@@ -12,6 +12,7 @@ alongside the four transports a deployment can choose. This file is about the re
 import uuid
 
 import pytest
+from django.core.exceptions import ImproperlyConfigured
 from django.test import SimpleTestCase, override_settings
 from django.utils.module_loading import import_string
 
@@ -19,10 +20,23 @@ from django_aiogram import TelegramBot
 from django_aiogram.broker.base import Broker
 from django_aiogram.broker.exceptions import BrokerNotConfiguredError
 from django_aiogram.broker.registry import get_broker, use_broker
-from django_aiogram.testing import InMemoryBroker, SendCaptureMixin, capture_sends
+from django_aiogram.runtime.registry import bots
+from django_aiogram.testing import InMemoryBroker, NotCapturedError, SendCaptureMixin, capture_sends
 from django_aiogram.testing.capture import BROKER_PATH
 
 SETTINGS = {'TOKEN': '42:x', 'FSM_STORAGE': 'memory', 'RATE_LIMIT': None, 'BROKER': 'unused.Broker'}
+
+#: two bots a case can tell apart on the wire. The identity is the number before the colon,
+#: so these are 111111 and 222222 without anything having to be looked up
+A_TOKEN = '111111:AAone'
+B_TOKEN = '222222:BBtwo'
+#: the memory transport by name, so the bot a capture is *not* watching still has somewhere to
+#: publish -- which is the half of the invariant that makes the other half worth asserting
+MULTI = {'BROKER': BROKER_PATH, 'FSM_STORAGE': 'memory', 'RATE_LIMIT': None}
+TWO_BOTS = {'a': {'TOKEN': A_TOKEN}, 'b': {'TOKEN': B_TOKEN}}
+#: the same two, one per queue. `QUEUES` declares both, or the group of the uncaptured bot
+#: refuses to publish to a queue nothing consumes
+LANES = {'a': {'TOKEN': A_TOKEN, 'QUEUE': 'vip'}, 'b': {'TOKEN': B_TOKEN, 'QUEUE': 'bulk'}}
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
@@ -224,3 +238,129 @@ def test_a_released_message_goes_back_to_the_front():
     again = broker.take_nowait()
     assert again is not None
     assert again.payload == b'first', 'a released message came back behind the ones queued after it'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=MULTI, TELEGRAM_BOTS=TWO_BOTS)
+def test_a_capture_for_one_bot_does_not_see_another_bots_send():
+    """The case the whole of this exists for: a capture narrowed to `a` is not `b`'s transport.
+
+    Both halves are asserted, and the second is the one that keeps the first honest: an empty
+    capture would also be what a broken send looks like, so the case reads `b`'s own queue and
+    finds the message there. `a` and `b` share a profile here -- nothing in `SHARED` differs --
+    so they share a group too, which is exactly the arrangement a scope that worked per group
+    rather than per bot would get wrong.
+    """
+    with capture_sends(bot='a') as sent:
+        bots['a'].send(chat_id=1, text='to a')
+        bots['b'].send(chat_id=2, text='to b')
+        elsewhere = bots['b'].broker.messages
+
+    assert sent.kwargs == [{'chat_id': 1, 'text': 'to a'}]
+    assert len(elsewhere) == 1, "b's send did not reach the transport it was configured with"
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=MULTI, TELEGRAM_BOTS=TWO_BOTS)
+def test_asking_a_narrowed_capture_about_another_bot_is_refused():
+    """An empty list is what a passing assertion is made of, so it is not the answer here."""
+    with capture_sends(bot='a') as sent:
+        bots['a'].send(chat_id=1, text='to a')
+
+    assert [one.kwargs for one in sent.for_bot('a')] == [{'chat_id': 1, 'text': 'to a'}]
+    with pytest.raises(NotCapturedError, match='not watching bot 222222'):
+        sent.for_bot('b')
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=MULTI, TELEGRAM_BOTS=TWO_BOTS)
+def test_an_unnarrowed_capture_sorts_the_bots_out_afterwards():
+    """The other way round, and the one a suite already sharing a queue wants: capture
+    everything, then ask per bot.
+
+    By alias or by identity, because a project writes whichever it has to hand.
+    """
+    with capture_sends() as sent:
+        bots['a'].send(chat_id=1, text='to a')
+        bots['b'].send(chat_id=2, text='to b')
+
+    assert [one.kwargs for one in sent.for_bot('a')] == [{'chat_id': 1, 'text': 'to a'}]
+    assert [one.kwargs for one in sent.for_bot(222222)] == [{'chat_id': 2, 'text': 'to b'}]
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**MULTI, 'QUEUES': ('vip', 'bulk')}, TELEGRAM_BOTS=LANES)
+def test_a_capture_for_one_queue_leaves_the_other_queue_alone():
+    """`queue=` narrows it the other way, for a deployment whose isolation is the queue."""
+    with capture_sends(queue='vip') as sent:
+        bots['a'].send(chat_id=1, text='vip')
+        bots['b'].send(chat_id=2, text='bulk')
+        elsewhere = bots['b'].broker.messages
+
+    assert sent.kwargs == [{'chat_id': 1, 'text': 'vip'}]
+    assert len(elsewhere) == 1, "the bulk queue's send was taken by the capture on vip"
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=MULTI, TELEGRAM_BOTS=TWO_BOTS)
+def test_the_factory_fixture_narrows_the_capture(capture_telegram_sends):
+    """The pytest half of narrowing: a fixture cannot be passed an argument, so it hands back
+    something that can.
+    """
+    sent = capture_telegram_sends(bot='a')
+
+    bots['a'].send(chat_id=1, text='to a')
+    bots['b'].send(chat_id=2, text='to b')
+
+    assert sent.kwargs == [{'chat_id': 1, 'text': 'to a'}]
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=MULTI, TELEGRAM_BOTS=TWO_BOTS)
+class TheMixinNarrowsByClassAttribute(SendCaptureMixin, SimpleTestCase):
+    """`setUp` runs before the method and cannot be passed anything, so the class says it."""
+
+    capture_bot = 'a'
+
+    def test_the_case_sees_only_its_own_bot(self):
+        """And the one it was not watching is refused rather than answered with nothing."""
+        bots['a'].send(chat_id=9, text='to a')
+        bots['b'].send(chat_id=8, text='to b')
+
+        assert self.sent.kwargs == [{'chat_id': 9, 'text': 'to a'}]
+        with pytest.raises(NotCapturedError):
+            self.sent.for_bot('b')
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=MULTI, TELEGRAM_BOTS=TWO_BOTS)
+def test_a_bot_nothing_is_configured_as_is_refused_where_it_is_named():
+    """A typo in an alias is a question about a bot that does not exist, and it says so."""
+    with pytest.raises(ImproperlyConfigured, match='No bot is configured'), capture_sends(bot='nobody'):
+        pass  # pragma: no cover - the capture never starts
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=MULTI, TELEGRAM_BOTS={'a': {'TOKEN': 'no-identity-here'}})
+def test_a_bot_whose_token_names_nobody_cannot_be_captured_by_name():
+    """`E052` reports the token; here the point is that the capture does not silently watch 0.
+
+    A capture that swallowed this would watch an identity no send ever carries, so every
+    assertion about it would be about an empty list.
+    """
+    with pytest.raises(NotCapturedError, match='no identity'), capture_sends(bot='a'):
+        pass  # pragma: no cover - the capture never starts
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=MULTI, TELEGRAM_BOTS=TWO_BOTS)
+def test_a_capture_for_one_bot_is_not_its_groups_transport():
+    """A group's transport is shared by every bot on the profile, so one bot's capture is not it.
+
+    The consumer reads through the group, and so does every depth the healthcheck asks for --
+    installing one client's test queue there would answer all of those from a queue that exists
+    for the length of one block.
+    """
+    with capture_sends(bot='a') as sent:
+        # built from `a`'s settings, because `a` asked for it first -- and those are the
+        # settings a group answers about itself with, although it serves `b` just as much.
+        # That is the arrangement where a scope read per group rather than per bot hands `b`
+        # the capture that was narrowed to `a`
+        group = bots['a'].group
+        bots['b'].send(chat_id=2, text='to b')
+
+        assert group.broker is bots['b'].broker, "the group handed out the capture's queue"
+        assert len(group.broker.messages) == 1
+
+    assert sent.kwargs == []

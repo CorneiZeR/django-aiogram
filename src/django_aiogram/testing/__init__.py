@@ -22,7 +22,14 @@ and nothing in them touches ``django.db`` or aiogram.
 """
 
 from django_aiogram.testing.broker import InMemoryBroker
-from django_aiogram.testing.capture import Captured, Sent, capture_sends
+from django_aiogram.testing.capture import Captured, NotCapturedError, Sent, capture_sends
 from django_aiogram.testing.case import SendCaptureMixin
 
-__all__ = ('Captured', 'InMemoryBroker', 'SendCaptureMixin', 'Sent', 'capture_sends')
+__all__ = (
+    'Captured',
+    'InMemoryBroker',
+    'NotCapturedError',
+    'SendCaptureMixin',
+    'Sent',
+    'capture_sends',
+)
