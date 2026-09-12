@@ -273,3 +273,22 @@ def test_a_stream_deleted_by_somebody_else_is_grouped_again(redis_server):
 
     assert again is not None, 'the read never recovered from the group being gone'
     assert again.payload == payload(2)
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_reclaim_recovers_from_a_stream_somebody_deleted(redis_server):
+    """The same recovery as a read, because a reclaim walks *every* stream in the lane.
+
+    Without it the first deleted stream raises and the walk stops, so one queue an operator
+    removed leaves the other nineteen unreclaimed -- a container that comes back holding work
+    nobody will hand out again.
+    """
+    broker = RedisStreamsBroker()
+    broker.publish([payload(1)])
+    taken = broker.take_nowait()
+    assert taken is not None, 'the message was not delivered in the first place'
+    broker.ack(taken.handle)
+
+    redis_server.delete(STREAM)
+
+    assert broker.reclaim() == 0, 'the reclaim did not recover from the group being gone'

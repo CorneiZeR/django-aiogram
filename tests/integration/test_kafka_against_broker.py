@@ -671,3 +671,38 @@ def test_reading_fewer_topics_pauses_them_rather_than_rejoining_the_group(broker
         close_clients()
         for future in admin.delete_topics([beside]).values():
             future.result(timeout=30)
+
+
+def test_a_settle_after_the_subscription_moved_does_not_raise(broker, kafka_bootstrap, kafka_topic):
+    """A container given one more queue must not fail the sends it was already making.
+
+    What this shows is the ordinary case: one member, so the rebalance hands its partitions
+    straight back and the settle goes through against the consumer the new subscription built.
+    The case where the partition really does move belongs to somebody else in the group, and it
+    is `_lost` that decides what happens then -- both of its answers are pinned offline, in
+    `tests/test_kafka_publish.py`, because a second member joining is a timing this suite
+    should not be built on.
+    """
+    from confluent_kafka.admin import AdminClient, NewTopic
+
+    arriving = f'{kafka_topic}-arriving'
+    admin = AdminClient({'bootstrap.servers': kafka_bootstrap})
+    for future in admin.create_topics([NewTopic(arriving, num_partitions=1, replication_factor=1)]).values():
+        future.result(timeout=30)
+    try:
+        with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
+            broker.serving((kafka_topic,))
+            broker.publish([payload(1)])
+            taken = _read_until(broker, (kafka_topic,), expected=1).get(kafka_topic)
+            assert taken is not None, 'the message was not delivered in the first place'
+
+            # the queue that arrives, which is what moves the subscription under the send
+            broker.serving((kafka_topic, arriving))
+
+            broker.ack(taken.handle)  # must not raise, whichever member holds the partition now
+
+            assert broker.inflight_depth() == 0, 'the settled message is still counted as held'
+    finally:
+        close_clients()
+        for future in admin.delete_topics([arriving]).values():
+            future.result(timeout=30)

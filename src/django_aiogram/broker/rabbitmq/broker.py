@@ -218,11 +218,18 @@ class RabbitMQBroker(Broker):
         nothing arrived — measured — so the consumer gets its turn back and can check whether
         it is shutting down.
 
-        Several queues take :meth:`_multiplexed` instead, because ``consume`` is a generator
-        over **one** queue: AMQP's way of reading several is a ``basic_consume`` each and the
-        connection's own turn, which is the same channel and the same socket.
+        A caller that **names** its queues takes :meth:`_multiplexed` instead, whether it names
+        one or five, because ``consume`` is a generator over one queue: AMQP's way of reading
+        several is a ``basic_consume`` each and the connection's own turn, which is the same
+        channel and the same socket.
+
+        Named rather than counted, and the difference is a live path: a lane of three whose
+        other two queues are at their budget asks for one, and coming down here for it would
+        leave those two subscribed and delivering while a second consumer opened on this one.
+        ``None`` is the only thing that reaches the generator, which is every caller that
+        predates queue sets.
         """
-        if queues is not None and tuple(queues) != (self._queue(),):
+        if queues is not None:
             return self._multiplexed(timeout, self._queues(queues))
         self._serving = (self._queue(),)
         channel = self._channel()

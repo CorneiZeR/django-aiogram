@@ -730,7 +730,21 @@ class RedisStreamsBroker(Broker):
         """
         keys = self._keys(queues)
         self._ensure(keys)
-        return sum(self._reclaimed(key) for key in keys)
+        return sum(self._recovering(key, keys) for key in keys)
+
+    def _recovering(self, key: str, keys: 'Seq[str]') -> int:
+        """Claim one stream, creating its group again where something else deleted it.
+
+        The same one-shot recovery :meth:`take` makes, and here for a sharper reason: a walk
+        over three streams that raised on the first would leave the other two unrecovered, so
+        one queue somebody removed stops the whole lane being reclaimed.
+        """
+        try:
+            return self._reclaimed(key)
+        except Exception as error:
+            if not self._regrouped(error, keys):
+                raise
+            return self._reclaimed(key)
 
     def _reclaimed(self, key: str) -> int:
         """Claim one stream's idle entries, which is what :meth:`reclaim` sums."""
