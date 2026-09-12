@@ -42,6 +42,7 @@ from django_aiogram.broker.registry import get_broker
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 from django_aiogram.eventlog.events import worker_identity
 from django_aiogram.redis import (
+    _escaped,
     get_redis,
     heartbeat_ttl,
     processing_key,
@@ -575,7 +576,11 @@ def _inflight_keys(broker: Broker | None) -> tuple[str, str]:
     queue = addressed() if callable(addressed) else ''
     if not queue:
         return processing_pattern(), processing_key()
-    return f'{queue}:processing:*', f'{queue}:processing:{worker_identity()}'
+    # escaped, for the reason `processing_pattern` gives about the process's own key: a queue
+    # named `vip[blue]` is a character class to `SCAN MATCH`, and the sweep would then report
+    # zero stranded lists *and* report itself complete -- the one answer a wrong pattern must
+    # not give. Only the name; the trailing `*` is the wildcard
+    return f'{_escaped(queue)}:processing:*', f'{queue}:processing:{worker_identity()}'
 
 
 def _guarantee() -> str:

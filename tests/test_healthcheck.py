@@ -1487,3 +1487,21 @@ def test_the_sweep_for_a_named_queue_walks_that_queues_own_keys(redis_server):
     assert report.ok, report.message
     assert report.warnings, report
     assert '1 message(s) are in flight' in report.warnings[0], report.warnings
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_queue_whose_name_is_a_glob_is_still_swept(redis_server):
+    """A client's queue is a name somebody typed, and `[` is a character class to `SCAN`.
+
+    Unescaped, the sweep for `vip[blue]` matches nothing this package ever writes — and
+    reports itself *complete*, which is the one answer a wrong pattern must not give.
+    """
+    queue = 'vip[blue]'
+    redis_server.set(f'{queue}:heartbeat:{WORKER}', str(int(time.time())), ex=90)
+    redis_server.rpush(f'{queue}:processing:a-dead-worker', b'{}')
+
+    report = check(queues=[queue], stranded=True)
+
+    assert report.ok, report.message
+    assert report.warnings, report
+    assert '1 message(s) are in flight' in report.warnings[0], report.warnings
