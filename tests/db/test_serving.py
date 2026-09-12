@@ -411,8 +411,11 @@ def test_a_consumer_that_cannot_take_the_new_queues_is_stopped_rather_than_left_
     assert log == [('started', ('client-1',)), ('stopped', ('client-1',))], log
     assert consumers.running == {}, 'the lane went on running with the queues it could serve'
 
-    # and what it had taken is settled by the pass that finds its thread gone, which is where
-    # every other stopped consumer is settled
+    # the next pass settles what it had taken -- where every other stopped consumer is settled --
+    # and builds the lane again, this time for both queues. A stop that nothing followed would
+    # be a container serving neither client rather than one serving both
     consumers.reconcile(served_by(pools=['vip']))
 
     assert ('collected', ('client-1',)) in log
+    assert ('started', ('client-1', 'client-2')) in log, log
+    assert sorted(consumers.serving()) == ['client-1', 'client-2']

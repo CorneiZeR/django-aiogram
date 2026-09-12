@@ -262,8 +262,11 @@ class KafkaBroker(Broker):
     def take(self, timeout: float, queues: 'Seq[str] | None' = None) -> Taken | None:
         """``poll`` for one message, waiting up to ``timeout`` seconds and no longer.
 
-        The handle is ``(partition, offset, epoch)``: Kafka names a message by where it sits,
-        which is also why settling one is not the same as settling the ones before it.
+        The handle is opaque and goes back to :meth:`ack` or :meth:`release` unread, which is
+        what the contract asks of every transport. What it names here is where the message sits
+        -- and *where* is a place on a topic rather than a partition number, which is why
+        settling one is not the same as settling the ones before it, and why this broker keys
+        everything it remembers by ``(topic, partition)``.
 
         ``timeout`` covers joining the group as well as waiting for a message. A consumer that
         has not joined yet may well spend the whole of it joining and answer "nothing" -- the

@@ -59,6 +59,16 @@ class _Entry(NamedTuple):
     identifier: str | bytes
 
 
+def _from_the_new_entries(keys: 'Seq[str]') -> dict[Any, Any]:
+    """Name each stream to read from ``>``, which is "whatever nobody has been given".
+
+    Typed loosely on purpose: redis-py declares this parameter as a mapping of its own union of
+    key and id types, and a `dict[str, str]` -- which is what every caller here builds -- is not
+    one of them. The alternative is the same `type: ignore` at each of the four call sites.
+    """
+    return dict.fromkeys(keys, '>')
+
+
 def _a_stream_name(value: object) -> str:
     """Read the stream name out of a read's answer, whichever way the client decodes.
 
@@ -207,6 +217,10 @@ class RedisStreamsBroker(Broker):
         reads them all over one connection and a queue may arrive while it runs -- the group
         on that stream is created by the read that first names it. The server probe stays once:
         it is a fact about the server, not about a key.
+
+        Remembering that a group was created is what :meth:`_regrouped` exists to undo: another
+        process can delete the stream, which takes the group with it, and this instance would
+        then skip the creation for the life of the process and read ``NOGROUP`` every time.
         """
         connection = self._redis()
         for key in self._keys(keys):
@@ -342,9 +356,13 @@ class RedisStreamsBroker(Broker):
         if held is not None:
             return held
         block = max(1, int(timeout * 1000))
-        return self._fresh(
-            connection.xreadgroup(self._group(), self._consumer(), dict.fromkeys(keys, '>'), count=1, block=block)
-        )
+        read = _from_the_new_entries(keys)
+        try:
+            return self._fresh(connection.xreadgroup(self._group(), self._consumer(), read, count=1, block=block))
+        except Exception as error:
+            if not self._regrouped(error, keys):
+                raise
+            return self._fresh(connection.xreadgroup(self._group(), self._consumer(), read, count=1, block=block))
 
     def take_nowait(self, queues: 'Seq[str] | None' = None) -> Taken | None:
         """Read the same two phases without waiting, for a drain with no thread to block."""
@@ -354,7 +372,36 @@ class RedisStreamsBroker(Broker):
         held = self._held(connection, keys)
         if held is not None:
             return held
-        return self._fresh(connection.xreadgroup(self._group(), self._consumer(), dict.fromkeys(keys, '>'), count=1))
+        read = _from_the_new_entries(keys)
+        try:
+            return self._fresh(connection.xreadgroup(self._group(), self._consumer(), read, count=1))
+        except Exception as error:
+            if not self._regrouped(error, keys):
+                raise
+            return self._fresh(connection.xreadgroup(self._group(), self._consumer(), read, count=1))
+
+    def _regrouped(self, error: Exception, keys: 'Seq[str]') -> bool:
+        """Create the groups again where a read said one is gone, and say whether it was that.
+
+        ``NOGROUP`` means the stream -- or the group on it -- was deleted by something else:
+        `manage.py tgbot_prune_queues` in another container, an operator, a client removed. This
+        instance remembers having created it, so without this it would read ``NOGROUP`` on every
+        take for the life of the process, and on a multiplexed read that is **every** queue in
+        the lane rather than the one that went.
+
+        Retried once, by the caller: a second ``NOGROUP`` is a server saying no twice, and a
+        loop on it would be the busy wait this package refuses everywhere else.
+        """
+        if 'NOGROUP' not in str(error):
+            return False
+        logger.warning(
+            'a stream or its group is gone, so it is being created again',
+            extra={'tg_key': ', '.join(keys)},
+        )
+        self._grouped.difference_update(keys)
+        self._recovered_upto.clear()
+        self._ensure(keys)
+        return True
 
     def _held(self, connection: object, keys: 'Seq[str]') -> Taken | None:
         """Hand back something this consumer already holds: a spare entry, then a pending one.
@@ -538,7 +585,7 @@ class RedisStreamsBroker(Broker):
         """Read a handle as the entry id this transport settles by, or say what it is instead.
 
         The other three brokers already refuse a handle of the wrong shape by name -- a payload, a
-        ``(channel, tag)`` pair, a ``(partition, offset, epoch)`` triple -- and this one handed
+        ``(channel, tag)`` pair, a ``(topic, partition, offset, epoch)`` tuple -- and this one handed
         whatever it got to redis-py, which complains about a type the caller never chose. A handle
         of another shape came from a different broker, and saying so is the answer.
 

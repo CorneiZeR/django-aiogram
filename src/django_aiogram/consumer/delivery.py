@@ -267,6 +267,23 @@ class Delivery(ABC):
         with self._books:
             return on_queue in self._in_flight
 
+    def _forget_retired(self) -> None:
+        """Drop the books of a queue that is no longer served and has nothing left in flight.
+
+        Called from the read loop and nowhere else, which is what makes it safe: the consumer
+        thread is the only reader, so between one take and the next there is no read that could
+        still answer from a queue this removes -- and a read that *began* before `serve` took a
+        queue away is still counted under it, because that entry is only dropped once its sends
+        have settled.
+
+        Without it a long-lived container whose clients come and go keeps one zero-count entry
+        per queue that ever existed, which is a dict that grows for the life of the process.
+        """
+        with self._books:
+            retired = [queue for queue, held in self._in_flight.items() if queue not in self.queues and held <= 0]
+            for queue in retired:
+                del self._in_flight[queue]
+
     def readable(self) -> 'tuple[str, ...] | None':
         """Which of this consumer's queues a read may ask for, dropping those at their budget.
 
@@ -278,9 +295,13 @@ class Delivery(ABC):
         giving it back -- spins against a saturated queue's backlog, and parking it would put
         the bound past itself one message per read.
 
-        ``None`` where there is one queue, which is the call every transport has always been
-        given. Where every queue is at its budget, `hold_for_capacity` has already stopped the
-        loop before this is asked.
+        ``None`` where there is one queue, and the callers pass **nothing at all** then rather
+        than passing it: a `Broker` somebody wrote before 5.0 declares ``take(self, timeout)``,
+        and a `None` handed to that is a `TypeError` out of the consumer's own loop. The
+        argument exists for the transports that were asked for a set.
+
+        Where every queue is at its budget, `hold_for_capacity` has already stopped the loop
+        before this is asked.
         """
         if self._asked is None:
             return None
@@ -356,7 +377,7 @@ class Delivery(ABC):
         a transport that returns an unsettled message to its group needs no reclaiming.
         """
         try:
-            count = self.broker.reclaim(self._asked)
+            count = self.broker.reclaim(self._asked) if self._asked else self.broker.reclaim()
         except Exception:
             # run() is the thread target, so anything escaping here — a Redis
             # that is not up yet, for one — would end the consumer for good
@@ -984,7 +1005,9 @@ class Delivery(ABC):
                 # the blocking loop waits here; a drain has no thread to wait on,
                 # so it stops instead of scheduling past the bound
                 return
-            taken = self.broker.take_nowait(self.readable())
+            self._forget_retired()
+            asked = self.readable()
+            taken = self.broker.take_nowait(asked) if asked else self.broker.take_nowait()
             if taken is None:
                 self.collect()
                 return
@@ -1025,7 +1048,9 @@ class BlpopDelivery(Delivery):
             if not reclaimed:
                 reclaimed = self.reclaim()
             try:
-                taken = self.broker.take(timeout, self.readable())
+                self._forget_retired()
+                asked = self.readable()
+                taken = self.broker.take(timeout, asked) if asked else self.broker.take(timeout)
             except Exception:
                 # a dropped connection must not kill the worker thread
                 logger.exception('blocking pop failed, retrying', extra={'tg_key': self.queue_key})

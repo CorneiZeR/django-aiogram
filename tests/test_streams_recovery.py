@@ -249,3 +249,27 @@ def test_the_awaiting_reads_answer_nothing_rather_than_raising(broker, redis_ser
     assert depth == 0, 'a stream that does not exist reported messages waiting'
     assert inflight == 0, 'a group that does not exist reported work in flight'
     assert not redis_server.exists(STREAM), 'reading created the stream'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_stream_deleted_by_somebody_else_is_grouped_again(redis_server):
+    """A consumer that remembered creating a group must not read `NOGROUP` for ever.
+
+    Another container's `tgbot_prune_queues`, an operator, a client removed: the stream goes and
+    the group goes with it, while this instance still believes it has one. Before the retry that
+    was every take for the life of the process -- and on a multiplexed read, every queue in the
+    lane rather than the one that went.
+    """
+    broker = RedisStreamsBroker()
+    broker.publish([payload(1)])
+    taken = broker.take_nowait()
+    assert taken is not None, 'the message was not delivered in the first place'
+    broker.ack(taken.handle)
+
+    redis_server.delete(STREAM)  # what another process does, with this instance none the wiser
+    broker.publish([payload(2)])
+
+    again = broker.take_nowait()
+
+    assert again is not None, 'the read never recovered from the group being gone'
+    assert again.payload == payload(2)

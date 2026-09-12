@@ -203,10 +203,15 @@ def test_a_queue_that_arrives_is_served_without_stopping_the_others(redis_server
 
     delivery.serve(('vip', 'bulk'))
     publish('bulk', 'for the new queue')
+    publish('vip', 'for the one already served')
     delivery.consume_pending()
 
-    assert [text for text, _ in handler.pending] == ['for the new queue']
+    # both halves: the queue that arrived is read, and the queue that was already being served
+    # is still read -- a `serve` that replaced the set rather than widening it would pass on the
+    # first assertion alone
+    assert sorted(text for text, _ in handler.pending) == ['for the new queue', 'for the one already served']
     assert delivery.in_flight('bulk') == 1
+    assert delivery.in_flight('vip') == 1
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={**STREAMS, 'EVENT_LOG': True})
@@ -246,3 +251,85 @@ def test_a_lane_that_shrinks_to_one_queue_goes_on_reading_that_queue(redis_serve
     delivery.consume_pending()
 
     assert [text for text, _ in handler.pending] == ['the queue that is left']
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=MEMORY)
+def test_a_broker_that_predates_queue_sets_is_never_handed_one():
+    """A `Broker` written before 5.0 declares `take(self, timeout)`, and that has to keep working.
+
+    Passing `None` is not the same as passing nothing: `take(timeout, None)` is a `TypeError`
+    out of the consumer's own loop, which is a container that stops delivering rather than one
+    that delivers through a transport somebody wrote. So a consumer serving one queue calls the
+    signature that existed before the argument did.
+    """
+
+    class Older:
+        """The three methods as they were, with no room for a queue set."""
+
+        CALL_TIMEOUT_OPTION = ''
+        MULTIPLEXES = False
+
+        def __init__(self):
+            """Record what was asked of it, which is what the case reads."""
+            self.calls = []
+
+        @property
+        def call_ceiling(self):
+            """Whatever the consumer's arithmetic needs; the number is not what is under test."""
+            return 5
+
+        def addressed(self):
+            """Name the one queue it reads, the way the consumer asks for it."""
+            return 'older'
+
+        def reclaim(self):
+            """Put nothing back, and say so."""
+            self.calls.append('reclaim')
+            return 0
+
+        def take_nowait(self):
+            """Answer with nothing, having been called the way it declares."""
+            self.calls.append('take_nowait')
+
+        def ack(self, handle):
+            """Settle nothing; no message ever reaches this."""
+
+    handler = Deferring()
+    broker = Older()
+    delivery = BlpopDelivery(handler=handler, route=routed(handler))
+    delivery.broker = broker
+    delivery.queues = (broker.addressed(),)
+    delivery._in_flight = {broker.addressed(): 0}
+    delivery._asked = None
+
+    delivery.reclaim()
+    delivery.consume_pending()
+
+    assert broker.calls == ['reclaim', 'take_nowait'], broker.calls
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=STREAMS)
+def test_the_books_of_a_queue_that_went_away_are_dropped_once_it_has_settled(redis_server):
+    """A container whose clients come and go must not keep a counter per queue that ever was.
+
+    Both halves, because only one of them is about memory: a queue with a send still in flight
+    keeps its entry -- that slot has to be given back somewhere -- and one that has settled is
+    forgotten by the next read.
+    """
+    handler = Deferring()
+    delivery = consuming(handler)
+    publish('bulk', 'still going when the queue leaves')
+    delivery.consume_pending()
+
+    delivery.serve(('vip',))
+    delivery.consume_pending()
+
+    assert delivery.in_flight('bulk') == 1, 'a send in flight lost the books its slot comes back to'
+
+    for _text, finished in handler.pending:
+        finished()
+    delivery.collect()
+    delivery.consume_pending()
+
+    assert delivery.in_flight('bulk') == 0
+    assert 'bulk' not in delivery._in_flight, 'the books of a queue nothing serves are kept for ever'
