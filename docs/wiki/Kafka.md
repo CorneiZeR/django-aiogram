@@ -139,8 +139,12 @@ come back and the unsettled one would be skipped. That is asserted by replacing 
 and reading what comes back, in `tests/integration/test_kafka_against_broker.py`; the in-flight
 counts alone cannot see it.
 
-A poll answers from whichever subscribed topic has something, and the set is resubscribed only
-when it moves.
+A poll answers from whichever subscribed topic has something. **The subscription follows the
+queues the container serves, not what a read asks for**, and those are different questions: a
+consumer narrows its read whenever a queue reaches its in-flight budget, and resubscribing for
+that would rebalance the group — partitions moving to other members and back — once per
+backlog. A narrower read pauses the assigned partitions of the topics left out and resumes them
+when they are asked for again, which the group never hears about.
 
 ## Where it shows through
 

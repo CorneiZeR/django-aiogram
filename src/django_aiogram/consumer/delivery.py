@@ -189,6 +189,7 @@ class Delivery(ABC):
         #: arriving while the container runs reaches this from the pass that noticed it, and a
         #: dict growing under a reader is what that would otherwise be
         self._books = threading.Lock()
+        self._tell_the_broker()
         # asked once: a handler that cannot take the callback is acknowledged the
         # moment it returns, which is the behavior every existing caller has
         self._defers = defers_completion(handler)
@@ -611,6 +612,23 @@ class Delivery(ABC):
                 self._in_flight.setdefault(queue, 0)
             self.queues = asked
             self._asked = None if asked == (self._own_queue(),) else asked
+        self._tell_the_broker()
+
+    def _tell_the_broker(self) -> None:
+        """Say which queues this consumer is *for*, as against which it is reading right now.
+
+        The two are not the same question, and one transport pays for the difference: a `take`
+        naming fewer queues is one of them at its budget, and on Kafka a narrower subscription
+        is a group rebalance. So the set moves here -- when a queue is added to this container
+        or taken away from it -- and a narrower read pauses rather than resubscribes.
+
+        Through `getattr`, like every other optional thing a `DELIVERY` may hold: `self.broker`
+        is whatever the registry handed over, and a double standing in for one need not have
+        heard of a method the contract gained.
+        """
+        told = getattr(self.broker, 'serving', None)
+        if callable(told) and self._asked is not None:
+            told(self._asked)
 
     def in_flight(self, on_queue: str = '') -> int:
         """How many sends this consumer is holding, on one queue or across all of them.

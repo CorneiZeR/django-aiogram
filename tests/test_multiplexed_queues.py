@@ -333,3 +333,25 @@ def test_the_books_of_a_queue_that_went_away_are_dropped_once_it_has_settled(red
 
     assert delivery.in_flight('bulk') == 0
     assert 'bulk' not in delivery._in_flight, 'the books of a queue nothing serves are kept for ever'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=STREAMS)
+def test_the_broker_is_told_the_set_a_consumer_is_for_rather_than_what_it_reads_now(redis_server):
+    """The two questions a lane asks, and the reason they are asked separately.
+
+    A `take` naming fewer queues means one of them is at its budget; on Kafka a narrower
+    subscription is a group rebalance, so the set that moves the subscription has to be the one
+    that moves when a queue is added or taken away. It is told at construction and again on
+    `serve`, and never on a capacity change.
+    """
+    told: list[tuple[str, ...]] = []
+    handler = Deferring()
+    delivery = consuming(handler)
+    delivery.broker.serving = lambda queues=None: told.append(tuple(queues or ()))
+
+    delivery._tell_the_broker()
+    delivery.serve(('vip', 'bulk', 'later'))
+    publish('vip', 'fills the vip budget')
+    delivery.consume_pending()
+
+    assert told == [('vip', 'bulk'), ('vip', 'bulk', 'later')], told

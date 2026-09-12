@@ -122,10 +122,15 @@ class KafkaBroker(Broker):
         #: handle's epoch stays comparable across a compaction: epochs count every rewind ever,
         #: while the list holds only the ones that can still matter
         self._rewound: dict[_Spot, int] = {}
-        #: the topics this instance reads, as the last take asked for them. Kept for the reason
-        #: the AMQP broker keeps its queues: settling reaches the consumer, and a consumer
-        #: built for a different subscription is a different consumer
+        #: the topics this instance is subscribed to: what `serving` was told, or the one this
+        #: broker addresses. Kept apart from what a `take` asks for, because a subscription here
+        #: is group membership -- changing it rebalances the group -- and a consumer narrows
+        #: what it reads on every capacity change
         self._serving: tuple[str, ...] = ()
+        #: the assigned partitions this broker has paused, so a topic at its budget stops
+        #: delivering without leaving the subscription. `(topic, partition)` like everything
+        #: else it remembers
+        self._paused: set[_Spot] = set()
         self._lock = threading.Lock()
 
     def _topic(self) -> str:
@@ -138,6 +143,15 @@ class KafkaBroker(Broker):
             return (self._topic(),)
         return tuple(dict.fromkeys(str(one) for one in queues))
 
+    def serving(self, queues: 'Seq[str] | None' = None) -> None:
+        """Take the set this consumer is *for*, which is what the subscription follows.
+
+        Told rather than inferred, and :meth:`Broker.serving` says why: a `take` naming fewer
+        topics is a queue at its in-flight budget, not a queue that has gone, and resubscribing
+        for that would rebalance the group every time a backlog built up.
+        """
+        self._serving = self._topics(queues)
+
     def _subscription(self) -> tuple[str, ...]:
         """Name the topics this instance's consumer is subscribed to, its own included.
 
@@ -146,6 +160,32 @@ class KafkaBroker(Broker):
         using would be a second client in the group.
         """
         return tuple(dict.fromkeys((*self._serving, self._topic())))
+
+    def _paced(self, consumer: 'Consumer', asked: tuple[str, ...]) -> None:
+        """Pause the assigned partitions of every topic outside ``asked``, and resume the rest.
+
+        What a narrower `take` does here instead of resubscribing: the group keeps this member
+        and its partitions, and the topics at their budget simply stop delivering until they
+        are asked for again. Measured against a real broker in
+        `tests/integration/test_kafka_against_broker.py`, where the consumer object is the same
+        one before and after.
+
+        Only the difference is sent, because `pause` and `resume` are calls: a loop that asked
+        for the same state on every take would be two round trips per message.
+        """
+        assigned = {(one.topic, one.partition) for one in consumer.assignment()}
+        wanted = {spot for spot in assigned if spot[0] not in asked}
+        if wanted == self._paused & assigned:
+            return
+        from confluent_kafka import TopicPartition  # noqa: PLC0415 - the driver is an extra
+
+        pausing = [TopicPartition(*spot) for spot in wanted - self._paused]
+        resuming = [TopicPartition(*spot) for spot in (self._paused & assigned) - wanted]
+        if pausing:
+            consumer.pause(pausing)
+        if resuming:
+            consumer.resume(resuming)
+        self._paused = wanted
 
     def _bootstrap(self) -> str:
         """Name the servers to reach, as librdkafka spells them."""
@@ -183,14 +223,16 @@ class KafkaBroker(Broker):
         """Return the same number, for the callers inside this class that read it per call."""
         return self.deadline()
 
-    def _consumer(self, queues: 'Seq[str] | None' = None) -> 'Consumer':
-        """Reach this thread's consumer, subscribed on first use.
+    def _consumer(self) -> 'Consumer':
+        """Reach this thread's consumer, subscribed to the set :meth:`serving` was told.
 
-        ``queues`` is what a read asks for; every other caller gets the subscription this
-        instance is already using, since settling has to reach the consumer holding the offset.
+        One subscription for every caller -- reading, settling, rewinding -- because a
+        consumer built for a different one is a different member of the group, and the offsets
+        this instance is holding belong to the member that took them.
         """
-        topics = self._topics(queues) if queues else self._subscription()
-        return consumer_for_thread(self._bootstrap(), topics, str(self.opt('KAFKA_GROUP')), self._timeout())
+        return consumer_for_thread(
+            self._bootstrap(), self._subscription(), str(self.opt('KAFKA_GROUP')), self._timeout()
+        )
 
     # ------------------------------------------------------------------ producer
 
@@ -275,11 +317,12 @@ class KafkaBroker(Broker):
         `KAFKA_TIMEOUT`: the caller's arithmetic about how long a loop iteration can take is
         then wrong by two orders of magnitude, and the consumer's heartbeat is what pays for it.
 
-        ``queues`` subscribes this consumer to several topics, which is one client and one
-        group member however many there are -- and the poll answers from whichever of them has
-        something. Changing the set is a resubscribe, so it is done only when it moves.
+        ``queues`` narrows what is read *now*, and the subscription is what
+        :meth:`serving` was told: several topics are one client and one group member however
+        many there are, and the poll answers from whichever of them has something. A narrower
+        set pauses the rest rather than resubscribing, since a subscription here is group
+        membership and changing it moves partitions between members.
         """
-        self._serving = self._topics(queues)
         return self._wrap(self._polled(max(0.001, timeout), queues=queues))
 
     def take_nowait(self, queues: 'Seq[str] | None' = None) -> Taken | None:
@@ -301,7 +344,6 @@ class KafkaBroker(Broker):
         Worth knowing before putting this on a request path. `take` is the method the consumer
         loop uses, and it has a timeout of its own.
         """
-        self._serving = self._topics(queues)
         return self._wrap(self._polled(_FETCH_BUDGET, joining=self._timeout(), queues=queues))
 
     def _polled(self, timeout: float, *, joining: float | None = None, queues: 'Seq[str] | None' = None) -> object:
@@ -317,7 +359,13 @@ class KafkaBroker(Broker):
         the 1.5-second fetch budget that method allows itself. `take` passes nothing, because a
         method with a timeout in its signature has to honour it.
         """
-        consumer = self._consumer(queues)
+        asked = self._topics(queues)
+        if not self._serving:
+            # nothing said which set this consumer is for, so the first read decides it: a
+            # caller using the broker directly -- a drain, a test -- names what it wants
+            self._serving = asked
+        consumer = self._consumer()
+        self._paced(consumer, asked)
         deadline = time.monotonic() + timeout
         if not consumer.assignment():
             # in slices rather than one long poll: librdkafka makes progress inside `poll`, and

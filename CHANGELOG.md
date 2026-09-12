@@ -152,6 +152,12 @@
   the unsettled one being skipped -- which is asserted by replacing the consumer and reading
   what comes back, since the in-flight counts cannot see it.
 
+  `Broker.serving(queues)` says which queues a consumer is *for* -- told at construction and
+  when the container's set moves, never on a capacity change -- and three of the four
+  transports need nothing from it. Kafka does: a subscription there is group membership, so
+  following a narrower read would rebalance the group once per backlog; it pauses the
+  partitions of the topics left out instead.
+
   `Broker.take(timeout, queues)`, `take_nowait(queues)` and `reclaim(queues)` take the set;
   `None` is the one queue the broker addresses, which is what every caller before this passed
   and what a `Broker` somebody else wrote still gets. `Taken.queue` names which queue a message

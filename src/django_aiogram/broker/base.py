@@ -157,6 +157,26 @@ class Broker(ABC):
         built.settings = settings
         return built
 
+    def serving(self, queues: 'Seq[str] | None' = None) -> None:  # noqa: ARG002 - the contract's; three of the four transports need nothing told to them
+        """Say which queues this broker will be asked for, until it is told otherwise.
+
+        Nothing by default, and three of the four shipped transports need nothing: what
+        :meth:`take` is handed is what they read, and changing it costs a dictionary key or a
+        ``basic_consume``.
+
+        It exists for the one where that is not true. A Kafka subscription is group membership,
+        so changing it is a **rebalance** -- partitions move to other members and come back --
+        and a consumer narrows what it reads on every capacity change: a queue at its in-flight
+        budget stops being read while the others keep going. Rebalancing the group for that
+        would be a cost paid per backlog.
+
+        So the two questions are asked separately. This one says *which queues this consumer is
+        for*, and moves only when a queue is added to the container or taken away from it;
+        :meth:`take` may name fewer, and a transport that cares pauses the rest rather than
+        leaving the set it belongs to.
+        """
+        return
+
     def one_queue(self, queues: 'Seq[str] | None') -> str:
         """Read a queue set as the single queue this broker reads, or refuse it.
 

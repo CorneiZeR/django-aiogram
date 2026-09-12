@@ -491,8 +491,15 @@ def test_a_transport_that_reads_one_queue_refuses_a_set_rather_than_reading_one(
     mine = broker.addressed()
 
     assert broker.take_nowait((mine,)) is None, 'a transport refused the one queue it addresses'
+    beside = (mine, f'{mine}-also')
+    # every method that takes the set, because a consumer calls all three and a refusal that
+    # only `take` makes is one the drain and the recovery walk straight past
     with pytest.raises(QueueMultiplexingUnavailableError, match='several queues'):
-        broker.take(0.01, (mine, f'{mine}-also'))
+        broker.take(0.01, beside)
+    with pytest.raises(QueueMultiplexingUnavailableError, match='several queues'):
+        broker.take_nowait(beside)
+    with pytest.raises(QueueMultiplexingUnavailableError, match='several queues'):
+        broker.reclaim(beside)
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)

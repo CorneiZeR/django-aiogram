@@ -622,3 +622,52 @@ def _read_until(broker, topics, *, expected):
         if taken is not None:
             seen[taken.queue] = taken
     return seen
+
+
+def test_reading_fewer_topics_pauses_them_rather_than_rejoining_the_group(broker, kafka_bootstrap, kafka_topic):
+    """A queue at its in-flight budget must not cost the group a rebalance.
+
+    The consumer narrows what it reads on every capacity change -- that is what the per-queue
+    budget *is* -- and a subscription here is group membership: resubscribing for it moves
+    partitions to other members and back, per backlog. So the subscription follows what
+    `serving` was told and a narrower `take` pauses the rest.
+
+    Asserted three ways, because two of them alone would pass on a resubscribe: the topic asked
+    for keeps answering, the one left out does not, and the consumer object is the same one
+    before and after.
+    """
+    from confluent_kafka.admin import AdminClient, NewTopic
+
+    beside = f'{kafka_topic}-paused'
+    admin = AdminClient({'bootstrap.servers': kafka_bootstrap})
+    for future in admin.create_topics([NewTopic(beside, num_partitions=1, replication_factor=1)]).values():
+        future.result(timeout=30)
+    try:
+        with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
+            broker.serving((kafka_topic, beside))
+            broker.publish([payload(1)])
+            KafkaBroker.configured(settings_for(kafka_bootstrap, beside)).publish([payload(2)])
+
+            # both, so the group has assigned this member the partitions of each
+            seen = _read_until(broker, (kafka_topic, beside), expected=2)
+            assert sorted(seen) == sorted((kafka_topic, beside)), f'one topic was never read: {sorted(seen)}'
+            for taken in seen.values():
+                broker.ack(taken.handle)
+            before = broker._consumer()
+
+            # what a queue at its budget does: read the other one, and only the other one
+            broker.publish([payload(3)])
+            KafkaBroker.configured(settings_for(kafka_bootstrap, beside)).publish([payload(4)])
+            narrowed = _read_until(broker, (kafka_topic,), expected=1)
+
+            assert sorted(narrowed) == [kafka_topic], f'a paused topic was still delivered: {sorted(narrowed)}'
+            assert broker._consumer() is before, 'the consumer was rebuilt, which rebalances the group'
+
+            # and the pause lifts when it is asked for again
+            resumed = _read_until(broker, (kafka_topic, beside), expected=1)
+
+            assert sorted(resumed) == [beside], f'the paused topic did not come back: {sorted(resumed)}'
+    finally:
+        close_clients()
+        for future in admin.delete_topics([beside]).values():
+            future.result(timeout=30)

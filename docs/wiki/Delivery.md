@@ -107,15 +107,27 @@ message from the process's own queue while the container believes it is serving 
 (`Broker.MULTIPLEXES`). A `run()` of your own hands it down and counts what comes back:
 
 ```python
-taken = self.broker.take(self.read_timeout, self.readable())
+asked = self.readable()
+taken = self.broker.take(self.read_timeout, asked) if asked else self.broker.take(self.read_timeout)
 if taken is not None and self.dispatch(taken.payload, taken.handle, taken.queue):
     self.acknowledge(taken.handle)
 ```
 
 `readable()` is this consumer's queues minus the ones already at their budget — a bound is per
-queue, so a saturated one stops being read while the rest are — and `Taken.queue` names which
-queue a message came off, which is what its send is counted against. Both are `None` and `''`
-for a consumer serving one queue, which is what every `run()` written before 5.0 passes.
+queue, so a saturated one stops being read while the rest are. It answers `None` for a consumer
+serving one queue, and then the argument is **left off** rather than passed as `None`: a
+`Broker` written before 5.0 declares `take(self, timeout)`, and handing it one more positional
+is a `TypeError` out of your own loop.
+
+A `Delivery` also tells its broker which queues it is *for*, through `Broker.serving`, at
+construction and whenever `serve()` moves the set — never on a capacity change. Only Kafka does
+anything with it, and the reason is on its page: a subscription there is group membership.
+
+`Taken.queue` names which queue a message came off, and that is what its send is counted
+against. Whether it is filled is the transport's own answer — the three that read several
+queues fill it always, and a Redis list leaves it empty because there is only ever one queue it
+could be — so a `run()` reads it as *the queue if the transport named one*. `dispatch` does
+exactly that: an empty name is counted under the one queue the consumer serves.
 
 ```python
 from django_aiogram.consumer.delivery import Delivery
