@@ -4,6 +4,7 @@ The heartbeat is the only thing another process can observe about the consumer
 thread, and `tgbot_healthcheck` is what reads it.
 """
 
+import contextlib
 import re
 import textwrap
 import time
@@ -1505,3 +1506,28 @@ def test_a_queue_whose_name_is_a_glob_is_still_swept(redis_server):
     assert report.ok, report.message
     assert report.warnings, report
     assert '1 message(s) are in flight' in report.warnings[0], report.warnings
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_run_that_fails_still_says_what_the_other_queues_warned_about(redis_server):
+    """One queue can fail while another warns, and the failing run is when both are needed.
+
+    Raising first threw away everything the other queues said — on exactly the run somebody
+    is reading the output of.
+    """
+    redis_server.rpush('vip', b'{}')
+
+    with pytest.raises(CommandError):
+        healthcheck(queue=['quiet', 'vip'])
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_the_warning_from_the_healthy_queue_is_printed_on_the_failing_run(redis_server):
+    """The same run, read for its output rather than its exception."""
+    redis_server.rpush('vip', b'{}')
+    out = StringIO()
+
+    with contextlib.suppress(CommandError):
+        call_command('tgbot_healthcheck', queue=['quiet', 'vip'], stdout=out)
+
+    assert 'quiet: nothing is consuming it' in out.getvalue(), out.getvalue()

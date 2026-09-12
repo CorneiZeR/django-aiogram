@@ -66,13 +66,16 @@ class Command(BaseCommand):
         # registry to answer a container's probe -- see the note at the top of `healthcheck.py`
         for line in self._quarantined():
             self.stdout.write(self.style.WARNING(line))
+        # and the probe's own warnings, also before the verdict: with several queues one can
+        # fail while another warns, and raising first threw away everything the *other*
+        # queues said -- the lines an operator needs most on the run that failed
+        for warning in report.warnings:
+            self.stdout.write(self.style.WARNING(warning))
         if not report.ok:
             raise CommandError(report.message)
         # plain when nothing was examined: a disabled process is not a healthy bot, and
         # this command has never colored that line green
         self.stdout.write(self.style.SUCCESS(report.message) if report.checked else report.message)
-        for warning in report.warnings:
-            self.stdout.write(self.style.WARNING(warning))
 
     @staticmethod
     def _quarantined() -> list[str]:
