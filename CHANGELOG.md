@@ -128,8 +128,12 @@
   every client during one client's incident re-sends messages nobody asked about; a mover that
   claimed another client's row publishes it to their queue from a container nobody asked to do
   it; a reclaim aimed at the wrong queue takes one client's in-flight messages and puts them on
-  another's. `--queue` on `tgbot_reclaim` refuses a name nothing declares, because a typo reads
-  as an empty in-flight list -- which is what a drained queue looks like.
+  another's. `--queue` on `tgbot_reclaim` refuses a name the declared set does not hold --
+  a typo otherwise reads as an empty in-flight list, which is what a drained queue looks like.
+  A queue table nobody could read declares *unknown* rather than *none*, and a name is
+  permitted there: refusing would block a reclaim during exactly the outage it is needed in.
+  A repeated or empty `--queue` is refused too, rather than silently taking the last one or
+  the process's own queue.
 
   Two commands take neither, and the reason is the same for both: `tgbot_move_events` copies a
   4.x feed into the 5.x table and `tgbot_backfill_short_ids` fills a column in it. Both are

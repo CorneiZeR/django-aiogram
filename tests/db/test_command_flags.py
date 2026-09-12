@@ -112,13 +112,18 @@ def test_the_mover_claims_only_the_rows_it_was_told_about():
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_dry_run_of_the_mover_counts_only_the_rows_it_was_told_about():
     """A rehearsal that counted every bot promises a pass this one will not make."""
-    a_scheduled(bot_id=111111)
-    a_scheduled(bot_id=222222)
+    a_scheduled(bot_id=111111, chat_id=11)
+    a_scheduled(bot_id=222222, chat_id=22)
     out = StringIO()
 
     call_command('tgbot_dispatch_scheduled', bot=[111111], dry_run=True, stdout=out)
 
-    assert '1 due now' in out.getvalue(), out.getvalue()
+    said = out.getvalue()
+    # the row itself, not the count: a rehearsal that listed the *other* bot's row also says
+    # one is due, and the line a person reads would then name a send this pass will not make
+    assert '1 due now' in said, said
+    assert 'chat=11' in said, said
+    assert 'chat=22' not in said, said
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker'})
@@ -173,16 +178,53 @@ def test_a_readable_declaration_with_nothing_in_it_still_refuses_a_name():
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker'})
-def test_a_queue_named_programmatically_as_a_string_is_one_queue():
+def test_a_queue_named_programmatically_as_a_string_is_one_queue(monkeypatch):
     """`call_command('tgbot_reclaim', queue='vip')` is a supported way to run this.
 
     It forwards the value as written rather than through argparse's `append`, so a command
     that counted the argument's length would refuse a perfectly good name by counting its
-    characters.
+    characters. Both directions are asserted: a *declared* name is accepted and reaches the
+    transport, and an undeclared one is refused — a case that only showed the refusal would
+    pass for a command that rejected every scalar.
     """
     from django_aiogram.models import TelegramQueue
 
     TelegramQueue.objects.create(name='client-a', pool='default')
+    asked = []
+
+    def note(*_args, **_kwargs):
+        """Stand in for the transport, recording that the name got this far."""
+        asked.append('built')
+
+        class Nothing:
+            """A transport with an empty in-flight list, which ends the run quietly."""
+
+            def configured(self, _settings):
+                """Answer as a configured broker does."""
+                return self
+
+            def _inflight(self, worker=None):
+                """Name a list that does not exist, so the run reports nothing in flight."""
+                return f'client-a:processing:{worker}'
+
+            def addressed(self):
+                """Name the queue this stand-in speaks for."""
+                return 'client-a'
+
+        return Nothing()
+
+    class Empty:
+        """A Redis whose lists are all empty, so the run ends after reading one length."""
+
+        def llen(self, _key):
+            """Nothing in flight."""
+            return 0
+
+    monkeypatch.setattr('django_aiogram.broker.registry.broker_class', note)
+    monkeypatch.setattr('django_aiogram.management.commands.tgbot_reclaim.get_redis', Empty)
+    call_command('tgbot_reclaim', worker='dead-worker', queue='client-a', stdout=StringIO())
+
+    assert asked == ['built'], 'a declared name given as a string never reached the transport'
 
     with pytest.raises(CommandError, match='not a declared queue'):
         call_command('tgbot_reclaim', worker='dead-worker', queue='client-z', stdout=StringIO())
@@ -243,3 +285,50 @@ def test_a_failure_that_names_no_bot_still_finds_its_arguments():
     call_command('tgbot_replay', correlation_id=[str(failed.correlation_id)], dry_run=True, stdout=out)
 
     assert 'from before' in out.getvalue(), out.getvalue()
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker'})
+def test_a_queue_table_nobody_could_read_still_permits_a_name(monkeypatch):
+    """*Unknown* and *none* are different answers, and only one of them may refuse.
+
+    Refusing where nothing could be read would block a reclaim during exactly the outage it
+    exists for — the database being down does not make a client's in-flight messages
+    unreachable.
+    """
+    from django.db import DatabaseError
+
+    def refuse(*_args, **_kwargs):
+        """Refuse the way an unmigrated or unreachable database does."""
+        msg = 'no such table'
+        raise DatabaseError(msg)
+
+    class Empty:
+        """A Redis whose lists are all empty, so the run ends after reading one length."""
+
+        def llen(self, _key):
+            """Nothing in flight."""
+            return 0
+
+    class Nothing:
+        """A transport that answers for whichever queue it is built for."""
+
+        def configured(self, _settings):
+            """Answer as a configured broker does."""
+            return self
+
+        def _inflight(self, worker=None):
+            """Name this queue's in-flight list."""
+            return f'client-z:processing:{worker}'
+
+        def addressed(self):
+            """Name the queue."""
+            return 'client-z'
+
+    monkeypatch.setattr('django_aiogram.models.TelegramQueue.objects.values_list', refuse)
+    monkeypatch.setattr('django_aiogram.broker.registry.broker_class', lambda *_a, **_k: Nothing())
+    monkeypatch.setattr('django_aiogram.management.commands.tgbot_reclaim.get_redis', Empty)
+    out = StringIO()
+
+    call_command('tgbot_reclaim', worker='dead-worker', queue='client-z', stdout=out)
+
+    assert 'Nothing in flight' in out.getvalue(), out.getvalue()
