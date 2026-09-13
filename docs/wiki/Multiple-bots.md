@@ -91,9 +91,13 @@ that, both bots' states land on `fsm:5:5:state` and each answers with the other'
 
 ## What twenty bots cost
 
-Bots configured alike share what a connection is: the broker, the consumer thread, the HTTP
-session. What they must agree on to share it is computed from their **resolved settings** — the
-transport and its options, the queue, the serializer, `MAX_IN_FLIGHT` — and is called a
+Some of it is the **process's**, whatever any bot's settings say: the dispatcher, the handler
+tree, the FSM store and the HTTP session every bot's aiogram `Bot` talks through. Twenty bots
+are one of each.
+
+What resolved settings decide is the **transport**: the broker connection and the consumer
+thread that reads it. Bots that agree share one, and what they must agree on — the transport
+and its options, the queue, the serializer, `MAX_IN_FLIGHT` — is computed and called a
 *profile*. Nothing configures it, and nothing should: it is what the settings already say.
 
 `manage.py tgbot_bots` is where you see it:

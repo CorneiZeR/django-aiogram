@@ -78,8 +78,9 @@ still the whole contract.
 
 **Serving several bots asks for one more line.** A queued message names the bot it is for --
 where that bot has an identity; one whose token carries none names nobody, and the `handler`
-below is what such a message reaches -- and the route is what turns the number into the right
-send:
+below is what such a message reaches. Such a bot is queue-only: the providers leave it out, so
+nothing polls it and no webhook path resolves it. The route is what turns the number into the
+right send:
 
 ```python
 class RoutingDelivery(Delivery):

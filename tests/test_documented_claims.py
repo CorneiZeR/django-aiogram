@@ -240,6 +240,27 @@ def test_every_permission_a_page_names_is_one_a_model_declares():
     assert named <= declared, f'pages name permissions nothing declares: {sorted(named - declared)}'
 
 
+def test_the_http_session_is_the_processs_whatever_the_profiles_say():
+    """Multiple-bots lists it beside the dispatcher and the store, not beside the transport.
+
+    One module-level session serves every bot, so two bots on different profiles -- different
+    transports, different queues -- still talk to Telegram through the same connector. A page
+    that put it with the profile would have a reader sizing connector limits per group.
+    """
+    from django.test import override_settings
+
+    defaults = {'FSM_STORAGE': 'memory', 'BROKER': 'django_aiogram.testing.InMemoryBroker', 'QUEUES': ('vip',)}
+    sections = {'default': {'TOKEN': '111111:AAone'}, 'apart': {'TOKEN': '222222:BBtwo', 'QUEUE': 'vip'}}
+    with override_settings(TELEGRAM_BOT_DEFAULTS=defaults, TELEGRAM_BOTS=sections):
+        from django_aiogram.runtime.groups import group_for
+        from django_aiogram.runtime.registry import bots
+
+        apart = group_for(bots['apart'].settings) is not group_for(bots['default'].settings)
+
+        assert apart, 'the two bots share a profile, so this case proves nothing'
+        assert bots['default'].bot.session is bots['apart'].bot.session, 'two profiles, two HTTP sessions'
+
+
 def test_a_bot_with_no_identity_sends_but_is_never_served():
     """Multiple-bots says both halves, and they are easy to confuse.
 

@@ -144,7 +144,8 @@ A container that dies loses its bots once `BOT_LEASE_SECONDS` has passed, and an
 may take them then. **An expired lease is not a revocation**: nothing reaches into the old
 container, so one that carries on — or comes back from a pause — polls the same token until a
 reconciliation pass stops it, and Telegram answers 409 to whichever of them asked second. Webhooks need none of this — there is nothing to hold — and past
-a hundred bots they are the only shape that works. **[Scaling](Scaling.md)** has the numbers.
+a hundred bots they are what this package recommends: nothing refuses polling there, it simply
+costs a long-lived connection per bot. **[Scaling](Scaling.md)** has the numbers.
 
 ## The credential
 
