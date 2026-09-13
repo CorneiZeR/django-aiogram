@@ -114,7 +114,10 @@ queue this process's *settings* name, which is a queue nobody here is reading â€
 
 ```shell
 python manage.py tgbot_queues                       # what is actually being consumed
-python -m django_aiogram.healthcheck --queue client-a --queue client-b
+
+# the module form runs no django.setup(), so it needs the settings module in its environment
+DJANGO_SETTINGS_MODULE=myproject.settings python -m django_aiogram.healthcheck \
+    --queue client-a --queue client-b
 ```
 
 The same names, in both places. **[Deployment](Deployment.md)** has the compose shape.
