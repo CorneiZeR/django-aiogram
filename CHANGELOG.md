@@ -1,6 +1,23 @@
 # Changelog
 
-## 5.0.0 - unreleased
+## 5.0.0 - 2026-09-13
+
+A major, and the one thing it changes for every project is the name of the settings dict. What
+else breaks depends on how far into the package a project reaches:
+
+| what breaks | who meets it | what to do |
+| --- | --- | --- |
+| `TELEGRAM_BOT` is dead; the dict is `TELEGRAM_BOT_DEFAULTS` and a bot is a section under `TELEGRAM_BOTS` | everybody | rename it; `E050` reports the old name, and a project that kept its token there has none |
+| the four tables and three new columns | everybody | `manage.py migrate` -- on both databases where `EVENT_LOG_DATABASE` names one of its own |
+| every consumer must be on 5.0 before a **second** bot sends | a deployment adding one | deploy the bot containers first; one bot is still either order |
+| `Event`, `Sent` and `Taken` each gained a field, at the end | a project unpacking one whole | read the fields by name; construction and indexing are unchanged |
+| `Broker.option`, `call_timeout` and `broker_class` take the settings to read from | a project that **overrides** one | accept the argument and pass it on, or a bot's own settings are silently replaced by the shared ones |
+| `Broker.take`, `take_nowait` and `reclaim` take a set of queues | a project shipping a `Broker` | nothing, unless it opts into `MULTIPLEXES`: the argument defaults to the queue it addresses and is left off where there is one |
+| a `DELIVERY` of your own is told which bot, which queue, and which queues | a project shipping one | take `route`, `settings` and `queues`; it is refused by name where it cannot serve what the container asked for |
+
+**[Upgrading](https://corneizer.github.io/django-aiogram/latest/Upgrading/)** walks the whole
+hop, including the index on the event log that is a decision rather than a formality on a large
+feed.
 
 ### Added
 
