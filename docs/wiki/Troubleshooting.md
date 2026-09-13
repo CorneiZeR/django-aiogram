@@ -105,6 +105,20 @@ ahead. Without `LMOVE` it is at-most-once, unless `REQUIRE_CRASH_SAFE` is on —
 then the worker refuses to start rather than deliver that way. A send that
 exhausted `MAX_RETRIES` is logged and acknowledged, not redelivered.
 
+## The probe says nothing ever started, and the consumers are running
+
+Look at what the container serves and what the probe asks about. A container started with
+`--queues client-a --queues client-b` serves those; a probe with no `--queue` asks about the
+queue this process's *settings* name, which is a queue nobody here is reading — so it reports
+`no heartbeat has been written` however well the consumers are doing.
+
+```shell
+python manage.py tgbot_queues                       # what is actually being consumed
+python -m django_aiogram.healthcheck --queue client-a --queue client-b
+```
+
+The same names, in both places. **[Deployment](Deployment.md)** has the compose shape.
+
 ## The container is unhealthy while the probe says `healthy`
 
 The probe was killed by Docker's `timeout`, so its exit code never arrived — `docker
