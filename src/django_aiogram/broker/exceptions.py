@@ -90,13 +90,21 @@ class QueueMultiplexingUnavailableError(BrokerError):
     nothing would say so.
     """
 
-    def __init__(self, broker: str, queues: 'tuple[str, ...]') -> None:
-        """Name the transport that refused and the queues it was asked to read together."""
+    def __init__(self, broker: str, queues: 'tuple[str, ...]', addressed: str = '') -> None:
+        """Name the transport that refused, what it was asked for, and what it reads.
+
+        All three, because the refusal has two readings and the message has to fit both: a set
+        of queues is one, and *one* queue that is not the one this broker was built for is the
+        other -- a consumer whose lane shrank to somebody else's queue, which reads as a
+        configuration mistake rather than as multiplexing.
+        """
         self.broker = broker
         self.queues = queues
+        self.addressed = addressed
         asked = ', '.join(repr(one) for one in queues) or 'none'
+        reads = f' It reads {addressed!r}.' if addressed else ''
         super().__init__(
-            f'{broker} cannot read several queues over one connection, and was asked for '
-            f'{asked}. Serve one queue per consumer here -- which is what this transport does '
-            f'when nothing asks it to multiplex -- or run a container per queue.'
+            f'{broker} reads one queue per connection, and was asked for {asked}.{reads} '
+            f'Serve one queue per consumer here -- which is what this transport does when '
+            f'nothing asks it to multiplex -- or run a container per queue.'
         )

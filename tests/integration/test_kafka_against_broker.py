@@ -686,15 +686,19 @@ def test_reading_fewer_topics_pauses_them_rather_than_rejoining_the_group(broker
             future.result(timeout=30)
 
 
-def test_a_settle_after_the_subscription_moved_does_not_raise(broker, kafka_bootstrap, kafka_topic):
-    """A container given one more queue must not fail the sends it was already making.
+def test_a_settle_after_the_subscription_moved_commits_rather_than_redelivering(broker, kafka_bootstrap, kafka_topic):
+    """A container given one more queue must not send twice what it had already sent.
 
-    What this shows is the ordinary case: one member, so the rebalance hands its partitions
-    straight back and the settle goes through against the consumer the new subscription built.
-    The case where the partition really does move belongs to somebody else in the group, and it
-    is `_lost` that decides what happens then -- both of its answers are pinned offline, in
-    `tests/test_kafka_publish.py`, because a second member joining is a timing this suite
-    should not be built on.
+    An explicit offset commit needs no assignment, so "it did not raise" says very little. What
+    matters is what the commit *did*: a regressed `_lost` swallowing a failure here would leave
+    the books reading empty while Kafka still held the message uncommitted -- and the next
+    member to take that partition would send it again.
+
+    So the assertion is the absence of a redelivery over a bounded window, which is the only
+    thing that tells a committed offset from a forgotten one. What happens when the partition
+    really has moved is `_lost`'s own decision, and both of its answers are pinned offline in
+    `tests/test_kafka_publish.py`: a second member joining is a timing this suite should not
+    rest on.
     """
     from confluent_kafka.admin import AdminClient, NewTopic
 
@@ -712,9 +716,12 @@ def test_a_settle_after_the_subscription_moved_does_not_raise(broker, kafka_boot
             # the queue that arrives, which is what moves the subscription under the send
             broker.serving((kafka_topic, arriving))
 
-            broker.ack(taken.handle)  # must not raise, whichever member holds the partition now
+            broker.ack(taken.handle)
 
             assert broker.inflight_depth() == 0, 'the settled message is still counted as held'
+            close_clients()  # the next member of the group reads from the committed offset
+            came_back = _read_until(KafkaBroker(), (kafka_topic, arriving), expected=1, keep_reading=5.0)
+            assert came_back == {}, f'a settled message was redelivered: {sorted(came_back)}'
     finally:
         close_clients()
         for future in admin.delete_topics([arriving]).values():

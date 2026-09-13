@@ -196,7 +196,7 @@ class RedisStreamsBroker(Broker):
         """
         return named_queues(queues) or (self._key(),)
 
-    def _ensure(self, keys: 'Seq[str] | None' = None) -> None:
+    def _ensure(self, keys: 'Seq[str] | None' = None) -> tuple[str, ...]:
         """Create the group on each stream, then prove the server can answer `depth()`.
 
         ``id='0'`` and not ``'$'``: a group starting at the end would skip whatever was
@@ -219,22 +219,55 @@ class RedisStreamsBroker(Broker):
         Remembering that a group was created is what :meth:`_regrouped` exists to undo: another
         process can delete the stream, which takes the group with it, and this instance would
         then skip the creation for the life of the process and read ``NOGROUP`` every time.
+
+        **Answers with the streams that are usable**, which is what a caller reads instead of
+        what it asked for. One key that cannot carry a group -- a name holding a list, which is
+        ``WRONGTYPE``, or a stream an operator has done something to -- would otherwise stop
+        the whole lane: the read raises before any key is looked at, the consumer logs it and
+        retries, and nineteen healthy queues wait behind the twentieth. The bad one is left out
+        and reported; it is tried again on the next read, since nothing about it is remembered.
+
+        A refusal with **nothing** usable left is raised, because then there is no read to make
+        and the caller has to hear why.
         """
         connection = self._redis()
+        usable: list[str] = []
+        refused: Exception | None = None
         for key in self._keys(keys):
             if key in self._grouped:
+                usable.append(key)
                 continue
             try:
-                connection.xgroup_create(key, self._group(), id='0', mkstream=True)
-            except Exception as error:
-                # narrowed by message rather than by class: the driver is imported lazily here,
-                # so naming `redis.exceptions.ResponseError` would put the import back
-                if 'BUSYGROUP' not in str(error):
-                    raise
-            if not self._ready and not self._reports_lag(connection.xinfo_groups(key)):
-                raise StreamServerTooOldError
-            self._grouped.add(key)
-            self._ready = True
+                self._grouping(connection, key)
+            except StreamServerTooOldError:
+                # about the server rather than about this key, so no other stream would fare
+                # better and the caller has to hear it
+                raise
+            except Exception as error:  # noqa: BLE001 - whatever it was, this key is the one it was about
+                logger.warning(
+                    'a stream could not be prepared and is left out of this read',
+                    extra={'tg_key': key, 'tg_error': type(error).__name__},
+                )
+                refused = refused or error
+                continue
+            usable.append(key)
+        if not usable and refused is not None:
+            raise refused
+        return tuple(usable)
+
+    def _grouping(self, connection: 'Redis', key: str) -> None:
+        """Create this stream's group, and prove the server can answer `depth()` once."""
+        try:
+            connection.xgroup_create(key, self._group(), id='0', mkstream=True)
+        except Exception as error:
+            # narrowed by message rather than by class: the driver is imported lazily here,
+            # so naming `redis.exceptions.ResponseError` would put the import back
+            if 'BUSYGROUP' not in str(error):
+                raise
+        if not self._ready and not self._reports_lag(connection.xinfo_groups(key)):
+            raise StreamServerTooOldError
+        self._grouped.add(key)
+        self._ready = True
 
     async def _aensure(self) -> None:
         """Do the same on the loop the caller is on, and not with a blocking socket.
@@ -347,8 +380,7 @@ class RedisStreamsBroker(Broker):
         one connection rather than twenty. ``BLOCK`` is satisfied by *any* of them, so a busy
         queue never starves a quiet one of the read.
         """
-        keys = self._keys(queues)
-        self._ensure(keys)
+        keys = self._ensure(self._keys(queues))
         connection = self._redis()
         held = self._held(connection, keys)
         if held is not None:
@@ -364,8 +396,7 @@ class RedisStreamsBroker(Broker):
 
     def take_nowait(self, queues: 'Seq[str] | None' = None) -> Taken | None:
         """Read the same two phases without waiting, for a drain with no thread to block."""
-        keys = self._keys(queues)
-        self._ensure(keys)
+        keys = self._ensure(self._keys(queues))
         connection = self._redis()
         held = self._held(connection, keys)
         if held is not None:
@@ -726,8 +757,7 @@ class RedisStreamsBroker(Broker):
         work behind on all three, and recovering the one it happens to address would leave the
         rest idle until something else came for them.
         """
-        keys = self._keys(queues)
-        self._ensure(keys)
+        keys = self._ensure(self._keys(queues))
         return sum(self._recovering(key, keys) for key in keys)
 
     def _recovering(self, key: str, keys: 'Seq[str]') -> int:

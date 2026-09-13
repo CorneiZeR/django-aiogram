@@ -212,7 +212,7 @@ class Broker(ABC):
         asked = named_queues(queues)
         if not asked or asked == (mine,):
             return mine
-        raise QueueMultiplexingUnavailableError(type(self).__name__, asked)
+        raise QueueMultiplexingUnavailableError(type(self).__name__, asked, mine)
 
     def opt(self, key: str) -> object:
         """Read one of this broker's own options as *this instance* was configured.

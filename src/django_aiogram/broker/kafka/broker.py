@@ -180,11 +180,6 @@ class KafkaBroker(Broker):
         Only the difference is sent, because `pause` and `resume` are calls: a loop that asked
         for the same state on every take would be two round trips per message.
         """
-        if self._paused_on is not consumer:
-            # a different consumer holds nothing this one paused, and believing otherwise
-            # leaves a topic delivering nothing for the life of the process
-            self._paused = set()
-            self._paused_on = consumer
         assigned = {(one.topic, one.partition) for one in consumer.assignment()}
         wanted = {spot for spot in assigned if spot[0] not in asked}
         if wanted == self._paused & assigned:
@@ -377,6 +372,7 @@ class KafkaBroker(Broker):
             # caller using the broker directly -- a drain, a test -- names what it wants
             self._serving = asked
         consumer = self._consumer()
+        self._forget_what_another_consumer_fetched(consumer)
         held = self._held(asked)
         if held is not None:
             return held
@@ -428,6 +424,29 @@ class KafkaBroker(Broker):
             return True
         self._spare.append(message)
         return False
+
+    def _forget_what_another_consumer_fetched(self, consumer: 'Consumer') -> None:
+        """Drop what a replaced consumer left behind: its pauses, and what it had fetched.
+
+        A subscription that moved closes the client and opens another, and neither the pauses
+        nor the records belong to the new one. A kept record is the worse of the two: its
+        offset was never committed, so the group hands it to whoever holds that partition now
+        -- and handing it over here as well would be this process sending a message a second
+        time, on a handle the member holding it cannot settle.
+
+        Nothing is lost by dropping them: uncommitted is uncommitted, and that is exactly what
+        makes Kafka redeliver.
+        """
+        if self._paused_on is consumer:
+            return
+        if self._spare:
+            logger.info(
+                'dropping what a replaced consumer had fetched; the group redelivers it',
+                extra={'tg_count': len(self._spare)},
+            )
+        self._spare.clear()
+        self._paused = set()
+        self._paused_on = consumer
 
     def _held(self, asked: tuple[str, ...]) -> object:
         """Hand back a message kept from an earlier read, where its topic is asked for now."""

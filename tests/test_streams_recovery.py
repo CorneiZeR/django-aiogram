@@ -310,3 +310,35 @@ def test_a_reclaim_recovers_from_a_stream_somebody_deleted(redis_server):
     claimed = broker.reclaim((STREAM, beside))
 
     assert claimed == 1, f'the walk stopped at the deleted stream: {claimed}'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_one_stream_that_cannot_carry_a_group_does_not_stop_the_lane(redis_server, caplog):
+    """A key holding something else is one queue's problem, not the container's.
+
+    ``WRONGTYPE`` is what a name holding a list answers to ``XGROUP CREATE``, and the read
+    raised before any stream was looked at -- so nineteen healthy queues waited behind the
+    twentieth while the consumer logged and retried. The bad one is left out and reported.
+    """
+    broken = f'{STREAM}-not-a-stream'
+    redis_server.rpush(broken, b'a list, which is what somebody else put here')
+    broker = RedisStreamsBroker()
+    broker.publish([payload(1)])
+
+    with caplog.at_level('WARNING', logger='django_aiogram'):
+        taken = broker.take_nowait((STREAM, broken))
+
+    assert taken is not None, 'the healthy stream was not read'
+    assert taken.payload == payload(1)
+    assert any(record.tg_key == broken for record in caplog.records if hasattr(record, 'tg_key'))
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_read_with_nothing_usable_left_says_why(redis_server):
+    """Leaving every stream out would be a read that answers "nothing" about a broken server."""
+    broken = f'{STREAM}-not-a-stream'
+    redis_server.rpush(broken, b'a list again')
+    broker = RedisStreamsBroker()
+
+    with pytest.raises(Exception, match='WRONGTYPE'):
+        broker.take_nowait((broken,))

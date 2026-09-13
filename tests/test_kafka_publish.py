@@ -10,6 +10,7 @@ means a hundred thousand records and a broker that has actually gone away.
 """
 
 import time
+from collections import deque
 from typing import NamedTuple
 
 import pytest
@@ -482,3 +483,26 @@ def test_a_settle_from_a_thread_that_never_joined_still_raises(monkeypatch):
 
     assert swallowed is False, 'a settle from a thread with no assignment was swallowed'
     assert broker._unsettled[held] == {1}, 'a stray caller dropped the books of the holding thread'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_what_a_replaced_consumer_had_fetched_is_not_handed_out_by_the_next_one(monkeypatch):
+    """A record belongs to the consumer that fetched it, and a subscription that moved is a new one.
+
+    The offset was never committed, so the group hands that message to whoever holds the
+    partition now. Handing it over here as well would send it a second time, on a handle the
+    member that has it cannot settle -- and the local books would be a second member's.
+    """
+    broker = KafkaBroker()
+    first, second = _Holding(), _Holding()
+    consumers = iter((first, first, second))
+    monkeypatch.setattr(broker, '_consumer', lambda: next(consumers))
+    broker._forget_what_another_consumer_fetched(broker._consumer())  # the first one, taking ownership
+    broker._spare.append(object())  # which is when a record can be kept at all
+
+    broker._forget_what_another_consumer_fetched(broker._consumer())  # still the first
+    kept = len(broker._spare)
+    broker._forget_what_another_consumer_fetched(broker._consumer())  # and now a replacement
+
+    assert kept == 1, 'the consumer that fetched them lost them'
+    assert broker._spare == deque(), 'a replaced consumer handed its records to the next one'

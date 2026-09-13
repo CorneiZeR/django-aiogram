@@ -201,7 +201,7 @@ def test_a_consumer_on_a_transport_that_cannot_multiplex_refuses_the_set():
     """
     handler = Deferring()
 
-    with pytest.raises(QueueMultiplexingUnavailableError, match='several queues'):
+    with pytest.raises(QueueMultiplexingUnavailableError, match='reads one queue per connection'):
         consuming(handler)
 
 
@@ -369,6 +369,25 @@ def test_the_broker_is_told_the_set_a_consumer_is_for_rather_than_what_it_reads_
     delivery.serve(('vip',))
 
     assert told == [('vip', 'bulk'), ('vip', 'bulk', 'later'), None], told
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=MEMORY)
+def test_the_refusal_names_the_queue_this_broker_actually_reads():
+    """The refusal has two readings, and the message has to fit both.
+
+    A *set* is one of them. One queue that is not the one this broker was built for is the
+    other -- a lane that shrank to somebody else's queue -- and a message saying "cannot read
+    several queues" about a request naming one is a message an operator cannot act on.
+    """
+    from django_aiogram.testing import InMemoryBroker
+
+    broker = InMemoryBroker.configured({**MEMORY, 'QUEUE': 'vip'})
+
+    with pytest.raises(QueueMultiplexingUnavailableError) as refused:
+        broker.take_nowait(('bulk',))
+
+    assert "'bulk'" in str(refused.value)
+    assert "reads 'vip'" in str(refused.value), str(refused.value)
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=MEMORY)
