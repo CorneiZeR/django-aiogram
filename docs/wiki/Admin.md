@@ -2,7 +2,8 @@
 
 For a deployment whose clients bring their own bot, the admin is the interface: bots are added
 there, tokens rotated there, a noisy client throttled there, and a client who left switched off
-there. Three models are registered — **bots**, **profiles** and **queues** — from
+there. **[Dynamic bots](Dynamic-bots.md)** is what the rows mean and how a container hears about
+them; this page is the interface over them. Three models are registered — **bots**, **profiles** and **queues** — from
 `AppConfig.ready()`, so nothing is read at import.
 
 Registration needs no setting: a web container that sends nothing and records nothing still has

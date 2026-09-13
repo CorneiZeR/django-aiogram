@@ -137,6 +137,19 @@ That is the whole minimum, and both values may be empty at startup. The
 package needs them only when something actually reaches Telegram or Redis, so
 tests, migrations and a build all run without them.
 
+A project with one bot writes nothing more. A second bot is a section under `TELEGRAM_BOTS`,
+which inherits everything above and overrides what it names:
+
+```python
+TELEGRAM_BOTS = {
+    'default': {'TOKEN': os.environ.get('TELEGRAM_BOT_TOKEN', '')},
+    'support': {'TOKEN': os.environ.get('SUPPORT_BOT_TOKEN', '')},
+}
+```
+
+See **[Multiple bots](Multiple-bots.md)**, and **[Dynamic bots](Dynamic-bots.md)** where they
+arrive while the container runs.
+
 The package ships tables of its own — the event log, the schedule an `eta` writes to, and the
 rows a project configures bots in — so run migrations after adding it. With
 `EVENT_LOG_DATABASE` naming a database of its own, migrate both: the feed lives there and
@@ -160,6 +173,17 @@ DJANGO_AIOGRAM_TOKEN=123:abc
 DJANGO_AIOGRAM_REDIS_URL=redis://redis:6379/0
 DJANGO_AIOGRAM_ENABLED=0
 ```
+
+One bot's own setting is `DJANGO_AIOGRAM_<ALIAS>_<NAME>`, so a bot's token can stay out of
+`settings.py`:
+
+```ini
+DJANGO_AIOGRAM_SUPPORT_TOKEN=456:def
+```
+
+**The section still has to exist.** `TELEGRAM_BOTS` is what declares which bots there are, and
+a variable is read only for an alias already declared there — so `'support': {}` is the whole
+of what the settings need, and the environment fills it in.
 
 Django settings win over the environment. Callables and mappings —
 `DEFAULT_KWARGS`, `DEFAULT_BOT_PROPERTIES`, `RATE_LIMIT` — have no sensible

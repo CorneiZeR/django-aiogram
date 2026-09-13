@@ -96,6 +96,14 @@ bot.send(chat_id=CHAT_ID, text='Order approved')
 python manage.py start_tgbot
 ```
 
+**More than one bot** is a section each under `TELEGRAM_BOTS`, inheriting the defaults above and
+overriding what it names; send through `bots['support']`. One dispatcher and one handler tree
+serve all of them, bots configured alike also share the connection and the consumer thread, and
+a queued message names the bot it is for wherever that bot has an identity:
+[Multiple bots](https://corneizer.github.io/django-aiogram/latest/Multiple-bots/). Bots that
+arrive *while it runs* — connected by your own clients — come from a provider and are reconciled
+without a redeploy: [Dynamic bots](https://corneizer.github.io/django-aiogram/latest/Dynamic-bots/).
+
 A router module, a call, and one process running the bot. That process gets Django's
 between-requests connection handling without having any requests — every update is bracketed
 with `close_old_connections()`, so a database that restarts under a long-running bot does not
@@ -120,6 +128,8 @@ the same pull request as the code they describe and published from `master`.
 | [Handlers](https://corneizer.github.io/django-aiogram/latest/Handlers/) | routers, filters, FSM, the async ORM |
 | [Sending messages](https://corneizer.github.io/django-aiogram/latest/Sending-messages/) | routes, keyboards, files, errors |
 | [Testing](https://corneizer.github.io/django-aiogram/latest/Testing/) | your suite without a broker, asserting what was queued |
+| [Multiple bots](https://corneizer.github.io/django-aiogram/latest/Multiple-bots/) | aliases, identities, what a set of bots shares and what it costs |
+| [Dynamic bots](https://corneizer.github.io/django-aiogram/latest/Dynamic-bots/) | bots that arrive while it runs: providers, reconciliation, quarantine, leases |
 | [API](https://corneizer.github.io/django-aiogram/latest/API/) | the instance, its internals, and what stays public |
 | [Delivery](https://corneizer.github.io/django-aiogram/latest/Delivery/) | how queued messages reach Telegram |
 | [Redis list](https://corneizer.github.io/django-aiogram/latest/Redis-list/) | the default transport: what it guarantees, and why the worker's name matters |

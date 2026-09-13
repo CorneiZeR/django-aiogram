@@ -76,8 +76,10 @@ are the ones that are easy to get wrong.
 and still works: with one bot every message is addressed to it or to nobody, and `run()` is
 still the whole contract.
 
-**Serving several bots asks for one more line.** A queued message names the bot it is for, and
-the route is what turns that number into the right send:
+**Serving several bots asks for one more line.** A queued message names the bot it is for --
+where that bot has an identity; one whose token carries none names nobody, and the `handler`
+below is what such a message reaches -- and the route is what turns the number into the right
+send:
 
 ```python
 class RoutingDelivery(Delivery):
@@ -104,7 +106,8 @@ neither argument is refused the same way and for the same shape of reason: it wo
 message from the process's own queue while the container believes it is serving another.
 
 `queues` is the set read over **one** connection, where the transport can
-(`Broker.MULTIPLEXES`). A `run()` of your own hands it down and counts what comes back:
+(`Broker.MULTIPLEXES`) — see **[Multiple bots](Multiple-bots.md)** for what a set of queues is
+for, and **[Dynamic bots](Dynamic-bots.md)** for where one arrives from mid-run. A `run()` of your own hands it down and counts what comes back:
 
 ```python
 asked = self.readable()

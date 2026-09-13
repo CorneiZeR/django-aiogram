@@ -129,6 +129,9 @@ nav:
       - Handlers: Handlers.md
       - Sending messages: Sending-messages.md
       - Testing: Testing.md
+  - Several bots:
+      - Multiple bots: Multiple-bots.md
+      - Dynamic bots: Dynamic-bots.md
   - Transports:
       - Redis list: Redis-list.md
       - Redis Streams: Redis-Streams.md

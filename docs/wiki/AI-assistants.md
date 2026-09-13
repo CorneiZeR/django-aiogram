@@ -12,11 +12,21 @@ correctly, short enough to sit in a system prompt or a `CLAUDE.md` /
 `AGENTS.md` / `.cursor/rules` file:
 
 ```text
-Project uses django-aiogram 4.x. Rules:
+Project uses django-aiogram 5.x. Rules:
 
 - Import the shared instance: `from django_aiogram import bot`. Never
   construct TelegramBot() per task or per request — that builds an event loop and
   an HTTP session nothing closes.
+- Settings live in TELEGRAM_BOT_DEFAULTS. In 4.x the dict was called TELEGRAM_BOT;
+  that name is dead and `manage.py check` reports E050 where it is still set.
+- Several bots: one section per bot under TELEGRAM_BOTS, keyed by an alias, each
+  overriding what it names and inheriting the rest from TELEGRAM_BOT_DEFAULTS.
+  Reach them with `from django_aiogram import bots` — `bots['support'].send(...)`,
+  or `bots.by_id(123456789)` where you have the identity a message carries.
+  `bot` is exactly `bots['default']`. A project with one bot writes no sections.
+  Some settings belong to the process rather than to a bot — FSM_STORAGE,
+  BOT_PROVIDERS, QUEUES, TOKEN_STORAGE, EVENT_LOG and the rest of the list in
+  Settings.md — and a section naming one is refused with E053.
 - To send from anywhere (view, task, signal): `bot.send(chat_id=..., text=...)`.
   It queues on whichever transport `BROKER` names outside the bot container, and
   calls Telegram directly inside it. Pass another method by name: bot.send('send_photo', chat_id=..., photo=...).
@@ -134,11 +144,19 @@ so message bodies stay out of the table, and grant support only
 
 **Migrate an older project.** *"This project imports `telegram_bot`, which
 `django-redis-aiogram` 3.0 removed, and that distribution is now `django-aiogram`.
-Move it to `django_aiogram` 4.x following the wiki's Upgrading page, newest section
+Move it to `django_aiogram` 5.x following the wiki's Upgrading page, newest section
 first: rename it in `INSTALLED_APPS`, replace the imports with the 4.0 layout, move
-`parse_mode` into `DEFAULT_BOT_PROPERTIES`, drop the placeholder token from settings,
+`parse_mode` into `DEFAULT_BOT_PROPERTIES`, rename the `TELEGRAM_BOT` settings dict to
+`TELEGRAM_BOT_DEFAULTS`, run `manage.py migrate`, drop the placeholder token from settings,
 and use `bot.router` instead of `bot._router`."* See
 **[Upgrading](Upgrading.md)**.
+
+**Add a second bot.** *"This project serves one Telegram bot and now needs a support bot
+beside it. Add a `TELEGRAM_BOTS` section per bot under the existing `TELEGRAM_BOT_DEFAULTS`,
+keep the shared settings where they are, and send through `bots['support']` from
+`django_aiogram`. Do not build a second `TelegramBot()`, and do not copy the settings dict:
+a section inherits what it does not name. Every consumer has to be on 5.0 before the second
+bot starts sending."* See **[Multiple bots](Multiple-bots.md)**.
 
 **Debug delivery.** *"Messages are queued but never arrive. Check in this order:
 is the `start_tgbot` container running and is `ENABLED` true there, does
@@ -161,6 +179,9 @@ Each of these has been seen in real integrations, and each is a 1.x habit:
 | `try/except` around the import | defensive habit from the crashing version | Import it plainly |
 | Expecting a queued send to raise | the call looks synchronous | The worker logs it; use `send_raw` if the caller must know |
 | `SERIALIZER: 'pickle'` "for keyboards" | true in 1.0.4, false since aiogram 3 | JSON round-trips keyboards, media and files |
+| A second `TelegramBot()` for a second bot | the class looks like the way to name one | A section under `TELEGRAM_BOTS`, reached as `bots['support']` |
+| Copying the settings dict per bot | a section reads like a whole configuration | It inherits; name only what differs |
+| `TELEGRAM_BOT = {...}` | it was the name until 5.0 | `TELEGRAM_BOT_DEFAULTS`, with `E050` reporting the old one |
 
 ## Working on this package, not with it
 
