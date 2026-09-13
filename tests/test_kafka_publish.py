@@ -295,8 +295,13 @@ class AssignedAfter:
         self.polls = []
 
     def assignment(self):
-        """Nothing until `after` polls have gone by, then one partition."""
-        return [] if len(self.polls) < self.after else [_Partition('conformance', 0)]
+        """Nothing until `after` polls have gone by, then one partition of the topic under test.
+
+        Of *that* topic rather than any: the broker pauses what it is not reading, so a double
+        answering with somebody else's partition would make it pause -- and reach for the
+        driver, which this suite runs without.
+        """
+        return [] if len(self.polls) < self.after else [_Partition(SETTINGS['KAFKA_TOPIC'], 0)]
 
     def poll(self, timeout):
         """Spend the asked-for time and answer nothing, as `NeverAssigned` does and why."""
@@ -424,7 +429,7 @@ def test_the_producer_states_its_acknowledgement_level(monkeypatch):
 class _Holding:
     """A consumer that holds one partition, which is what a settled message needs."""
 
-    def __init__(self, assignment=(('conformance', 0),)):
+    def __init__(self, assignment=((SETTINGS['KAFKA_TOPIC'], 0),)):
         """Hold whatever the case says this member was given."""
         self._assigned = [_Partition(*spot) for spot in assignment]
 
@@ -443,7 +448,7 @@ def test_a_partition_this_member_no_longer_holds_is_forgotten_rather_than_raised
     a later handle from it would be judged against offsets that belong to another member.
     """
     broker = KafkaBroker()
-    gone = ('conformance', 7)
+    gone = (SETTINGS['KAFKA_TOPIC'], 7)
     broker._unsettled[gone] = {3}
     broker._settled[gone] = {2}
     broker._rewinds[gone] = [1]
@@ -469,7 +474,7 @@ def test_a_settle_from_a_thread_that_never_joined_still_raises(monkeypatch):
     the one this nearly took away.
     """
     broker = KafkaBroker()
-    held = ('conformance', 0)
+    held = (SETTINGS['KAFKA_TOPIC'], 0)
     broker._unsettled[held] = {1}
     monkeypatch.setattr(broker, '_consumer', lambda: _Holding(assignment=()))
 
