@@ -251,10 +251,14 @@ class RabbitMQBroker(Broker):
         Named rather than counted, and the difference is a live path: a lane of three whose
         other two queues are at their budget asks for one, and coming down here for it would
         leave those two subscribed and delivering while a second consumer opened on this one.
-        ``None`` is the only thing that reaches the generator, which is every caller that
-        predates queue sets.
+
+        And a lane that shrank to the queue this broker addresses says so as ``None``, which
+        would come down here with the subscriptions of the queues it *used* to serve still
+        registered: they would go on taking messages into a deque this path never reads.
+        So while anything is subscribed, the multiplexed path is the one that runs -- it is
+        what cancels what is no longer wanted.
         """
-        if queues is not None:
+        if queues is not None or self._mine.subscribed:
             return self._multiplexed(timeout, self._queues(queues))
         self._serving = (self._queue(),)
         channel = self._channel()

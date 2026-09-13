@@ -656,3 +656,29 @@ def test_publishing_from_another_thread_does_not_disturb_the_consumer(broker, br
         assert broker.inflight_depth() == 1, "a publisher dropped the consumer's in-flight handle"
         broker.ack(taken.handle)
         assert broker.inflight_depth() == 0, 'the settle was refused after a publish from elsewhere'
+
+
+def test_a_lane_shrinking_to_the_addressed_queue_cancels_what_it_stops_serving(broker, broker_channel, amqp_url):
+    """`None` means *the queue I address*, and a lane can arrive at that by shrinking.
+
+    The subscriptions of the queues it used to serve are still registered then, and the
+    single-queue path never reads the deque their callbacks fill -- so those queues would go on
+    being consumed into a buffer nothing drains, with the addressed queue consumed twice.
+    """
+    beside = f'{AMQP_QUEUE}-leaving'
+    broker_channel.queue_declare(queue=beside, durable=True)
+    try:
+        with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
+            broker.publish([payload(1)])
+            taken = broker.take(1.0, (AMQP_QUEUE, beside))
+            assert taken is not None, 'the lane never delivered'
+            broker.ack(taken.handle)
+            assert broker._mine.subscribed == (AMQP_QUEUE, beside)
+
+            # the lane shrinks to the queue this broker addresses, which `Delivery` says as None
+            assert broker.take(0.2) is None
+
+            assert broker._mine.subscribed in ((), (AMQP_QUEUE,)), broker._mine.subscribed
+            assert beside not in broker._mine.tags, 'a queue this lane stopped serving is still consumed'
+    finally:
+        broker_channel.queue_delete(queue=beside)

@@ -345,7 +345,7 @@ def test_the_books_of_a_queue_that_went_away_are_dropped_once_it_has_settled(red
     assert 'bulk' not in delivery._in_flight, 'the books of a queue nothing serves are kept for ever'
 
 
-@override_settings(TELEGRAM_BOT_DEFAULTS=STREAMS)
+@override_settings(TELEGRAM_BOT_DEFAULTS={**STREAMS, 'MAX_IN_FLIGHT': 1})
 def test_the_broker_is_told_the_set_a_consumer_is_for_rather_than_what_it_reads_now(redis_server):
     """The two questions a lane asks, and the reason they are asked separately.
 
@@ -363,6 +363,10 @@ def test_the_broker_is_told_the_set_a_consumer_is_for_rather_than_what_it_reads_
     delivery.serve(('vip', 'bulk', 'later'))
     publish('vip', 'fills the vip budget')
     delivery.consume_pending()
+    # a capacity change, which is the thing that must *not* reach the broker: the bound is 1
+    # here, so `vip` has left the readable set while the served set has not moved
+    assert delivery.at_capacity('vip') is True
+    assert delivery.readable() == ('bulk', 'later'), delivery.readable()
     # and a lane that shrinks to the queue this broker addresses says so too, as `None`: a
     # transport whose subscription follows this would otherwise keep holding the queue that
     # went, while the container now serving it waits

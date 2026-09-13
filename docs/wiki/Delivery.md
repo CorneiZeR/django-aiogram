@@ -109,7 +109,7 @@ message from the process's own queue while the container believes it is serving 
 ```python
 asked = self.readable()
 if asked == ():
-    continue                       # every queue this consumer serves is at its budget
+    continue  # every queue this consumer serves is at its budget
 taken = self.broker.take(self.read_timeout, asked) if asked else self.broker.take(self.read_timeout)
 if taken is not None and self.dispatch(taken.payload, taken.handle, taken.queue):
     self.acknowledge(taken.handle)

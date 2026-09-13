@@ -578,12 +578,11 @@ def test_two_topics_settle_separately_under_one_consumer(broker, kafka_bootstrap
     The second topic is created and dropped here rather than by a fixture, because it exists
     only for this case -- the rest of the file is about one topic's order.
     """
-    from confluent_kafka.admin import AdminClient, NewTopic
+    from confluent_kafka.admin import AdminClient
 
     beside = f'{kafka_topic}-also'
     admin = AdminClient({'bootstrap.servers': kafka_bootstrap})
-    for future in admin.create_topics([NewTopic(beside, num_partitions=1, replication_factor=1)]).values():
-        future.result(timeout=30)
+    _a_topic(admin, beside)
     try:
         with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
             broker.publish([payload(1)])
@@ -609,6 +608,25 @@ def test_two_topics_settle_separately_under_one_consumer(broker, kafka_bootstrap
         close_clients()
         for future in admin.delete_topics([beside]).values():
             future.result(timeout=30)
+
+
+def _a_topic(admin, name):
+    """Create one topic and wait until the cluster reports it, the way the fixture does.
+
+    Creating is not the same as being visible: metadata propagates, and a publish or a
+    subscribe against a topic the cluster has not caught up on is the intermittent failure this
+    suite would otherwise spend a morning on. The `kafka_topic` fixture waits for exactly this;
+    a case making a second topic of its own has to wait for it too.
+    """
+    from confluent_kafka.admin import NewTopic
+
+    for future in admin.create_topics([NewTopic(name, num_partitions=1, replication_factor=1)]).values():
+        future.result(timeout=30)
+    for _ in range(100):
+        if name in admin.list_topics(timeout=10).topics:
+            return
+        time.sleep(0.1)
+    pytest.skip(f'kafka did not report the topic {name!r} after creating it')
 
 
 def _read_until(broker, topics, *, expected, keep_reading=0.0):
@@ -647,12 +665,11 @@ def test_reading_fewer_topics_pauses_them_rather_than_rejoining_the_group(broker
     for keeps answering, the one left out does not, and the consumer object is the same one
     before and after.
     """
-    from confluent_kafka.admin import AdminClient, NewTopic
+    from confluent_kafka.admin import AdminClient
 
     beside = f'{kafka_topic}-paused'
     admin = AdminClient({'bootstrap.servers': kafka_bootstrap})
-    for future in admin.create_topics([NewTopic(beside, num_partitions=1, replication_factor=1)]).values():
-        future.result(timeout=30)
+    _a_topic(admin, beside)
     try:
         with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
             broker.serving((kafka_topic, beside))
@@ -700,12 +717,11 @@ def test_a_settle_after_the_subscription_moved_commits_rather_than_redelivering(
     `tests/test_kafka_publish.py`: a second member joining is a timing this suite should not
     rest on.
     """
-    from confluent_kafka.admin import AdminClient, NewTopic
+    from confluent_kafka.admin import AdminClient
 
     arriving = f'{kafka_topic}-arriving'
     admin = AdminClient({'bootstrap.servers': kafka_bootstrap})
-    for future in admin.create_topics([NewTopic(arriving, num_partitions=1, replication_factor=1)]).values():
-        future.result(timeout=30)
+    _a_topic(admin, arriving)
     try:
         with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
             broker.serving((kafka_topic,))
