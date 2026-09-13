@@ -628,3 +628,31 @@ def test_a_send_that_finished_across_a_queue_set_change_is_still_settled(broker,
             assert broker.take_nowait((AMQP_QUEUE,)) is None, 'a finished send was redelivered'
     finally:
         broker_channel.queue_delete(queue=beside)
+
+
+def test_publishing_from_another_thread_does_not_disturb_the_consumer(broker, broker_channel, amqp_url):
+    """One broker instance is shared, and a channel belongs to the thread that opened it.
+
+    A runtime group hands the same broker to every bot on its profile, so a web thread
+    publishing through it reaches `_channel()` -- and everything registered on a channel is
+    registered on *that thread's*. Read off the instance, a publisher would see a channel that
+    is not the consumer's, drop its subscriptions and its deliveries, and take its handles out
+    of the in-flight count: a settle then refused, a message left unacknowledged, and a depth
+    answering for a channel that has taken nothing.
+    """
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
+        broker.publish([payload(1)])
+        taken = broker.take(1.0, (AMQP_QUEUE,))
+        assert taken is not None, 'the message was not delivered in the first place'
+        assert broker.inflight_depth() == 1
+
+        elsewhere = ThreadPoolExecutor(max_workers=1)
+        try:
+            # a publish from a thread with no channel of its own, which is every web worker
+            elsewhere.submit(broker.publish, [payload(2)]).result(timeout=30)
+        finally:
+            elsewhere.shutdown(wait=True)
+
+        assert broker.inflight_depth() == 1, "a publisher dropped the consumer's in-flight handle"
+        broker.ack(taken.handle)
+        assert broker.inflight_depth() == 0, 'the settle was refused after a publish from elsewhere'

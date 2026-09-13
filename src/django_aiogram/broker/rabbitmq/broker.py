@@ -14,6 +14,7 @@ is also the cheaper one where it does have to cross. See
 
 import asyncio
 import logging
+import threading
 from collections import deque
 from collections.abc import Mapping
 from collections.abc import Sequence as Seq
@@ -57,6 +58,49 @@ def _position(handle: object) -> tuple[int, int]:
     return handle
 
 
+class _PerThread(threading.local):
+    """What one thread's channel holds, kept off the shared broker instance.
+
+    A `BlockingConnection` belongs to the thread that opened it, so everything registered on a
+    channel does too: the open consumer, the subscriptions and their tags, what those have
+    delivered, and which queues have been declared on it. A broker instance is shared by every
+    bot on a profile and reached from web threads as well as the consumer's, and none of this
+    means anything on a thread that did not open the channel it was recorded against.
+    """
+
+    def __init__(self) -> None:
+        """Start a thread with nothing open, which is what a thread starts with."""
+        #: the open consumer, the timeout it was opened with, and the channel it belongs to.
+        #: `consume` fixes its inactivity timeout when the generator is made, so a different
+        #: one needs a new generator -- and so does a different *channel*: a connection replaced
+        #: under this broker leaves a generator whose channel is dead, and advancing that is a
+        #: failure where opening a new consumer was the whole intent
+        self.consumer: Any = None
+        self.consumer_timeout: float | None = None
+        self.consumer_channel: Any = None
+        #: the queues a multiplexed consumer is subscribed to on the current channel, and the
+        #: messages those subscriptions have handed over. pika delivers through callbacks, so
+        #: the deque is where a `take` reads from after giving the connection its turn
+        self.subscribed: tuple[str, ...] = ()
+        #: the channel those subscriptions were registered on. Its own rather than the
+        #: generator consumer's: the two are separate paths, and reading one for the other
+        #: dropped every subscription -- and everything already delivered through it -- on the
+        #: take after the one that registered them. Measured against a real broker: the second
+        #: queue's message was delivered, cleared and never seen again
+        self.subscribed_channel: Any = None
+        #: the consumer tag each subscribed queue was registered under, so one can be cancelled
+        #: without touching the others: `channel.cancel()` cancels every consumer on the
+        #: channel, which on a set that merely lost one queue would stop reading for the rest
+        self.tags: dict[str, str] = {}
+        self.delivered: deque[tuple[str, Any, bytes]] = deque()
+        #: the queues declared on the channel this thread is using, and which generation of it
+        self.declared: set[str] = set()
+        self.declared_on: int | None = None
+        #: the generation this thread last saw, so a replacement drops the handles **it** was
+        #: holding rather than every handle in the process
+        self.generation: int | None = None
+
+
 class RabbitMQBroker(Broker):
     """One durable queue, consumed with acknowledgements, settled by delivery tag."""
 
@@ -82,45 +126,28 @@ class RabbitMQBroker(Broker):
 
     def __init__(self) -> None:
         """Hold nothing open; the first publish or take opens this thread's channel."""
-        #: the open consumer, the timeout it was opened with, and the channel it belongs to.
-        #: `consume` fixes its inactivity timeout when the generator is made, so a different
-        #: one needs a new generator — and so does a different *channel*: a connection replaced
-        #: under this broker leaves a generator whose channel is dead, and advancing that is a
-        #: failure where opening a new consumer was the whole intent
-        self._consumer: Any = None
-        self._consumer_timeout: float | None = None
-        self._consumer_channel: Any = None
-        #: delivery tags handed out and not yet settled. AMQP does not report an unacked count
-        #: — `message_count` counts only what is ready, measured — and the contract asks what
-        #: *this worker* holds, which is exactly what this knows
+        #: everything that belongs to a *channel*, which belongs to a thread. One broker
+        #: instance is shared -- a runtime group hands the same one to every bot on its profile
+        #: -- so a web thread publishing through it must not clear what the consumer thread's
+        #: channel is holding. Measured as a shape rather than in a log: `_notice_a_new_channel`
+        #: ran on every publish, saw a channel that was not the consumer's, and dropped the
+        #: subscriptions and the deliveries of a thread it had nothing to do with
+        self._mine = _PerThread()
+        #: delivery tags handed out and not yet settled, across every thread. Shared on purpose:
+        #: the contract asks what *this worker* holds, and a monitor asking from a web thread
+        #: would otherwise be told about its own channel, which has taken nothing. AMQP reports
+        #: no unacked count -- `message_count` counts only what is ready, measured -- so this is
+        #: the only answer there is
         self._unsettled: set[object] = set()
-        #: the queues a multiplexed consumer is subscribed to on the current channel, and the
-        #: messages those subscriptions have handed over. pika delivers through callbacks, so
-        #: the deque is where a `take` reads from after giving the connection its turn
-        self._subscribed: tuple[str, ...] = ()
-        #: the channel those subscriptions were registered on. Its own rather than the
-        #: generator consumer's: the two are separate paths, and reading one for the other
-        #: dropped every subscription -- and everything already delivered through it -- on the
-        #: take after the one that registered them. Measured against a real broker: the second
-        #: queue's message was delivered, cleared and never seen again
-        self._subscribed_channel: Any = None
-        #: the consumer tag each subscribed queue was registered under, so one can be cancelled
-        #: without touching the others: `channel.cancel()` cancels every consumer on the
-        #: channel, which on a set that merely lost one queue would stop reading for the rest
-        self._tags: dict[str, str] = {}
-        #: the queues declared on the channel this broker is using. Declaring is idempotent and
-        #: cheap, and doing it here rather than when the channel is opened is what keeps the
-        #: channel's identity free of the queue set -- see `channel_for_thread`
-        self._declared: set[str] = set()
-        #: which channel generation those declarations were made on
-        self._declared_on: int | None = None
+        #: over `_unsettled`, because two threads reach it: the consumer takes and settles, and
+        #: a publisher whose channel was replaced drops what its own generation was holding
+        self._books = threading.Lock()
         #: the queues this instance reads, as the last take asked for them. Kept because every
         #: other call needs the same channel: settling by delivery tag on a channel opened for
         #: a *different* set is settling on a different channel, which AMQP requeues the whole
         #: set over -- measured against a real broker, as a take that never saw its second
         #: queue again
         self._serving: tuple[str, ...] = ()
-        self._delivered: deque[tuple[str, Any, bytes]] = deque()
 
     def _queue(self) -> str:
         """Name the queue this broker publishes to and consumes from."""
@@ -139,11 +166,11 @@ class RabbitMQBroker(Broker):
         restarted under it.
         """
         for queue in queues:
-            if queue in self._declared:
+            if queue in self._mine.declared:
                 continue
             channel.queue_declare(queue=queue, durable=True)
-            self._declared.add(queue)
-            self._declared_on = channel_generation()
+            self._mine.declared.add(queue)
+            self._mine.declared_on = channel_generation()
 
     def _channel(self, queues: 'Seq[str] | None' = None) -> 'BlockingChannel':
         """Reach this thread's channel, declaring the queues it is for on first use.
@@ -231,12 +258,12 @@ class RabbitMQBroker(Broker):
             return self._multiplexed(timeout, self._queues(queues))
         self._serving = (self._queue(),)
         channel = self._channel()
-        if self._consumer is None or self._consumer_timeout != timeout:
+        if self._mine.consumer is None or self._mine.consumer_timeout != timeout:
             self._cancel(channel)
-            self._consumer = channel.consume(self._queue(), inactivity_timeout=max(0.001, timeout))
-            self._consumer_timeout = timeout
-            self._consumer_channel = channel
-        method, _properties, body = next(self._consumer)
+            self._mine.consumer = channel.consume(self._queue(), inactivity_timeout=max(0.001, timeout))
+            self._mine.consumer_timeout = timeout
+            self._mine.consumer_channel = channel
+        method, _properties, body = next(self._mine.consumer)
         if method is None or body is None:
             return None
         return self._issued(method, body)
@@ -308,8 +335,8 @@ class RabbitMQBroker(Broker):
         """
         kept: deque[tuple[str, Any, bytes]] = deque()
         found: tuple[str, Any, bytes] | None = None
-        while self._delivered:
-            entry = self._delivered.popleft()
+        while self._mine.delivered:
+            entry = self._mine.delivered.popleft()
             queue, method, body = entry
             if queue not in queues:
                 self._give_back(channel, method, queue)
@@ -318,7 +345,7 @@ class RabbitMQBroker(Broker):
                 found = entry
             else:
                 kept.append(entry)
-        self._delivered = kept
+        self._mine.delivered = kept
         if found is None:
             return None
         queue, method, body = found
@@ -346,18 +373,18 @@ class RabbitMQBroker(Broker):
         already being served, and this is the path a container takes whenever one of them
         arrives or goes away.
         """
-        if self._subscribed == queues:
+        if self._mine.subscribed == queues:
             return
-        for queue in [held for held in self._subscribed if held not in queues]:
-            tag = self._tags.pop(queue, '')
+        for queue in [held for held in self._mine.subscribed if held not in queues]:
+            tag = self._mine.tags.pop(queue, '')
             if tag:
                 channel.basic_cancel(tag)
         for queue in queues:
-            if queue in self._tags:
+            if queue in self._mine.tags:
                 continue
-            self._tags[queue] = channel.basic_consume(queue, self._delivery_into(queue), auto_ack=False)
-        self._subscribed = queues
-        self._subscribed_channel = channel
+            self._mine.tags[queue] = channel.basic_consume(queue, self._delivery_into(queue), auto_ack=False)
+        self._mine.subscribed = queues
+        self._mine.subscribed_channel = channel
 
     def _delivery_into(self, queue: str) -> 'Callable[[object, object, object, bytes], None]':
         """Make the callback that files a delivery under the queue it came from.
@@ -369,19 +396,19 @@ class RabbitMQBroker(Broker):
 
         def arrived(_channel: object, method: object, _properties: object, body: bytes) -> None:
             """File one delivery under its queue, for the take that asked for the turn."""
-            self._delivered.append((queue, method, body))
+            self._mine.delivered.append((queue, method, body))
 
         return arrived
 
     def _unsubscribe(self, channel: 'BlockingChannel') -> None:
         """Cancel the multiplexed subscriptions, for a drain that uses ``basic_get`` instead."""
-        if not self._subscribed:
+        if not self._mine.subscribed:
             return
-        self._subscribed = ()
-        self._subscribed_channel = None
-        for tag in self._tags.values():
+        self._mine.subscribed = ()
+        self._mine.subscribed_channel = None
+        for tag in self._mine.tags.values():
             channel.basic_cancel(tag)
-        self._tags.clear()
+        self._mine.tags.clear()
 
     def _issued(self, method: object, body: bytes | None, queue: str = '') -> Taken | None:
         """Hand out a message, remembering which channel's tag this is.
@@ -398,7 +425,8 @@ class RabbitMQBroker(Broker):
         # way: pika is an extra, and this signature does not name a class from one
         tag = method.delivery_tag  # type: ignore[attr-defined]  # the parameter is `object`, see above
         generation = channel_generation()
-        self._unsettled.add((generation, tag))
+        with self._books:
+            self._unsettled.add((generation, tag))
         return Taken(body, (generation, tag), queue)
 
     def _notice_a_new_channel(self, channel: 'BlockingChannel') -> None:
@@ -418,32 +446,40 @@ class RabbitMQBroker(Broker):
         A connection is replaced whenever the settings behind it move or it was closed, which
         is a live path rather than a theoretical one.
         """
-        if self._consumer is not None and self._consumer_channel is not channel:
-            self._consumer = None
-            self._consumer_timeout = None
-            self._consumer_channel = None
-        if self._subscribed_channel is not None and self._subscribed_channel is not channel:
+        if self._mine.consumer is not None and self._mine.consumer_channel is not channel:
+            self._mine.consumer = None
+            self._mine.consumer_timeout = None
+            self._mine.consumer_channel = None
+        if self._mine.subscribed_channel is not None and self._mine.subscribed_channel is not channel:
             # the subscriptions belonged to the channel that is gone, and so did anything it
             # had handed over: RabbitMQ requeues an unacknowledged delivery when its channel
             # drops, so those messages are back on their queues for whoever takes them next
-            self._subscribed = ()
-            self._subscribed_channel = None
-            self._tags.clear()
-            self._delivered.clear()
-        if self._declared and channel_generation() != self._declared_on:
-            # a new channel is a new connection, and the server may have been restarted under
-            # it: what this instance declared belonged to the one that is gone
-            self._declared.clear()
+            self._mine.subscribed = ()
+            self._mine.subscribed_channel = None
+            self._mine.tags.clear()
+            self._mine.delivered.clear()
         current = channel_generation()
-        self._unsettled = {held for held in self._unsettled if _position(held)[0] == current}
+        if self._mine.declared and current != self._mine.declared_on:
+            # a new channel is a new connection, and the server may have been restarted under
+            # it: what this thread declared belonged to the one that is gone
+            self._mine.declared.clear()
+        if self._mine.generation not in (None, current):
+            # **this thread's** old handles, not every handle in the process. RabbitMQ requeues
+            # an unacknowledged delivery when the channel that held it closes, so those are
+            # back on their queues -- but the consumer thread's handles are none of a publisher
+            # thread's business, and dropping them made `inflight_depth` answer for a channel
+            # that has taken nothing
+            with self._books:
+                self._unsettled = {held for held in self._unsettled if _position(held)[0] != self._mine.generation}
+        self._mine.generation = current
 
     def _cancel(self, channel: 'BlockingChannel') -> None:
         """Close the open consumer, if there is one, and forget it."""
-        if self._consumer is None:
+        if self._mine.consumer is None:
             return
-        self._consumer = None
-        self._consumer_timeout = None
-        self._consumer_channel = None
+        self._mine.consumer = None
+        self._mine.consumer_timeout = None
+        self._mine.consumer_channel = None
         channel.cancel()
 
     def ack(self, handle: object) -> None:
@@ -453,7 +489,8 @@ class RabbitMQBroker(Broker):
         if tag is None:
             return
         channel.basic_ack(tag)
-        self._unsettled.discard(handle)
+        with self._books:
+            self._unsettled.discard(handle)
 
     def release(self, handle: object) -> None:
         """``basic_nack`` with requeue, which is a real nack rather than a documented no-op.
@@ -469,7 +506,8 @@ class RabbitMQBroker(Broker):
         if tag is None:
             return
         channel.basic_nack(tag, requeue=True)
-        self._unsettled.discard(handle)
+        with self._books:
+            self._unsettled.discard(handle)
 
     def _settleable(self, handle: object) -> int | None:
         """Find the tag to settle with, or ``None`` when the channel that issued it is gone.
@@ -485,7 +523,8 @@ class RabbitMQBroker(Broker):
         generation, tag = _position(handle)
         current = channel_generation()
         if generation != current:
-            self._unsettled.discard(handle)
+            with self._books:
+                self._unsettled.discard(handle)
             logger.warning(
                 'a message finished after its channel was replaced, so it will be redelivered',
                 extra={'tg_key': self._queue()},
@@ -553,7 +592,8 @@ class RabbitMQBroker(Broker):
         """
         if worker is not None:
             raise WorkerDepthUnavailableError(type(self).__name__, worker)
-        return len(self._unsettled)
+        with self._books:
+            return len(self._unsettled)
 
     async def adepth(self) -> int:
         """Read the same count off the loop's thread; see :meth:`apublish`."""
