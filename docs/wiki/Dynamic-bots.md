@@ -149,8 +149,9 @@ a hundred bots they are the only shape that works. **[Scaling](Scaling.md)** has
 ## The credential
 
 A row holds a token, and the shipped storage writes it as it was given: what protects it then is
-the database's own access control and the `view_telegramevent_payload`-style permission the
-model declares. **Treat a dump of that table as a dump of every client's credential.**
+the database's own access control and the `view_telegrambot_token` permission the model
+declares -- which is what the admin's *show it* link is behind, and why reading one is written
+into the feed. **Treat a dump of that table as a dump of every client's credential.**
 `TOKEN_STORAGE` behind the `[crypto]` extra encrypts it at rest, and
 `manage.py tgbot_rewrap_tokens` moves a table that already has tokens in it.
 **[Tokens](Tokens.md)** is the page.

@@ -209,3 +209,32 @@ def test_one_persons_state_does_not_cross_between_two_bots():
     keys = [built.build(StorageKey(bot_id=identity, chat_id=5, user_id=5), 'state') for identity in (111111, 222222)]
 
     assert keys[0] != keys[1], f'two bots share one FSM key: {keys[0]}'
+
+
+def test_every_permission_a_page_names_is_one_a_model_declares():
+    """A page telling an operator to grant a permission has to name one that exists.
+
+    `Dynamic-bots.md` named `view_telegramevent_payload` where the token is -- the feed's
+    permission, not the bot's -- which is a grant that would leave the credential exactly as
+    unreadable as before, with nothing saying so. Read from the models rather than listed here,
+    so a permission added tomorrow is covered by the page that documents it.
+    """
+    import re
+
+    from django.apps import apps
+
+    declared = {
+        name for model in apps.get_app_config('django_aiogram').get_models() for name, _label in model._meta.permissions
+    } | {
+        f'{action}_{model._meta.model_name}'
+        for model in apps.get_app_config('django_aiogram').get_models()
+        for action in ('add', 'change', 'delete', 'view')
+    }
+    named = {
+        found
+        for page in (ROOT / 'docs' / 'wiki').glob('*.md')
+        for found in re.findall(r'`((?:add|change|delete|view)_telegram\w+)`', page.read_text(encoding='utf-8'))
+    }
+
+    assert named, 'no page names a permission, so this case is checking nothing'
+    assert named <= declared, f'pages name permissions nothing declares: {sorted(named - declared)}'

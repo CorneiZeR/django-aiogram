@@ -76,8 +76,10 @@ are the ones that are easy to get wrong.
 and still works: with one bot every message is addressed to it or to nobody, and `run()` is
 still the whole contract.
 
-**Serving several bots asks for one more line.** A queued message names the bot it is for, and
-the route is what turns that number into the right send:
+**Serving several bots asks for one more line.** A queued message names the bot it is for --
+where that bot has an identity; one whose token carries none names nobody, and the `handler`
+below is what such a message reaches -- and the route is what turns the number into the right
+send:
 
 ```python
 class RoutingDelivery(Delivery):

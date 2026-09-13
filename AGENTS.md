@@ -12,7 +12,9 @@ AMQP queue, a Kafka topic. The Django processes never poll; they publish a
 payload and the bot container consumes it.
 
 Since 5.0 it serves **any number of bots**, from `TELEGRAM_BOTS` and from rows a
-project's own clients create, and a queued message names the bot it is for. The
+project's own clients create, and a queued message names the bot it is for
+wherever that bot has an identity -- one whose token carries none queues a
+message that names nobody, which a consumer delivers through its own bot. The
 dispatcher and the handler tree are one per **process**, whatever any bot's
 settings say — a `Router` cannot be attached to two dispatchers. What resolved
 settings decide is the *transport* and the consumer thread: bots that agree share

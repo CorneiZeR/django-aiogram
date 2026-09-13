@@ -137,8 +137,10 @@ twenty backlogs and one connection, not twenty of each.
 
 ## Everything a message carries says which bot
 
-A queued message names its bot on the wire, so a container serving several delivers each
-through the right token. The same identity reaches the event log (`bot_id`), the structured
+A queued message names its bot on the wire **where the bot has an identity to name** -- which
+is every token Telegram issues, and not a token `E052` has already reported -- so a container
+serving several delivers each through the right one. One that names nobody is delivered through
+the consumer's own bot, which is what a 4.x payload is and what makes the upgrade rolling. The same identity reaches the event log (`bot_id`), the structured
 logs (`tg_bot_id`), the Prometheus labels (behind `METRICS_PER_BOT`, which is off by default —
 twenty bots is twenty label values) and the admin's filters.
 
