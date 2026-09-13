@@ -171,9 +171,13 @@
   back. The queues one consumer reads are a **lane**: those whose settings agree on everything
   but which queue they name, which is the same arithmetic that decides whether two bots share a
   transport. Queues that disagree cannot share a connection and get a consumer each. A `DELIVERY` of your own adds `queues=None` to its `__init__` and hands it to
-  `Delivery.__init__`; its `run()` then passes `self.readable()` -- this consumer's queues
-  minus the ones at their bound -- to `take`, and `Taken.queue` to `dispatch`. One that does
-  not take the argument is refused by name rather than served one queue of several. A queue arriving in a group that is already
+  `Delivery.__init__`; its `run()` then reads `self.readable()` -- this consumer's queues minus
+  the ones at their bound -- and hands `Taken.queue` to `dispatch`. That answer has three
+  readings and a `run()` has to keep them apart: `None` is one queue and the argument is left
+  **off**, a set is passed, and `()` means every queue is at its budget, so the loop reads
+  nothing and goes round again rather than passing an empty set to a transport that would read
+  it as *the queue I address*. A `DELIVERY` that does not take `queues` at all is refused by
+  name rather than served one queue of several. A queue arriving in a group that is already
   running is told to that consumer instead of restarting it, so one client connecting does not
   pause the others.
 

@@ -108,16 +108,22 @@ message from the process's own queue while the container believes it is serving 
 
 ```python
 asked = self.readable()
+if asked == ():
+    continue                       # every queue this consumer serves is at its budget
 taken = self.broker.take(self.read_timeout, asked) if asked else self.broker.take(self.read_timeout)
 if taken is not None and self.dispatch(taken.payload, taken.handle, taken.queue):
     self.acknowledge(taken.handle)
 ```
 
 `readable()` is this consumer's queues minus the ones already at their budget — a bound is per
-queue, so a saturated one stops being read while the rest are. It answers `None` for a consumer
-serving one queue, and then the argument is **left off** rather than passed as `None`: a
-`Broker` written before 5.0 declares `take(self, timeout)`, and handing it one more positional
-is a `TypeError` out of your own loop.
+queue, so a saturated one stops being read while the rest are — and it has **three** answers,
+none of which may be confused with another:
+
+| it answers | what it means | what to do |
+| --- | --- | --- |
+| `None` | this consumer serves one queue, the one its broker addresses | leave the argument off: a `Broker` written before 5.0 declares `take(self, timeout)`, and one more positional is a `TypeError` out of your own loop |
+| `()` | every queue it serves is at its budget | read nothing and go round again. An empty set means *the queue I address* to all four transports, so passing it down is a read past a budget |
+| a set | those are below their budget | `take(timeout, asked)` |
 
 A `Delivery` also tells its broker which queues it is *for*, through `Broker.serving`, at
 construction and whenever `serve()` moves the set — never on a capacity change. Only Kafka does
