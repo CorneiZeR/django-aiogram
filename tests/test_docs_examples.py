@@ -144,10 +144,6 @@ def test_a_documented_settings_block_configures_what_it_says(name, settings):
 
 #: the multi-bot blocks, which are the ones a reader copies to serve a second client
 BOTS_BLOCK = re.compile(r'^TELEGRAM_BOTS = (\{.*?^\})', re.DOTALL | re.MULTILINE)
-#: what a token looks like, so a page writing `'...'` where one goes is read as the placeholder
-#: it is rather than as a credential this could not parse
-TOKEN_SHAPE = re.compile(r'\d+:\S+')
-
 #: what a fragment written for a reader carries where the rest of a dict would be. A block
 #: holding one is prose and is skipped; a block that is *meant* to be copied and cannot be
 #: parsed is a published configuration that does not work, and `test_every_documented_block_is_
@@ -172,6 +168,10 @@ def a_token(alias: str) -> str:
     page honest *and* lets this drive it: what is under test is that the section resolves --
     the alias, the identity, the override winning over the default -- and none of that is
     about which characters the credential has.
+
+    **Only for a lookup.** A literal the page wrote, `'...'` included, is left exactly as it
+    is: a block whose token is a placeholder is a fragment for a reader, and putting a real
+    one in would make this pass about a configuration `E052` refuses.
     """
     return f'{abs(hash(alias)) % 900000 + 100000}:AA{alias}'
 
@@ -187,12 +187,7 @@ def documented_bots(source: str, alias: str):
             return a_token(alias)
         return resolve(node)
 
-    written = {resolve(key): value(item) for key, item in zip(tree.keys, tree.values, strict=True)}
-    if not TOKEN_SHAPE.fullmatch(str(written.get('TOKEN', ''))):
-        # a page that writes `'...'` where the credential goes, which is the right thing for a
-        # page to write and not something this can resolve. The shape is what is under test
-        written['TOKEN'] = a_token(alias)
-    return written
+    return {resolve(key): value(item) for key, item in zip(tree.keys, tree.values, strict=True)}
 
 
 def multi_bot_examples():
@@ -202,6 +197,12 @@ def multi_bot_examples():
             continue
         for match in BOTS_BLOCK.finditer(path.read_text(encoding='utf-8')):
             source = match.group(1)
+            if prose(source):
+                # a page writing `'...'` where the credential goes is telling a reader what to
+                # put there, not publishing a configuration. Substituting a token of our own
+                # would make this pass about a block the checks themselves refuse -- `E052` is
+                # what a real project would meet -- so it is skipped as the fragment it is
+                continue
             try:
                 sections = ast.parse(source, mode='eval').body
                 written = {
