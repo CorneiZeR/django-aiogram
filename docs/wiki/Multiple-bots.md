@@ -34,7 +34,8 @@ what the event log records, what a metric is labelled with and what the admin fi
 
 A token with no identity in it is still usable — it is just anonymous: `E052` reports it, and a
 message it queues names no bot, so a consumer delivers it through the bot it has. That is the
-4.x shape, and it is what makes a rolling upgrade work.
+4.x shape, and it is what makes the upgrade rolling **while there is one bot** -- see
+*Everything a message carries says which bot* below for what a second one changes.
 
 ## Reaching a bot
 

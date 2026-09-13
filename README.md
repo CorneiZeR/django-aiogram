@@ -86,8 +86,8 @@ async def start(message: types.Message) -> None:
 ```
 
 ```python
-# anywhere else in the project
-from django_aiogram import bot
+# anywhere else in the project — `bots['support']` is the second bot, if there is one
+from django_aiogram import bot, bots
 
 bot.send(chat_id=CHAT_ID, text='Order approved')
 ```
@@ -97,12 +97,12 @@ python manage.py start_tgbot
 ```
 
 **More than one bot** is a section each under `TELEGRAM_BOTS`, inheriting the defaults above and
-overriding what it names; send through `bots['support']`. One dispatcher and one handler tree
-serve all of them, bots configured alike also share the connection and the consumer thread, and
-a queued message names the bot it is for wherever that bot has an identity:
+overriding what it names. One dispatcher and one handler tree serve all of them, bots configured
+alike share the connection and the consumer thread, and a queued message names the bot it is for
+wherever that bot has an identity —
 [Multiple bots](https://corneizer.github.io/django-aiogram/latest/Multiple-bots/). Bots that
-arrive *while it runs* — connected by your own clients — come from a provider and are reconciled
-without a redeploy: [Dynamic bots](https://corneizer.github.io/django-aiogram/latest/Dynamic-bots/).
+arrive *while it runs* come from a provider, reconciled without a redeploy —
+[Dynamic bots](https://corneizer.github.io/django-aiogram/latest/Dynamic-bots/).
 
 A router module, a call, and one process running the bot. That process gets Django's
 between-requests connection handling without having any requests — every update is bracketed

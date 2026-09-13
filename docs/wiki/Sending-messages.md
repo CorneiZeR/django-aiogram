@@ -37,8 +37,14 @@ bots.by_id(123456789).send(chat_id=CHAT_ID, text='from whoever that is')
 
 A queued message **names the bot that made it**, so a container serving several delivers each
 through the right token — and a bot whose token has no identity queues a message that names
-none, which a consumer delivers through the bot it has. That is what makes a rolling upgrade
-from 4.1 work; **[Multiple bots](Multiple-bots.md)** has the rest.
+none, which a consumer delivers through the bot it has.
+
+That is what makes the upgrade from 4.1 rolling **while the deployment has one bot**: a 4.1
+consumer cannot read the field and delivers everything through the bot it has, which is the
+right one when there is only one. **Before a second bot sends, every consumer has to be on
+5.0** — otherwise its messages go out under the first bot's token, to chats it may not be in,
+with nothing raised and nothing dropped. **[Upgrading](Upgrading.md)** has the order and
+**[Multiple bots](Multiple-bots.md)** the rest.
 
 ## Checked before it is sent
 
