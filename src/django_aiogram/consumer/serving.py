@@ -215,7 +215,11 @@ class Consumers:
             self._done = True
             refused: Exception | None = None
             for lane in list(self.running):
-                refused = refused or self._stop(lane)
+                # the call first and the choice after: `refused or self._stop(lane)` would stop
+                # calling it once one lane had refused, leaving the rest running, unjoined and
+                # with nothing holding what they had reclaimed
+                stopped = self._stop(lane)
+                refused = refused or stopped
             for consumer in self._ready.values():
                 try:
                     consumer.stop()

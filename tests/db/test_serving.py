@@ -470,7 +470,8 @@ def test_a_consumer_that_refuses_to_stop_is_still_settled():
             raise RuntimeError('the connection is gone')
 
     consumers = Consumers(build=lambda queues: Refusing(queues, log), join_timeout=1.0)
-    TelegramQueue.objects.create(name='vip', pool='vip')
+    for name in ('vip', 'bulk'):
+        TelegramQueue.objects.create(name=name, pool='vip')
     consumers.reconcile(served_by(pools=['vip']))
 
     with pytest.raises(RuntimeError, match='the connection is gone'):
@@ -478,6 +479,10 @@ def test_a_consumer_that_refuses_to_stop_is_still_settled():
     consumers.collect()
 
     assert ('collected', ('vip',)) in log, 'a consumer that refused to stop was never settled'
+    # every lane asked, not only the ones before the first refusal -- one left in `running` is
+    # one still reading its transport while the container believes it has shut down
+    assert ('stopped', ('bulk',)) in log, 'the lane behind the refusal was never asked to stop'
+    assert consumers.running == {}, consumers.running
 
 
 def test_a_consumer_that_cannot_settle_does_not_cost_the_others_their_rows(caplog):

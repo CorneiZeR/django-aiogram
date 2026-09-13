@@ -57,9 +57,14 @@ def two_bots(server, redis_url):
 def test_each_bot_queues_to_its_own_key(two_bots, server):
     """A queue is the isolation boundary, and the server is what has to hold two of them."""
     two_bots['shop'].send(chat_id=1, text='for the shop')
+
+    # before the second send, which is what says the shop's message went to the shop's queue:
+    # two sends and two depths of one hold just as well with the two queues swapped
+    assert server.llen('shop') == 1, 'the shop queue did not get its message'
+    assert server.llen('help') == 0, "the shop's message went to the other bot's queue"
+
     two_bots['help'].send(chat_id=2, text='for support')
 
-    assert server.llen('shop') == 1, 'the shop queue did not get its message'
     assert server.llen('help') == 1, 'the support queue did not get its message'
     assert two_bots['shop'].queue_depth() == 1
     assert two_bots['help'].queue_depth() == 1
@@ -73,9 +78,11 @@ def test_a_message_names_the_bot_that_queued_it(two_bots, server):
     two_bots['shop'].send(chat_id=1, text='for the shop')
     two_bots['help'].send(chat_id=2, text='for support')
 
-    named = {unpack(loads(server.lindex(queue, 0))).bot_id for queue in ('shop', 'help')}
+    named = {queue: unpack(loads(server.lindex(queue, 0))).bot_id for queue in ('shop', 'help')}
 
-    assert named == {111111, 222222}, named
+    # which bot is in which queue, not merely that both are somewhere: the set holds with the
+    # two swapped, which is each bot sending under the other's token
+    assert named == {'shop': 111111, 'help': 222222}, named
 
 
 def test_one_bots_in_flight_list_is_not_the_others(two_bots, server):
