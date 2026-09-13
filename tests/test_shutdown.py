@@ -702,16 +702,16 @@ def test_a_bot_that_fails_to_close_does_not_strand_the_rest(monkeypatch):
 def test_the_shared_session_is_left_to_the_bot_whose_loop_opened_it():
     """A session belongs to the process, a loop to a bot, and only that bot can close it.
 
-    Taking the session here and finding its loop still running leaves nobody holding it: this
-    shutdown cannot close it, and the bot that can no longer has it to close.
+    Whether that loop is running at the moment it is asked is not the question: it can start
+    again between the ask and the close, and a `run_until_complete` on a loop that has started
+    refuses with the session already taken. A loop the other bot has *closed* is not this case
+    -- the process answers `None` for it, and then this bot closes the session itself.
     """
     from django_aiogram.runtime import process
 
+    # deliberately idle: a loop that is not running now is the one the old condition closed the
+    # session on, and it is another bot's either way
     opener = asyncio.new_event_loop()
-    thread = threading.Thread(target=opener.run_forever, daemon=True)
-    thread.start()
-    while not opener.is_running():
-        time.sleep(0.01)
 
     closed = []
 
@@ -735,6 +735,27 @@ def test_the_shared_session_is_left_to_the_bot_whose_loop_opened_it():
         assert closed == [], 'the session was closed on a loop that did not open it'
     finally:
         process._session = None
-        opener.call_soon_threadsafe(opener.stop)
-        thread.join(timeout=5)
         opener.close()
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'BROKER': 'django_aiogram.testing.InMemoryBroker'})
+def test_a_consumer_that_refuses_to_stop_does_not_cost_the_shutdown_its_settlement(monkeypatch):
+    """`consumers.stop()` used to sit outside the block whose `finally` settles the log.
+
+    The sends a drain has just finished report themselves into a queue only `collect()` reads,
+    so a refusal there left every one of them in flight and the next start sent them again --
+    the one thing `Delivery.md` says a *kill* is needed for.
+    """
+    from django_aiogram.consumer import serving
+
+    collected = []
+    monkeypatch.setattr(serving.Consumers, 'stop', lambda self: (_ for _ in ()).throw(RuntimeError('will not stop')))
+    monkeypatch.setattr(serving.Consumers, 'collect', lambda self: collected.append(True))
+
+    command = StartCommand()
+    command.idle_event = threading.Event()
+    command.idle_event.set()
+    with pytest.raises(RuntimeError, match='will not stop'):
+        command.handle(mode='webhook', idle=False, queues='', pools='', no_updates=False, updates_only=False)
+
+    assert collected == [True], 'a consumer that refused to stop took the settlement with it'

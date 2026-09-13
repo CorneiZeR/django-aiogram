@@ -737,16 +737,18 @@ class TelegramBot(RouterShortcuts):
                     # `close_session` first would always answer `None` here, because taking the
                     # session is how the process forgets it
                     owner = process.session_loop()
-                    if owner is not None and owner.is_running():
-                        # left whole, not only unclosed: the bot whose loop this is will close
-                        # it on its way out and is the only one that can, so taking it here
-                        # would leave nobody holding it. `loop` is not this branch -- a running
-                        # one is refused at the top of the teardown
+                    if owner is not None and owner is not loop:
+                        # left whole, not only unclosed: the bot whose loop this is closes it on
+                        # its way out and is the only one that can, so taking it here would
+                        # leave nobody holding it. Whether that loop is running *now* is not the
+                        # question -- it can start again between the ask and the close, and then
+                        # `run_until_complete` refuses with the session already gone. A loop
+                        # that bot has closed answers `None` above, and then this one closes it
                         logger.debug('leaving the session to the bot whose loop opened it')
                     else:
                         ending = process.close_session()
                         if ending is not None:
-                            (owner or loop).run_until_complete(ending)
+                            loop.run_until_complete(ending)
                     if not loop.is_closed():
                         loop.close()
             self._loop = None

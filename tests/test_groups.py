@@ -406,9 +406,13 @@ def test_a_digest_is_the_same_number_in_every_process():
     case did exactly that.
     """
     from django_aiogram.config.bots import record
-    from django_aiogram.runtime.profiles import profile_of
+    from django_aiogram.runtime.profiles import IGNORED, profile_of
 
     hashed = repr(profile_of(record('a')).settings)
 
     assert '0x' not in hashed, f'the digest is hashed from an address, so it changes per process: {hashed}'
     assert 'object object' not in hashed, hashed
+    # the repr itself, not only the absence of an address: anything process-dependent in it --
+    # a name, a counter, an id -- moves the digest while both assertions above still pass
+    assert repr(IGNORED) == '<ignored>', repr(IGNORED)
+    assert '<ignored>' in hashed, f'the sentinel this case is about is not in what gets hashed: {hashed}'

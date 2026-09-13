@@ -452,6 +452,34 @@ def test_a_consumer_that_refuses_to_stop_does_not_strand_the_others():
     assert ('stopped', ('bulk',)) in log, log
 
 
+def test_a_consumer_that_refuses_to_stop_is_still_settled():
+    """`_stop` takes the lane out of `running` before it stops the consumer.
+
+    A refusal there used to leave nothing holding it -- no record, no join -- so what it had
+    reclaimed stayed in its in-flight list, and the next start sent those messages again. The
+    record is written whatever the stop says, and the refusal still reaches the caller.
+    """
+    log = []
+
+    class Refusing(Fake):
+        """One whose transport raises on the way out, as a broken connection does."""
+
+        def stop(self):
+            """Say we were asked, then refuse."""
+            super().stop()
+            raise RuntimeError('the connection is gone')
+
+    consumers = Consumers(build=lambda queues: Refusing(queues, log), join_timeout=1.0)
+    TelegramQueue.objects.create(name='vip', pool='vip')
+    consumers.reconcile(served_by(pools=['vip']))
+
+    with pytest.raises(RuntimeError, match='the connection is gone'):
+        consumers.stop()
+    consumers.collect()
+
+    assert ('collected', ('vip',)) in log, 'a consumer that refused to stop was never settled'
+
+
 def test_a_consumer_that_cannot_settle_does_not_cost_the_others_their_rows(caplog):
     """One queue's rows are not every queue's.
 
