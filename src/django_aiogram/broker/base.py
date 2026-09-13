@@ -24,7 +24,7 @@ from django_aiogram.broker.models import Liveness, Taken
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.settings import conf, setting_label
 
-__all__ = ('REQUIRED', 'Broker')
+__all__ = ('REQUIRED', 'Broker', 'named_queues')
 
 
 class _Required:
@@ -41,6 +41,25 @@ class _Required:
 
 #: no default: the broker cannot run until the project sets it
 REQUIRED = _Required()
+
+
+def named_queues(queues: 'Seq[str] | None') -> tuple[str, ...]:
+    """Read what a caller named as a tuple of queue names, one string included.
+
+    ``'vip'`` is a `Sequence[str]` whose members are ``'v'``, ``'i'`` and ``'p'``, so a caller
+    handing over one name -- ``broker.addressed()``, a queue read off a row -- would be asking
+    for three queues nothing has ever heard of. Type checking cannot see it and the refusal it
+    caused named characters, so it is normalised here instead, once, where every transport and
+    the consumer all read their argument.
+
+    ``None`` is empty: the caller said nothing, which every reader turns into *the queue this
+    broker addresses*.
+    """
+    if queues is None:
+        return ()
+    if isinstance(queues, str):
+        return (queues,)
+    return tuple(dict.fromkeys(str(one) for one in queues))
 
 
 class Broker(ABC):
@@ -190,9 +209,10 @@ class Broker(ABC):
         way it refuses would be found out at run time rather than at startup.
         """
         mine = self.addressed()
-        if queues is None or tuple(queues) == (mine,):
+        asked = named_queues(queues)
+        if not asked or asked == (mine,):
             return mine
-        raise QueueMultiplexingUnavailableError(type(self).__name__, tuple(queues))
+        raise QueueMultiplexingUnavailableError(type(self).__name__, asked)
 
     def opt(self, key: str) -> object:
         """Read one of this broker's own options as *this instance* was configured.

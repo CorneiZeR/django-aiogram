@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.core.exceptions import ImproperlyConfigured
 
-from django_aiogram.broker.base import REQUIRED, Broker
+from django_aiogram.broker.base import REQUIRED, Broker, named_queues
 from django_aiogram.broker.exceptions import WorkerDepthUnavailableError
 from django_aiogram.broker.kafka.client import (
     close_clients,
@@ -148,9 +148,7 @@ class KafkaBroker(Broker):
 
     def _topics(self, queues: 'Seq[str] | None') -> tuple[str, ...]:
         """Name the topics a read is for: those asked for, or the one this broker addresses."""
-        if not queues:
-            return (self._topic(),)
-        return tuple(dict.fromkeys(str(one) for one in queues))
+        return named_queues(queues) or (self._topic(),)
 
     def serving(self, queues: 'Seq[str] | None' = None) -> None:
         """Take the set this consumer is *for*, which is what the subscription follows.

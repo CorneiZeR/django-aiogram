@@ -22,7 +22,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence as Seq
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
-from django_aiogram.broker.base import REQUIRED, Broker
+from django_aiogram.broker.base import REQUIRED, Broker, named_queues
 from django_aiogram.broker.models import Liveness, Taken
 from django_aiogram.broker.redis_streams.exceptions import (
     StreamLagUnknownError,
@@ -194,9 +194,7 @@ class RedisStreamsBroker(Broker):
         name a project writes is what the transport addresses. So a consumer serving three
         queues hands their names down and this reads all three.
         """
-        if not queues:
-            return (self._key(),)
-        return tuple(dict.fromkeys(str(one) for one in queues))
+        return named_queues(queues) or (self._key(),)
 
     def _ensure(self, keys: 'Seq[str] | None' = None) -> None:
         """Create the group on each stream, then prove the server can answer `depth()`.

@@ -369,3 +369,22 @@ def test_the_broker_is_told_the_set_a_consumer_is_for_rather_than_what_it_reads_
     delivery.serve(('vip',))
 
     assert told == [('vip', 'bulk'), ('vip', 'bulk', 'later'), None], told
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=MEMORY)
+def test_one_queue_named_as_a_string_is_one_queue():
+    """`'vip'` is a `Sequence[str]` of three characters, and nothing in a type checker sees it.
+
+    A caller with one name to hand over -- `broker.addressed()`, a queue off a row -- would
+    otherwise be asking for queues called `v`, `i` and `p`, and the refusal it drew named
+    characters. Asserted through the refusal, because that is where it surfaced.
+    """
+    from django_aiogram.broker.base import named_queues
+    from django_aiogram.testing import InMemoryBroker
+
+    broker = InMemoryBroker.configured(MEMORY)
+
+    assert named_queues('vip') == ('vip',)
+    assert named_queues(None) == ()
+    assert named_queues(['vip', 'vip', 'bulk']) == ('vip', 'bulk')
+    assert broker.one_queue(broker.addressed()) == broker.addressed()

@@ -19,7 +19,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence as Seq
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from django_aiogram.broker.base import REQUIRED, Broker
+from django_aiogram.broker.base import REQUIRED, Broker, named_queues
 from django_aiogram.broker.exceptions import WorkerDepthUnavailableError
 from django_aiogram.broker.models import Taken
 from django_aiogram.broker.rabbitmq.client import (
@@ -128,9 +128,7 @@ class RabbitMQBroker(Broker):
 
     def _queues(self, queues: 'Seq[str] | None') -> tuple[str, ...]:
         """Name the queues a read is for: those asked for, or the one this broker addresses."""
-        if not queues:
-            return (self._queue(),)
-        return tuple(dict.fromkeys(str(one) for one in queues))
+        return named_queues(queues) or (self._queue(),)
 
     def _declare(self, channel: 'BlockingChannel', queues: 'Seq[str]') -> None:
         """Declare each of these queues on this channel, once per channel.

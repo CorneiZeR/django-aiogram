@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from django.utils.module_loading import import_string
 
 from django_aiogram.api import check_function
+from django_aiogram.broker.base import named_queues
 from django_aiogram.broker.exceptions import QueueMultiplexingUnavailableError
 from django_aiogram.broker.registry import get_broker
 from django_aiogram.config.enums import EventKind
@@ -172,7 +173,7 @@ class Delivery(ABC):
         self._finished: queue.SimpleQueue[tuple[object, bool, int | None, str]] = queue.SimpleQueue()
         #: which queues this consumer serves. One of them for every deployment before 5.0 and
         #: for every transport that reads one queue per connection
-        self.queues: tuple[str, ...] = tuple(queues) if queues else (self._own_queue(),)
+        self.queues: tuple[str, ...] = named_queues(queues) or (self._own_queue(),)
         if len(self.queues) > 1 and not type(self.broker).MULTIPLEXES:
             raise QueueMultiplexingUnavailableError(type(self.broker).__name__, self.queues)
         #: what a read asks for, and ``None`` only where the one queue served is the one this
@@ -308,9 +309,14 @@ class Delivery(ABC):
         down -- an empty one means *the queue I address* to every transport here, which would
         be a read against a queue at its budget.
         """
-        if self._asked is None:
+        with self._books:
+            asked = self._asked
+        if asked is None:
             return None
-        return tuple(one for one in self._asked if not self.at_capacity(one))
+        # read once and walked from the snapshot: `serve` runs on the pass that noticed a queue
+        # arriving, which is not this thread, and a set that changed between the check and the
+        # walk is a `None` being iterated
+        return tuple(one for one in asked if not self.at_capacity(one))
 
     @property
     def processing_key(self) -> str:
@@ -381,7 +387,11 @@ class Delivery(ABC):
         a transport that returns an unsettled message to its group needs no reclaiming.
         """
         try:
-            count = self.broker.reclaim(self._asked) if self._asked else self.broker.reclaim()
+            with self._books:
+                asked = self._asked
+            # the same snapshot, for the same reason: read twice, the second read can be `None`
+            # and a legacy `reclaim(self)` is then handed an argument it does not take
+            count = self.broker.reclaim(asked) if asked else self.broker.reclaim()
         except Exception:
             # run() is the thread target, so anything escaping here — a Redis
             # that is not up yet, for one — would end the consumer for good
@@ -605,7 +615,7 @@ class Delivery(ABC):
         flight, and the transport still has to be told about them -- but nothing new is read
         from it. One that arrives starts at zero.
         """
-        asked = tuple(dict.fromkeys(queues))
+        asked = named_queues(queues)
         if not asked:
             return
         if len(asked) > 1 and not type(self.broker).MULTIPLEXES:
@@ -629,12 +639,14 @@ class Delivery(ABC):
         is whatever the registry handed over, and a double standing in for one need not have
         heard of a method the contract gained.
         """
+        with self._books:
+            asked = self._asked
         told = getattr(self.broker, 'serving', None)
         if callable(told):
             # including ``None``, which means *the queue this broker addresses* -- a lane that
             # shrank to one queue has to say so, or a transport whose subscription follows this
             # keeps holding a queue somebody else is now serving
-            told(self._asked)
+            told(asked)
 
     def in_flight(self, on_queue: str = '') -> int:
         """How many sends this consumer is holding, on one queue or across all of them.
