@@ -4,6 +4,10 @@ One bot is one connection and a container. A thousand bots is a different questi
 answer is not "the same thing, bigger": the two ways of receiving updates cost different
 things per bot, and only one of them is free.
 
+What a set of bots *is* — aliases, identities, what they share — is
+**[Multiple bots](Multiple-bots.md)**; where they come from at run time is
+**[Dynamic bots](Dynamic-bots.md)**. This page is what each of them costs.
+
 ## Polling stops well before a thousand bots
 
 Long polling costs, **per bot**:

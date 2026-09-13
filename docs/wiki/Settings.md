@@ -4,6 +4,7 @@ Two dicts in `settings.py`. `TELEGRAM_BOT_DEFAULTS` holds what every bot inherit
 `TELEGRAM_BOTS` holds one section per bot, keyed by an alias, and each section overrides
 what it names. A project that writes no sections has one bot called `default` resolving
 entirely from the defaults, which is what a single-bot project keeps writing.
+**[Multiple bots](Multiple-bots.md)** is the page; this one is the keys.
 
 ```python
 TELEGRAM_BOT_DEFAULTS = {'REDIS_URL': os.environ['REDIS_URL']}

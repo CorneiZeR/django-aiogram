@@ -135,6 +135,9 @@ def test_each_client_is_told_its_own_thing():
     assert [one.kwargs for one in sent.for_bot('support')] == [{'chat_id': 42, 'text': 'Done'}]
 ```
 
+What a set of bots *is* — aliases, identities, what they share — is
+**[Multiple bots](Multiple-bots.md)**.
+
 `capture_sends(bot='support')` narrows the capture itself, and `capture_sends(queue='vip')`
 narrows it to one queue. Every other bot then keeps the transport it was configured with, so
 one client's sends can be captured while another's keep flowing.

@@ -392,6 +392,22 @@ manage.py shell -c "from django_aiogram.models import TelegramBotLease as L; pri
   exclusivity at all — they will both poll every bot either of them claims. `I001` is
   about that name for the same reason.
 
+## A message went out under the wrong bot
+
+One cause, and it is a deployment order rather than a bug: **a consumer older than 5.0**. A
+queued message names the bot it is for in a field a 4.1 consumer cannot read, so that consumer
+delivers everything through the one bot it has — the wrong token, and a chat that bot may not
+even be in. Nothing raises and nothing is dropped.
+
+So every container running `start_tgbot` has to be on 5.0 **before** a second bot starts
+sending. The web tier and the bot container may be deployed in either order while you run one
+bot, which is what makes the upgrade rolling; adding the second bot is the step that is not.
+**[Upgrading](Upgrading.md)** has the order.
+
+The other cause is a token with no identity in it — `E052` reports one. A message queued by
+such a bot names nobody, and a consumer delivers it through its own default, which is the same
+symptom from the other end.
+
 ## One client's bot stopped answering
 
 Read the row: `quarantine_reason` says what happened and `quarantined_until` says
