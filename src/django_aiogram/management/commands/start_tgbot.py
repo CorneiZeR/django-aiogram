@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import BaseCommand, CommandError
 
-from django_aiogram import bot
+from django_aiogram import bot, bots
 from django_aiogram.broker.registry import get_broker
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import UpdateMode
@@ -383,9 +383,34 @@ class Command(BaseCommand):
         # -- the transport's own call ceiling. `BLPOP_TIMEOUT + 1` was six seconds against a
         # worst case of ten, so a consumer that outlived the join went on to acknowledge a
         # message close() had already refused
-        consumers.stop()
         try:
-            bot.close()
+            failure: Exception | None = None
+            try:
+                consumers.stop()
+            except Exception as error:  # noqa: BLE001 - the bots still have to be closed and the log settled
+                # inside the try, unlike before: a consumer that refuses to stop used to take
+                # `collect()` and `recorder.stop()` with it, so the sends the drain had already
+                # finished stayed in flight and the next start sent them again
+                failure = error
+            # every bot this process built, not only the one this module imported: each holds
+            # a loop, a runner thread and sends a drain has to finish, and a container serving
+            # several closed exactly one of them -- the rest kept their threads and dropped
+            # whatever was still in flight. Measured on a two-bot container, where it also
+            # closed the shared session on a loop that had not opened it.
+            #
+            # `bot` last, because it is what this module holds and what a test replaces: the
+            # registry answers with what it built, and a double put here is not in it.
+            #
+            # Every close attempted before any failure is raised -- stopping at the first would
+            # leave the bots after it holding exactly what this loop exists to release. The
+            # first failure is the one re-raised: the ones after it are usually its consequences
+            for made in (*(one for one in bots.built() if one is not bot), bot):
+                try:
+                    made.close()
+                except Exception as error:  # noqa: BLE001, PERF203 - the rest still have to be closed
+                    failure = failure or error
+            if failure is not None:
+                raise failure
         finally:
             # the sends close() just drained reported themselves finished into a
             # queue whose only reader is the consumer loop, and that returned before

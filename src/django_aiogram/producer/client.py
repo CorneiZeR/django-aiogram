@@ -728,9 +728,27 @@ class TelegramBot(RouterShortcuts):
                     if closing is not None:
                         loop.run_until_complete(closing)
                     self._bot = None
-                    ending = process.close_session()
-                    if ending is not None:
-                        loop.run_until_complete(ending)
+                    # who owns the session, asked *before* anything takes it: the session
+                    # belongs to the process and a loop belongs to a bot, so in a container
+                    # serving several the connector was built by whichever loop made the first
+                    # request, and closing it anywhere else raises about a future attached to a
+                    # different loop -- measured on a two-bot container whose consumer sent
+                    # through the second bot and whose shutdown closed the first. Asking
+                    # `close_session` first would always answer `None` here, because taking the
+                    # session is how the process forgets it
+                    owner = process.session_loop()
+                    if owner is not None and owner is not loop:
+                        # left whole, not only unclosed: the bot whose loop this is closes it on
+                        # its way out and is the only one that can, so taking it here would
+                        # leave nobody holding it. Whether that loop is running *now* is not the
+                        # question -- it can start again between the ask and the close, and then
+                        # `run_until_complete` refuses with the session already gone. A loop
+                        # that bot has closed answers `None` above, and then this one closes it
+                        logger.debug('leaving the session to the bot whose loop opened it')
+                    else:
+                        ending = process.close_session()
+                        if ending is not None:
+                            loop.run_until_complete(ending)
                     if not loop.is_closed():
                         loop.close()
             self._loop = None

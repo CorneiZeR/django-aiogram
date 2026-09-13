@@ -20,6 +20,7 @@ Everything is built on first use and rebuilt after a close, so nothing here runs
 import asyncio
 import logging
 import threading
+from asyncio import AbstractEventLoop
 from typing import TYPE_CHECKING, Any
 
 from aiogram import Dispatcher, Router
@@ -39,7 +40,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger('django_aiogram')
 
-__all__ = ('close_session', 'close_storage', 'dispatcher', 'router', 'session')
+__all__ = ('close_session', 'close_storage', 'dispatcher', 'router', 'session', 'session_loop')
 
 _lock = threading.RLock()
 _router: Router | None = None
@@ -204,6 +205,30 @@ def close_session() -> 'Closing':
         current, _session = _session, None
     _moved_on()
     return None if current is None else current.close()
+
+
+def session_loop() -> 'AbstractEventLoop | None':
+    """Name the loop the shared session is bound to, where it has opened anything.
+
+    A session is the **process's** and a loop is a **bot's**, so the two do not have to be the
+    same bot's: whichever loop made the first request is the one aiohttp built the connector
+    on, and closing it anywhere else is a `RuntimeError` about a future attached to a different
+    loop -- out of a shutdown, where it is the last thing a container does. Measured on a
+    two-bot container whose consumer sent through the second bot and whose shutdown closed the
+    first.
+
+    Read off the client aiohttp keeps, which is private to it: there is no public answer to
+    "which loop is this on", and the alternative is guessing. ``None`` where nothing has been
+    opened yet, where the attribute is gone, or where that loop is already closed -- in each of
+    those the caller's own loop is as good an answer as there is.
+    """
+    with _lock:
+        current = _session
+    client = getattr(current, '_session', None)
+    loop = getattr(client, '_loop', None)
+    if not isinstance(loop, AbstractEventLoop) or loop.is_closed():
+        return None
+    return loop
 
 
 @receiver(setting_changed, dispatch_uid='django_aiogram.runtime.process')

@@ -309,10 +309,18 @@ class _SharedConnection:
         """Empty every slot, then close whatever was in them."""
         with self._lock:
             held, self._clients = list(self._clients.values()), {}
+        refused: Exception | None = None
         for client in held:
             # closing talks to the socket: a caller waiting to build a
-            # replacement should not be held up by it
-            client.close()
+            # replacement should not be held up by it -- nor should the
+            # clients after one that refused, which are already out of the
+            # slots and unreachable by anything but this loop
+            try:
+                client.close()
+            except Exception as error:  # noqa: BLE001, PERF203 - a socket may refuse in any way it likes
+                refused = refused or error
+        if refused is not None:
+            raise refused
 
 
 class _LoopConnections:

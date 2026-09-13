@@ -378,3 +378,41 @@ def test_an_unknown_alias_is_refused_with_the_ones_there_are():
         pytest.raises(ImproperlyConfigured, match='support'),
     ):
         bots['supprt']
+
+
+@override_settings(
+    # the list transport, because the sentinel under test is what a bot's ``QUEUE`` does to a
+    # transport's *own* queue option -- and the in-memory one has none to ignore
+    TELEGRAM_BOT_DEFAULTS={
+        'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker',
+        'FSM_STORAGE': 'memory',
+        'QUEUES': ('vip',),
+    },
+    TELEGRAM_BOTS={'a': {'TOKEN': TOKEN, 'QUEUE': 'vip'}},
+)
+def test_a_digest_is_the_same_number_in_every_process():
+    """The column an operator compares between two containers has to be comparable.
+
+    `tgbot_bots` prints it so that twenty bots configured alike can be *seen* to be one group,
+    and a digest that changes per process answers that question with noise. It did: a bot
+    naming a `QUEUE` carries a sentinel for the transport's own queue option, the digest is
+    hashed from the **repr** of what the profile holds, and a bare `object()` puts the address
+    it happens to be at in there. Measured on a real project -- three runs, three digests,
+    nothing changed between them.
+
+    Asserted as *no address in what is hashed* rather than by comparing two subprocesses: two
+    runs of the same short script land that object at the same address often enough that the
+    comparison passes with the defect in place. Measured, again -- the first version of this
+    case did exactly that.
+    """
+    from django_aiogram.config.bots import record
+    from django_aiogram.runtime.profiles import IGNORED, profile_of
+
+    hashed = repr(profile_of(record('a')).settings)
+
+    assert '0x' not in hashed, f'the digest is hashed from an address, so it changes per process: {hashed}'
+    assert 'object object' not in hashed, hashed
+    # the repr itself, not only the absence of an address: anything process-dependent in it --
+    # a name, a counter, an id -- moves the digest while both assertions above still pass
+    assert repr(IGNORED) == '<ignored>', repr(IGNORED)
+    assert '<ignored>' in hashed, f'the sentinel this case is about is not in what gets hashed: {hashed}'

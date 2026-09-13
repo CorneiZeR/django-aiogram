@@ -149,6 +149,22 @@ class Bots(Mapping[str, 'TelegramBot']):
         """Name the aliases without building any of them."""
         return f'<Bots {", ".join(aliases())}>'
 
+    def built(self) -> 'tuple[TelegramBot, ...]':
+        """Every bot this process has actually made, which is what a shutdown has to close.
+
+        Not every bot *configured*: reading one builds it, and a shutdown that built the twenty
+        it had never touched would open twenty loops on its way out. What is here is what holds
+        a loop, a runner thread and sends a drain has to finish.
+
+        The default is last, because it is the one a command reaches for by name and the one
+        that owns the process-wide teardown in every deployment that has a single bot.
+        """
+        with self._lock:
+            made = dict(self._made)
+        rest = [built for alias, built in made.items() if alias != DEFAULT_ALIAS]
+        last = [made[DEFAULT_ALIAS]] if DEFAULT_ALIAS in made else []
+        return (*rest, *last)
+
     def forget(self) -> None:
         """Drop the built bots, so the next lookup builds them from the settings as they are.
 

@@ -1,6 +1,23 @@
 # Changelog
 
-## 5.0.0 - unreleased
+## 5.0.0 - 2026-09-13
+
+A major, and the one thing it changes for every project is the name of the settings dict. What
+else breaks depends on how far into the package a project reaches:
+
+| what breaks | who meets it | what to do |
+| --- | --- | --- |
+| `TELEGRAM_BOT` is dead; the dict is `TELEGRAM_BOT_DEFAULTS` and a bot is a section under `TELEGRAM_BOTS` | everybody | rename it; `E050` reports the old name, and a project that kept its token there has none |
+| the four tables and three new columns | everybody | `manage.py migrate` -- on both databases where `EVENT_LOG_DATABASE` names one of its own |
+| every consumer must be on 5.0 before a **second** bot sends | a deployment adding one | deploy the bot containers first; one bot is still either order |
+| `Event`, `Sent` and `Taken` each gained a field, at the end | a project unpacking one whole | read the fields by name; construction and indexing are unchanged |
+| `Broker.option`, `call_timeout` and `broker_class` take the settings to read from | a project that **overrides** one | accept the argument and pass it on, or a bot's own settings are silently replaced by the shared ones |
+| `Broker.take`, `take_nowait` and `reclaim` take a set of queues | a project shipping a `Broker` | nothing, unless it opts into `MULTIPLEXES`: the argument defaults to the queue it addresses and is left off where there is one |
+| a `DELIVERY` of your own is told which bot, which queue, and which queues | a project shipping one | take `route`, `settings` and `queues`; it is refused by name where it cannot serve what the container asked for |
+
+**[Upgrading](https://corneizer.github.io/django-aiogram/latest/Upgrading/)** walks the whole
+hop, including the index on the event log that is a decision rather than a formality on a large
+feed.
 
 ### Added
 
@@ -136,6 +153,24 @@
   restart. `python -m django_aiogram.healthcheck` does not, and cannot: it reads no models,
   which is what lets a container probe answer in hundredths of a second rather than paying for
   `AppConfig.ready()`.
+
+- **A profile digest is the same number in every process.** `manage.py tgbot_bots` prints it so
+  that twenty bots configured alike can be *seen* to be one group, and for a bot naming a
+  `QUEUE` it changed on every run: the digest is hashed from the repr of what the profile
+  holds, and the sentinel standing in for the transport's own queue option was a bare object,
+  whose repr is the address it happens to be at. The grouping itself was right; the number an
+  operator compares between two containers was noise. Found by running the upgrade on a real
+  project.
+
+- **A shutdown closes every bot the process built, not only the one it imported.** Each holds
+  a loop, a runner thread and the sends a drain has to finish, so a container serving several
+  kept the other threads and dropped whatever was still in flight -- and then closed the shared
+  HTTP session on a loop that had never opened it, which is a `RuntimeError` out of the last
+  thing a container does. The session is closed on the loop that owns it now, and a loop still
+  running is left to the bot whose it is. Found by running the upgrade on a real project.
+  Every close in a shutdown is attempted before any failure is raised, too -- bots, consumers,
+  their settlement and the Redis clients a reset drops: the one that refuses used to strand
+  everything behind it, which is what a shutdown exists to release.
 
 - **Several queues over one connection, where the transport can.** A container serving twenty
   client queues held twenty connections and twenty consumer threads, because a consumer was one

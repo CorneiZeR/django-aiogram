@@ -136,9 +136,27 @@ def connection_of(settings: 'Mapping[str, Any]') -> Profile:
     return Profile(settings=tuple((key, value) for key, value in whole.settings if key != 'QUEUE'))
 
 
+class _Ignored:
+    """What a key contributes when nothing reads it, with a name rather than an address.
+
+    A bare ``object()`` would do for the equalities -- there is one of it, and identity is the
+    whole comparison -- but :attr:`Profile.digest` hashes the *repr* of what it holds, and an
+    object's repr carries the address it happens to be at. Every bot naming a ``QUEUE`` has one
+    of these in its profile, so the digest an operator compares between two containers was a
+    different number in each, and the same number was never seen twice in one deployment.
+    Measured on a two-bot project: three runs, three digests, nothing changed between them.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        """Say what it is, the same way in every process."""
+        return '<ignored>'
+
+
 #: what a key contributes when nothing reads it, distinct from every value a project can write.
 #: A profile is only as good as the equalities it makes, and `None` is a legal setting
-IGNORED = object()
+IGNORED = _Ignored()
 
 
 def _value_of(key: str, settings: 'Mapping[str, Any]', queue_option: str) -> object:

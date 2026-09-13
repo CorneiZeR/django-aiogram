@@ -419,3 +419,126 @@ def test_a_consumer_that_cannot_take_the_new_queues_is_stopped_rather_than_left_
     assert ('collected', ('client-1',)) in log
     assert ('started', ('client-1', 'client-2')) in log, log
     assert sorted(consumers.serving()) == ['client-1', 'client-2']
+
+
+def test_a_consumer_that_refuses_to_stop_does_not_strand_the_others():
+    """A shutdown reaches every consumer or none of them.
+
+    Stopping at the first refusal leaves the rest holding a transport and an in-flight list
+    nothing else can settle -- and the refusal still has to reach the caller, which is the
+    container deciding whether it shut down cleanly.
+    """
+    log = []
+
+    class Refusing(Fake):
+        """One whose transport raises on the way out, as a broken connection does."""
+
+        def stop(self):
+            """Say we were asked, then refuse."""
+            super().stop()
+            raise RuntimeError('the connection is gone')
+
+    refusing = Refusing(('vip',), log)
+    willing = Fake(('bulk',), log)
+    consumers = Consumers(
+        build=lambda queues: Fake(queues, log),
+        join_timeout=1.0,
+        ready={('queue', 'vip'): refusing, ('queue', 'bulk'): willing},
+    )
+
+    with pytest.raises(RuntimeError, match='the connection is gone'):
+        consumers.stop()
+
+    assert ('stopped', ('bulk',)) in log, log
+
+
+def test_a_consumer_that_refuses_to_stop_is_still_settled():
+    """`_stop` takes the lane out of `running` before it stops the consumer.
+
+    A refusal there used to leave nothing holding it -- no record, no join -- so what it had
+    reclaimed stayed in its in-flight list, and the next start sent those messages again. The
+    record is written whatever the stop says, and the refusal still reaches the caller.
+    """
+    log = []
+
+    class Refusing(Fake):
+        """One whose transport raises on the way out, as a broken connection does."""
+
+        def stop(self):
+            """Say we were asked, then refuse."""
+            super().stop()
+            raise RuntimeError('the connection is gone')
+
+    consumers = Consumers(build=lambda queues: Refusing(queues, log), join_timeout=1.0)
+    for name in ('vip', 'bulk'):
+        TelegramQueue.objects.create(name=name, pool='vip')
+    consumers.reconcile(served_by(pools=['vip']))
+
+    with pytest.raises(RuntimeError, match='the connection is gone'):
+        consumers.stop()
+    consumers.collect()
+
+    assert ('collected', ('vip',)) in log, 'a consumer that refused to stop was never settled'
+    # every lane asked, not only the ones before the first refusal -- one left in `running` is
+    # one still reading its transport while the container believes it has shut down
+    assert ('stopped', ('bulk',)) in log, 'the lane behind the refusal was never asked to stop'
+    assert consumers.running == {}, consumers.running
+
+
+def test_a_consumer_that_cannot_settle_does_not_cost_the_others_their_rows(caplog):
+    """One queue's rows are not every queue's.
+
+    `collect` is what turns finished sends into rows, and it runs once, at the end of a
+    shutdown. A consumer that raises here would otherwise take the rest of the container's
+    settlement with it.
+    """
+    log = []
+
+    class Unsettled(Fake):
+        """One whose settle fails -- a database that went away mid-shutdown."""
+
+        def collect(self):
+            """Say we were asked, then refuse."""
+            super().collect()
+            raise OperationalError('the database is gone')
+
+    consumers = Consumers(
+        build=lambda queues: Fake(queues, log),
+        join_timeout=1.0,
+        ready={('queue', 'vip'): Unsettled(('vip',), log), ('queue', 'bulk'): Fake(('bulk',), log)},
+    )
+
+    with caplog.at_level('ERROR', logger='django_aiogram'):
+        consumers.collect()
+
+    assert ('collected', ('bulk',)) in log, log
+    assert 'could not settle a consumer' in caplog.text
+
+
+def test_a_stop_that_refuses_does_not_cut_the_reconciliation_pass_short():
+    """The pass removes lanes and starts the asked-for ones; a refusal used to end it.
+
+    The lanes behind it went on running after they had left the set, and the queues the pass
+    was asked for got nobody on them until some later pass managed to get further.
+    """
+    log = []
+
+    class Refusing(Fake):
+        """One whose transport raises when it is asked to stop."""
+
+        def stop(self):
+            """Say we were asked, then refuse."""
+            super().stop()
+            raise RuntimeError('the connection is gone')
+
+    consumers = Consumers(build=lambda queues: Refusing(queues, log), join_timeout=1.0)
+    for name in ('gone-1', 'gone-2'):
+        TelegramQueue.objects.create(name=name, pool='old')
+    consumers.reconcile(served_by(pools=['old']))
+
+    TelegramQueue.objects.create(name='wanted', pool='new')
+    with pytest.raises(RuntimeError, match='the connection is gone'):
+        consumers.reconcile(served_by(pools=['new']))
+
+    assert ('stopped', ('gone-2',)) in log, 'the lane behind the refusal went on running'
+    assert ('started', ('wanted',)) in log, 'the queue this pass was asked for got nobody on it'

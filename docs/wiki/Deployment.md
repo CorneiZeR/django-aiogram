@@ -510,6 +510,12 @@ Each named queue is probed through a transport built for *it*, one line each, an
 answer decides — a container serving five clients is healthy or not per client, and a report
 that summed the depths would hide the one queue filling up behind four empty ones.
 
+**The probe has to name the same queues the command does.** Left out, it asks about the queue
+this process's settings name — which a container started with `--queues client-a` is not
+serving — so it reports *no heartbeat has been written* for ever while the consumers it cannot
+see are perfectly well. Measured on a two-queue container: the queues showed a consumer eight
+seconds old, and the probe with no `--queue` said nothing had ever started.
+
 The verdict for a named queue is not the one for this container's own, deliberately:
 
 | what the probe finds | what it says |
