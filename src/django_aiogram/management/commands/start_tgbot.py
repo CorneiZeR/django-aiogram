@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import BaseCommand, CommandError
 
-from django_aiogram import bot
+from django_aiogram import bot, bots
 from django_aiogram.broker.registry import get_broker
 from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import UpdateMode
@@ -385,6 +385,18 @@ class Command(BaseCommand):
         # message close() had already refused
         consumers.stop()
         try:
+            # every bot this process built, not only the one this module imported: each holds
+            # a loop, a runner thread and sends a drain has to finish, and a container serving
+            # several closed exactly one of them -- the rest kept their threads and dropped
+            # whatever was still in flight. Measured on a two-bot container, where it also
+            # closed the shared session on a loop that had not opened it.
+            #
+            # `bot` last and separately, because it is what this module holds and what a test
+            # replaces: the registry answers with what it built, and a double put here is not
+            # in it
+            for made in bots.built():
+                if made is not bot:
+                    made.close()
             bot.close()
         finally:
             # the sends close() just drained reported themselves finished into a

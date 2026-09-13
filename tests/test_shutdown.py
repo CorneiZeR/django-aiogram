@@ -635,3 +635,31 @@ def test_a_runner_that_will_not_stop_still_leaves_the_bot_usable(monkeypatch):
 
     assert instance._closing is False, 'a bot that failed to close can never send again'
     assert instance._draining is False
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'BROKER': 'django_aiogram.testing.InMemoryBroker'},
+    TELEGRAM_BOTS={'default': {'TOKEN': '111111:AAone'}, 'support': {'TOKEN': '222222:BBtwo'}},
+)
+def test_every_bot_this_process_built_is_closed(monkeypatch):
+    """A container serving several closed exactly one of them.
+
+    Each bot holds a loop, a runner thread and the sends a drain has to finish, so the ones a
+    shutdown walks past keep their threads and drop whatever was still in flight -- and the
+    shared session is then closed by a bot whose loop never opened it, which is a `RuntimeError`
+    out of the last thing a container does. Measured on a two-bot container.
+    """
+    from django_aiogram.runtime.registry import bots
+
+    closed = []
+    for alias in ('default', 'support'):
+        made = bots[alias]
+        monkeypatch.setattr(made, 'close', lambda *args, _alias=alias, **kwargs: closed.append(_alias))
+    monkeypatch.setattr('django_aiogram.management.commands.start_tgbot.bot', bots['default'])
+
+    command = StartCommand()
+    command.idle_event = threading.Event()
+    command.idle_event.set()
+    command.handle(mode='webhook', idle=False, queues='', pools='', no_updates=False, updates_only=False)
+
+    assert sorted(closed) == ['default', 'support'], closed

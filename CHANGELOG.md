@@ -154,6 +154,13 @@ feed.
   which is what lets a container probe answer in hundredths of a second rather than paying for
   `AppConfig.ready()`.
 
+- **A shutdown closes every bot the process built, not only the one it imported.** Each holds
+  a loop, a runner thread and the sends a drain has to finish, so a container serving several
+  kept the other threads and dropped whatever was still in flight -- and then closed the shared
+  HTTP session on a loop that had never opened it, which is a `RuntimeError` out of the last
+  thing a container does. The session is closed on the loop that owns it now, and a loop still
+  running is left to the bot whose it is. Found by running the upgrade on a real project.
+
 - **Several queues over one connection, where the transport can.** A container serving twenty
   client queues held twenty connections and twenty consumer threads, because a consumer was one
   queue's. `Broker.MULTIPLEXES` is the capability and each transport answers it: RabbitMQ
