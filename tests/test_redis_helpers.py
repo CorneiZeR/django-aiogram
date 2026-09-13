@@ -429,3 +429,41 @@ def test_asking_for_the_async_client_off_a_loop_says_what_to_call(redis_server):
             coroutine.send(None)
     finally:
         coroutine.close()
+
+
+def test_a_client_that_refuses_to_close_does_not_leave_the_others_open():
+    """`reset()` empties the slots first, so this loop is the last reach anything has.
+
+    A close that raises part-way through leaves every client behind it open and unreachable --
+    a leaked socket per server for the life of the process. The refusal is still raised, once
+    the rest are shut.
+    """
+    from django_aiogram.redis import _SharedConnection
+
+    closed = []
+
+    class Refusing:
+        """A client whose socket is already gone, which is how a close fails."""
+
+        @staticmethod
+        def close():
+            """Say we were asked, then refuse."""
+            closed.append('refusing')
+            raise ConnectionError('the socket is gone')
+
+    class Willing:
+        """One that closes as asked."""
+
+        @staticmethod
+        def close():
+            """Say so."""
+            closed.append('willing')
+
+    holder = _SharedConnection()
+    holder._clients = {'redis://one': Refusing(), 'redis://two': Willing()}
+
+    with pytest.raises(ConnectionError, match='the socket is gone'):
+        holder.reset()
+
+    assert sorted(closed) == ['refusing', 'willing'], closed
+    assert holder._clients == {}, 'a failed close left the slots pointing at clients nothing can reach'

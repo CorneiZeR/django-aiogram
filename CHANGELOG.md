@@ -168,6 +168,9 @@ feed.
   HTTP session on a loop that had never opened it, which is a `RuntimeError` out of the last
   thing a container does. The session is closed on the loop that owns it now, and a loop still
   running is left to the bot whose it is. Found by running the upgrade on a real project.
+  Every close in a shutdown is attempted before any failure is raised, too -- bots, consumers,
+  their settlement and the Redis clients a reset drops: the one that refuses used to strand
+  everything behind it, which is what a shutdown exists to release.
 
 - **Several queues over one connection, where the transport can.** A container serving twenty
   client queues held twenty connections and twenty consumer threads, because a consumer was one

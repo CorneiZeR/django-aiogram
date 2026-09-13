@@ -728,23 +728,25 @@ class TelegramBot(RouterShortcuts):
                     if closing is not None:
                         loop.run_until_complete(closing)
                     self._bot = None
-                    ending = process.close_session()
-                    if ending is not None:
-                        # on the loop that *owns* it, which is not always this bot's: the
-                        # session belongs to the process and the loop belongs to a bot, so in a
-                        # container serving several the connector was built by whichever loop
-                        # made the first request. Closing it anywhere else raises about a
-                        # future attached to a different loop -- measured on a two-bot
-                        # container whose consumer sent through the second bot and whose
-                        # shutdown closed the first
-                        owner = process.session_loop() or loop
-                        if owner.is_running():
-                            # its own bot will close it: a loop that is still running belongs
-                            # to a bot this shutdown has not reached, and `run_until_complete`
-                            # refuses on one anyway
-                            logger.debug('leaving the session to the bot whose loop opened it')
-                        else:
-                            owner.run_until_complete(ending)
+                    # who owns the session, asked *before* anything takes it: the session
+                    # belongs to the process and a loop belongs to a bot, so in a container
+                    # serving several the connector was built by whichever loop made the first
+                    # request, and closing it anywhere else raises about a future attached to a
+                    # different loop -- measured on a two-bot container whose consumer sent
+                    # through the second bot and whose shutdown closed the first. Asking
+                    # `close_session` first would always answer `None` here, because taking the
+                    # session is how the process forgets it
+                    owner = process.session_loop()
+                    if owner is not None and owner.is_running():
+                        # left whole, not only unclosed: the bot whose loop this is will close
+                        # it on its way out and is the only one that can, so taking it here
+                        # would leave nobody holding it. `loop` is not this branch -- a running
+                        # one is refused at the top of the teardown
+                        logger.debug('leaving the session to the bot whose loop opened it')
+                    else:
+                        ending = process.close_session()
+                        if ending is not None:
+                            (owner or loop).run_until_complete(ending)
                     if not loop.is_closed():
                         loop.close()
             self._loop = None

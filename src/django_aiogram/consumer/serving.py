@@ -213,10 +213,19 @@ class Consumers:
         """
         with self._lock:
             self._done = True
+            refused: Exception | None = None
             for lane in list(self.running):
-                self._stopped.append((lane, *self._stop(lane)))
+                try:
+                    self._stopped.append((lane, *self._stop(lane)))
+                except Exception as error:  # noqa: BLE001, PERF203 - the rest still have to stop
+                    refused = refused or error
             for consumer in self._ready.values():
-                consumer.stop()
+                try:
+                    consumer.stop()
+                except Exception as error:  # noqa: BLE001, PERF203 - same: one refusal is not all of them
+                    refused = refused or error
+        if refused is not None:
+            raise refused
 
     def collect(self) -> None:
         """Let every consumer settle what its sends finished, after the bot has been closed.
@@ -228,10 +237,23 @@ class Consumers:
         """
         with self._lock:
             for consumer, _ in self.running.values():
-                consumer.collect()
+                self._settle(consumer)
             for consumer in self._ready.values():
-                consumer.collect()
+                self._settle(consumer)
             self._settle_what_has_stopped()
+
+    def _settle(self, consumer: 'Delivery') -> None:
+        """Settle one consumer, and log rather than raise where it refuses.
+
+        A shutdown reaches every consumer or none: the one that raises is one queue's rows,
+        and stopping there is every other queue's. Logged like the stopped ones in
+        :meth:`_settle_what_has_stopped`, which is where a reader already looks for this.
+        """
+        try:
+            consumer.collect()
+        except Exception:
+            queues = ', '.join(getattr(consumer, 'queues', ()))
+            logger.exception('could not settle a consumer', extra={'tg_queue': queues})
 
     def _still_turning(self, lane: 'Lane') -> bool:
         """Whether a consumer this container stopped for that lane is still inside ``run``.

@@ -391,13 +391,20 @@ class Command(BaseCommand):
             # whatever was still in flight. Measured on a two-bot container, where it also
             # closed the shared session on a loop that had not opened it.
             #
-            # `bot` last and separately, because it is what this module holds and what a test
-            # replaces: the registry answers with what it built, and a double put here is not
-            # in it
-            for made in bots.built():
-                if made is not bot:
+            # `bot` last, because it is what this module holds and what a test replaces: the
+            # registry answers with what it built, and a double put here is not in it.
+            #
+            # Every close attempted before any failure is raised -- stopping at the first would
+            # leave the bots after it holding exactly what this loop exists to release. The
+            # first failure is the one re-raised: the ones after it are usually its consequences
+            failure: Exception | None = None
+            for made in (*(one for one in bots.built() if one is not bot), bot):
+                try:
                     made.close()
-            bot.close()
+                except Exception as error:  # noqa: BLE001, PERF203 - the rest still have to be closed
+                    failure = failure or error
+            if failure is not None:
+                raise failure
         finally:
             # the sends close() just drained reported themselves finished into a
             # queue whose only reader is the consumer loop, and that returned before

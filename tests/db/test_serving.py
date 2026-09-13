@@ -419,3 +419,64 @@ def test_a_consumer_that_cannot_take_the_new_queues_is_stopped_rather_than_left_
     assert ('collected', ('client-1',)) in log
     assert ('started', ('client-1', 'client-2')) in log, log
     assert sorted(consumers.serving()) == ['client-1', 'client-2']
+
+
+def test_a_consumer_that_refuses_to_stop_does_not_strand_the_others():
+    """A shutdown reaches every consumer or none of them.
+
+    Stopping at the first refusal leaves the rest holding a transport and an in-flight list
+    nothing else can settle -- and the refusal still has to reach the caller, which is the
+    container deciding whether it shut down cleanly.
+    """
+    log = []
+
+    class Refusing(Fake):
+        """One whose transport raises on the way out, as a broken connection does."""
+
+        def stop(self):
+            """Say we were asked, then refuse."""
+            super().stop()
+            raise RuntimeError('the connection is gone')
+
+    refusing = Refusing(('vip',), log)
+    willing = Fake(('bulk',), log)
+    consumers = Consumers(
+        build=lambda queues: Fake(queues, log),
+        join_timeout=1.0,
+        ready={('queue', 'vip'): refusing, ('queue', 'bulk'): willing},
+    )
+
+    with pytest.raises(RuntimeError, match='the connection is gone'):
+        consumers.stop()
+
+    assert ('stopped', ('bulk',)) in log, log
+
+
+def test_a_consumer_that_cannot_settle_does_not_cost_the_others_their_rows(caplog):
+    """One queue's rows are not every queue's.
+
+    `collect` is what turns finished sends into rows, and it runs once, at the end of a
+    shutdown. A consumer that raises here would otherwise take the rest of the container's
+    settlement with it.
+    """
+    log = []
+
+    class Unsettled(Fake):
+        """One whose settle fails -- a database that went away mid-shutdown."""
+
+        def collect(self):
+            """Say we were asked, then refuse."""
+            super().collect()
+            raise OperationalError('the database is gone')
+
+    consumers = Consumers(
+        build=lambda queues: Fake(queues, log),
+        join_timeout=1.0,
+        ready={('queue', 'vip'): Unsettled(('vip',), log), ('queue', 'bulk'): Fake(('bulk',), log)},
+    )
+
+    with caplog.at_level('ERROR', logger='django_aiogram'):
+        consumers.collect()
+
+    assert ('collected', ('bulk',)) in log, log
+    assert 'could not settle a consumer' in caplog.text

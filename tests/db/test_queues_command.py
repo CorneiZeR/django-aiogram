@@ -241,12 +241,13 @@ def test_the_age_of_a_consumer_is_rounded_to_a_second(monkeypatch):
             return 0
 
         def liveness(self):
-            """A consumer that spoke twenty-six and a half seconds ago."""
-            return Liveness(reported=True, age=26.487100839614868, detail='')
+            """A consumer that spoke twenty-six and a half seconds ago, and a hair over."""
+            return Liveness(reported=True, age=26.687100839614868, detail='')
 
     TelegramQueue.objects.create(name='vip')
     monkeypatch.setattr('django_aiogram.broker.registry.broker_class', lambda *_a, **_k: Talkative)
 
     (row,) = listed()
 
-    assert row['consumer'] == '26s ago', row
+    # past the half-second, so a truncating clock would answer 26 and this case would catch it
+    assert row['consumer'] == '27s ago', row

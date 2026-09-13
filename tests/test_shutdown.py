@@ -663,3 +663,78 @@ def test_every_bot_this_process_built_is_closed(monkeypatch):
     command.handle(mode='webhook', idle=False, queues='', pools='', no_updates=False, updates_only=False)
 
     assert sorted(closed) == ['default', 'support'], closed
+
+
+@override_settings(
+    TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'BROKER': 'django_aiogram.testing.InMemoryBroker'},
+    TELEGRAM_BOTS={'default': {'TOKEN': '111111:AAone'}, 'support': {'TOKEN': '222222:BBtwo'}},
+)
+def test_a_bot_that_fails_to_close_does_not_strand_the_rest(monkeypatch):
+    """Stopping at the first failure leaves the bots after it holding everything.
+
+    A close raises for the same reasons a shutdown exists -- a runner that will not stop, a
+    drain that timed out -- and the bots behind it in the queue keep their loops, their threads
+    and whatever was in flight. The failure still has to reach the caller.
+    """
+    from django_aiogram.runtime.registry import bots
+
+    made = {alias: bots[alias] for alias in ('default', 'support')}
+    closed = []
+
+    def refusing(*_args, **_kwargs):
+        closed.append('support')
+        raise RuntimeError('the runner would not stop')
+
+    monkeypatch.setattr(made['support'], 'close', refusing)
+    monkeypatch.setattr(made['default'], 'close', lambda *_a, **_k: closed.append('default'))
+    monkeypatch.setattr('django_aiogram.management.commands.start_tgbot.bot', made['default'])
+
+    command = StartCommand()
+    command.idle_event = threading.Event()
+    command.idle_event.set()
+    with pytest.raises(RuntimeError, match='the runner would not stop'):
+        command.handle(mode='webhook', idle=False, queues='', pools='', no_updates=False, updates_only=False)
+
+    assert sorted(closed) == ['default', 'support'], closed
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_the_shared_session_is_left_to_the_bot_whose_loop_opened_it():
+    """A session belongs to the process, a loop to a bot, and only that bot can close it.
+
+    Taking the session here and finding its loop still running leaves nobody holding it: this
+    shutdown cannot close it, and the bot that can no longer has it to close.
+    """
+    from django_aiogram.runtime import process
+
+    opener = asyncio.new_event_loop()
+    thread = threading.Thread(target=opener.run_forever, daemon=True)
+    thread.start()
+    while not opener.is_running():
+        time.sleep(0.01)
+
+    closed = []
+
+    class Shared:
+        """Enough of an aiohttp session for the teardown to find the loop behind it."""
+
+        #: what aiohttp keeps, and where the loop it bound the connector to is readable
+        _session = SimpleNamespace(_loop=opener)
+
+        async def close(self):
+            """Record the close this case says must not happen here."""
+            closed.append(True)
+
+    process._session = Shared()
+    instance = TelegramBot()
+    instance._bot = stub_bot()
+    try:
+        instance.close(drain_timeout=0.1)
+
+        assert process._session is not None, 'the session was taken from the only bot that can close it'
+        assert closed == [], 'the session was closed on a loop that did not open it'
+    finally:
+        process._session = None
+        opener.call_soon_threadsafe(opener.stop)
+        thread.join(timeout=5)
+        opener.close()
