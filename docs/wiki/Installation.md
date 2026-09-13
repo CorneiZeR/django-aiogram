@@ -174,12 +174,16 @@ DJANGO_AIOGRAM_REDIS_URL=redis://redis:6379/0
 DJANGO_AIOGRAM_ENABLED=0
 ```
 
-One bot's own setting is `DJANGO_AIOGRAM_<ALIAS>_<NAME>`, so a second token needs no
-`settings.py` change either:
+One bot's own setting is `DJANGO_AIOGRAM_<ALIAS>_<NAME>`, so a bot's token can stay out of
+`settings.py`:
 
 ```ini
 DJANGO_AIOGRAM_SUPPORT_TOKEN=456:def
 ```
+
+**The section still has to exist.** `TELEGRAM_BOTS` is what declares which bots there are, and
+a variable is read only for an alias already declared there — so `'support': {}` is the whole
+of what the settings need, and the environment fills it in.
 
 Django settings win over the environment. Callables and mappings —
 `DEFAULT_KWARGS`, `DEFAULT_BOT_PROPERTIES`, `RATE_LIMIT` — have no sensible

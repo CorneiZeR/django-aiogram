@@ -96,13 +96,13 @@ bot.send(chat_id=CHAT_ID, text='Order approved')
 python manage.py start_tgbot
 ```
 
-**More than one bot** is a section each under `TELEGRAM_BOTS`, inheriting the defaults above
-and overriding what it names; send through `bots['support']`. Bots configured alike share one
-connection, one dispatcher and one consumer thread, and a queued message names the bot it is
-for — [Multiple bots](https://corneizer.github.io/django-aiogram/latest/Multiple-bots/). Bots
-that arrive *while it runs*, connected by your own clients, come from a provider and are
-reconciled without a redeploy —
-[Dynamic bots](https://corneizer.github.io/django-aiogram/latest/Dynamic-bots/).
+**More than one bot** is a section each under `TELEGRAM_BOTS`, inheriting the defaults above and
+overriding what it names; send through `bots['support']`. One dispatcher and one handler tree
+serve all of them, bots configured alike also share the connection and the consumer thread, and
+a queued message names the bot it is for:
+[Multiple bots](https://corneizer.github.io/django-aiogram/latest/Multiple-bots/). Bots that
+arrive *while it runs* — connected by your own clients — come from a provider and are reconciled
+without a redeploy: [Dynamic bots](https://corneizer.github.io/django-aiogram/latest/Dynamic-bots/).
 
 A router module, a call, and one process running the bot. That process gets Django's
 between-requests connection handling without having any requests — every update is bracketed

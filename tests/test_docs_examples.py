@@ -81,7 +81,9 @@ def documented_settings():
             try:
                 tree = ast.parse(source, mode='eval').body
             except SyntaxError:
-                continue  # a fragment written for a reader, with prose inside it
+                if not prose(source):
+                    UNREADABLE.append((path.name, source.splitlines()[0]))
+                continue
             settings = {resolve(key): resolve(value) for key, value in zip(tree.keys, tree.values, strict=True)}
             yield path.name, settings
 
@@ -146,6 +148,21 @@ BOTS_BLOCK = re.compile(r'^TELEGRAM_BOTS = (\{.*?^\})', re.DOTALL | re.MULTILINE
 #: it is rather than as a credential this could not parse
 TOKEN_SHAPE = re.compile(r'\d+:\S+')
 
+#: what a fragment written for a reader carries where the rest of a dict would be. A block
+#: holding one is prose and is skipped; a block that is *meant* to be copied and cannot be
+#: parsed is a published configuration that does not work, and `test_every_documented_block_is_
+#: readable` fails naming the page rather than letting it disappear from the parametrize
+PROSE = ('...', '<', '# …', '…')
+
+#: blocks this file could not read, with the page they are on. Filled while harvesting and
+#: asserted on below: a block that quietly left the list took its assertions with it
+UNREADABLE: list[tuple[str, str]] = []
+
+
+def prose(source: str) -> bool:
+    """Whether this block is a fragment written for a reader rather than one to copy."""
+    return any(mark in source for mark in PROSE)
+
 
 def a_token(alias: str) -> str:
     """A token shaped like Telegram's, for a documented section that reads one from the env.
@@ -184,18 +201,35 @@ def multi_bot_examples():
         if not path.is_file():
             continue
         for match in BOTS_BLOCK.finditer(path.read_text(encoding='utf-8')):
+            source = match.group(1)
             try:
-                sections = ast.parse(match.group(1), mode='eval').body
+                sections = ast.parse(source, mode='eval').body
                 written = {
                     resolve(alias): documented_bots(ast.unparse(section), resolve(alias))
                     for alias, section in zip(sections.keys, sections.values, strict=True)
                 }
             except (SyntaxError, ValueError):
-                continue  # a fragment written for a reader, with prose inside it
+                # prose is skipped and everything else is reported: a block a reader is meant
+                # to copy, which this cannot read, is a published configuration that does not
+                # work -- and dropping it here would take its assertions with it, silently
+                if not prose(source):
+                    UNREADABLE.append((path.name, source.splitlines()[0]))
+                continue
             yield path.name, written
 
 
 BOT_EXAMPLES = list(multi_bot_examples())
+
+
+def test_every_documented_block_is_readable():
+    """A block nothing here could parse is one nothing here checks, which is the worse failure.
+
+    The harvesters above skip what they cannot read, and a skip is invisible: the page keeps a
+    configuration that does not work and this file keeps passing, because another block in
+    another page still gives the parametrize something to run. So what is skipped is recorded,
+    and a fragment written for a reader says so with an ellipsis or an angle bracket.
+    """
+    assert UNREADABLE == [], f'documented blocks this suite could not read: {UNREADABLE}'
 
 
 def test_there_is_a_documented_multi_bot_block_to_check():

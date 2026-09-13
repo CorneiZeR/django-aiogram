@@ -5,6 +5,8 @@ bot called `default`, and everything on this page still describes it — it is s
 one.
 
 ```python
+import os
+
 TELEGRAM_BOT_DEFAULTS = {'REDIS_URL': os.environ['REDIS_URL']}
 TELEGRAM_BOTS = {
     'default': {'TOKEN': os.environ['TELEGRAM_TOKEN']},

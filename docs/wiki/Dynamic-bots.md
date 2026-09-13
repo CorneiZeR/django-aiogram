@@ -140,8 +140,10 @@ So a bot is held by a **lease**, renewed on every pass:
 | `MAX_BOTS_PER_WORKER` | `0` | How many bots one polling process may hold; `0` is as many as it is given |
 | `BOT_LEASE_SECONDS` | `90` | How long a lease is believed. `W011` reports one that is not comfortably longer than `BOT_REFRESH_INTERVAL` |
 
-A container that dies loses its bots after `BOT_LEASE_SECONDS`, which is also the longest two
-of them could poll one token. Webhooks need none of this — there is nothing to hold — and past
+A container that dies loses its bots once `BOT_LEASE_SECONDS` has passed, and another process
+may take them then. **An expired lease is not a revocation**: nothing reaches into the old
+container, so one that carries on — or comes back from a pause — polls the same token until a
+reconciliation pass stops it, and Telegram answers 409 to whichever of them asked second. Webhooks need none of this — there is nothing to hold — and past
 a hundred bots they are the only shape that works. **[Scaling](Scaling.md)** has the numbers.
 
 ## The credential
