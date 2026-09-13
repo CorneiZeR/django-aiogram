@@ -513,3 +513,32 @@ def test_a_consumer_that_cannot_settle_does_not_cost_the_others_their_rows(caplo
 
     assert ('collected', ('bulk',)) in log, log
     assert 'could not settle a consumer' in caplog.text
+
+
+def test_a_stop_that_refuses_does_not_cut_the_reconciliation_pass_short():
+    """The pass removes lanes and starts the asked-for ones; a refusal used to end it.
+
+    The lanes behind it went on running after they had left the set, and the queues the pass
+    was asked for got nobody on them until some later pass managed to get further.
+    """
+    log = []
+
+    class Refusing(Fake):
+        """One whose transport raises when it is asked to stop."""
+
+        def stop(self):
+            """Say we were asked, then refuse."""
+            super().stop()
+            raise RuntimeError('the connection is gone')
+
+    consumers = Consumers(build=lambda queues: Refusing(queues, log), join_timeout=1.0)
+    for name in ('gone-1', 'gone-2'):
+        TelegramQueue.objects.create(name=name, pool='old')
+    consumers.reconcile(served_by(pools=['old']))
+
+    TelegramQueue.objects.create(name='wanted', pool='new')
+    with pytest.raises(RuntimeError, match='the connection is gone'):
+        consumers.reconcile(served_by(pools=['new']))
+
+    assert ('stopped', ('gone-2',)) in log, 'the lane behind the refusal went on running'
+    assert ('started', ('wanted',)) in log, 'the queue this pass was asked for got nobody on it'

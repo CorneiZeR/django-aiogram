@@ -95,6 +95,10 @@ def test_one_bots_in_flight_list_is_not_the_others(two_bots, server):
     assert taken is not None, 'the shop queue delivered nothing'
     assert server.llen(f'shop:processing:{WORKER}') == 1
     assert server.llen(f'help:processing:{WORKER}') == 0, "the other bot's list was written to"
+    # which message moved, not only which list it landed in: a take that read the wrong queue
+    # and wrote it to this one's list holds both assertions above
+    assert server.llen('shop') == 0, 'the shop queue still holds the message that was taken'
+    assert server.llen('help') == 1, "the take came out of the other bot's queue"
     assert two_bots['shop'].inflight_depth() == 1
     assert two_bots['help'].inflight_depth() == 0
 

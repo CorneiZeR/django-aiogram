@@ -132,9 +132,14 @@ class Consumers:
 
         One queue's failure to start is its own -- the others keep being served, and the next
         pass tries it again -- because a container that stopped consuming everything because
-        one queue was misconfigured is the outage the whole set was meant to survive.
+        one queue was misconfigured is the outage the whole set was meant to survive. A stop
+        that *refuses* is the same rule read from the other end: the pass finishes, and the
+        refusal is raised once every lane has been reconciled. Raised out of the middle it
+        would leave the lanes behind it running after they left the set, and the queues this
+        pass was asked for with nothing on them until some later pass got further.
         """
         asked = lanes(wanted)
+        refused: Exception | None = None
         with self._lock:
             if self._done:
                 logger.info('not reconciling the queues: the shutdown had already begun')
@@ -145,11 +150,13 @@ class Consumers:
                 # would collect for it -- but `collect` on a consumer whose thread is still
                 # inside `run` would be two threads settling one in-flight list and calling
                 # one transport
-                self._raise_if_it_refused(self._stop(lane))
+                stopped = self._stop(lane)
+                refused = refused or stopped
             self._settle_what_has_stopped()
             for lane, serving in asked.items():
                 if lane in self.running:
-                    self._follow(lane, serving)
+                    stopped = self._follow(lane, serving)
+                    refused = refused or stopped
                     continue
                 if self._still_turning(lane):
                     # left the set, its stop timed out, and now it is back: starting a
@@ -175,8 +182,10 @@ class Consumers:
                         'could not start consuming a queue; the next pass will try again',
                         extra={'tg_queue': ', '.join(serving)},
                     )
+        if refused is not None:
+            raise refused
 
-    def _follow(self, lane: 'Lane', serving: tuple[str, ...]) -> None:
+    def _follow(self, lane: 'Lane', serving: tuple[str, ...]) -> 'Exception | None':
         """Tell a running consumer which queues its lane holds now, if the set has moved.
 
         Told rather than restarted, which is the whole reason a lane has a key of its own: a
@@ -188,7 +197,7 @@ class Consumers:
         """
         consumer, _thread = self.running[lane]
         if tuple(getattr(consumer, 'queues', ())) == serving:
-            return
+            return None
         try:
             consumer.serve(serving)
         except Exception:
@@ -201,7 +210,8 @@ class Consumers:
                 'could not change the queues a consumer serves; stopping it so the next pass rebuilds it',
                 extra={'tg_queue': ', '.join(serving)},
             )
-            self._raise_if_it_refused(self._stop(lane))
+            return self._stop(lane)
+        return None
 
     def stop(self) -> None:
         """Stop every consumer and wait for its thread, which is a shutdown's half of this.
@@ -242,12 +252,6 @@ class Consumers:
             for consumer in self._ready.values():
                 self._settle(consumer)
             self._settle_what_has_stopped()
-
-    @staticmethod
-    def _raise_if_it_refused(refused: 'Exception | None') -> None:
-        """Raise what :meth:`_stop` handed back, for the callers with nothing else to finish."""
-        if refused is not None:
-            raise refused
 
     def _settle(self, consumer: 'Delivery') -> None:
         """Settle one consumer, and log rather than raise where it refuses.
