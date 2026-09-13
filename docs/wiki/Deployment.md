@@ -811,7 +811,8 @@ to the consumer that is already running, so the clients it was already serving
 are not paused.
 
 That is per **lane**, and a lane is the queues whose settings agree on
-everything but which queue they name: the transport, the server, the serializer,
+everything but which queue they name — the same arithmetic that decides what a
+set of bots shares, which **[Multiple bots](Multiple-bots.md)** is the page for: the transport, the server, the serializer,
 `MAX_IN_FLIGHT`. Queues that disagree cannot share a connection and get a
 consumer each, which is the same arithmetic the runtime groups bots by. A
 container whose twenty client queues are configured alike — the ordinary case,

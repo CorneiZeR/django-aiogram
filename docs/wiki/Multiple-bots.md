@@ -127,6 +127,12 @@ published to a queue nobody consumes is a send that succeeds and arrives nowhere
 `QUEUES` or as a `TelegramQueue` row. **[Deployment](Deployment.md)** has which container
 serves what, and **[Scaling](Scaling.md)** has the arithmetic.
 
+A queue of its own does not mean a connection of its own. Queues whose settings agree on
+everything but their name are read by **one** consumer over one connection wherever the
+transport can do it — RabbitMQ, Kafka and Redis Streams can, a crash-safe Redis list cannot —
+and each keeps its own in-flight budget inside that. So twenty clients on twenty queues is
+twenty backlogs and one connection, not twenty of each.
+
 ## Everything a message carries says which bot
 
 A queued message names its bot on the wire, so a container serving several delivers each

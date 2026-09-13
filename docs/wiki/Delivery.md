@@ -104,7 +104,8 @@ neither argument is refused the same way and for the same shape of reason: it wo
 message from the process's own queue while the container believes it is serving another.
 
 `queues` is the set read over **one** connection, where the transport can
-(`Broker.MULTIPLEXES`). A `run()` of your own hands it down and counts what comes back:
+(`Broker.MULTIPLEXES`) — see **[Multiple bots](Multiple-bots.md)** for what a set of queues is
+for, and **[Dynamic bots](Dynamic-bots.md)** for where one arrives from mid-run. A `run()` of your own hands it down and counts what comes back:
 
 ```python
 asked = self.readable()
