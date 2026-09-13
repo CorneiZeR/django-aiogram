@@ -5,9 +5,9 @@ installed: two drivers present would make the choice ambiguous, and one present 
 a typo in the setting look like a working configuration.
 """
 
-import atexit
 import contextlib
 import threading
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from django.core.signals import setting_changed
@@ -16,13 +16,13 @@ from django.utils.module_loading import import_string
 
 from django_aiogram.broker.base import Broker
 from django_aiogram.broker.exceptions import BrokerDependencyError, BrokerNotConfiguredError
-from django_aiogram.config.settings import SETTINGS_NAME, conf
+from django_aiogram.config.settings import SETTINGS_NAME, conf, setting_label
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterable, Iterator, Mapping
     from typing import Any
 
-__all__ = ('SHIPPED', 'broker_class', 'close_broker', 'get_broker', 'use_broker')
+__all__ = ('SHIPPED', 'broker_class', 'close_broker', 'get_broker', 'overriding', 'use_broker')
 
 #: what each shipped broker needs, keyed by dotted path — readable *without* importing the
 #: module, so a check can name the missing extra even where the import would fail
@@ -36,19 +36,62 @@ SHIPPED: dict[str, tuple[str, str]] = {
 }
 
 _lock = threading.Lock()
-_broker: Broker | None = None
+
+
+@dataclass(frozen=True)
+class _Scope:
+    """Which bots an override answers for, which is what makes a capture per bot possible.
+
+    Empty on both fields means *every* bot, which is what `use_broker(broker)` has always
+    meant and what a single-bot project's suite relies on. A named queue or a set of
+    identities narrows it, and a bot outside it goes on using its own transport -- so a case
+    can capture one client's sends while another client's keep flowing.
+    """
+
+    #: the queue name this override stands for, as `QUEUE` resolves it
+    queue: str | None = None
+    #: the identities it stands for
+    bots: frozenset[int] = frozenset()
+
+    def answers_for(self, settings: 'Mapping[str, Any] | None', *, whole_group: bool) -> bool:
+        """Whether this override is the transport those settings should use.
+
+        Every field the scope names has to match. ``whole_group`` asks on behalf of a
+        :class:`~django_aiogram.runtime.groups.RuntimeGroup` rather than one bot, and a scope
+        narrowed to *bots* answers no to it: a group serves every bot on its profile, and
+        twenty bots configured alike share one -- so installing one client's capture as the
+        group's transport would capture the other nineteen.
+        """
+        if self.queue is None and not self.bots:
+            return True
+        if whole_group and self.bots:
+            return False
+        if settings is None:
+            # the process-wide defaults rather than a bot's: a narrowed override is about
+            # named bots, and answering for "whoever asked without saying" would capture the
+            # very sends it was scoped away from
+            return False
+        # deferred: both reach the settings, and this module is imported from `apps.ready`
+        from django_aiogram.config.bots import parse_bot_id  # noqa: PLC0415 - as above
+        from django_aiogram.runtime.queues import named  # noqa: PLC0415 - as above
+
+        # every field that was named has to match, rather than any of them: a block that says
+        # *this bot on this queue* is narrower than either half, and reading it as an either-or
+        # would capture the bot's sends on some other queue -- and everybody else's on this one
+        if self.queue is not None and named(settings) != self.queue:
+            return False
+        return not self.bots or parse_bot_id(settings.get('TOKEN')) in self.bots
+
+
 #: a broker handed in rather than resolved, for the length of a test. Consulted *before*
 #: `BROKER` and never built from it, which is the whole reason it is not simply an
 #: `override_settings` in `django_aiogram.testing`: a case that overrides the setting itself --
-#: and every `@override_settings(TELEGRAM_BOT=...)` replaces the dict whole -- would otherwise
+#: and every `@override_settings(TELEGRAM_BOT_DEFAULTS=...)` replaces the dict whole -- would otherwise
 #: undo the helper it is running inside, silently, and at a moment it did not choose
-_overrides: list[tuple[object, Broker]] = []
-#: registered once per process rather than per build, so a settings change that replaces the
-#: broker does not stack another callback. `close_broker` is idempotent either way
-_exit_hook_armed = False
+_overrides: list[tuple[object, Broker, _Scope]] = []
 
 
-def broker_class(*, verify_driver: bool = True) -> type[Broker]:
+def broker_class(settings: 'Mapping[str, Any] | None' = None, *, verify_driver: bool = True) -> type[Broker]:
     """Resolve ``BROKER`` to a class, and refuse anything that is not one.
 
     Separate from :func:`get_broker` because the checks want the class and its declared
@@ -63,9 +106,11 @@ def broker_class(*, verify_driver: bool = True) -> type[Broker]:
 
     Every shipped broker imports its driver lazily, so the import below succeeds without it.
     """
-    path = str(conf['BROKER'] or '').strip()
+    resolved = conf if settings is None else settings
+    named = setting_label(settings, 'BROKER')
+    path = str(resolved['BROKER'] or '').strip()
     if not path:
-        msg = f"{SETTINGS_NAME}['BROKER'] is empty, so no transport is chosen."
+        msg = f'{named} is empty, so no transport is chosen.'
         raise BrokerNotConfiguredError(msg)
     if path in SHIPPED and verify_driver:
         # verified before the import, which is belt to `verify`'s braces. Every shipped
@@ -81,10 +126,10 @@ def broker_class(*, verify_driver: bool = True) -> type[Broker]:
     # than `ImportError` -- see `producer.from_settings.build_storage` for the same catch and the
     # same reason
     except (ImportError, ValueError) as error:
-        msg = f"{SETTINGS_NAME}['BROKER'] is {path!r}, which cannot be imported: {error}"
+        msg = f'{named} is {path!r}, which cannot be imported: {error}'
         raise BrokerNotConfiguredError(msg) from error
     if not (isinstance(resolved, type) and issubclass(resolved, Broker)):
-        msg = f"{SETTINGS_NAME}['BROKER'] is {path!r}, which is not a Broker subclass."
+        msg = f'{named} is {path!r}, which is not a Broker subclass.'
         raise BrokerNotConfiguredError(msg)
     return resolved
 
@@ -97,53 +142,53 @@ def _require(path: str, module: str, extra: str) -> None:
         raise BrokerDependencyError(path.rsplit('.', 1)[-1], module, extra)
 
 
-def get_broker() -> Broker:
-    """Return the one broker this process uses, building it on the first ask.
+def get_broker(settings: 'Mapping[str, Any] | None' = None) -> Broker:
+    """Return the transport one bot uses, building its group's on the first ask.
 
-    Cached like the Redis client was, and for the same reason: a transport holds a
-    connection, and building one per send is what the 3.x accessor existed to avoid.
+    Cached by *profile* since 5.0 rather than per process: twenty bots configured alike share
+    one connection, and one configured differently gets its own. `settings` names the bot;
+    without them the shared defaults answer, which is what a process with one bot has.
 
-    An override from :func:`use_broker` wins over both the cache and the setting, and is the
-    only way anything but ``BROKER`` decides this.
-
-    **One lock over the whole choice**, rather than a lock-free read of the cache after
-    checking for an override. Between the two, another thread could install one -- and then a
-    send made *inside* a capture would go to the configured transport instead, which is a test
-    that fails for a reason nothing in it can show. The cost is an uncontended acquisition on a
-    path that ends in a socket write.
+    An override from :func:`use_broker` wins over both the group and the setting, and is the
+    only way anything but `BROKER` decides this.
     """
-    global _broker, _exit_hook_armed  # noqa: PLW0603 - one per process, like the connection it holds
+    # deferred: `runtime.groups` reaches back here for `broker_class`, and a module-scope import
+    # either way round would be a cycle
+    from django_aiogram.runtime.groups import group_for  # noqa: PLC0415 - as above
+
+    held = overriding(settings)
+    if held is not None:
+        return held
+    return group_for(conf if settings is None else settings).broker
+
+
+def overriding(settings: 'Mapping[str, Any] | None' = None, *, whole_group: bool = False) -> Broker | None:
+    """Return the broker a :func:`use_broker` block installed for these settings, if any.
+
+    Read by the groups as well as here, so a capture reaches a bot whichever way its transport
+    is asked for.
+
+    The innermost block that *answers for this bot* wins, which is the same rule as before
+    wherever nothing is narrowed: a capture scoped to one client is passed over by every other
+    client's send, and those go on reaching the transport they were configured with.
+
+    ``whole_group`` is the group asking for the transport its whole profile shares --
+    see :meth:`_Scope.answers_for` for why a capture scoped to one bot declines that question.
+    """
     with _lock:
-        if _overrides:
-            return _overrides[-1][1]
-        if _broker is None:
-            cls = broker_class()
-            cls.verify()
-            _broker = cls()
-            if not _exit_hook_armed:
-                # `Broker.close()` says it is "called once, at shutdown", and until this line
-                # nothing called it there: the only path to `close_broker` was the
-                # `setting_changed` receiver below, which fires in a test suite and never in a
-                # deployment. So the Kafka producer was never flushed and its consumer never
-                # left its group -- a member that disappears without saying so holds its
-                # partitions until the session times out, which is a bot restart that delivers
-                # nothing for that long. `EventRecorder` has armed an `atexit` for its writer
-                # all along; this is the same trade in the same shape.
-                #
-                # This hook runs during interpreter shutdown, on the main thread, which is not
-                # the thread that opened a consumer's connection -- and `bot.close()`, the other
-                # path here, runs wherever a caller happens to be. Neither can promise the
-                # owning thread, which is why each transport's `close()` already restricts what
-                # it touches from a foreign one: pika's asks the owner through
-                # `add_callback_threadsafe`, and librdkafka's flushes the process producer and
-                # closes only the calling thread's consumer.
-                atexit.register(close_broker)
-                _exit_hook_armed = True
-        return _broker
+        for _token, broker, scope in reversed(_overrides):
+            if scope.answers_for(settings, whole_group=whole_group):
+                return broker
+        return None
 
 
 @contextlib.contextmanager
-def use_broker(broker: Broker) -> 'Iterator[Broker]':
+def use_broker(
+    broker: Broker,
+    *,
+    queue: str | None = None,
+    bots: 'Iterable[int] | None' = None,
+) -> 'Iterator[Broker]':
     """Make ``broker`` this process's broker for the length of the block.
 
     The seam ``django_aiogram.testing`` is built on, and public because a project's own
@@ -151,8 +196,13 @@ def use_broker(broker: Broker) -> 'Iterator[Broker]':
     process that could be talked out of its transport by a caller is one whose configuration
     means less than it says.
 
+    ``queue`` and ``bots`` narrow it. Left out, it stands for every bot, which is what a
+    single-bot project's suite has always had; named, every other bot goes on using the
+    transport it was configured with -- so one client's sends can be captured while another's
+    keep flowing, which is the whole of what a multi-bot capture needs.
+
     Ahead of the setting rather than through it, which is a deliberate difference from
-    ``override_settings(TELEGRAM_BOT=...)``. Every such override replaces the dict whole, so a
+    ``override_settings(TELEGRAM_BOT_DEFAULTS=...)``. Every such override replaces the dict whole, so a
     case that carries one of its own -- a decorator on the method, applied *after* a fixture
     has already started capturing -- would silently take the helper's broker away again. The
     override is a fact about this process, and nothing in the settings can undo it.
@@ -165,7 +215,7 @@ def use_broker(broker: Broker) -> 'Iterator[Broker]':
     ended, and the one that exits last leaves it installed for good. Removing an entry by
     identity cannot get that wrong, and the innermost block still standing is the one that wins.
     """
-    entry = (object(), broker)
+    entry = (object(), broker, _Scope(queue=queue, bots=frozenset(bots or ())))
     with _lock:
         _overrides.append(entry)
     try:
@@ -181,15 +231,14 @@ def use_broker(broker: Broker) -> 'Iterator[Broker]':
 
 
 def close_broker() -> None:
-    """Drop the cached broker, closing it first. Safe to call when there is none."""
-    global _broker
-    with _lock:
-        current, _broker = _broker, None
-    if current is not None:
-        current.close()
+    """Close every transport this process built. Safe to call when there is none."""
+    # deferred for the reason `get_broker` gives
+    from django_aiogram.runtime.groups import close_groups  # noqa: PLC0415 - as above
+
+    close_groups()
 
 
-@receiver(setting_changed)
+@receiver(setting_changed, dispatch_uid='django_aiogram.broker.registry')
 def _forget_the_broker(**kwargs: 'Any') -> None:
     """Rebuild on the next ask when the settings change, as the client does.
 

@@ -26,7 +26,7 @@ from django_aiogram.testing import capture_sends
 SETTINGS = {'TOKEN': '42:x', 'FSM_STORAGE': 'memory', 'RATE_LIMIT': None}
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_method_object_queues_the_call_it_describes():
     """The whole point, through the real producer: names and arguments from aiogram."""
     with capture_sends() as sent:
@@ -37,7 +37,7 @@ def test_a_method_object_queues_the_call_it_describes():
     assert sent[0].correlation_id == identifier
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 @pytest.mark.parametrize('form', ['send', 'enqueue'])
 def test_every_queued_producer_takes_one(form):
     """`send`, `enqueue` and their awaiting twins, because a caller should not have to ask.
@@ -56,7 +56,7 @@ def test_every_queued_producer_takes_one(form):
     assert sent[0].correlation_id == identifier
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 @pytest.mark.parametrize('form', ['asend', 'aenqueue'])
 def test_the_awaiting_twins_take_one_too(form):
     """Separate implementations, so separate cases -- the sync ones would pass with these broken."""
@@ -69,7 +69,7 @@ def test_the_awaiting_twins_take_one_too(form):
     assert sent[0].correlation_id == identifier
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_nested_model_keeps_its_own_type_on_the_way_through():
     """The reason the fields are read rather than dumped.
 
@@ -87,7 +87,7 @@ def test_a_nested_model_keeps_its_own_type_on_the_way_through():
     assert sent[0].kwargs['reply_markup'].inline_keyboard[0][0].callback_data == 'k'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_field_aiogram_does_not_declare_is_refused_at_the_call():
     """The half a type checker does not do, and the reason this refusal exists at all.
 
@@ -102,7 +102,7 @@ def test_a_field_aiogram_does_not_declare_is_refused_at_the_call():
         TelegramBot().send(SendMessage(chat_id=1, text='x', parse_mod='HTML'))
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_project_s_own_subclass_resolves_to_the_method_it_inherits():
     """A subclass is a reasonable thing to write, and its class name is not a method name.
 
@@ -122,7 +122,7 @@ def test_a_project_s_own_subclass_resolves_to_the_method_it_inherits():
     assert sent[0].kwargs == {'chat_id': 1, 'text': 'from a subclass'}
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_neither_a_name_nor_a_method_object_is_refused_by_name():
     """The third case the signature allows a caller to reach, said plainly rather than as an
     `AttributeError` about `model_fields_set`."""
@@ -130,21 +130,21 @@ def test_neither_a_name_nor_a_method_object_is_refused_by_name():
         TelegramBot().send({'chat_id': 1, 'text': 'a dict is not a call'})  # type: ignore[arg-type]
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_denied_method_is_refused_by_the_same_allowlist():
     """The object form is not a way around `DENIED_METHODS`: it resolves to a name and is checked."""
     with capture_sends(), pytest.raises(UnknownApiMethodError):
         TelegramBot().send(SetWebhook(url='https://elsewhere.example/hook'))
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_arguments_beside_a_method_object_are_refused_rather_than_ignored():
     """Two sources for one call is a caller who means something this cannot answer."""
     with capture_sends(), pytest.raises(TypeError, match='cannot be passed beside it'):
         TelegramBot().send(SendMessage(chat_id=1, text='x'), text='and again')
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_string_form_is_untouched():
     """It is the 2.x call, the documented one, and the only form that takes a variable."""
     name = 'send_message'
@@ -195,7 +195,7 @@ def test_every_aiogram_method_resolves_to_the_name_the_allowlist_holds():
     assert checked == len(API_METHODS), f'{checked} of {len(API_METHODS)} allowed methods were reached'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_subclass_may_not_invent_an_argument_for_the_api():
     """The other half of accepting a subclass, and the hole the first version had.
 
@@ -261,7 +261,7 @@ def test_the_types_still_line_up_with_what_the_bot_takes():
     assert optional_extras == {'request_timeout'}, f'a new optional parameter appeared: {sorted(optional_extras)}'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_media_group_object_keeps_its_discriminated_items():
     """The case `wire.serializers` warns about, driven through the producer."""
     from aiogram.methods import SendMediaGroup
@@ -273,7 +273,7 @@ def test_a_media_group_object_keeps_its_discriminated_items():
     assert isinstance(sent[0].kwargs['media'][0], InputMediaPhoto)
 
 
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'ENABLED': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'ENABLED': False})
 def test_a_disabled_bot_answers_the_object_form_with_an_id_too():
     """Whatever the form, a send that does nothing still answers with the id it would have used."""
     with capture_sends() as sent:

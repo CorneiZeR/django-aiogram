@@ -1,7 +1,28 @@
 # Settings
 
-Everything lives under `TELEGRAM_BOT` in `settings.py`. Scalar values can also
-come from `DJANGO_AIOGRAM_<NAME>`; Django settings take precedence.
+Two dicts in `settings.py`. `TELEGRAM_BOT_DEFAULTS` holds what every bot inherits;
+`TELEGRAM_BOTS` holds one section per bot, keyed by an alias, and each section overrides
+what it names. A project that writes no sections has one bot called `default` resolving
+entirely from the defaults, which is what a single-bot project keeps writing.
+**[Multiple bots](Multiple-bots.md)** is the page; this one is the keys.
+
+```python
+TELEGRAM_BOT_DEFAULTS = {'REDIS_URL': os.environ['REDIS_URL']}
+TELEGRAM_BOTS = {
+    'default': {'TOKEN': os.environ['TELEGRAM_TOKEN']},
+    'support': {'TOKEN': os.environ['SUPPORT_TOKEN'], 'RATE_LIMIT': {'overall_per_second': 5}},
+}
+```
+
+Scalar values can also come from `DJANGO_AIOGRAM_<NAME>`, and one bot's from
+`DJANGO_AIOGRAM_<ALIAS>_<NAME>`; Django settings take precedence over either.
+
+A bot is identified by the number in front of the colon in its token, read without asking
+Telegram. That number is the one thing about a bot that holds still: an alias is a name a
+project may change and a token is a credential it may rotate, and a rotated token keeps the
+same identity. These belong to the process rather than to a bot — `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `FSM_STORAGE`, `BOT_PROVIDERS`, `BOT_REFRESH_INTERVAL`, `MAX_BOTS_PER_WORKER`, `BOT_LEASE_SECONDS`, `QUEUES`, `REMOVED_QUEUE_POLICY`, `METRICS_PER_BOT`, `TOKEN_STORAGE`, `TOKEN_ENCRYPTION_KEYS`, `EVENT_LOG` and every `EVENT_LOG_*` one — so a section naming one is refused by `E053` instead of
+deciding for every bot in the process. `ENABLED` is not among them: a bot may be switched off
+on its own.
 
 All of it is validated by `manage.py check` — in processes where the bot is
 enabled **or** the event log is on. A container with `ENABLED=0` and the log
@@ -37,6 +58,17 @@ Neither is required for the project to boot.
 | `ENABLED` | `True` | Whether this process sends — to Telegram, or into the broker. The depth reads answer regardless |
 | `AUTODISCOVER` | `True` | Import `<app>.<MODULE_NAME>` on startup |
 | `MODULE_NAME` | `'tg_router'` | Module to look for in each installed app |
+| `BOT_PROVIDERS` | `('django_aiogram.runtime.providers.from_settings',)` | Where the bots come from, by dotted path and in the order they are read. The shipped default reads `TELEGRAM_BOTS`; `django_aiogram.runtime.providers.from_database` reads the `TelegramBot` table, for a project whose clients bring their own bot. A path that cannot be imported is refused rather than skipped — a source nobody reads is a set of bots nobody serves. Where two sources name one identity the first keeps it, and the collision is logged |
+| `BOT_REFRESH_INTERVAL` | `30` | Seconds between re-reads of the providers. The poll is what makes a change arrive at all; a change made through the admin also pushes, which is what makes it arrive in a second. A pass over an unchanged table costs one aggregate per table, and a provider that suddenly reads no bots at all is held for one pass before it is believed |
+| `MAX_IN_FLIGHT_PER_BOT` | `0` | How many sends one bot may have in flight on one queue; `0` is as many as the queue's own `MAX_IN_FLIGHT` allows. The second of two bounds, and the reason there are two: a single bound over the whole queue lets one chatty or rate-limited client fill it while every other bot on that queue waits behind them. A message taken for a bot already at its budget is **held by the consumer**, not released — `release` is a documented no-op on the transport that has an in-flight list, so a released message would sit there until a restart reclaimed it — and it is handed over as soon as that bot has room. Each held message occupies one of the queue's slots, so `MAX_IN_FLIGHT` bounds how many can wait; a queue whose whole budget is waiting stops being read until a send finishes. A held message does **not** count against the bot's own budget: it is waiting for one of that bot's sends to end, so counting it would be a reservation nothing can release — with a budget of two, two sends and two held messages would leave the bot at its budget with nothing running to take it below again |
+| `QUEUE` | `''` | Which queue this bot's messages go to, whatever the transport calls one — a Redis list key, a stream, an AMQP queue, a Kafka topic. Empty means the transport's own option decides, which is what a deployment with one queue has. A bot's setting rather than the process's: two bots naming different queues get a transport each, so neither reads the other's messages. A name must be declared in `QUEUES` or in the `TelegramQueue` table — `E059` reports one that is not, and building the transport for it refuses |
+| `REMOVED_QUEUE_POLICY` | `'park'` | The process's, not a bot's — a section that sets it is refused by `E053`. What `manage.py tgbot_prune_queues` does with a queue no bot publishes to any more: `park` leaves it and reports it, `hold` removes it once it is empty, `drop` removes it with whatever is still in it. A queue per client is how a deployment leaks — one Redis key, AMQP queue or consumer group per client that ever existed — and the default destroys nothing, because a client may come back and the messages may still be worth reading. Nothing acts on this on its own: removing a queue is not a decision for a signal handler in a web request |
+| `QUEUES` | `()` | The queues this deployment has, by name. The process's, not a bot's — a bot chooses one of them with `QUEUE`, and a section that sets this is refused by `E053`. Declaring one is what makes it nameable: a typo in `QUEUE` would otherwise be a queue nothing consumes, holding messages nobody waits for, reported as a healthy send. Rows in `TelegramQueue` declare one too, for a deployment whose clients arrive at run time |
+| `MAX_BOTS_PER_WORKER` | `0` | How many bots one polling process may hold at once; `0` is as many as it is given. Exclusivity comes from a lease per bot, so this is what splits a set of bots across containers — and what bounds a container that would otherwise take all of them |
+| `METRICS_PER_BOT` | `False` | The process's, not a bot's. Whether the shipped Prometheus exporter labels its series by bot. Off, because a label per bot is a series per bot **per kind** — and the histogram multiplies that again by its buckets, so a deployment with a thousand clients counts its series in the hundreds of thousands rather than in dozens. The event log answers the same question per bot and is queryable — see **[Event log](Event-log.md)** |
+| `TOKEN_STORAGE` | `'django_aiogram.tokens.PlainTokenStorage'` | The process's, not a bot's. A dotted path to the class every stored token is written and read through. The default keeps the value as it was given: what protects a token then is the database's own access control and the admin permission on the column. `django_aiogram.crypto.FernetTokenStorage` encrypts it, and needs the `[crypto]` extra — see **[Tokens](Tokens.md)** |
+| `TOKEN_ENCRYPTION_KEYS` | `()` | The process's, not a bot's. A list or tuple of the keys an encrypting storage uses, **newest first** — a set is refused, because it cannot say which one is newest and the first key is the one that encrypts; one key may be written as a bare string: the first one encrypts and every one of them decrypts, which is what makes a key rotation something `manage.py tgbot_rewrap_tokens` can walk through with nothing down. Empty is refused where the configured storage needs keys (`E063`) |
+| `BOT_LEASE_SECONDS` | `90` | How long a bot's polling lease is believed. It is renewed on every pass, so it has to be comfortably longer than `BOT_REFRESH_INTERVAL`; `W011` says so when it is not. A container that dies loses its bots after this long, which is also how long two of them could poll one token |
 
 **Every boolean setting here is parsed, not tested for truthiness**: `'false'`,
 `'no'`, `'off'` and `0` all mean false, wherever a boolean is accepted. Anything
@@ -51,7 +83,7 @@ was the last setting read that way, and no longer is. See **[Deployment](Deploym
 | ------- | ------- | ----------- |
 | `DEFAULT_BOT_PROPERTIES` | `{}` | Passed to aiogram's `DefaultBotProperties` |
 | `DEFAULT_KWARGS` | `lambda fn: {}` | Per-function extras the above cannot express |
-| `FSM_STORAGE` | `'redis'` | `'redis'`, `'memory'`, or a dotted path |
+| `FSM_STORAGE` | `'redis'` | `'redis'`, `'memory'`, or a dotted path. One store per process, shared by every bot: the handlers are shared, and a `Router` cannot be attached to two dispatchers. The shipped Redis store keys on the bot's identity as well as the chat, so one person talking to two of your bots has a state with each — a store of your own has to do the same |
 | `MAX_RETRIES` | `10` | Retries after a Telegram rate-limit refusal |
 | `RAISE_EXCEPTION` | `False` | Let `send_raw` propagate failures |
 | `TRANSACTIONAL` | `False` | Hold the queue write until the caller's transaction commits |
@@ -63,7 +95,7 @@ row it announced rolled back. With it on, the write waits for the commit on the 
 connection and a rolled-back block queues nothing at all.
 
 ```python
-TELEGRAM_BOT = {'TRANSACTIONAL': True}
+TELEGRAM_BOT_DEFAULTS = {'TRANSACTIONAL': True}
 ```
 
 What it does not change, and what to expect:
@@ -118,7 +150,7 @@ What it does not change, and what to expect:
 `show_caption_above_media`. A misspelling fails at `manage.py check`.
 
 ```python
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'DEFAULT_BOT_PROPERTIES': {
         'parse_mode': 'HTML',
         'link_preview_is_disabled': True,
@@ -281,10 +313,10 @@ consumer as not observable from outside.
 
 | Setting | Default | Description |
 | ------- | ------- | ----------- |
-| `RATE_LIMIT` | see below | Proactive pacing, or `None` to disable |
+| `RATE_LIMIT` | see below | Proactive pacing, or `None` (or `{}`) to disable |
 
 ```python
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'RATE_LIMIT': {
         'overall_per_second': 30,
         'per_chat_per_second': 1,
@@ -336,7 +368,10 @@ entry naming a retired one is dead but harmless.
 | Id | Meaning |
 | -- | ------- |
 | `W001` / `W002` | `TOKEN` / `REDIS_URL` empty while the bot is enabled |
-| `W003` | `TELEGRAM_BOT` contains unknown keys |
+| `W003` | `TELEGRAM_BOT_DEFAULTS` contains unknown keys |
+| `W010` | one bot's section contains unknown keys |
+| `W012` | `MAX_IN_FLIGHT_PER_BOT` is set while `MAX_IN_FLIGHT` is `0`, so nothing bounds what the consumer holds. A held message and the transport's in-flight state grow together, and on a Redis list every acknowledgement scans that state. The consumer will not do that: without the queue's bound it *waits* for the saturated bot instead, which is the head-of-line blocking the per-bot budget exists to avoid — so set both |
+| `W011` | `BOT_LEASE_SECONDS` is not at least twice `BOT_REFRESH_INTERVAL`, so the lease lapses between the renewals a pass makes and the bot is traded between containers — each trade a 409 from Telegram for whoever was polling |
 | `W004` | `BLPOP_TIMEOUT` is **above** the ceiling the consumer applies — `min(HEARTBEAT_INTERVAL, floor(<the transport timeout>) - 1)`, never below 1 — so the take is silently shortened to it. Equal to the ceiling is not warned about and is not shortened. The hint names whichever of the two binds, and the transport term is the one `BROKER` names rather than always `REDIS_TIMEOUT` |
 | `E001`–`E003`, `E017`, `E049` | a boolean setting holds something that cannot be read as true or false. `ENABLED` and `AUTODISCOVER` are read while the app loads, so in practice those two refuse the boot with the same message before `check` runs at all |
 | `E004`–`E007`, `E009`–`E011` | a string setting is wrong, or not one of the allowed values |
@@ -364,11 +399,27 @@ entry naming a retired one is dead but harmless.
 | `E043` | `REDIS_URL` sets `decode_responses` while `ALLOW_PICKLE` is `True` |
 | `E044` | `DRAIN_TIMEOUT` is not a finite number, or is negative |
 | `E045` | `MAX_IN_FLIGHT` is not an integer, or is negative |
+| `E060` | `MAX_IN_FLIGHT_PER_BOT` is not an integer, or is negative. Reported rather than clamped, because a negative one reads as *no per-bot bound at all*: the consumer takes `max(0, ...)` of it, so a typed-in `-1` would silently be the single-bound behaviour the setting was added to leave |
+| `E061` | `REMOVED_QUEUE_POLICY` is not `park`, `hold` or `drop` |
+| `E062` | `TOKEN_STORAGE` is empty, cannot be imported, is not a `TokenStorage` subclass, or refused to be built — the encrypting one reads its keys at boot, so an unusable key ring is reported here rather than by the first row that could not be read |
+| `E063` | `TOKEN_ENCRYPTION_KEYS` is not a collection of strings, or is empty while the configured storage says it needs keys |
+| `E064` | `METRICS_PER_BOT` is not something that reads as a boolean |
 | `E046` | `REQUIRE_CRASH_SAFE` cannot be read as true or false |
 | `E047` | `BROKER` is unusable. Reported whatever `ENABLED` says: it is empty; it names something that is not a broker; it names one that declares no `CALL_TIMEOUT_OPTION` — the option bounding one of its calls, which `W004` quotes and the consumer caps its reads by; or that option holds something the transport refuses, meaning anything but a positive finite number of seconds, and whatever narrower range the transport documents. That last finding stands aside where the option has a rule of its own that is already reporting the value — `REDIS_TIMEOUT` has `E030`, so one value never draws two errors. The name and the deadline are judged before the driver is looked for, so a process that has not installed the extra yet still hears about them. Gated on the bot being enabled, like `W001` and `W002`: the driver behind it is not installed — the hint carries the `pip install` line for that extra — and its own required settings are unset. A process that never reaches a transport is not asked to install a driver, while a name or a deadline is as wrong in the web tier as in the worker |
 | `E048` | `DATABASE_ROUTERS` names any `django_redis_aiogram.` path, which 4.0 renamed. The router we shipped is named against its replacement, `django_aiogram.eventlog.dbrouter.TelegramEventLogRouter`; any other path from that distribution is reported as gone, since this cannot invent a replacement for something it never had |
+| `E050` | `TELEGRAM_BOT` is still set. 5.0 split it into `TELEGRAM_BOT_DEFAULTS` and `TELEGRAM_BOTS`, and nothing reads the old name: every value left in it is ignored, and whatever it configured resolves from the shared defaults, the environment or this package's own defaults instead. A project that kept its token there has none |
+| `E051` | two aliases hold one token, which is one bot under two names: the pair would race for its updates and pace against two budgets |
+| `E052` | `TOKEN` is not a bot token. One reads `<bot id>:<secret>`, and the number before the colon is what identifies the bot — a token with none cannot be told apart from another bot's |
+| `E053` | a bot's section sets a setting the process owns — `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `FSM_STORAGE`, `BOT_PROVIDERS`, `BOT_REFRESH_INTERVAL`, `MAX_BOTS_PER_WORKER`, `BOT_LEASE_SECONDS`, `QUEUES`, `REMOVED_QUEUE_POLICY`, `METRICS_PER_BOT`, `TOKEN_STORAGE`, `TOKEN_ENCRYPTION_KEYS`, `EVENT_LOG` or an `EVENT_LOG_*` one. There is one writer thread, one in-flight list and one handler tree per process, so a per-bot value could only mean whichever bot resolved last wins |
+| `E054` | `TELEGRAM_BOTS` cannot be read: it is not a mapping, an alias is not a name, or a section is not a mapping |
+| `E057` | `QUEUE` is not a string |
+| `E058` | `QUEUES` is not a collection of strings — a list, a tuple or a set, and any other that is not a mapping. A mapping is refused for the reason `E029` gives, and so is a bare string: it is a collection of its characters, so `'vip'` would declare three queues called `v`, `i` and `p` |
+| `E059` | `QUEUE` names a queue neither `QUEUES` nor the `TelegramQueue` table declares. Silent where the table cannot be read at all — unreachable or unmigrated — because `manage.py check` runs in both those states and an outage must not read as a configuration error |
+| `E055` | `MAX_BOTS_PER_WORKER` is not an integer, or is negative. `0` is not: it means as many bots as this process is given |
+| `E056` | `BOT_LEASE_SECONDS` is not a finite number, or is below 1 |
 | `I001` | `WORKER_NAME` is empty **and** the hostname is one Docker generated, so a replacement container gets a different name — which strands whatever the old container was sending. Information rather than a warning because a check cannot tell a consumer from a web process, and every container without `hostname:` matches; `start_tgbot` warns for itself at startup |
 | `I003` | `django_redis_aiogram_event` — the table 3.x wrote to — is still on whichever database the log resolves to, holding rows this release does not read. Information because leaving them there is a legitimate choice and a check cannot tell it from an oversight; always on, because it is what makes `manage.py tgbot_move_events` discoverable. Asked of the log's alias rather than the default, so a project with `EVENT_LOG_DATABASE` set is not the one that hears nothing |
+| `I004` | a `TELEGRAM_BOTS` section is named like a bot identity — all digits. A bot that lives in the `TelegramBot` table is known by its identity written out, so the two share an alias and every message about either names it. The runtime keeps them apart, which is why this is information rather than a warning: rename the section to something a person chose |
 | `I002` | `EVENT_LOG_DATABASE` names an alias and nothing in `DATABASE_ROUTERS` that this check can read sends this app there — a dotted path counts, and so does an instance, but a bare class does not: Django uses a non-string entry as it stands, so its `db_for_read` would be called without one. So a plain `migrate` may not create the table — `migrate --database=<alias>` still would. Information rather than a warning: a router of your own returning that alias is equally correct, and this cannot see inside one |
 | `W005` | the log is on while its database has no engine, so every event is dropped |
 | `W006` | the log is on with `EVENT_LOG_RETENTION_DAYS` at 0, so nothing ever deletes a row |

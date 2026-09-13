@@ -47,10 +47,97 @@ its expiry event — was removed in 3.0: it needed `CONFIG SET notify-keyspace-e
 managed providers refuse, and nothing could be delivered before the TTL elapsed. `E009` names
 both old words against what to write instead.
 
+### Removing a queue
+
+`Broker.discard()` is how a transport removes the queue it addresses, and it is what
+`manage.py tgbot_prune_queues` calls. The shipped transports differ, and the contract says
+so rather than pretending: the Redis list deletes its queue and every worker's in-flight list
+and heartbeat derived from its name, Redis Streams deletes the stream (which takes its group
+and pending entries with it), RabbitMQ deletes the queue on the server, and **Kafka answers
+`False`** — deleting a topic is the cluster's decision and not a producer's. `False` is not a
+failure; the command reports it as a queue somebody has to remove by hand.
+
+A transport of your own inherits `False`, so it is never removed by accident, and
+`removes_queues` is how a caller asks *before* deciding — a dry run has to say what a real run
+would do, and it may not find out by trying.
+
+`discard(if_empty=True)` is the same removal with the emptiness read **in the same step**: the
+Redis transports watch their keys and delete in a transaction, the memory one holds the lock a
+publish would need, and RabbitMQ answers `False` because AMQP's own `if_empty` cannot see
+another container's unacknowledged delivery. A taken-but-unsettled message counts as held
+everywhere: somebody is still sending it.
+
 ### Writing your own
 
 Subclass `Delivery` and implement `run()`. Everything else is provided, and the provided parts
-are the ones that are easy to get wrong:
+are the ones that are easy to get wrong.
+
+**One bot needs nothing more.** A consumer written before 5.0 takes `__init__(self, handler)`
+and still works: with one bot every message is addressed to it or to nobody, and `run()` is
+still the whole contract.
+
+**Serving several bots asks for one more line.** A queued message names the bot it is for --
+where that bot has an identity; one whose token carries none names nobody, and the `handler`
+below is what such a message reaches. Such a bot is queue-only: the providers leave it out, so
+nothing polls it and no webhook path resolves it. The route is what turns the number into the
+right send:
+
+```python
+class RoutingDelivery(Delivery):
+    def __init__(self, handler, route=None):
+        super().__init__(handler, route)
+```
+
+Without it, `manage.py start_tgbot` refuses to build the consumer where more than one bot is
+configured, and says so by name — rather than delivering every addressed message through the
+process's own bot, under a token the producer did not name.
+
+**Serving several queues asks for one more.** A container told `--queues` or `--pools` tells
+each consumer which queue — or which queues — it is for:
+
+```python
+class QueuedDelivery(Delivery):
+    def __init__(self, handler, route=None, settings=None, queues=None):
+        super().__init__(handler, route, settings, queues)
+```
+
+`self.settings` is that queue's resolved settings, and `self.broker` is already built from
+them — so a `run()` written against `self.broker` needs no change. A consumer that takes
+neither argument is refused the same way and for the same shape of reason: it would take every
+message from the process's own queue while the container believes it is serving another.
+
+`queues` is the set read over **one** connection, where the transport can
+(`Broker.MULTIPLEXES`) — see **[Multiple bots](Multiple-bots.md)** for what a set of queues is
+for, and **[Dynamic bots](Dynamic-bots.md)** for where one arrives from mid-run. A `run()` of your own hands it down and counts what comes back:
+
+```python
+asked = self.readable()
+if asked == ():
+    continue  # every queue this consumer serves is at its budget
+taken = self.broker.take(self.read_timeout, asked) if asked else self.broker.take(self.read_timeout)
+if taken is not None and self.dispatch(taken.payload, taken.handle, taken.queue):
+    self.acknowledge(taken.handle)
+```
+
+`readable()` is this consumer's queues minus the ones already at their budget — a bound is per
+queue, so a saturated one stops being read while the rest are — and it has **three** answers,
+none of which may be confused with another:
+
+| it answers | what it means | what to do |
+| --- | --- | --- |
+| `None` | this consumer serves one queue, the one its broker addresses | leave the argument off: a `Broker` written before 5.0 declares `take(self, timeout)`, and one more positional is a `TypeError` out of your own loop |
+| `()` | every queue it serves is at its budget | read nothing and go round again. An empty set means *the queue I address* to all four transports, so passing it down is a read past a budget |
+| a set | those are below their budget | `take(timeout, asked)` |
+
+A `Delivery` also tells its broker which queues it is *for*, through `Broker.serving`, at
+construction and whenever `serve()` moves the set — never on a capacity change. Only Kafka does
+anything with it, and the reason is on its page: a subscription there is group membership.
+
+`Taken.queue` names which queue a message came off, and that is what its send is counted
+against. Whether it is filled is the transport's own answer — the three that read several
+queues fill it always, and a Redis list leaves it empty because there is only ever one queue it
+could be — so a `run()` reads it as *the queue if the transport named one*. `dispatch` does
+exactly that: an empty name is counted under the one queue the consumer serves.
 
 ```python
 from django_aiogram.consumer.delivery import Delivery
@@ -64,6 +151,12 @@ class BatchedDelivery(Delivery):
             self.heartbeat()
             self.collect()  # settle what finished while we blocked
             self.hold_for_capacity()  # MAX_IN_FLIGHT, if the project set one
+            # `dispatch` applies MAX_IN_FLIGHT_PER_BOT itself: a message for a bot at its
+            # budget is held and handed over from `collect`, so a run() of your own needs
+            # nothing for it beyond calling both of these. It also acknowledges only what
+            # `dispatch` says to: a handler that reported through `on_complete` and then
+            # raised has settled its own message, and `dispatch` answers False for it
+
             if self.stopping:  # the gate above releases on shutdown as well as on capacity
                 break
             taken = self.broker.take(self.read_timeout)  # never a number of your own: see below

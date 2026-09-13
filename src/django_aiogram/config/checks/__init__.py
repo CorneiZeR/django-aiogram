@@ -23,17 +23,30 @@ from functools import partial
 from typing import Any
 
 from django.core.checks import CheckMessage
+from django.core.exceptions import ImproperlyConfigured
 
+from django_aiogram.config.bots import defaults_record, records
 from django_aiogram.config.checks.bot import (
     MODE_CHOICES,
     PAYLOAD_CHOICES,
+    QUEUE_POLICY_CHOICES,
     SERIALIZER_CHOICES,
+    _a_declared_queue,
+    _a_lease_a_pass_can_renew,
+    _a_readable_bots_dict,
+    _a_section_named_like_a_bot,
+    _a_token_with_an_identity,
+    _a_usable_token_storage,
     _importable_storage,
+    _keys_for_a_storage_that_needs_them,
     _known_bot_properties,
     _known_update_types,
+    _one_bot_per_token,
     _readable_serializer,
     _sane_rate_limits,
     _serviceable_webhook,
+    _settings_one_process_decides,
+    _the_dict_5_0_replaced,
 )
 from django_aiogram.config.checks.conditions import _redis_is_in_use
 from django_aiogram.config.checks.eventlog import (
@@ -61,12 +74,14 @@ from django_aiogram.config.checks.shapes import (
 )
 from django_aiogram.config.checks.transport import (
     THREE_X_DELIVERIES,
+    _a_bound_on_what_is_held,
     _a_pop_inside_the_deadline,
     _a_url_pickle_can_survive,
     _a_usable_broker,
     _a_usable_delivery,
     _a_worker_that_keeps_its_name,
     _known_keys,
+    _known_section_keys,
     worker_name_problems,
 )
 
@@ -87,7 +102,9 @@ CHECKS: tuple[Check, ...] = (
     Check('E003', 'RAISE_EXCEPTION', _a_readable_boolean),
     Check('E017', 'ALLOW_PICKLE', _a_readable_boolean),
     Check('E049', 'TRANSACTIONAL', _a_readable_boolean),
+    Check('E064', 'METRICS_PER_BOT', _a_readable_boolean, process=True),
     Check('E004', 'TOKEN', _a_string),
+    Check('E052', 'TOKEN', _a_token_with_an_identity),
     Check('E005', 'REDIS_URL', _a_string),
     Check('E006', 'MODULE_NAME', _a_string),
     Check('E007', 'REDIS_MESSAGES_KEY', _a_string),
@@ -132,13 +149,16 @@ CHECKS: tuple[Check, ...] = (
     # reader can act on, not a condition worth failing `check --fail-level WARNING`
     Check('I002', 'EVENT_LOG_DATABASE', _a_routed_log_database),
     # keyed on nothing, because the condition is a table rather than a setting: it is true or
-    # false whatever `TELEGRAM_BOT` says, and the message names the alias it asked
-    Check('I003', '', _a_log_the_rename_left_behind),
+    # false whatever `TELEGRAM_BOT_DEFAULTS` says, and the message names the alias it asked
+    Check('I003', '', _a_log_the_rename_left_behind, process=True),
     Check('E047', 'BROKER', _a_usable_broker),
     Check('E042', 'EVENT_LOG_SYNC', _a_readable_boolean),
     Check('E043', 'REDIS_URL', _a_url_pickle_can_survive),
     Check('E044', 'DRAIN_TIMEOUT', partial(_a_number, minimum=0)),
     Check('E045', 'MAX_IN_FLIGHT', partial(_an_integer, minimum=0)),
+    Check('E060', 'MAX_IN_FLIGHT_PER_BOT', partial(_an_integer, minimum=0)),
+    Check('E061', 'REMOVED_QUEUE_POLICY', partial(_a_string, allowed=QUEUE_POLICY_CHOICES), process=True),
+    Check('W012', 'MAX_IN_FLIGHT_PER_BOT', _a_bound_on_what_is_held),
     Check('E046', 'REQUIRE_CRASH_SAFE', _a_readable_boolean),
     Check('W005', 'EVENT_LOG', _somewhere_to_write_the_log),
     Check('W006', 'EVENT_LOG_RETENTION_DAYS', _a_log_that_is_pruned),
@@ -150,8 +170,29 @@ CHECKS: tuple[Check, ...] = (
     # in processes that own no in-flight list. `start_tgbot` warns for itself, where being
     # the consumer is known
     Check('I001', 'WORKER_NAME', _a_worker_that_keeps_its_name),
-    Check('W003', '', _known_keys),
-    Check('E048', '', _a_router_this_release_still_has),
+    Check('W003', '', _known_keys, process=True),
+    Check('W010', '', _known_section_keys),
+    Check('E048', '', _a_router_this_release_still_has, process=True),
+    # the three rows about the set of bots rather than about any one of them
+    Check('E050', '', _the_dict_5_0_replaced, process=True),
+    Check('E051', '', _one_bot_per_token, process=True),
+    Check('E054', '', _a_readable_bots_dict, process=True),
+    Check('E053', '', _settings_one_process_decides, process=True),
+    # I, not W: the runtime keeps the two apart, so this is a confusion an operator may
+    # decide to live with rather than a failure -- and a warning would fail
+    # `check --fail-level WARNING` for a deployment that works
+    Check('I004', '', _a_section_named_like_a_bot, process=True),
+    # the leases a polling container takes: how many, and for how long
+    # the queue a bot publishes to: a name, and one this deployment has declared
+    Check('E057', 'QUEUE', _a_string),
+    Check('E058', 'QUEUES', _a_collection_of_strings, process=True),
+    # where a token is kept, and what the encrypting storage needs to keep it
+    Check('E062', 'TOKEN_STORAGE', _a_usable_token_storage, process=True),
+    Check('E063', 'TOKEN_ENCRYPTION_KEYS', _keys_for_a_storage_that_needs_them, process=True),
+    Check('E059', 'QUEUE', _a_declared_queue),
+    Check('E055', 'MAX_BOTS_PER_WORKER', partial(_an_integer, minimum=0), process=True),
+    Check('E056', 'BOT_LEASE_SECONDS', partial(_a_number, minimum=1), process=True),
+    Check('W011', 'BOT_LEASE_SECONDS', _a_lease_a_pass_can_renew, process=True),
     Check(
         'W001',
         'TOKEN',
@@ -176,5 +217,20 @@ CHECKS: tuple[Check, ...] = (
 
 
 def check_settings(**kwargs: Any) -> list[CheckMessage]:
-    """Run every registered check and return everything it reported."""
-    return [message for check in CHECKS for message in check.run()]
+    """Run every registered check: once for the process, then once for each configured bot.
+
+    Two passes because a rule guards one of two kinds of setting. A process-scoped one is decided
+    once whatever the deployment runs -- the event log's writer, router discovery -- and reporting
+    it per bot would print the same finding five times. Everything else belongs to a bot, and its
+    finding names the section that holds the value.
+    """
+    process = defaults_record()
+    messages = [message for check in CHECKS if check.per_process for message in check.run(process)]
+    try:
+        configured = records()
+    except ImproperlyConfigured:
+        # `E054` has already reported it, and there are no bots to judge
+        return messages
+    for record in configured:
+        messages += [message for check in CHECKS if not check.per_process for message in check.run(record)]
+    return messages

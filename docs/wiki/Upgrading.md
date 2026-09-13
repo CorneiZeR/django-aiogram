@@ -4,6 +4,123 @@ What each major release changed, newest first — so an upgrade is read from the
 the lowest section that applies to the version you are on and work **up** the page, one release
 at a time: each covers a single hop and assumes the ones below it are done.
 
+# From 4.1 to 5.0
+
+**Two required steps: the migration, and the rename.** Read this whole section before running
+`migrate` — one of its operations is an index on the event log, and on a large feed that is a
+decision rather than a formality.
+
+5.0 adds four tables — profiles, queues, bots and the polling lease — and a column on three
+that already had rows. A project that configures its bots in `settings.py` never writes to any
+of the four, so they stay empty. The replay claim's uniqueness moves from the correlation id
+to the pair with the bot; any claim rows you have are for failures already replayed.
+
+**Which databases.** With `EVENT_LOG_DATABASE` unset, or naming `default`, everything is on one
+and `manage.py migrate` is the whole of it. With it naming another alias, the event log lives
+there and everything else lives on `default` — the router keeps each off the other — so both
+need migrating:
+
+```shell
+python manage.py migrate                        # the tables and the columns
+python manage.py migrate --database=warehouse    # the event log's own column and index
+```
+
+**The index on the feed is the one operation that is not free.** `0007` adds it to
+`django_aiogram_event`, the one table here whose size is set by your traffic. Django builds an
+index without `CONCURRENTLY`, so on PostgreSQL that takes a lock which holds writes to the
+table for as long as the build lasts. Nothing sending is affected: the recorder buffers and
+then drops rather than making a send wait, so the cost is log rows for the duration, not
+messages.
+
+**How large is large is a question about the table, not about the setting.** Turning
+`EVENT_LOG` off stops new rows and removes none of the old ones, so ask the database that
+actually holds the feed — the log alias where you have one:
+
+```shell
+python manage.py dbshell --database=warehouse -- -c 'SELECT count(*) FROM django_aiogram_event'
+```
+
+Nothing here can tell you what that number costs on your database: this package has no
+benchmark to offer and the answer depends on your hardware, your row width and what else the
+table is doing. Decide it against your own maintenance window. If a build you can measure
+fits, take the migration as it comes.
+
+**If it does not**, stop before the index, build it by hand, and only then record it:
+
+```shell
+python manage.py migrate django_aiogram 0006                        # tables and columns
+python manage.py migrate django_aiogram 0006 --database=warehouse    # the feed's column
+```
+
+```sql
+CREATE INDEX CONCURRENTLY dja_event_bot ON django_aiogram_event (bot_id, id DESC);
+```
+
+```shell
+python manage.py migrate django_aiogram 0007 --fake --database=warehouse
+python manage.py migrate                                             # and the rest of them
+```
+
+In that order, and **finish**: `0006` and `0007` are the two this section is about, and there
+are four. `0008` and `0009` are a watermark column on the queue table and the intent columns on
+the bot table — both small, both on `default`, and a deployment that stopped at the index would
+have the admin writing an intent into a column that is not there. Measured: the rehearsal for
+this release stopped exactly where the recipe did. `--fake` records the migration as applied without running it, so a
+`CREATE INDEX CONCURRENTLY` that fails after it leaves the index missing with Django believing
+it exists, and nothing will build it again. A concurrent build that fails also leaves an
+invalid index behind — `DROP INDEX dja_event_bot` and start over.
+
+The name has to match, or the next `makemigrations` will offer to create it again. **Do not
+fake `0006`** to get at this: it carries the four tables and the `bot_id` columns, and a
+deployment that skipped it would refuse every event insert. And where the feed is on a log
+alias, `0007` is faked **there** rather than on `default`, where the event table does not
+exist and the migration is a no-op anyway.
+
+**The rename.** Nothing reads the old
+name, so every value left in it is ignored and whatever it configured falls back to the
+environment or to this package's defaults — a project that kept its token there has none.
+`manage.py check` reports it as `E050` rather than leaving you to find out at the first send.
+
+A project running one bot is then done: the dict it renamed configures a bot called `default`,
+and every setting keeps its meaning and its default.
+
+To run more than one, add a section per bot under `TELEGRAM_BOTS` — see
+**[Settings](Settings.md)**. What a section leaves out it inherits, and `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`, `FSM_STORAGE`, `BOT_PROVIDERS`, `BOT_REFRESH_INTERVAL`, `MAX_BOTS_PER_WORKER`, `BOT_LEASE_SECONDS`, `QUEUES`, `REMOVED_QUEUE_POLICY`, `METRICS_PER_BOT`, `TOKEN_STORAGE`, `TOKEN_ENCRYPTION_KEYS`, `EVENT_LOG` and every `EVENT_LOG_*` one stay shared:
+they configure the process, not a bot, and `E053` refuses a section that names them.
+`ENABLED` is not one of them, so a single bot can still be switched off on its own.
+
+**Either container may be deployed first, while you run one bot.** A queued message now names
+the bot it is for, and that is a field rather than a new envelope version: a 4.1 consumer
+handed a 5.0 payload delivers it through the one bot it has, and a 5.0 consumer handed a 4.1
+payload finds no bot named and does the same. Nothing is lost in either direction.
+
+**Before you add a second bot, every consumer has to be at 5.0.** A 4.1 one cannot read the
+field, so a message queued for the new bot would be delivered through the old one — the wrong
+token, and a chat it may not be in. Nothing raises and nothing is dropped, which is what makes
+this worth doing in order.
+
+**A captured send says which bot made it.** `Sent` carries `bot_id`, added at the end, so
+`sent[0].kwargs` and every attribute you already read are unchanged — but the record is five
+values now, and `function, kwargs, correlation_id, queued_at = sent[0]` raises `ValueError`.
+Read the fields by name. See **[Testing](Testing.md#several-bots)** for `for_bot` and the
+narrowed captures.
+
+**If you ship a `Broker` or a `DELIVERY` of your own**, two shapes moved for the queues a
+container reads over one connection. `Taken` carries `queue` — added at the end, so
+`Taken(payload, handle)` still builds one and `taken.payload` reads as before, but the record
+is three values now and `payload, handle = taken` raises `ValueError`. And `take`,
+`take_nowait` and `reclaim` take a set of queues, defaulting to `None` — the one queue the
+broker addresses, which is every call anything made before this. A broker that leaves
+`MULTIPLEXES` alone is never asked for a set; one that sets it fills `Taken.queue`, or the
+consumer cannot count what it hands back. See **[Delivery](Delivery.md)** for the consumer's
+half.
+
+If you ship a `Broker` of your own, `option`, `call_timeout` and `broker_class` now take the
+settings to read from. Calling them is unchanged — the argument is optional and falls back to
+the shared settings. An **override** is not: `def option(cls, key, settings=None)` and
+`def call_timeout(cls, settings=None)`, each passing `settings` on to `super()`. An override
+that drops it reads the shared settings for every bot, without failing.
+
 # From 4.0 to 4.1
 
 **One required step: run `migrate`.** 4.1 adds two tables, and a project that skips the

@@ -66,7 +66,7 @@ def kinds():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_delivered_send_records_the_id_telegram_gave():
     instance = TelegramBot()
     instance._bot = a_bot(lambda _kwargs: Sent())
@@ -86,7 +86,7 @@ def test_a_delivered_send_records_the_id_telegram_gave():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_failed_send_records_why():
     def explode(_kwargs):
         msg = 'telegram said no'
@@ -107,7 +107,7 @@ def test_a_failed_send_records_why():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_rate_limit_records_the_retry_and_then_the_giving_up():
     attempts = []
 
@@ -135,7 +135,7 @@ def test_a_rate_limit_records_the_retry_and_then_the_giving_up():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_send_refused_at_shutdown_leaves_a_row():
     """Before 3.0 this was a log line and nothing else, so a message lost on
     `docker stop` was invisible to anything but a log search."""
@@ -157,7 +157,7 @@ def test_a_send_refused_at_shutdown_leaves_a_row():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_pacing_figure_measures_the_attempt_that_sent_it():
     """`paced_ms` answers "how long did the rate limiter hold this back".
 
@@ -194,7 +194,7 @@ def test_the_pacing_figure_measures_the_attempt_that_sent_it():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': 'redis://localhost:6379/0'})
 def test_queueing_records_the_id_the_caller_was_given(redis_server):
     instance = TelegramBot()
     identifier = instance.enqueue(chat_id=7, text='hi')
@@ -208,7 +208,7 @@ def test_queueing_records_the_id_the_caller_was_given(redis_server):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': 'redis://localhost:6379/0'})
 def test_the_consumer_records_what_it_took_off_the_queue(redis_server):
     """The row that makes queue latency measurable, and the one that ties the
     two processes together."""
@@ -226,7 +226,7 @@ def test_the_consumer_records_what_it_took_off_the_queue(redis_server):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': 'redis://localhost:6379/0'})
 def test_an_undecodable_payload_is_recorded_by_fingerprint_not_by_content(redis_server):
     """An undecodable payload is untrusted input and may be a pickle, so the
     row holds a hash and a size rather than the bytes."""
@@ -241,7 +241,7 @@ def test_an_undecodable_payload_is_recorded_by_fingerprint_not_by_content(redis_
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': 'redis://localhost:6379/0'})
 def test_a_payload_naming_something_that_is_not_an_api_method_is_recorded(redis_server):
     redis_server.rpush(QUEUE, JsonSerializer().dumps({'function': 'download_file', 'kwargs': {}}))
 
@@ -328,7 +328,7 @@ def test_an_unnamed_task_gets_an_id_rather_than_an_error():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': 'redis://localhost:6379/0'})
 def test_an_envelope_the_reader_cannot_make_sense_of_is_dropped_not_raised(redis_server):
     """A payload that decodes but declares a version no release ever wrote.
 
@@ -350,7 +350,7 @@ def test_an_envelope_the_reader_cannot_make_sense_of_is_dropped_not_raised(redis
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': 'redis://localhost:6379/0'})
 def test_a_queue_that_refuses_the_message_records_the_drop_and_raises(redis_server, monkeypatch):
     """A Redis that refuses the push means the message was never queued, and a
     `queued` row would say the opposite — the one row that must not be written

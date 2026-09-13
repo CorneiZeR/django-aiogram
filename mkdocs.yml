@@ -129,6 +129,9 @@ nav:
       - Handlers: Handlers.md
       - Sending messages: Sending-messages.md
       - Testing: Testing.md
+  - Several bots:
+      - Multiple bots: Multiple-bots.md
+      - Dynamic bots: Dynamic-bots.md
   - Transports:
       - Redis list: Redis-list.md
       - Redis Streams: Redis-Streams.md
@@ -137,7 +140,10 @@ nav:
   - Running it:
       - Delivery: Delivery.md
       - Webhook: Webhook.md
+      - Scaling: Scaling.md
       - Rate limits: Rate-limits.md
+      - Tokens: Tokens.md
+      - Admin: Admin.md
       - Deployment: Deployment.md
       - Logging: Logging.md
       - Event log: Event-log.md

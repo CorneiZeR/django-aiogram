@@ -120,7 +120,7 @@ def a_while_ago(seconds=60):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_an_eta_writes_a_row_and_publishes_nothing(published):
     due = in_a_while()
 
@@ -136,7 +136,7 @@ def test_an_eta_writes_a_row_and_publishes_nothing(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_mover_publishes_a_due_row_and_deletes_it(published):
     TelegramBot().send(chat_id=7, text='now', eta=a_while_ago())
 
@@ -150,7 +150,7 @@ def test_the_mover_publishes_a_due_row_and_deletes_it(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_row_that_is_not_due_is_left_alone(published):
     TelegramBot().send(chat_id=7, text='later', eta=in_a_while())
 
@@ -161,7 +161,7 @@ def test_a_row_that_is_not_due_is_left_alone(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_envelope_is_stamped_with_the_due_time_and_not_the_scheduling_time(published):
     """Otherwise the delivered row reports the whole wait as time spent in the queue.
 
@@ -178,7 +178,7 @@ def test_the_envelope_is_stamped_with_the_due_time_and_not_the_scheduling_time(p
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_row_another_mover_owns_is_not_selected(published):
     """The cheap half of running two movers: a claimed row is filtered out of the query."""
     TelegramBot().send(chat_id=7, text='once', eta=a_while_ago())
@@ -192,7 +192,7 @@ def test_a_row_another_mover_owns_is_not_selected(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_row_claimed_between_the_select_and_the_update_is_not_won_twice(monkeypatch, published):
     """The half the filter cannot cover, which is the whole reason for the update's condition.
 
@@ -225,7 +225,7 @@ def test_a_row_claimed_between_the_select_and_the_update_is_not_won_twice(monkey
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_waiting_send_can_be_called_off(published):
     identifier = TelegramBot().send(chat_id=7, text='never mind', eta=in_a_while())
 
@@ -237,7 +237,7 @@ def test_a_waiting_send_can_be_called_off(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_claimed_send_cannot_be_called_off(published):
     """It is already on its way to the broker, and deleting the row would not stop it."""
     identifier = TelegramBot().send(chat_id=7, text='too late', eta=a_while_ago())
@@ -248,7 +248,7 @@ def test_a_claimed_send_cannot_be_called_off(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_row_past_its_grace_is_dropped_rather_than_sent_late(published):
     """A mover that was down for a day would otherwise deliver a day of stale messages."""
     TelegramBot().send(chat_id=7, text='stale', eta=a_while_ago(3600))
@@ -263,7 +263,7 @@ def test_a_row_past_its_grace_is_dropped_rather_than_sent_late(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_TIMEOUT': 30})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_TIMEOUT': 30})
 def test_a_lease_no_longer_than_a_publish_is_reported(published, caplog):
     """Nothing can fence a call already in flight to another system, so this is arithmetic.
 
@@ -281,7 +281,7 @@ def test_a_lease_no_longer_than_a_publish_is_reported(published, caplog):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_TIMEOUT': 10})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_TIMEOUT': 10})
 def test_a_lease_longer_than_a_publish_says_nothing(published, caplog):
     TelegramBot().send(chat_id=7, text='now', eta=a_while_ago())
 
@@ -292,7 +292,7 @@ def test_a_lease_longer_than_a_publish_says_nothing(published, caplog):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_dry_run_reports_a_lapsed_claim_as_work_it_would_take(published, capsys):
     """The dry run has to ask what a real pass asks, or it understates what one takes."""
     TelegramBot().send(chat_id=7, text='now', eta=a_while_ago())
@@ -305,7 +305,7 @@ def test_a_dry_run_reports_a_lapsed_claim_as_work_it_would_take(published, capsy
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_dry_run_claims_nothing(published):
     TelegramBot().send(chat_id=7, text='now', eta=a_while_ago())
 
@@ -316,7 +316,7 @@ def test_a_dry_run_claims_nothing(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS, USE_TZ=True)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS, USE_TZ=True)
 def test_a_naive_eta_is_refused_rather_than_read_in_the_projects_timezone(published):
     """An hour early is not a value worth guessing at."""
     with pytest.raises(ImproperlyConfigured, match='aware datetime'):
@@ -326,7 +326,7 @@ def test_a_naive_eta_is_refused_rather_than_read_in_the_projects_timezone(publis
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_an_eta_inside_the_bot_container_still_waits(published):
     """`send` there calls Telegram directly, and an `eta` is the one case it must not."""
     instance = TelegramBot()
@@ -341,7 +341,7 @@ def test_an_eta_inside_the_bot_container_still_waits(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'ENABLED': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'ENABLED': False})
 def test_a_disabled_process_writes_no_row_and_still_answers(published):
     identifier = TelegramBot().send(chat_id=7, text='later', eta=in_a_while())
 
@@ -350,7 +350,7 @@ def test_a_disabled_process_writes_no_row_and_still_answers(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'ENABLED': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'ENABLED': False})
 def test_a_disabled_fan_out_does_not_judge_an_eta_it_will_not_use(published):
     """`send` returns before looking at anything; the fan-out was refusing first.
 
@@ -367,14 +367,14 @@ def test_a_disabled_fan_out_does_not_judge_an_eta_it_will_not_use(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'ENABLED': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'ENABLED': False})
 def test_the_mover_refuses_where_nothing_can_be_sent(published):
     with pytest.raises(CommandError, match='disabled'):
         call_command('tgbot_dispatch_scheduled')
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_scheduled_send_rolls_back_with_the_transaction_that_made_it(published):
     """It needs nothing from `TRANSACTIONAL`: the row is the caller's own write."""
     with pytest.raises(RuntimeError):
@@ -385,7 +385,7 @@ def test_a_scheduled_send_rolls_back_with_the_transaction_that_made_it(published
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_scheduling_is_recorded_with_the_time_it_waits_for(published):
     due = in_a_while()
 
@@ -406,11 +406,11 @@ def test_a_broker_that_cannot_be_resolved_claims_nothing(published):
     clears the claims by hand. `enqueue` resolves the broker before it writes for the same
     reason.
     """
-    with override_settings(TELEGRAM_BOT=SETTINGS):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS):
         TelegramBot().send(chat_id=7, text='now', eta=a_while_ago())
 
     with (
-        override_settings(TELEGRAM_BOT={**SETTINGS, 'BROKER': 'tests.db.test_scheduling.NoSuchBroker'}),
+        override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'BROKER': 'tests.db.test_scheduling.NoSuchBroker'}),
         pytest.raises(BrokerNotConfiguredError),
     ):
         call_command('tgbot_dispatch_scheduled')
@@ -419,7 +419,7 @@ def test_a_broker_that_cannot_be_resolved_claims_nothing(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_publish_that_fails_is_counted_and_left_for_its_lease(published):
     """The claim stays so the lease paces the retry, and the attempt is counted."""
     TelegramBot().send(chat_id=7, text='doomed', eta=a_while_ago())
@@ -434,7 +434,7 @@ def test_a_publish_that_fails_is_counted_and_left_for_its_lease(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_row_the_broker_keeps_refusing_is_given_up_on(published):
     """The lease turned "not retried" into "every lease, for ever", which needs a bound.
 
@@ -456,7 +456,7 @@ def test_a_row_the_broker_keeps_refusing_is_given_up_on(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_two_movers_failing_on_one_row_both_count(published):
     """`row.attempts + 1` written twice loses a failure, so the bound arrives late or never.
 
@@ -477,7 +477,7 @@ def test_two_movers_failing_on_one_row_both_count(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_dry_run_survives_a_limit_the_real_pass_would_clamp(published, capsys):
     """The raw value reached a queryset slice, where Django refuses a negative index."""
     TelegramBot().send(chat_id=7, text='now', eta=a_while_ago())
@@ -488,7 +488,7 @@ def test_a_dry_run_survives_a_limit_the_real_pass_would_clamp(published, capsys)
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_max_attempts_of_zero_retries_without_end(published):
     """The escape hatch, for a queue an operator would rather never give up on."""
     TelegramBot().send(chat_id=7, text='doomed', eta=a_while_ago())
@@ -503,7 +503,7 @@ def test_max_attempts_of_zero_retries_without_end(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_scheduled_fan_out_writes_a_row_per_chat(published):
     identifiers = TelegramBot().send_many([1, 2, 3], chunk_size=2, text='digest', eta=a_while_ago())
 
@@ -522,7 +522,7 @@ def test_a_scheduled_fan_out_writes_a_row_per_chat(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_awaiting_producers_can_schedule_at_all(published):
     """`bulk_create` from a coroutine raises `SynchronousOnlyOperation` -- measured.
 
@@ -535,7 +535,7 @@ def test_the_awaiting_producers_can_schedule_at_all(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_awaiting_fan_out_can_schedule_too(published):
     identifiers = asyncio.run(TelegramBot().asend_many([1, 2], chunk_size=1, text='awaited', eta=in_a_while()))
 
@@ -544,7 +544,7 @@ def test_the_awaiting_fan_out_can_schedule_too(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS, USE_TZ=False)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS, USE_TZ=False)
 def test_an_aware_eta_is_refused_where_the_database_would_refuse_it(published):
     """Measured: SQLite answers *does not support timezone-aware datetimes when USE_TZ is
     False*, from inside `bulk_create` -- a long way from the `eta` that caused it."""
@@ -555,7 +555,7 @@ def test_an_aware_eta_is_refused_where_the_database_would_refuse_it(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_stranded_claim_is_taken_back_after_its_lease(published):
     """A mover that died holding a row must not strand the message for ever.
 
@@ -577,7 +577,7 @@ def test_a_stranded_claim_is_taken_back_after_its_lease(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_lease_of_zero_claims_with_no_expiry_at_all(published):
     """The escape hatch for an operator who would rather nothing be re-sent."""
     TelegramBot().send(chat_id=7, text='held', eta=a_while_ago(3600))
@@ -591,7 +591,7 @@ def test_a_lease_of_zero_claims_with_no_expiry_at_all(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_lapsed_claim_can_be_called_off_again(published):
     """`claim` and `cancel` have to read the same fact, or they disagree about one row.
 
@@ -611,7 +611,7 @@ def test_a_lapsed_claim_can_be_called_off_again(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_SYNC': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG_SYNC': False})
 def test_no_event_outlives_the_block_that_rolled_the_schedule_back(published):
     """The rows are the caller's write; the recorder's writer commits on its own.
 
@@ -632,7 +632,7 @@ def test_no_event_outlives_the_block_that_rolled_the_schedule_back(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_SYNC': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG_SYNC': False})
 def test_the_event_does_land_once_the_block_commits(published):
     """The other half: waiting for the commit must not mean waiting for ever."""
     with transaction.atomic():
@@ -644,7 +644,7 @@ def test_the_event_does_land_once_the_block_commits(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_SYNC': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG_SYNC': False})
 def test_no_event_outlives_a_manually_managed_rollback(published):
     """Autocommit off is not an excuse to record a send that never existed.
 
@@ -673,7 +673,7 @@ def test_no_event_outlives_a_manually_managed_rollback(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_SYNC': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG_SYNC': False})
 def test_the_event_lands_when_a_manually_managed_block_commits(published):
     """The other half again: the weaker condition must not swallow the event either."""
     transaction.set_autocommit(False)
@@ -690,7 +690,7 @@ def test_the_event_lands_when_a_manually_managed_block_commits(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_SYNC': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG_SYNC': False})
 def test_no_event_survives_a_rollback_with_no_block_of_the_caller_s_own(published):
     """The case that had no commit hook to wait for, and now has one.
 
@@ -716,7 +716,7 @@ def test_no_event_survives_a_rollback_with_no_block_of_the_caller_s_own(publishe
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'BROKER': 'tests.db.test_scheduling.StealingBroker'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'BROKER': 'tests.db.test_scheduling.StealingBroker'})
 def test_a_mover_that_lost_its_claim_gives_up_on_nothing(published):
     """A publish this mover cannot account for is one it says nothing about.
 
@@ -737,7 +737,7 @@ def test_a_mover_that_lost_its_claim_gives_up_on_nothing(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_mover_that_lost_its_claim_drops_nothing_as_late_either(published):
     """The same condition on the other judgement the mover passes.
 
@@ -758,7 +758,7 @@ def test_a_mover_that_lost_its_claim_drops_nothing_as_late_either(published):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'BROKER': 'tests.db.test_scheduling.CancellingBroker'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'BROKER': 'tests.db.test_scheduling.CancellingBroker'})
 def test_a_cancellation_that_wins_the_race_still_lets_the_message_out(published):
     """The boundary, pinned rather than apologised for.
 
@@ -783,7 +783,7 @@ def test_a_cancellation_that_wins_the_race_still_lets_the_message_out(published)
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_full_batch_of_drops_does_not_send_the_loop_to_sleep(published, monkeypatch):
     """What tells `--loop` there is more waiting is the claim, not the publish.
 
@@ -832,7 +832,7 @@ def test_an_unlimited_retry_count_has_no_column_to_overflow():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_bound_past_the_feed_s_column_still_records_the_give_up(published):
     """`--max-attempts` takes any number, and the event it writes has the narrow column.
 
@@ -854,7 +854,7 @@ def test_a_bound_past_the_feed_s_column_still_records_the_give_up(published):
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(
-    TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_DATABASE': 'default'},
+    TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG_DATABASE': 'default'},
     DATABASE_ROUTERS=['django_aiogram.eventlog.dbrouter.TelegramEventLogRouter'],
 )
 def test_naming_the_default_alias_for_the_log_still_leaves_the_schedule_somewhere(published):
@@ -875,7 +875,7 @@ def test_naming_the_default_alias_for_the_log_still_leaves_the_schedule_somewher
 
 @pytest.mark.django_db(transaction=True, databases=['default', 'logs'])
 @override_settings(
-    TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_DATABASE': 'logs'},
+    TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG_DATABASE': 'logs'},
     DATABASE_ROUTERS=['django_aiogram.eventlog.dbrouter.TelegramEventLogRouter'],
 )
 def test_the_schedule_is_not_created_on_the_log_database(published):

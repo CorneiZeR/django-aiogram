@@ -35,7 +35,7 @@ def prune(**options):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT={'EVENT_LOG': True, 'EVENT_LOG_RETENTION_DAYS': 30})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG': True, 'EVENT_LOG_RETENTION_DAYS': 30})
 def test_only_rows_past_the_window_go():
     old = an_event(days_old=40)
     recent = an_event(days_old=1)
@@ -48,7 +48,7 @@ def test_only_rows_past_the_window_go():
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT={'EVENT_LOG': True, 'EVENT_LOG_RETENTION_DAYS': 30})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG': True, 'EVENT_LOG_RETENTION_DAYS': 30})
 def test_an_unknown_database_alias_is_refused_by_name():
     """`E041` guards the setting; `--database` goes around it.
 
@@ -65,7 +65,7 @@ def test_an_unknown_database_alias_is_refused_by_name():
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT={'EVENT_LOG': True, 'EVENT_LOG_RETENTION_DAYS': 0})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG': True, 'EVENT_LOG_RETENTION_DAYS': 0})
 def test_retention_unset_deletes_nothing():
     """0 means keep for ever, and W006 is what warns about it — a command that
     guessed a window instead would be a data-loss bug."""
@@ -78,7 +78,7 @@ def test_retention_unset_deletes_nothing():
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT={'EVENT_LOG': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG': True})
 def test_dry_run_reports_without_deleting():
     an_event(days_old=40)
 
@@ -89,7 +89,7 @@ def test_dry_run_reports_without_deleting():
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT={'EVENT_LOG': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG': True})
 def test_it_deletes_in_bounded_ranges_not_one_statement():
     """A single unbounded DELETE is the thing this exists to avoid: it holds a
     lock across the whole cold end of the table."""
@@ -107,7 +107,7 @@ def test_it_deletes_in_bounded_ranges_not_one_statement():
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT={'EVENT_LOG': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG': True})
 def test_the_pause_happens_between_chunks_and_not_after_the_last(monkeypatch):
     """`--sleep` is the valve for replica lag, and a valve nothing turns is a
     flag that lies. Patched rather than waited on, so this stays a test about
@@ -123,7 +123,7 @@ def test_the_pause_happens_between_chunks_and_not_after_the_last(monkeypatch):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT={'EVENT_LOG': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG': True})
 def test_max_chunks_bounds_a_nightly_run():
     for _ in range(6):
         an_event(days_old=40)
@@ -135,7 +135,7 @@ def test_max_chunks_bounds_a_nightly_run():
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT={'EVENT_LOG': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG': True})
 def test_nothing_older_than_the_cutoff_is_said_plainly():
     an_event(days_old=1)
 
@@ -146,7 +146,7 @@ def test_nothing_older_than_the_cutoff_is_said_plainly():
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT={'EVENT_LOG': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG': True})
 def test_a_recent_row_inside_the_id_range_survives():
     """The id range is the access path, not the condition.
 
@@ -169,7 +169,7 @@ def test_a_recent_row_inside_the_id_range_survives():
 
 
 @pytest.mark.django_db(databases=['default', 'logs'])
-@override_settings(TELEGRAM_BOT={'EVENT_LOG': True, 'EVENT_LOG_DATABASE': 'logs'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG': True, 'EVENT_LOG_DATABASE': 'logs'})
 def test_it_prunes_the_configured_alias_and_leaves_the_other_alone():
     """Every other test in this file runs against one alias, so a handle() that
     pruned whatever `default` happens to be would pass them all."""
@@ -190,7 +190,7 @@ def test_it_prunes_the_configured_alias_and_leaves_the_other_alone():
 
 
 @pytest.mark.django_db(databases=['default', 'logs'])
-@override_settings(TELEGRAM_BOT={'EVENT_LOG': True, 'EVENT_LOG_DATABASE': 'logs'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG': True, 'EVENT_LOG_DATABASE': 'logs'})
 def test_the_database_flag_wins_over_the_configured_alias():
     """The two put in conflict, which is the only arrangement that pins the
     precedence: with the setting unset, either order picks the same alias."""
@@ -208,7 +208,7 @@ def test_the_database_flag_wins_over_the_configured_alias():
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT={'EVENT_LOG': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG': True})
 def test_each_chunk_gets_its_own_transaction(monkeypatch):
     """Counting the DELETEs is not enough: moving atomic() outside the loop
     would leave the statement count identical and the lock held throughout."""
@@ -233,7 +233,7 @@ def test_each_chunk_gets_its_own_transaction(monkeypatch):
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT={'EVENT_LOG': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG': True})
 def test_a_surviving_low_id_row_does_not_pin_the_walk():
     """`low` was the table's lowest id while the watermark was cutoff-filtered.
 
@@ -255,7 +255,7 @@ def test_a_surviving_low_id_row_does_not_pin_the_walk():
 
 
 @pytest.mark.django_db
-@override_settings(TELEGRAM_BOT={'EVENT_LOG': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG': True})
 def test_a_dry_run_does_not_pace_itself(monkeypatch):
     """The pause is for replicas and autovacuum. A dry run deletes nothing, so
     there is nothing to pace, and a nightly `--dry-run` over a large table slept

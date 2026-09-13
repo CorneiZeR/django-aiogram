@@ -14,7 +14,7 @@ from django_aiogram.wire.serializers import JsonSerializer
 SETTINGS = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'}
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_outside_the_worker_it_queues(redis_server):
     instance = TelegramBot()
     assert instance.is_worker is False
@@ -27,7 +27,7 @@ def test_outside_the_worker_it_queues(redis_server):
     assert queued.kwargs == {'chat_id': 1, 'text': 'hi'}
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_inside_the_worker_it_calls_telegram(redis_server, monkeypatch):
     instance = TelegramBot()
     instance._polling = True
@@ -44,7 +44,7 @@ def test_inside_the_worker_it_calls_telegram(redis_server, monkeypatch):
     assert redis_server.llen('TELEGRAM_BOT_MESSAGE') == 0
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_function_name_is_forwarded(redis_server):
     TelegramBot().send('send_photo', chat_id=1, photo='file_id')
 
@@ -52,7 +52,7 @@ def test_the_function_name_is_forwarded(redis_server):
     assert queued.function == 'send_photo'
 
 
-@override_settings(TELEGRAM_BOT={'ENABLED': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'ENABLED': False})
 def test_disabled_send_is_a_noop(monkeypatch):
     """Neither route may build a bot or reach for a connection."""
 
@@ -68,7 +68,7 @@ def test_disabled_send_is_a_noop(monkeypatch):
     assert instance._bot is None
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_polling_clears_the_worker_flag_even_when_it_fails(monkeypatch):
     instance = TelegramBot()
     seen = []
@@ -87,7 +87,7 @@ def test_polling_clears_the_worker_flag_even_when_it_fails(monkeypatch):
     assert instance.is_worker is False
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_not_a_worker_until_the_loop_is_actually_running(redis_server, monkeypatch):
     """The flag used to be set before run_until_complete, so during startup
     send() chose send_raw against a loop that was not running yet."""
@@ -105,7 +105,7 @@ def test_not_a_worker_until_the_loop_is_actually_running(redis_server, monkeypat
     assert observed == [False], 'is_worker was already true before the loop ran'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_sends_during_startup_are_queued_not_sent_directly(redis_server, monkeypatch):
     """Deterministic stand-in for the startup interval: a send issued while the
     loop has not started must go to Redis, not to a loop-bound send_raw."""
@@ -168,7 +168,7 @@ class RateLimited:
 def a_failing_send(raise_exception, bot=Refusing):
     """Drive one doomed send on the caller's thread and report what reached them."""
     with override_settings(
-        TELEGRAM_BOT={**SETTINGS, 'RAISE_EXCEPTION': raise_exception, 'MAX_RETRIES': 0, 'RATE_LIMIT': None}
+        TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'RAISE_EXCEPTION': raise_exception, 'MAX_RETRIES': 0, 'RATE_LIMIT': None}
     ):
         instance = TelegramBot()
         refusing = bot()
@@ -183,7 +183,7 @@ def a_failing_send(raise_exception, bot=Refusing):
         return refusing.attempts
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_raise_exception_reads_the_word_and_not_its_truthiness():
     """`DJANGO_AIOGRAM_RAISE_EXCEPTION=false` arrives as `'false'`, which is truthy.
 
@@ -195,7 +195,7 @@ def test_raise_exception_reads_the_word_and_not_its_truthiness():
     assert a_failing_send('false'), 'the send never ran, so nothing was proved'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_flag_still_reaches_the_caller_when_it_is_asked_to():
     """The other direction, so the fix cannot be "the flag never fires".
 
@@ -207,7 +207,7 @@ def test_the_flag_still_reaches_the_caller_when_it_is_asked_to():
             a_failing_send(asked)
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_exhausted_retry_path_reads_the_word_too():
     """The second place the flag is read, and the one the tests above cannot reach.
 

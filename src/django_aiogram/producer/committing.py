@@ -67,7 +67,7 @@ def defer(publish: Callable[[], None]) -> bool:
     return True
 
 
-def after_commit(work: Callable[[], None]) -> bool:
+def after_commit(work: Callable[[], None], using: str = DEFAULT_DB_ALIAS) -> bool:
     """Run ``work`` when the caller's transaction commits, or **now** where none can.
 
     ``True`` means it was arranged for later, ``False`` that it has already run. Gated by no
@@ -89,10 +89,16 @@ def after_commit(work: Callable[[], None]) -> bool:
     :func:`~django_aiogram.producer.scheduling.schedule` opens a block of its own precisely so
     that a hook exists to take. It stays because this is a helper about a connection's state
     and not about that one caller.
+
+    ``using`` names the connection whose commit to wait for, and it defaults to the one a send
+    has no opinion about. A caller that *does* -- Django hands a model signal the alias its row
+    was written on -- has to pass it, or the hook waits on a transaction that is not the one
+    holding the row: on `default` while the row is in a block on another alias, which runs the
+    work immediately and would then publish a notice about a row a rollback took away.
     """
-    connection = connections[DEFAULT_DB_ALIAS]
+    connection = connections[using]
     if connection.in_atomic_block:
-        transaction.on_commit(work, using=DEFAULT_DB_ALIAS)
+        transaction.on_commit(work, using=using)
         return True
     if connection.connection is not None and not connection.get_autocommit():
         _mention_manual_transactions()

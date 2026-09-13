@@ -2,7 +2,7 @@
 
 Every value here is frozen: queued payloads carry serialization tags and user
 settings carry delivery, serializer, storage and mode names, so changing a value
-would break in-flight messages and every deployment's ``TELEGRAM_BOT`` block.
+would break in-flight messages and every deployment's ``TELEGRAM_BOT_DEFAULTS`` block.
 The classes subclass ``str`` so that a member is interchangeable with the string
 it names, which is what keeps existing settings and payloads readable as-is.
 """
@@ -33,6 +33,45 @@ class UpdateMode(str, Enum):
 
     POLLING = 'polling'
     WEBHOOK = 'webhook'
+
+
+@unique
+class BotIntent(str, Enum):
+    """What an operator asked to have done to one bot, for something with a loop to do.
+
+    An admin request must not talk to Telegram: a page that called ``getMe`` for five hundred
+    selected bots would hold a request open for five hundred round trips, and a timeout would
+    leave nobody knowing which of them had happened. So the page writes the *intent* and a
+    process that already has an event loop -- and already holds this bot -- carries it out and
+    writes back what it found.
+    """
+
+    #: ask Telegram who this token belongs to. The cheapest way to find out whether a
+    #: credential somebody pasted works at all
+    CHECK = 'check'
+    #: register this bot's webhook, with the URL and secret its settings resolve to
+    SET_WEBHOOK = 'set_webhook'
+    #: unregister it, which is what a bot being switched off needs before Telegram stops
+    #: posting updates at a URL that answers 404
+    DELETE_WEBHOOK = 'delete_webhook'
+
+
+@unique
+class RemovedQueuePolicy(str, Enum):
+    """What becomes of a queue no bot publishes to any more.
+
+    A queue per client is what keeps one client's backlog off another's, and it is also how a
+    deployment leaks: one Redis key, AMQP queue or consumer group per client that ever
+    existed. These are the three answers, and the default is the one that destroys nothing.
+    """
+
+    #: leave it, and report it. An operator decides -- which is right where a client may come
+    #: back, and where the messages in it may still be worth reading
+    PARK = 'park'
+    #: remove it once it is empty, and report it while it is not
+    HOLD = 'hold'
+    #: remove it, with whatever is still in it
+    DROP = 'drop'
 
 
 @unique
@@ -107,6 +146,10 @@ class EventKind(str, Enum):
     FSM_TRANSITION = 'fsm.transition'
     QUEUE_UNDECODABLE = 'queue.undecodable'
     QUEUE_REJECTED = 'queue.rejected'
+    #: written when somebody with `view_telegrambot_token` reveals a bot's credential in the
+    #: admin. Its own kind because "who saw the token" is a question an incident asks, and the
+    #: feed is the only place in this package that can answer it
+    BOT_TOKEN_REVEALED = 'bot.token_revealed'  # noqa: S105 - an event kind, not a credential
     LOG_DROPPED = 'log.dropped'
 
 

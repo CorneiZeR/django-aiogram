@@ -51,13 +51,13 @@ def broker(server, redis_url, version):
     """
     if version < (7, 0):
         pytest.skip(f'the Streams broker needs Redis 7.0 for XINFO GROUPS lag; this is {version}')
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': redis_url}):
         yield RedisStreamsBroker()
 
 
 def test_depth_counts_what_is_waiting(broker, redis_url):
     """The assertion the in-memory server gets wrong, made against a real one."""
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': redis_url}):
         broker.publish([payload(3), payload(4)])
 
         assert broker.depth() == 2, 'two published entries are not two waiting'
@@ -68,7 +68,7 @@ def test_depth_counts_what_is_waiting(broker, redis_url):
 
 def test_the_awaiting_half_publishes_and_counts_the_same(broker, redis_url):
     """`apublish` and `adepth` are a second implementation, so they are asked separately."""
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': redis_url}):
 
         async def on_a_loop():
             await broker.apublish([])
@@ -90,7 +90,7 @@ def test_nothing_is_lost_when_a_consumer_never_comes_back(broker, server, redis_
     process — the entry is delivered and unacknowledged, which is exactly the state a killed
     worker leaves, and what matters is that the two counts still add up to what was sent.
     """
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': redis_url}):
         broker.publish([payload(1), payload(2), payload(3)])
         taken = broker.take_nowait()
 
@@ -108,16 +108,25 @@ def test_a_dead_consumers_work_is_reclaimed_under_any_name(broker, server, redis
     every CI run buys nothing. This is the same move as writing straight into the list
     broker's processing key to represent a worker that died holding a message.
     """
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': redis_url}):
         broker.publish([payload(8)])
         taken = broker.take_nowait()
         assert taken is not None
         server.xclaim(
-            STREAM, GROUP, 'the-worker-that-died', min_idle_time=0, message_ids=[taken.handle], idle=IDLE_PAST_THE_TTL
+            STREAM,
+            GROUP,
+            'the-worker-that-died',
+            min_idle_time=0,
+            # the id out of the handle: this broker settles by `(stream, id)` since it learnt
+            # to read several streams at once, and `XCLAIM` here is asked about one stream
+            message_ids=[taken.handle.identifier],
+            idle=IDLE_PAST_THE_TTL,
         )
 
         # a different process, and deliberately a different consumer name
-        with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url, 'WORKER_NAME': 'a-new-container'}):
+        with override_settings(
+            TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': redis_url, 'WORKER_NAME': 'a-new-container'}
+        ):
             replacement = RedisStreamsBroker()
 
             assert replacement.reclaim() == 1, "the dead consumer's entry was not claimed"
@@ -135,7 +144,7 @@ def test_a_released_message_is_reclaimable_at_once(broker, redis_url):
     what makes setting idle to exactly the threshold enough rather than one millisecond
     short of it.
     """
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': redis_url}):
         broker.publish([payload(9)])
         taken = broker.take_nowait()
         assert taken is not None
@@ -150,7 +159,7 @@ def test_a_released_message_is_reclaimable_at_once(broker, redis_url):
 
 def test_trimming_stops_at_the_oldest_unacknowledged_entry(broker, server, redis_url):
     """The whole reason this broker refuses `MAXLEN`: in-flight work must survive a trim."""
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': redis_url}):
         broker.publish([payload(1), payload(2), payload(3)])
         settled = broker.take_nowait()
         assert settled is not None
@@ -162,7 +171,7 @@ def test_trimming_stops_at_the_oldest_unacknowledged_entry(broker, server, redis
 
         assert server.xlen(STREAM) == 2, 'trimming did not drop the acknowledged entry'
         assert broker.inflight_depth() == 1, 'trimming dropped an unacknowledged entry'
-        assert held.handle in [entry[0] for entry in server.xrange(STREAM)], (
+        assert held.handle.identifier in [entry[0] for entry in server.xrange(STREAM)], (
             'the entry still in flight is no longer in the stream'
         )
 
@@ -173,7 +182,7 @@ def test_deleting_entries_makes_the_count_refuse_rather_than_guess(broker, serve
     Measured: one delete of an undelivered entry turns a lag of 4 into nil, and it stays nil
     for the life of the group. A number here would read as a healthy queue.
     """
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': redis_url}):
         broker.publish([payload(1), payload(2), payload(3)])
         ids = [entry[0] for entry in server.xrange(STREAM)]
 
@@ -195,7 +204,7 @@ def test_a_server_without_lag_refuses_by_name(server, redis_url, version):
     """
     if version >= (7, 0):
         pytest.skip(f'this server has lag; the refusal needs one below 7.0, this is {version}')
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': redis_url}):
         broker = RedisStreamsBroker()
 
         with pytest.raises(StreamServerTooOldError) as refused:

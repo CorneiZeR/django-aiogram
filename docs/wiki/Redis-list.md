@@ -5,7 +5,7 @@ changes its imports and nothing else. A Redis list holds the queue: `RPUSH` to p
 blocking pop to take.
 
 ```python
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'BROKER': 'django_aiogram.broker.redis_list.RedisListBroker',
     'REDIS_URL': 'redis://localhost:6379/0',
 }
@@ -82,6 +82,17 @@ acknowledged one. `scripts/measurements` re-takes it.
 
 Acknowledging is an `LREM`, which scans the in-flight list, so `MAX_IN_FLIGHT` earns its keep
 here more than anywhere: an unbounded list turns draining a backlog into quadratic work.
+
+## One queue per connection, and why
+
+This is the one shipped transport that cannot read several queues at once, and the reason is the
+crash safety: `BLMOVE` takes **one** source, and the move is what puts the message in the
+in-flight list before anything sends it. Reading several keys would mean `BLPOP`, which returns
+the message with nothing recording that this worker holds it.
+
+So a container serving three queues on a list runs three consumers and holds three connections.
+`Deployment.md` says what to do where that cost matters: spread the queues across containers by
+pool, or choose a transport that multiplexes.
 
 ## Where it shows through
 

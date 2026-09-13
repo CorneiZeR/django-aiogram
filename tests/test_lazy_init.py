@@ -60,10 +60,14 @@ def test_bot_name_is_not_shadowed_by_a_module():
 
 
 def test_building_a_bot_is_cheap():
+    from django_aiogram.runtime import process
+
     instance = TelegramBot()
     assert instance._bot is None
-    assert instance._dispatcher is None
     assert instance._loop is None
+    # the dispatcher is the process's since 5.0, so the question is whether *anything* built
+    # one — a bot that built it on construction would pay for the FSM store on every import
+    assert process._dispatcher is None
 
 
 def test_bot_requires_token_only_when_used():
@@ -89,7 +93,11 @@ def test_handlers_register_without_a_token():
     async def handler(message):  # pragma: no cover - never dispatched
         ...
 
-    assert len(instance.router.observers['message'].handlers) == 1
+    # the router is the process's since 5.0 and `django.setup()` has already registered the
+    # fake app's handlers on it, so the question is whether this one arrived — not how many
+    # are there
+    registered = [held.callback for held in instance.router.observers['message'].handlers]
+    assert handler in registered
 
 
 def test_defaults_are_readable():
@@ -98,33 +106,33 @@ def test_defaults_are_readable():
     assert conf['DELIVERY'] == 'django_aiogram.consumer.delivery.BlpopDelivery'
 
 
-@override_settings(TELEGRAM_BOT={'MAX_RETRIES': 3})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'MAX_RETRIES': 3})
 def test_override_settings_is_picked_up():
     assert conf['MAX_RETRIES'] == 3
 
 
 def test_settings_win_over_environment(monkeypatch):
     monkeypatch.setenv('DJANGO_AIOGRAM_MAX_RETRIES', '7')
-    with override_settings(TELEGRAM_BOT={'MAX_RETRIES': 3}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'MAX_RETRIES': 3}):
         assert conf['MAX_RETRIES'] == 3
 
 
 def test_environment_fills_unset_keys(monkeypatch):
     monkeypatch.setenv('DJANGO_AIOGRAM_MAX_RETRIES', '7')
     monkeypatch.setenv('DJANGO_AIOGRAM_TOKEN', '42:from-env')
-    with override_settings(TELEGRAM_BOT={}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={}):
         assert conf['MAX_RETRIES'] == 7
         assert conf['TOKEN'] == '42:from-env'
 
 
 def test_environment_ignores_non_scalar_settings(monkeypatch):
     monkeypatch.setenv('DJANGO_AIOGRAM_DEFAULT_KWARGS', 'nonsense')
-    with override_settings(TELEGRAM_BOT={}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={}):
         assert callable(conf['DEFAULT_KWARGS'])
 
 
 def test_unknown_settings_are_preserved():
-    with override_settings(TELEGRAM_BOT={'CUSTOM': 'kept'}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'CUSTOM': 'kept'}):
         assert conf['CUSTOM'] == 'kept'
 
 
@@ -145,7 +153,7 @@ def test_parse_bool_rejects_ambiguous():
 
 def test_invalid_integer_in_environment_is_reported(monkeypatch):
     monkeypatch.setenv('DJANGO_AIOGRAM_MAX_RETRIES', 'ten')
-    with override_settings(TELEGRAM_BOT={}), pytest.raises(ImproperlyConfigured, match='integer'):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={}), pytest.raises(ImproperlyConfigured, match='integer'):
         _ = conf['MAX_RETRIES']
 
 
@@ -238,7 +246,7 @@ def test_running_the_system_checks_does_not_import_aiogram():
 
         # the positive control: our rules reached this run through Django's registry
         try:
-            with override_settings(TELEGRAM_BOT={'TOKEN': 42}):
+            with override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': 42}):
                 call_command('check')
         except SystemCheckError as refused:
             assert 'django_aiogram.E004' in str(refused), f'someone else refused it: {refused}'
@@ -472,3 +480,29 @@ def test_the_healthcheck_probe_does_not_populate_the_app_registry(tmp_path):
 
     assert control.returncode == 0, control.stderr
     assert marker.exists(), 'the marker never fires, so its absence above proved nothing'
+
+
+def test_a_base_install_never_imports_cryptography():
+    """#122's first acceptance: the extra is a decision, and the default is not it.
+
+    In a subprocess, because this suite installs the extra to test it — the question is
+    whether *using the default storage* reaches the driver, and in-process `sys.modules`
+    cannot answer that once another case has imported it.
+    """
+    script = textwrap.dedent("""
+        import sys
+
+        import django
+
+        django.setup()
+
+        from django_aiogram.tokens import read_token, store_token
+
+        wrapped = store_token('123456:AAaa')
+        assert read_token(wrapped) == '123456:AAaa', wrapped
+        assert 'cryptography' not in {name.split('.')[0] for name in sys.modules}, 'the default reached the driver'
+        print('no crypto ok')
+    """)
+    result = run_python(script, env={'DJANGO_SETTINGS_MODULE': 'tests.settings'})
+    assert result.returncode == 0, result.stderr
+    assert 'no crypto ok' in result.stdout

@@ -160,3 +160,128 @@ def test_every_aiogram_model_is_tagged_with_its_class_name():
         encoded = codec.encode(model)
 
         assert encoded[SerializationTag.MODEL] == type(model).__name__, encoded
+
+
+def test_every_bot_in_a_process_runs_the_one_handler_tree():
+    """Handlers and Multiple-bots both say so, and a project's registrations depend on it.
+
+    The pages tell a reader to register once, on `django_aiogram.bot`, however many bots the
+    project serves -- and to read the bot out of the update where a handler has to know which
+    one it is answering for. Both follow from there being one tree: a decorator on
+    `bots['support']` would put the handler on the same one twice, and a project that believed
+    otherwise would register every handler per bot and answer each message as many times.
+
+    The dispatcher goes with it, and for the reason `runtime.process` gives: a `Router` cannot
+    be attached to two of them, so a dispatcher each would be a handler tree each.
+    """
+    from django.test import override_settings
+
+    defaults = {'FSM_STORAGE': 'memory', 'BROKER': 'django_aiogram.testing.InMemoryBroker'}
+    sections = {'default': {'TOKEN': '111111:AAone'}, 'support': {'TOKEN': '222222:BBtwo'}}
+    with override_settings(TELEGRAM_BOT_DEFAULTS=defaults, TELEGRAM_BOTS=sections):
+        from django_aiogram.runtime.registry import bots
+
+        assert bots['default'].router is bots['support'].router, 'two bots hold two handler trees'
+        assert bots['default'].dispatcher is bots['support'].dispatcher, 'two bots hold two dispatchers'
+
+
+def test_one_persons_state_does_not_cross_between_two_bots():
+    """Handlers says a state belongs to one person talking to one bot, and Multiple-bots why.
+
+    aiogram's default key builder leaves the bot out, and with one store per process that is
+    one key for every bot: measured, `fsm:5:5:state` for both, so somebody using two of them
+    has one conversation and each answers with the other's half of it.
+
+    Asked of **this package's** storage rather than of a key builder the case built, which is
+    the difference between checking our configuration and checking aiogram: the first version
+    of this made its own builder with `with_bot_id=True` and passed with the source set to
+    `False`. Nothing connects -- `from_url` builds a client and waits to be used -- so this
+    needs no server.
+    """
+    from aiogram.fsm.storage.base import StorageKey
+    from django.test import override_settings
+
+    from django_aiogram.producer.from_settings import build_storage
+
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'FSM_STORAGE': 'redis', 'REDIS_URL': 'redis://localhost/0'}):
+        built = build_storage().key_builder
+
+    keys = [built.build(StorageKey(bot_id=identity, chat_id=5, user_id=5), 'state') for identity in (111111, 222222)]
+
+    assert keys[0] != keys[1], f'two bots share one FSM key: {keys[0]}'
+
+
+def test_every_permission_a_page_names_is_one_a_model_declares():
+    """A page telling an operator to grant a permission has to name one that exists.
+
+    `Dynamic-bots.md` named `view_telegramevent_payload` where the token is -- the feed's
+    permission, not the bot's -- which is a grant that would leave the credential exactly as
+    unreadable as before, with nothing saying so. Read from the models rather than listed here,
+    so a permission added tomorrow is covered by the page that documents it.
+    """
+    import re
+
+    from django.apps import apps
+
+    declared = {
+        name for model in apps.get_app_config('django_aiogram').get_models() for name, _label in model._meta.permissions
+    } | {
+        f'{action}_{model._meta.model_name}'
+        for model in apps.get_app_config('django_aiogram').get_models()
+        for action in ('add', 'change', 'delete', 'view')
+    }
+    named = {
+        found
+        for page in (ROOT / 'docs' / 'wiki').glob('*.md')
+        for found in re.findall(r'`((?:add|change|delete|view)_telegram\w+)`', page.read_text(encoding='utf-8'))
+    }
+
+    assert named, 'no page names a permission, so this case is checking nothing'
+    assert named <= declared, f'pages name permissions nothing declares: {sorted(named - declared)}'
+
+
+def test_the_http_session_is_the_processs_whatever_the_profiles_say():
+    """Multiple-bots lists it beside the dispatcher and the store, not beside the transport.
+
+    One module-level session serves every bot, so two bots on different profiles -- different
+    transports, different queues -- still talk to Telegram through the same connector. A page
+    that put it with the profile would have a reader sizing connector limits per group.
+    """
+    from django.test import override_settings
+
+    defaults = {'FSM_STORAGE': 'memory', 'BROKER': 'django_aiogram.testing.InMemoryBroker', 'QUEUES': ('vip',)}
+    sections = {'default': {'TOKEN': '111111:AAone'}, 'apart': {'TOKEN': '222222:BBtwo', 'QUEUE': 'vip'}}
+    with override_settings(TELEGRAM_BOT_DEFAULTS=defaults, TELEGRAM_BOTS=sections):
+        from django_aiogram.runtime.groups import group_for
+        from django_aiogram.runtime.registry import bots
+
+        apart = group_for(bots['apart'].settings) is not group_for(bots['default'].settings)
+
+        assert apart, 'the two bots share a profile, so this case proves nothing'
+        assert bots['default'].bot.session is bots['apart'].bot.session, 'two profiles, two HTTP sessions'
+
+
+def test_a_bot_with_no_identity_sends_but_is_never_served():
+    """Multiple-bots says both halves, and they are easy to confuse.
+
+    It **sends**: the alias resolves, `send` queues, and the message names no bot -- which is
+    what a 4.x payload looks like and what makes the upgrade rolling. It is not **served**: the
+    providers leave it out, so nothing polls it and no webhook path resolves it, there being no
+    number for a route to carry. A page that promised the first without the second would send a
+    reader to look for updates that are never coming.
+    """
+    from django.test import override_settings
+
+    defaults = {'BROKER': 'django_aiogram.testing.InMemoryBroker', 'FSM_STORAGE': 'memory'}
+    sections = {'default': {'TOKEN': '111111:AAone'}, 'nameless': {'TOKEN': 'no-identity-here'}}
+    with override_settings(TELEGRAM_BOT_DEFAULTS=defaults, TELEGRAM_BOTS=sections):
+        from django_aiogram.runtime.providers import desired
+        from django_aiogram.runtime.registry import bots
+        from django_aiogram.testing import capture_sends
+
+        with capture_sends() as sent:
+            bots['nameless'].send(chat_id=1, text='from the anonymous bot')
+
+        assert len(sent) == 1, 'a bot with no identity could not send'
+        assert sent[0].bot_id is None, 'a bot with no identity named one anyway'
+        assert [found.alias for found in desired()] == ['default'], 'a bot with no identity was offered to be served'

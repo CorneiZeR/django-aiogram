@@ -1,5 +1,625 @@
 # Changelog
 
+## 5.0.0 - 2026-09-13
+
+A major, and the one thing it changes for every project is the name of the settings dict. What
+else breaks depends on how far into the package a project reaches:
+
+| what breaks | who meets it | what to do |
+| --- | --- | --- |
+| `TELEGRAM_BOT` is dead; the dict is `TELEGRAM_BOT_DEFAULTS` and a bot is a section under `TELEGRAM_BOTS` | everybody | rename it; `E050` reports the old name, and a project that kept its token there has none |
+| the four tables and three new columns | everybody | `manage.py migrate` -- on both databases where `EVENT_LOG_DATABASE` names one of its own |
+| every consumer must be on 5.0 before a **second** bot sends | a deployment adding one | deploy the bot containers first; one bot is still either order |
+| `Event`, `Sent` and `Taken` each gained a field, at the end | a project unpacking one whole | read the fields by name; construction and indexing are unchanged |
+| `Broker.option`, `call_timeout` and `broker_class` take the settings to read from | a project that **overrides** one | accept the argument and pass it on, or a bot's own settings are silently replaced by the shared ones |
+| `Broker.take`, `take_nowait` and `reclaim` take a set of queues | a project shipping a `Broker` | nothing, unless it opts into `MULTIPLEXES`: the argument defaults to the queue it addresses and is left off where there is one |
+| a `DELIVERY` of your own is told which bot, which queue, and which queues | a project shipping one | take `route`, `settings` and `queues`; it is refused by name where it cannot serve what the container asked for |
+
+**[Upgrading](https://corneizer.github.io/django-aiogram/latest/Upgrading/)** walks the whole
+hop, including the index on the event log that is a decision rather than a formality on a large
+feed.
+
+### Added
+
+- **Four tables, for the bots a project configures at run time rather than in `settings.py`.**
+  `TelegramBotProfile` holds the settings a group of bots shares, `TelegramQueue` a declared
+  queue and the pool that serves it, `TelegramBot` one bot -- its identity, its token, the
+  profile and queue it points at, and whether it is on -- and `TelegramBotLease` is how two
+  containers agree on which of them polls a bot.
+
+  Overrides are sparse and by key presence, the same rule the settings dicts follow: not a
+  column per setting and not `NULL` meaning "inherit", because `RATE_LIMIT: None` is a value
+  and a nullable column cannot say both.
+
+  `TelegramEvent` and `TelegramScheduledSend` gain a `bot_id` column, and the replay claim's
+  uniqueness moves from the correlation id to the pair with the bot: one id can name a message
+  from each of several bots, and the old constraint would have refused the second bot's replay
+  as already handled. That column defaults to `0` rather than being nullable, because a unique
+  index treats two NULLs as distinct on every database this package supports -- so a nullable
+  one would let two runs claim one failure and send the message twice.
+
+  **The token column stores the token as `TOKEN_STORAGE` writes it**, and the shipped default
+  writes it as given: what protects it then is the database's own access control and the
+  `view_telegrambot_token` permission the model declares, which is why that permission exists.
+  A dump of this table is a dump of every bot's credential.
+
+  Nothing reads any of it until a supervisor or the admin is configured, and a project running
+  one bot from `settings.py` writes no row at all. **Run `manage.py migrate`** -- on both databases where
+  `EVENT_LOG_DATABASE` names one of its own, since the feed lives there and everything else
+  does not. The index on the feed is a migration of its own so that a large one can have it
+  built by hand: Django builds an index without `CONCURRENTLY`, and the upgrading page has the
+  order to do it in.
+
+- **Bots can arrive while the process runs.** `BOT_PROVIDERS` names where they come from, in
+  order: the shipped default reads `TELEGRAM_BOTS`, and
+  `django_aiogram.runtime.providers.from_database` reads the `TelegramBot` table — for a
+  project whose clients connect their own bot through its interface. A provider of your own is
+  a callable answering with resolved bots.
+
+  A supervisor brings what is running into line with what is configured, again and again
+  rather than once at startup. **A provider that cannot look has not said there is nothing to
+  serve**: a failed read leaves the running set exactly as it is, because the alternative is a
+  database blinking and taking every bot off the air. One bot that cannot be served is
+  quarantined with a reason and a growing wait, and the pass carries on to the others. A
+  quarantine belongs to the configuration that earned it, so a corrected token is tried on the
+  next pass rather than waiting the wait out.
+
+  **An empty answer has to be said twice**, and for the same reason a failed read is not a
+  removal: a provider that returned twenty bots and now returns none is usually a query that
+  reached the wrong place. The first such read is held, the second is honoured, and a
+  deployment that really removed its last bot converges one interval later. An unchanged
+  table, meanwhile, is answered from what was last read -- one aggregate per table rather than
+  resolving every bot through its profile every few seconds in every container.
+
+  A change made through a project's own interface reaches a running container in about a
+  second: saving one of those rows publishes a notice on the queue, and a consumer that reads
+  it asks the supervisor for a pass. The notice says *read again* rather than carrying the
+  change, so a duplicate costs nothing, a loss costs one `BOT_REFRESH_INTERVAL`, and two of
+  them out of order cannot leave a process serving the wrong bots. A queue that cannot be
+  reached costs the second, never the save.
+
+- **A queue is a bot's setting, and one word for all four transports.** `QUEUE` is the name a
+  bot publishes to and reads from — a Redis list key, a stream, an AMQP queue, a Kafka topic —
+  so isolating a client onto their own queue is said once rather than per transport. Left
+  empty, the transport's own option decides, which is what every 4.x deployment already has.
+
+  Two bots naming different queues resolve to different profiles, so they get a transport
+  each: sharing one, each would take the other's messages off the queue it was addressed to.
+  Two bots on the *same* queue stay one profile even where the transport's own queue option
+  still holds different leftovers, because nothing reads it once `QUEUE` is set -- a split
+  there would be a connection and a consumer each for identical behaviour.
+  That works because a broker is now built **with** the settings it is for -- `Broker.settings`,
+  set by the group -- rather than merely chosen by them and left reading the shared defaults.
+  A transport a project writes needs no change: the constructor still takes nothing.
+
+  `REDIS_URL` follows it: the Redis clients are cached per server rather than per process, so a
+  bot on its own Redis reaches its own — cached for the process, its queue key was right and
+  its data was somewhere else, with nothing reporting it. `get_redis()` and `aget_redis()` take
+  the settings a client is for; both keep working with no argument, which is what every caller
+  outside a transport passes. **A test double that replaces either has to accept it.**
+
+  **One container can consume several of them.** `manage.py start_tgbot --queues default,vip`
+  enumerates them as Celery's `-Q` does, and `--pools vip` selects by the label on a
+  `TelegramQueue` row instead — which enumeration cannot do when clients arrive at run time,
+  since a queue created after the container started is served with no redeploy. No globs: a
+  glob includes a queue by the accident of its name. Both together are a union; neither means
+  the one queue the settings name, which is every deployment before this.
+
+  The set is re-read every `BOT_REFRESH_INTERVAL`, which is what makes a pool worth selecting
+  on: a queue added to one starts being consumed within that interval and one moved out of it
+  stops, with no redeploy. A pass that could not read the table leaves the consumers alone, and
+  one queue that cannot be consumed does not stop the others.
+
+  `MAX_IN_FLIGHT` is applied per queue, so a backlog on one queue is a backlog on one queue: a
+  queue at its bound stops being read from until one of its sends finishes, and the others go
+  on being read.
+
+  **And a bound per bot inside that**, `MAX_IN_FLIGHT_PER_BOT`, because a single bound over a
+  shared queue is what turns one slow client into everybody's outage: their sends fill it and
+  every other bot on that queue waits behind them. A message taken for a bot already at its
+  budget is held by the consumer -- not released, since `release` is a documented no-op on the
+  transport that has an in-flight list and the message would sit there until a restart
+  reclaimed it -- and handed over as soon as that bot has room. It is not acknowledged while
+  it waits, so a crash leaves it where every other in-flight message is. Each held message
+  occupies one of the queue's slots, so `MAX_IN_FLIGHT` bounds how many can wait; `0`, the
+  default, is the single-bound behaviour that shipped before.
+
+  **Both bounds or neither**: with `MAX_IN_FLIGHT` at zero nothing would bound what is held,
+  so a saturated bot would grow the held list and the transport's in-flight state together --
+  and on a Redis list every acknowledgement scans that state. The consumer waits for that bot
+  instead, which is bounded and is the head-of-line blocking the per-bot budget avoids; `W012`
+  is what says the better behaviour is one setting away. A `DELIVERY` of your own is told which queue
+  it serves through a third argument, `settings`, and is refused by name where it takes none
+  and a queue other than the process's own was asked for.
+
+  **Naming a queue means declaring it.** `QUEUES` in the settings, rows in `TelegramQueue`, or
+  both; a name in neither is refused where the transport for it is built and reported at boot
+  as `E059`, because the alternative has no symptom -- a message published to a queue nothing
+  consumes is a send that succeeds and arrives nowhere. A table that could not be *read* --
+  down, or not migrated here -- declares nothing and refuses nothing; no table at all is a
+  different state, where the settings are the whole declaration.
+
+- **The healthcheck answers per queue, and says when a queue has nobody reading it.**
+  `--queue`, repeatable, on both forms of the probe: each named queue is asked through a
+  transport built for it, one line each, and the worst answer decides. A named queue holding
+  messages with **no live consumer fails** -- they are going nowhere and nobody is coming --
+  and an empty one with none **warns**, because a queue declared for a client who has not
+  written yet is waiting rather than broken. That is the signal a multi-queue deployment has
+  no other way to get: a queue nobody serves is silent until somebody notices the messages
+  that never arrived.
+
+  `manage.py tgbot_healthcheck` also names the quarantined bots with the reason a supervisor
+  wrote, without changing the verdict -- a revoked token is fixed by a person, not by a
+  restart. `python -m django_aiogram.healthcheck` does not, and cannot: it reads no models,
+  which is what lets a container probe answer in hundredths of a second rather than paying for
+  `AppConfig.ready()`.
+
+- **A profile digest is the same number in every process.** `manage.py tgbot_bots` prints it so
+  that twenty bots configured alike can be *seen* to be one group, and for a bot naming a
+  `QUEUE` it changed on every run: the digest is hashed from the repr of what the profile
+  holds, and the sentinel standing in for the transport's own queue option was a bare object,
+  whose repr is the address it happens to be at. The grouping itself was right; the number an
+  operator compares between two containers was noise. Found by running the upgrade on a real
+  project.
+
+- **A shutdown closes every bot the process built, not only the one it imported.** Each holds
+  a loop, a runner thread and the sends a drain has to finish, so a container serving several
+  kept the other threads and dropped whatever was still in flight -- and then closed the shared
+  HTTP session on a loop that had never opened it, which is a `RuntimeError` out of the last
+  thing a container does. The session is closed on the loop that owns it now, and a loop still
+  running is left to the bot whose it is. Found by running the upgrade on a real project.
+  Every close in a shutdown is attempted before any failure is raised, too -- bots, consumers,
+  their settlement and the Redis clients a reset drops: the one that refuses used to strand
+  everything behind it, which is what a shutdown exists to release.
+
+- **Several queues over one connection, where the transport can.** A container serving twenty
+  client queues held twenty connections and twenty consumer threads, because a consumer was one
+  queue's. `Broker.MULTIPLEXES` is the capability and each transport answers it: RabbitMQ
+  consumes several queues on one channel, Kafka subscribes to several topics on one consumer,
+  Redis Streams reads several streams in one `XREADGROUP`, and a crash-safe Redis list cannot
+  -- `BLMOVE` takes one source, and the move is what makes it crash-safe -- so there a consumer
+  per queue stays the honest answer.
+
+  Kafka's bookkeeping moved with it: the unsettled and settled offsets, the rewinds, and the
+  handle a message is settled by are keyed by `(topic, partition)` rather than by partition
+  alone, because partition 0 is a different place on every topic. A commit against the wrong
+  one would move an offset on a queue nobody had read -- the settled message coming back and
+  the unsettled one being skipped -- which is asserted by replacing the consumer and reading
+  what comes back, since the in-flight counts cannot see it.
+
+  `Broker.serving(queues)` says which queues a consumer is *for* -- told at construction and
+  when the container's set moves, never on a capacity change -- and three of the four
+  transports need nothing from it. Kafka does: a subscription there is group membership, so
+  following a narrower read would rebalance the group once per backlog; it pauses the
+  partitions of the topics left out instead.
+
+  `Broker.take(timeout, queues)`, `take_nowait(queues)` and `reclaim(queues)` take the set;
+  `None` is the one queue the broker addresses, which is what every caller before this passed
+  and what a `Broker` somebody else wrote still gets. `Taken.queue` names which queue a message
+  came off -- last on the `NamedTuple`, like `Sent.bot_id`, so `Taken(payload, handle)` still
+  builds one and only unpacking both values at once has to change, which the upgrading page
+  says out loud -- because the budget is per queue and a message that cannot say where it came
+  from cannot be counted against one.
+
+  The consumer keeps a count per queue and reads only the queues below their bound, so a
+  saturated client is not read from while everybody else is, and nothing is taken and given
+  back. The queues one consumer reads are a **lane**: those whose settings agree on everything
+  but which queue they name, which is the same arithmetic that decides whether two bots share a
+  transport. Queues that disagree cannot share a connection and get a consumer each. A `DELIVERY` of your own adds `queues=None` to its `__init__` and hands it to
+  `Delivery.__init__`; its `run()` then reads `self.readable()` -- this consumer's queues minus
+  the ones at their bound -- and hands `Taken.queue` to `dispatch`. That answer has three
+  readings and a `run()` has to keep them apart: `None` is one queue and the argument is left
+  **off**, a set is passed, and `()` means every queue is at its budget, so the loop reads
+  nothing and goes round again rather than passing an empty set to a transport that would read
+  it as *the queue I address*. A `DELIVERY` that does not take `queues` at all is refused by
+  name rather than served one queue of several. A queue arriving in a group that is already
+  running is told to that consumer instead of restarting it, so one client connecting does not
+  pause the others.
+
+- **The testing helpers know which bot a send was made through.** Each record carries
+  `bot_id` -- at the end of the `NamedTuple`, so every attribute reads as before and only
+  unpacking all four values at once has to change, which the upgrading page says out loud.
+  `sent.for_bot('support')` reads one bot's sends by alias or by identity, and
+  `capture_sends(bot='support')` or `capture_sends(queue='vip')` narrows the capture itself --
+  every other bot then keeps the transport it was configured with, so one client's sends can be
+  captured while another's keep flowing. `capture_telegram_sends` is the fixture that narrows,
+  and a `TestCase` sets `capture_bot` or `capture_queue` on the class. `use_broker` takes the
+  same `bots=` and `queue=`.
+
+  Asking a narrowed capture about a bot it is not watching raises `NotCapturedError` rather
+  than answering with an empty list: the empty list is what a passing assertion is made of, so
+  a suite that asserted nothing was sent about a bot nobody was capturing would go green for
+  ever. A single-bot suite writes none of this and keeps working unchanged.
+
+- **The commands act on the bots and queues they are told about.** `--bot` on
+  `tgbot_replay`, `tgbot_prune_events` and `tgbot_dispatch_scheduled`, and `--queue` on
+  `tgbot_reclaim`; each defaults to what a single-bot install already had. A replay that swept
+  every client during one client's incident re-sends messages nobody asked about; a mover that
+  claimed another client's row publishes it to their queue from a container nobody asked to do
+  it; a reclaim aimed at the wrong queue takes one client's in-flight messages and puts them on
+  another's. `--queue` on `tgbot_reclaim` refuses a name the declared set does not hold --
+  a typo otherwise reads as an empty in-flight list, which is what a drained queue looks like.
+  A queue table nobody could read declares *unknown* rather than *none*, and a name is
+  permitted there: refusing would block a reclaim during exactly the outage it is needed in.
+  A repeated or empty `--queue` is refused too, rather than silently taking the last one or
+  the process's own queue.
+
+  Two commands take neither, and the reason is the same for both: `tgbot_move_events` copies a
+  4.x feed into the 5.x table and `tgbot_backfill_short_ids` fills a column in it. Both are
+  one-time data migrations over the whole table, and a half-migrated feed is worse than an
+  unmigrated one.
+
+- **Two commands that say what a deployment is actually serving.** `manage.py check` reads
+  settings, and a bot that arrived at run time is a row -- so until now nothing could answer
+  *what will happen* for a deployment whose clients connect themselves.
+
+  `manage.py tgbot_bots` lists every resolved bot with its source, profile digest, queue, mode,
+  switch and lease. The digest is what makes a grouping decision readable: twenty bots
+  configured alike show one digest between them, and a deployment that quietly built twenty
+  groups is paying for twenty transports. `--bot`, `--all` and `--json`; the digest is printed
+  rather than the settings behind it, which hold `REDIS_URL` and its password.
+
+  `manage.py tgbot_queues` lists the declared queues -- from the table and from `QUEUES` --
+  with their pool, depth, in-flight count and how long ago something said it was consuming
+  them, and names the queues holding messages that nobody is reading. `--queue`, `--pool`,
+  `--json`, and `--no-depth` for the form that touches no network. A transport that cannot be
+  reached reads `?` rather than `0`: an unreachable broker is not an empty queue.
+
+- **Every line and every row about a bot says which bot.** `tg_bot_id` is on the send,
+  delivery, quarantine and reconciliation lines -- in `extra`, never interpolated: a value in
+  the message text is still greppable but is not a *field*, so nothing can filter, group or
+  alert on it -- and the identity a send is described by is the one it *went out under*:
+  `Outbound` carries it, so a token rotated while Telegram is answering cannot move a failure
+  to the replacement client. and the feed's
+  `bot_id` column is filled by everything that knew the bot: a send, a queued message, an
+  update, an FSM transition. It has existed since the 5.0 tables and nothing wrote it.
+
+  The feed's changelist gained a **bot** filter, offered from the configured bots and the rows
+  in `TelegramBot` rather than a `SELECT DISTINCT` over a table sized by traffic -- and it
+  still narrows to a client who has *gone*, which is one of the questions a feed is kept for.
+  `bot_id` is a column on the list and on the detail page. It is **not**
+  sortable: the index leading with it is `(bot_id, -id)`, and a header asks for
+  `ORDER BY bot_id DESC, id DESC`, which that cannot serve -- and sorting a feed by bot
+  answers nothing anybody asks, where narrowing to one is the whole point of the filter. A consumed row also carries `detail.queue`, so a
+  container serving several says which one a message came from -- in `detail` rather than a
+  column, because a column here is a migration on the one table sized by traffic and nothing
+  looks for a client's messages by queue.
+
+  **The Prometheus exporter labels by bot only where a project asks.** `METRICS_PER_BOT` is
+  off, so the number of series does not grow with the number of bots: a label per bot is a
+  series per bot *per kind*, and the histogram multiplies that again by its buckets -- a
+  thousand clients counted that way are hundreds of thousands of series. Turned on, every series carries `bot` -- the identity, `unknown` for a row
+  that named none, and `other` past 512 distinct bots in one process: a `queue.rejected` row
+  is written before a message is routed, so its identity is whatever the envelope claimed, and
+  anything able to publish to the queue could otherwise mint a series per message. `E064`
+  reports a value that does not read as a boolean.
+
+- **A token in an error message is redacted even where the deployment never configured it.**
+  The shape the redaction matches was anchored on a word boundary, and the place a token
+  actually appears is the API URL -- `.../bot123456:AA.../sendMessage` -- where there is no
+  boundary between `bot` and the digits. So a message from aiogram went into a feed row intact
+  unless that token was also in the settings, which is where every token used to be. A bot
+  configured in a row had no such second chance.
+
+- **An admin for the bots, their profiles and their queues.** Registered from
+  `AppConfig.ready()` and behind no setting: the container that renders it may send nothing and
+  record nothing, and it is still where the bots the other containers serve are configured.
+
+  **The token field is write-only, and empty means keep** -- so a credential can be rotated by
+  somebody who cannot read the one being replaced. What is rendered is a mask: the identity,
+  which is in every queued message anyway, and eight dots for the half that is a secret. The
+  identity is read off the token rather than typed, and a new one is stored through
+  `TOKEN_STORAGE`.
+
+  **The fieldsets are permission boundaries.** `view_telegrambot_token` follows the precedent
+  `view_telegramevent_payload` set: without it the credentials section is not rendered at all
+  rather than masked, because a section that renders is a section that posts back and a token
+  field left in place is the bot given away. Support staff keep the limits and the switch.
+
+  **A setting a bot decides is a checkbox, not a JSON key somebody has to remember.** Each
+  overridable setting renders as "this bot decides it" plus a value, with what it would inherit
+  and the layer that decides it written beside it -- because `overrides` is sparse by key
+  presence and "inherit" is an answer a person has to be able to give. Values are judged by the
+  package's own check registry, so a page cannot accept what the deployment would refuse to
+  start with.
+
+  The queue picked in the admin is now the queue the bot publishes to: `TelegramBot.queue` is
+  read into `QUEUE` when the row is resolved, below its own overrides. Before this it decided
+  nothing -- routing read the setting and the column was decoration. `TelegramQueue` gained an
+  `updated_at`, and the providers' watermark watches all three tables a resolved bot reads:
+  without it a renamed queue would leave every container publishing to the old name until it
+  restarted. **Run `manage.py migrate`.**
+
+  `WEBHOOK_SECRET` and `REDIS_URL` are credentials too -- one tells Telegram's requests from
+  anybody else's, the other carries the broker's password -- so the page prints `'set'` or
+  `'not set'` and the layer rather than the value, and their pairs are offered only to a user
+  who may see the token. The values are judged as a set, and against the profile the
+  *submission* chose rather than the one the row held: `W004` reads its neighbours to decide
+  whether a `BLPOP_TIMEOUT` will be honoured, so judging one at a time -- or under the old
+  profile -- refuses a configuration that is correct. A bot being added is resolved by the
+  identity in the token being submitted, since a bot's own environment variables are keyed by
+  it.
+
+  Adding a bot needs `view_telegrambot_token`, and the token field is absent from the *form* a
+  user without it gets rather than only from the page: an unrendered section still posts back,
+  and a token accepted from somebody who may not read one is the bot given away.
+
+  **The three actions that would need the network write an intent instead.** *Check the token*,
+  *register the webhook* and *remove the webhook* record what was asked on the row --
+  `TelegramBot.intent` and three columns beside it -- and `manage.py tgbot_intents` (or, once it
+  runs there, a supervisor holding that bot) carries it out and writes one line back. Each is
+  claimed with a compare-and-set, so two containers reading one table cannot both call Telegram
+  for a bot, and an operator asking for something else meanwhile keeps their newer question.
+  The claim is a lease rather than a flag: the asking stays on the row until an answer is
+  written, so a container killed mid-intent loses the work instead of carrying the only record
+  of the request away, and the answer is written only by the claim still held -- a worker that
+  finished after its lease lapsed cannot replace a newer answer. What comes back is redacted
+  the way a feed row is.
+
+  **Reading a token is a deliberate act and a recorded one.** The mask carries a *show it*
+  link to a page of its own, which asks for confirmation and writes `bot.token_revealed` into
+  the feed -- the bot, and who asked -- so a credential is never in a changeform or a
+  screenshot of one by accident, and "who saw this token" has an answer.
+
+  `Event` gained `bot_id`, and the writer fills the column the tables have had since 5.0: a
+  feed that cannot say *whose* bot failed is one a deployment with twenty clients cannot read.
+  Added at the **end** of the dataclass rather than beside `correlation_id` where it belongs by
+  meaning: the class is public, so its positional constructor is too, and a field inserted in
+  the middle rebinds every argument after it.
+
+  **An edit that would strand a backlog is refused**: pointing a bot at another queue while the
+  old one still holds messages leaves them with no consumer, so the page says to drain it
+  first. A queue the transport cannot be reached to read is not a full one, and the edit goes
+  through -- the trade the supervisor makes about a provider it could not read; a transport
+  that cannot be *built* is refused, because then nobody can read that queue at all. The check
+  reads the queue each configuration **resolves to** rather than the picker alone, so a bot
+  whose queue comes from its profile is judged like any other. It is a
+  guard rather than a guarantee: the read and the save are two steps, and closing that would
+  mean a lock across every send in the deployment. The order with no race in it is the one the
+  refusal names -- switch the bot off, let the queue drain, then move it.
+
+  The list is built to be scanned: the pool, the settings each bot overrides and whether
+  anything is serving it, filters over the switch, profile, queue and pool, and **Switch
+  on/off** as actions -- one statement for five hundred clients, and their watermark moves with
+  it so a supervisor picks the change up within a poll. Nothing in a request talks to Telegram,
+  and the changelist asks the same number of queries for five hundred bots as for one. See
+  **[Admin](https://corneizer.github.io/django-aiogram/latest/Admin/)**.
+
+- **A token can be encrypted at rest, and the package does not decide that for you.**
+  `TOKEN_STORAGE` names the class every stored token is written and read through. The default,
+  `django_aiogram.tokens.PlainTokenStorage`, keeps the value as it was given -- the right
+  answer wherever the database is already the trust boundary, and what keeps a base install
+  from importing `cryptography` at all. `django_aiogram.crypto.FernetTokenStorage` behind the
+  new `[crypto]` extra encrypts it.
+
+  Both directions go through the seam -- the providers, the rewrapping command -- so a project
+  that turns it on has no plaintext path left behind. A value the storage did not write comes
+  back as it is, which is what makes turning it on a settings change followed by
+  `manage.py tgbot_rewrap_tokens` rather than an outage.
+
+  `TOKEN_ENCRYPTION_KEYS` lists the keys **newest first**: the first encrypts, all of them
+  decrypt. So a rotation is add the key, deploy, rewrap, drop the old one -- readable at every
+  step. Dropping it before the rewrap is the one order that costs data, and then it costs one
+  bot at a time: an unreadable row is reported and left out, and the other bots keep running.
+  `E062` reports a storage that cannot be built and `E063` an encrypting one with no keys,
+  both at boot. Both settings belong to the process rather than to a bot. See
+  **[Tokens](https://corneizer.github.io/django-aiogram/latest/Tokens/)**.
+
+- **A rate limit per bot.** `RATE_LIMIT` is resolved per bot like every other setting, so a
+  noisy client can be throttled below the shared default and one with paid broadcasting can go
+  above it -- in a `TELEGRAM_BOTS` section or in that bot's row. Telegram meters the token, so
+  the budget is still shared by every object holding one; what is a bot's own is the numbers.
+
+  A change in a row takes effect on the next send rather than at the next restart: the limiter
+  remembers the numbers it was built from and is rebuilt when they move, which `setting_changed`
+  could not do for a value that lives in a row. `RATE_LIMIT: {}` switches pacing off for that
+  bot and the limiter is dropped with it.
+
+  Only the record the numbers came from may rebuild it. Two configurations of one identity --
+  a row and a section holding the same token -- are answered with what that record decided,
+  because a rebuild starts the buckets full and alternating sends would then be paced by
+  nothing at all; a warning names the one that was not used. `RATE_LIMIT: {}` is one of those
+  decisions and is owned like the numbers are, so an owner that switched pacing off leaves the
+  token paced by nothing rather than by whichever record sends next.
+
+  `Rate-limits.md` states the multi-container arithmetic plainly, because the limiter is per
+  process: two containers with one budget send at twice it. Divide the number by the processes
+  that send for that bot, or accept 429 and let the retry absorb it as far as `MAX_RETRIES`
+  reaches -- and the per-bot number is what makes the first of those possible.
+
+- **A webhook per bot, and a pass that keeps Telegram's idea of them in line.** The URL
+  carries the identity -- `path('tg/9c1f2b7a/<int:bot_id>/', telegram_webhook)`, with
+  `WEBHOOK_URL` as the prefix the command appends the identity to -- and each bot has its own
+  `WEBHOOK_SECRET`, in its section or its row. Both halves matter: one URL
+  would leave the update's contents as the only clue about who it is for, and one shared
+  secret would let a leak from one client's bot post as every other. A bot with no secret of
+  its own is refused rather than served under the process's.
+
+  An update naming a bot this deployment does not serve gets a 404 from a **cached** set of
+  identities: a webhook that read the database per request would be a way for a stranger to
+  load it. The cache is held for `BOT_REFRESH_INTERVAL`, and a miss re-reads at most once a
+  second, so a bot registered a moment ago is served without a flood of unknown identities
+  costing a query each.
+
+  `manage.py tgbot_webhook reconcile` asks `getWebhookInfo` what Telegram has and gives each
+  bot this deployment serves the webhook it should have -- the only authority on what Telegram
+  will post to is Telegram. It cannot repair the other direction: deregistering a bot needs
+  that bot's token, so `delete --bot <id>` belongs *before* its row is removed. It paces itself with a jittered `--pause`, so a thousand
+  bots starting at once are not a thousand calls arriving together, and one bot's failure is
+  its own. `--force` applies a rotated secret, which Telegram never reports. `--bot` bounds
+  any of the actions to one bot.
+
+  New page: **Scaling**, which says where polling stops -- the shared session's connector
+  limit is 100 connections and polling holds one per bot, so past a hundred bots a webhook is
+  the answer and between twenty and a hundred the leases are -- and what grows with the bots
+  whatever the mode.
+
+  A bot the providers described follows its row: a rotated token or a new webhook secret
+  reaches the object that is already serving it, so a rotation takes effect on the next pass
+  rather than at the next restart. The object itself is kept -- it holds the loop and the
+  in-flight sends a shutdown drains -- and what it built from the old record is not.
+
+  A row's bot and a settings section of the same name are two bots, and stay two: a section
+  may legally be *named* `123456`, and a bot that resolved its settings by alias would have
+  read that section's token. `I004` reports the collision so it can be renamed.
+
+- **Receiving updates and draining the queue are two jobs, and a container can do one.**
+  `start_tgbot --no-updates` consumes and never calls `getUpdates` -- the shape a webhook
+  deployment's sender pool is -- and `--updates-only` polls and consumes nothing. Both by
+  default, which is what every installation has today.
+
+  Two configurations are refused rather than started, because both leave a container looking
+  alive and doing nothing: the flags together, and `--updates-only` in **webhook mode**, where
+  the updates arrive over HTTP in whatever serves the webhook and consuming the queues was all
+  this process was doing. So `--updates-only` is a polling deployment's flag.
+
+  A receiver has no consumer in it, so nothing writes a heartbeat: `tgbot_healthcheck
+  --no-consumer` (and `python -m django_aiogram.healthcheck --no-consumer`) is how the probe
+  is told that, and without it the probe restarts a container that is doing what it was told.
+  `start_tgbot` warns at startup rather than leaving it to be discovered. The transport is
+  still read either way -- a receiver has to send what its handlers produce. Shutdown stops
+  whatever is running and preserves whichever guarantee the transport gives; splitting the
+  roles changes neither of them.
+
+- **`manage.py tgbot_prune_queues`, for the queues a client leaves behind.** A queue per
+  client keeps one backlog off another's, and it is also how a deployment leaks: the client
+  goes, their bot's row goes, and a Redis key, an AMQP queue or a consumer group stays for
+  ever -- one per client that ever existed. The command finds the queues no bot points at and
+  obeys `REMOVED_QUEUE_POLICY`: `park` (the default) reports and removes nothing, `hold`
+  removes once empty, `drop` removes with whatever is still in it. `--dry-run` and `--queue`
+  bound a run, and a queue a bot still points at is refused rather than skipped -- a bot
+  switched off still counts, because a client paused for a month has not given up their
+  backlog.
+
+  Under `hold` the transport decides emptiness in one step -- the Redis transports watch their
+  keys and delete in a transaction, the memory one holds the lock a publish would need -- and a
+  taken-but-unsettled message counts as held. RabbitMQ refuses `hold` and says why: AMQP's own
+  `if_empty` counts ready messages only, so a queue whose one message is an unacknowledged
+  delivery elsewhere would be deleted with it. The row is locked and its bots re-read in the
+  transaction that deletes, because a client's bot can be pointed at the queue in the seconds
+  since the candidates were chosen.
+
+  A command rather than a signal: removing a queue is destructive, and a `post_delete`
+  receiver in a web request is the wrong place to decide it. `Broker.discard()` is the seam --
+  implemented for the Redis list (with every worker's in-flight list and heartbeat for that
+  queue), Redis Streams and RabbitMQ, and answering `False` on Kafka, where dropping a topic
+  is the cluster's decision rather than a producer's. A transport of your own inherits `False`
+  and is never removed by accident.
+
+- **Two containers over one set of bots split them, and neither polls the other's.**
+  `getUpdates` is exclusive -- two processes calling it for one token get a 409 and half the
+  updates each -- and with bots arriving at run time there is no deploy-time list to divide
+  them by. So a polling process claims a lease per bot: a row, taken by compare-and-set, held
+  under this worker's name and renewed on every pass. `MAX_BOTS_PER_WORKER` bounds how many
+  one container takes, and the bots it is already serving come first, so a new client's bot
+  arriving does not take an existing one off the air.
+
+  Failover is the same mechanism: a container that stops renewing loses its bots to whoever
+  asks next, one `BOT_LEASE_SECONDS` later, and a clean shutdown releases them at once rather
+  than making a client wait that out. A lease another process has taken over is left alone --
+  deleting it would put two pollers on one token, which is the thing being prevented. Leases
+  that cannot be read leave the running set alone, like a provider that could not look.
+
+  Webhook deployments need none of it: an update arrives wherever the request landed.
+
+- **A bot's failure is read for what it was.** 401 means the token is gone, and nothing but a
+  new one brings it back — so it is not retried on a timer, where it would be one doomed
+  request per bot every five minutes for as long as the container runs. 409 means something
+  else is polling those updates, which is what a deploy looks like before the old process
+  exits, and it clears itself on the wait. A 429, a closed socket or a 5xx is the ordinary
+  weather and gets the ordinary backoff.
+
+  The reason and the moment to try again are written on the bot's row, so an admin page
+  answers "why did this client's bot stop" without reading a container's log, and
+  `bot_quarantined` / `bot_recovered` are the signals a project connects to reach the person
+  whose bot it was. A state write a database refused is retried by the next pass rather than
+  lost, because neither end of it is written again otherwise: a bot that recovered is running
+  and unchanged, and a revoked one is held with no clock. A new token clears any of it on the
+  next pass, `revoked` included: the
+  identity is the number in front of the colon, so a rotated token is the same bot with a
+  changed configuration and its queue, its feed history and its pending sends stay.
+
+### Changed
+
+- **`TELEGRAM_BOT` is now `TELEGRAM_BOT_DEFAULTS`, and every bot is a section under
+  `TELEGRAM_BOTS`.** A project running one bot renames the dict and changes nothing else; the
+  bot it configures is called `default`. What a section leaves out is inherited from the
+  defaults, by key presence rather than by a value being non-null -- so `RATE_LIMIT: None`
+  means "this bot has no limits" and not "inherit". `E050` reports the old name rather than
+  leaving it to be read as configuration: the dict is ignored, so whatever a project put
+  there has to move, and a project that put its token there has none.
+
+  A bot is identified by the number in front of the colon in its token, read without asking
+  Telegram. That number is the one thing about a bot that holds still: an alias is a name a
+  project may change and a token is a credential it may rotate, and a rotated token keeps the
+  same identity.
+
+  Settings the process owns rather than a bot -- `AUTODISCOVER`, `MODULE_NAME`, `WORKER_NAME`,
+  `FSM_STORAGE`, `BOT_PROVIDERS`, `BOT_REFRESH_INTERVAL`, `MAX_BOTS_PER_WORKER`,
+  `BOT_LEASE_SECONDS`, `QUEUES`, `REMOVED_QUEUE_POLICY`, `METRICS_PER_BOT`, `TOKEN_STORAGE`, `TOKEN_ENCRYPTION_KEYS`, `EVENT_LOG` and every `EVENT_LOG_*` one -- may not be set per bot. `ENABLED` is not one of
+  them: a bot may be switched off on its own. There is one writer thread and one
+  in-flight list per process, so a per-bot value could only mean whichever bot resolved last
+  wins. `E053` reports the attempt.
+
+- **Bots configured alike share one transport.** What two bots have to agree on before they
+  may share anything is computed from their resolved settings -- the transport and its own
+  options, the consumer named in `DELIVERY`, the serializer, the consumer's numbers -- so twenty bots on one configuration hold
+  one connection between them and one configured differently gets its own. It is computed
+  rather than named: a setting choosing the group would be a second source of truth, and two
+  sections written differently that resolve the same are one configuration.
+
+  What stays a bot's own is its token, its pacing and its aiogram `Bot`, which costs almost
+  nothing. What belongs to the *process* is the dispatcher, the handler tree and the FSM
+  store: a `Router` cannot be attached to two dispatchers, so a dispatcher per bot would make
+  whether your handlers serve a bot depend on whether its transport settings happened to match
+  another's. `FSM_STORAGE` is process-owned for that reason.
+
+  The shipped Redis store now keys on the bot's identity as well as the chat --
+  `DefaultKeyBuilder(with_bot_id=True)`, against aiogram's default of `False`. Measured: with
+  it off, two bots produce the same key for one person, so each answers with the other's state.
+
+  `django_aiogram.bots['support']` is how a project reaches a bot that is not the default, and
+  `bots.by_id(...)` by the identity in its token. `django_aiogram.bot` is `bots['default']` --
+  the same object, since it is what handlers are registered on and what a shutdown closes.
+
+- **A queued message names the bot it is for**, so one queue serves several of them: the
+  producer stamps the number in its own token, and the consumer hands the message to that
+  bot's send. A message for a bot the process does not serve is left *in flight* rather than
+  acknowledged — delivering it through another bot would send it under the wrong token, and
+  acknowledging would destroy a message a correctly configured process can still take.
+
+  A payload whose identity cannot be *read* is refused outright rather than treated as naming
+  none: the no-bot answer means "deliver through this process's own bot", so anything else
+  would let whoever can write to the queue have a message sent under a token they did not
+  name. Absent is not the same as unreadable, and only the first is an upgrade.
+
+  And a consumer serving one bot -- which is handed no routing, since there is nothing to
+  choose between -- still delivers only what is its own. Two such processes can share a queue,
+  so a message naming the other one is left in flight rather than sent under this bot's token.
+
+  **The envelope version did not move for it.** The reader takes the keys it knows and ignores
+  the rest, so a 4.1 consumer handed a 5.0 payload delivers it through the one bot it has, and
+  a 5.0 consumer handed a 4.1 payload finds no bot named and does the same. A bump would have
+  made the rolling upgrade a choice between losing the backlog and stopping the world -- an
+  older envelope is *recorded and acknowledged*, which is to say dropped. The reader now keeps
+  a set of the versions it understands, separate from the one it writes, so the next bump
+  cannot make that mistake either.
+
+  So either container may be deployed first **while the deployment runs one bot**. Adding a
+  second one asks for the consumers to be at 5.0 already: a 4.1 consumer cannot read the field,
+  and would deliver a message queued for the new bot through the old one -- the wrong token,
+  and a chat it may not be in. Nothing raises and nothing is dropped, which is exactly why the
+  order matters.
+
+  New check ids: `E050`-`E054` and `W010`. `W003` now asks the shared dict only, and `W010`
+  asks each section, so one typo is one finding rather than one per bot.
+
+- **`Broker.option`, `Broker.call_timeout` and `broker_class` take the settings to read
+  from.** The argument is optional and falls back to the shared settings, so *calling* any of
+  the three is unchanged. *Overriding* `option` or `call_timeout` is not: the override has to
+  accept the argument and pass it on, or the bot's own settings are silently replaced by the
+  shared ones.
+
 ## 4.1.0 - 2026-09-06
 
 ### Added

@@ -50,6 +50,15 @@ class Queueing:
     #: a deferred publish runs after the caller may have changed a nested value, and the
     #: payload is bytes by then — so a row described later would disagree with the wire
     details: list[dict[str, Any] | None] = field(default_factory=list)
+    #: which bot these messages are for, the same identity the payload carries. Kept here so
+    #: the feed rows can say it: a deployment with twenty clients reads this log to find out
+    #: whose messages were queued or lost, and a column of nulls answers nothing.
+    #:
+    #: **Last, rather than beside the payloads where it belongs by meaning.** A dataclass's
+    #: generated constructor is positional, so a field inserted in the middle rebinds every
+    #: argument after it -- `details` would have become the identity, and the feed would then
+    #: have attributed rows to a list
+    bot_id: int | None = None
 
 
 def _dropped(
@@ -57,6 +66,7 @@ def _dropped(
     messages: list[tuple[uuid.UUID, dict[str, Any]]],
     stage: str,
     error: Exception,
+    bot_id: int | None = None,
 ) -> None:
     """Record every message a failure lost, and where it lost them.
 
@@ -74,6 +84,7 @@ def _dropped(
             Event(
                 kind=EventKind.OUTBOUND_DROPPED.value,
                 correlation_id=identifier,
+                bot_id=bot_id,
                 function=function,
                 chat_id=as_identifier(kwargs.get('chat_id')),
                 error_code=type(error).__name__,
@@ -87,6 +98,7 @@ def serialise(
     function: str,
     messages: list[tuple[uuid.UUID, dict[str, Any]]],
     queued_at: float | None = None,
+    bot_id: int | None = None,
 ) -> Queueing:
     """Turn the calls into payloads, and stamp the moment they were made.
 
@@ -108,6 +120,11 @@ def serialise(
     where the call was written, rather than reading them again from a commit hook that runs
     after the caller has moved on.
 
+    ``bot_id`` is stamped on every payload, so a consumer serving several bots knows which
+    one a message is for. Written where the send was made rather than read at delivery: the
+    producer is the only place that knows, and a scheduled send is serialized hours before
+    anything takes it off the queue.
+
     ``queued_at`` is passed in by exactly one caller, and for a reason worth stating: a
     scheduled send is serialized when it is *scheduled* and published when it comes **due**,
     so stamping it now would report the whole wait as queue latency. Its due time goes in
@@ -122,14 +139,16 @@ def serialise(
     try:
         return Queueing(
             payloads=[
-                serializer.dumps(pack(function, kwargs, identifier, queued_at)) for identifier, kwargs in messages
+                serializer.dumps(pack(function, kwargs, identifier, queued_at, bot_id))
+                for identifier, kwargs in messages
             ],
             messages=messages,
             queued_at=queued_at,
+            bot_id=bot_id,
             details=[describe(kwargs) if described else None for _, kwargs in messages],
         )
     except Exception as error:
-        _dropped(function, messages, 'serialising', error)
+        _dropped(function, messages, 'serialising', error, bot_id)
         raise
 
 
@@ -148,7 +167,7 @@ def publishing(function: str, write: Queueing) -> 'Iterator[Queueing]':
     try:
         yield write
     except Exception as error:
-        _dropped(function, write.messages, 'queueing', error)
+        _dropped(function, write.messages, 'queueing', error, write.bot_id)
         raise
     if not recorder.active:
         # nothing keeps the table and nothing listens, so there is no event to make
@@ -158,6 +177,7 @@ def publishing(function: str, write: Queueing) -> 'Iterator[Queueing]':
             Event(
                 kind=EventKind.OUTBOUND_QUEUED.value,
                 correlation_id=identifier,
+                bot_id=write.bot_id,
                 created_at=write.queued_at,
                 function=function,
                 chat_id=as_identifier(kwargs.get('chat_id')),
@@ -167,7 +187,11 @@ def publishing(function: str, write: Queueing) -> 'Iterator[Queueing]':
 
 
 @contextlib.contextmanager
-def queueing(function: str, messages: list[tuple[uuid.UUID, dict[str, Any]]]) -> 'Iterator[Queueing]':
+def queueing(
+    function: str,
+    messages: list[tuple[uuid.UUID, dict[str, Any]]],
+    bot_id: int | None = None,
+) -> 'Iterator[Queueing]':
     """Everything a queue write does, except the write.
 
     The two halves in one call, for the producer that publishes where it stands. A producer
@@ -175,7 +199,7 @@ def queueing(function: str, messages: list[tuple[uuid.UUID, dict[str, Any]]]) ->
     :func:`~django_aiogram.producer.committing.defer` — because only the second half may
     wait.
     """
-    with publishing(function, serialise(function, messages)) as write:
+    with publishing(function, serialise(function, messages, bot_id=bot_id)) as write:
         yield write
 
 

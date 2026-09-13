@@ -58,7 +58,7 @@ import os
 
 INSTALLED_APPS = [..., 'django_aiogram']
 
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'TOKEN': os.environ.get('TELEGRAM_BOT_TOKEN', ''),
     # unset, BROKER resolves to RedisListBroker; the table above has the other three,
     # and each transport reads its own settings on top of these two
@@ -86,8 +86,8 @@ async def start(message: types.Message) -> None:
 ```
 
 ```python
-# anywhere else in the project
-from django_aiogram import bot
+# anywhere else in the project — `bots['support']` is the second bot, if there is one
+from django_aiogram import bot, bots
 
 bot.send(chat_id=CHAT_ID, text='Order approved')
 ```
@@ -95,6 +95,14 @@ bot.send(chat_id=CHAT_ID, text='Order approved')
 ```shell
 python manage.py start_tgbot
 ```
+
+**More than one bot** is a section each under `TELEGRAM_BOTS`, inheriting the defaults above and
+overriding what it names. One dispatcher and one handler tree serve all of them, bots configured
+alike share the connection and the consumer thread, and a queued message names the bot it is for
+wherever that bot has an identity —
+[Multiple bots](https://corneizer.github.io/django-aiogram/latest/Multiple-bots/). Bots that
+arrive *while it runs* come from a provider, reconciled without a redeploy —
+[Dynamic bots](https://corneizer.github.io/django-aiogram/latest/Dynamic-bots/).
 
 A router module, a call, and one process running the bot. That process gets Django's
 between-requests connection handling without having any requests — every update is bracketed
@@ -120,6 +128,8 @@ the same pull request as the code they describe and published from `master`.
 | [Handlers](https://corneizer.github.io/django-aiogram/latest/Handlers/) | routers, filters, FSM, the async ORM |
 | [Sending messages](https://corneizer.github.io/django-aiogram/latest/Sending-messages/) | routes, keyboards, files, errors |
 | [Testing](https://corneizer.github.io/django-aiogram/latest/Testing/) | your suite without a broker, asserting what was queued |
+| [Multiple bots](https://corneizer.github.io/django-aiogram/latest/Multiple-bots/) | aliases, identities, what a set of bots shares and what it costs |
+| [Dynamic bots](https://corneizer.github.io/django-aiogram/latest/Dynamic-bots/) | bots that arrive while it runs: providers, reconciliation, quarantine, leases |
 | [API](https://corneizer.github.io/django-aiogram/latest/API/) | the instance, its internals, and what stays public |
 | [Delivery](https://corneizer.github.io/django-aiogram/latest/Delivery/) | how queued messages reach Telegram |
 | [Redis list](https://corneizer.github.io/django-aiogram/latest/Redis-list/) | the default transport: what it guarantees, and why the worker's name matters |
@@ -127,7 +137,10 @@ the same pull request as the code they describe and published from `master`.
 | [RabbitMQ](https://corneizer.github.io/django-aiogram/latest/RabbitMQ/) | a broker that tracks its own consumers, and one thread per connection |
 | [Kafka](https://corneizer.github.io/django-aiogram/latest/Kafka/) | offsets settle a prefix, ordering is per partition, a refusal rewinds |
 | [Webhook](https://corneizer.github.io/django-aiogram/latest/Webhook/) | receiving updates over HTTP instead of polling |
+| [Scaling](https://corneizer.github.io/django-aiogram/latest/Scaling/) | where polling stops, why a webhook costs nothing per bot, and what grows with the bots |
 | [Rate limits](https://corneizer.github.io/django-aiogram/latest/Rate-limits/) | staying inside Telegram's published limits |
+| [Tokens](https://corneizer.github.io/django-aiogram/latest/Tokens/) | where a bot's credential is kept, and rotating the key that wraps it |
+| [Admin](https://corneizer.github.io/django-aiogram/latest/Admin/) | configuring bots, profiles and queues, and the permission the token is behind |
 | [Deployment](https://corneizer.github.io/django-aiogram/latest/Deployment/) | compose recipes, healthchecks, per-process opt-out |
 | [Logging](https://corneizer.github.io/django-aiogram/latest/Logging/) | the logger and its structured fields |
 | [Event log](https://corneizer.github.io/django-aiogram/latest/Event-log/) | recording what the bot did to a table, and a signal to count it without one |

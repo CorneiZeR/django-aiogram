@@ -39,7 +39,7 @@ PATHS = ['.Thing', 'nomodule.Thing', 'Thing']
 @pytest.mark.parametrize('path', PATHS, ids=['an empty module part', 'no such module', 'no module at all'])
 def test_a_path_that_cannot_resolve_is_refused_by_this_package(key, resolve, refusal, path):
     """The refusal is the package's own, and it names the setting rather than the import machinery."""
-    with override_settings(TELEGRAM_BOT={**SETTINGS, key: path}), pytest.raises(refusal) as refused:
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, key: path}), pytest.raises(refusal) as refused:
         resolve()
 
     assert key in str(refused.value), f'the refusal does not name {key}: {refused.value}'

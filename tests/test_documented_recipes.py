@@ -40,7 +40,7 @@ def a_message(text):
     )
 
 
-@override_settings(TELEGRAM_BOT={'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/0'})
 def test_the_fakeredis_queue_assertion(monkeypatch):
     """The page tells the reader to patch the broker's client, which is where the write happens.
 
@@ -49,7 +49,7 @@ def test_the_fakeredis_queue_assertion(monkeypatch):
     going through the seam the producer has no such name at all.
     """
     server = fakeredis.FakeRedis()
-    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', lambda: server)
+    monkeypatch.setattr('django_aiogram.broker.redis_list.broker.get_redis', lambda *args, **kwargs: server)
 
     approve({'reviewer': 42})
 
@@ -109,9 +109,19 @@ def test_routing_through_a_dispatcher():
 
 
 def test_a_catch_all_registered_earlier_swallows_the_update():
-    """The ordering caveat on the page — tests/fake_app holds a catch-all."""
+    """The ordering caveat on the page: aiogram stops at the first handler that matches.
+
+    The catch-all is registered here rather than borrowed from `tests/fake_app`, which is
+    where it used to come from. The router is one per process since 5.0, so a fixture app
+    holding an unfiltered handler sits in front of every case in the suite — it is filtered
+    now, and a case about ordering should build the ordering it is about anyway.
+    """
     seen = []
     before = list(bot.router.observers['message'].handlers)
+
+    @bot.message()
+    async def catch_all(message):  # pragma: no cover - it is what takes the update
+        ...
 
     @bot.message(F.text == '/late')
     async def late(message):  # pragma: no cover - the point is that it is not called
@@ -136,13 +146,14 @@ def test_a_catch_all_registered_earlier_swallows_the_update():
         # bot.router is the shared singleton. A handler left registered would
         # answer updates in every test after this one, and a router left
         # attached makes the next include_router() raise
-        observers[:] = [handler for handler in observers if handler.callback is not late]
+        taken = {late, catch_all}
+        observers[:] = [handler for handler in observers if handler.callback not in taken]
         bot.router._parent_router = parent
 
     assert observers == before, 'the recipe left the shared router changed'
 
 
-@override_settings(TELEGRAM_BOT={})
+@override_settings(TELEGRAM_BOT_DEFAULTS={})
 def test_draining_the_queue_without_a_thread(redis_server):
     """Queued by enqueue and read by the consumer, which is the whole path."""
     bot.enqueue(chat_id=42, text='hi')
@@ -158,7 +169,7 @@ def test_draining_the_queue_without_a_thread(redis_server):
     assert redis_server.llen(QUEUE) == 0
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'FSM_STORAGE': 'memory', 'RATE_LIMIT': None})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'FSM_STORAGE': 'memory', 'RATE_LIMIT': None})
 def test_the_capture_recipe_the_page_leads_with():
     """The page's first answer, run as written -- no server, no patching, no settings.
 
@@ -458,6 +469,8 @@ WEBHOOK_REFUSALS = (
     'webhook received an update while the bot is disabled',
     'webhook is not configured to serve updates',
     'webhook received an update while this deployment polls',
+    'webhook cannot resolve the bot the path names',
+    'webhook has no secret to serve this update with',
     'webhook cannot build the bot',
     'webhook refused an update',
 )
@@ -493,7 +506,7 @@ def test_every_reason_the_webhook_refuses_is_catalogued(fragment):
 #: enough to read the count the page states in prose; it is a small number by construction
 NUMBER_WORDS = {'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7}
 
-#: what each of the four 503 branches is called on Webhook.md, where the causes are prose
+#: what each of the 503 branches is called on Webhook.md, where the causes are prose
 #: rather than log lines. Ordered as the view checks them, which is what the page claims.
 #: The third names the exception, because the view catches `ImproperlyConfigured` and a
 #: bad `TOKEN` is only its most common cause
@@ -501,6 +514,8 @@ WEBHOOK_CAUSES = (
     '`ENABLED` is off',
     'cannot be read',
     '`MODE` is not `webhook`',
+    'cannot be resolved',
+    'no `WEBHOOK_SECRET` for it',
     'raised `ImproperlyConfigured`',
     'nothing ran the update',
 )
@@ -622,7 +637,7 @@ def test_the_grace_table_names_a_timeout_every_shipped_transport_declares():
     assert covered == named, f'the row names {sorted(named - covered)}, which no shipped transport declares'
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0'})
 def test_the_grace_table_adds_up_to_the_period_the_page_sells():
     """Three waits and a total, all four of which the reader copies into a compose file.
 

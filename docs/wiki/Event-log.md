@@ -1,7 +1,9 @@
 # Event log
 
-An optional table recording what the bot did: a message queued, delivered,
-retried or dropped, an update received, an FSM transition, a payload refused.
+An optional table recording what each bot did: a message queued, delivered,
+retried or dropped, an update received, an FSM transition, a payload refused. A row names the
+bot it is about **wherever that was known** — see `bot_id` in the table below — so a deployment
+serving twenty clients can answer for one of them.
 It exists to answer the question the structured log cannot once it has rotated —
 *this user says they never got the message; did we send it?*
 
@@ -10,7 +12,7 @@ second a database is the wrong tool and a log shipper is the right one. Below
 that, a table you can query and join against your own models is worth the write.
 
 ```python
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'EVENT_LOG': True,
     # part of turning it on, not an afterthought: nothing on the write path deletes
     # anything, so `W006` warns while this is 0, which is also the default — and a project running
@@ -33,6 +35,7 @@ not the flag is on; nothing reads or writes it until you turn it on.
 | `kind` | which of the kinds below |
 | `function` | the aiogram method, when there is one |
 | `chat_id`, `user_id`, `message_id`, `update_id` | the identifiers Telegram issued |
+| `bot_id` | which bot the row is about, by the number in its token. Filled on every row something knew the bot for — a send, a queued message, an update, an FSM transition, a revealed token — and null where nothing did: an undecodable payload names no bot. Indexed, and the feed's changelist filters by it |
 | `worker` | which container recorded it |
 | `attempt`, `duration_ms` | how many tries, and how long. `attempt` stops counting at 32767, which is its column: a value that does not fit fails the whole batch it travelled in rather than its own row, so the writer saturates it. Only `tgbot_dispatch_scheduled --max-attempts` above that reaches it, and its drop keeps the exact number in `detail.attempts` |
 | `error_code`, `error` | why it failed |
@@ -64,6 +67,7 @@ gives you `sent` rows with no `queued` rows to match. That is not a bug.
 | `fsm.transition` | a chat's state changed |
 | `queue.undecodable` | a payload could not be decoded |
 | `queue.rejected` | a payload named something that is not a Telegram API method |
+| `bot.token_revealed` | somebody with `view_telegrambot_token` read a bot's credential in the admin. Who, and which bot — see **[Admin](Admin.md)** |
 | `log.dropped` | the writer fell behind and lost events — the gap, recorded |
 
 `outbound.dropped` is the one worth reading twice. Four different things end up
@@ -167,7 +171,7 @@ an explicit `correlation_id` per send where you need the states apart.
 got there yet; or the writer dropped the event under pressure, which the section below
 explains and a `log.dropped` row marks; or `EVENT_LOG_RETENTION_DAYS` has pruned it; or —
 the one that looks least like a misconfiguration — **the process that sent the message does
-not record outcomes.** The bot container reads its own `TELEGRAM_BOT`, so one with the log
+not record outcomes.** The bot container reads its own `TELEGRAM_BOT_DEFAULTS`, so one with the log
 off or with a narrower `EVENT_LOG_KINDS` writes no row for a message it delivered perfectly
 well, and the refusal below cannot fire for a configuration this process cannot see.
 
@@ -276,8 +280,37 @@ Two metrics, filled from every batch:
 
 | | |
 | --- | --- |
-| `django_aiogram_events_total{kind}` | every event, by kind — one counter with a label rather than fourteen names to learn |
+| `django_aiogram_events_total{kind}` | every event, by kind — one counter with a label rather than a metric name per kind |
 | `django_aiogram_event_duration_seconds{kind}` | how long the work took, where it was measured: a send's round trip and a handler's run. Seconds, because that is what a dashboard's arithmetic assumes |
+
+**The bot is not a label by default**, and that is load-bearing rather than an omission: a
+label per bot is a series per bot **per kind**, and the histogram multiplies that again by its
+buckets — so a thousand clients are counted in hundreds of thousands of series, which is a
+Prometheus problem rather than a dashboard. Where a deployment wants it and knows the cost:
+
+```python
+TELEGRAM_BOT_DEFAULTS = {'METRICS_PER_BOT': True}
+```
+
+Every series then carries `bot`, holding the identity, or `unknown` for a row that named no
+bot — an undecodable payload does not — so a query can tell the two apart. Read once when the
+exporter is built, because a live metric's label set cannot change under it.
+
+**And the label is bounded**: after 512 distinct bots, a process counts the rest under `other`.
+A `queue.rejected` row is written *before* a message is routed, so its identity is whatever the
+envelope claimed — and anything able to publish to the queue could otherwise mint a series per
+message. The counts stay right either way, and the feed keeps the real identity, because a row
+is not a series.
+
+**The queue is in `detail`, not a column.** A consumed row carries `detail.queue` — which
+queue the message was taken from, for a container serving several — beside the `detail.queue_ms`
+it waited. Not a column of its own and not a filter: a column here is a migration on the one
+table whose size is set by traffic, and nothing looks for a client's messages *by queue*. The
+bot is that dimension, and it has a column, an index and a filter.
+
+The same question per bot is answered by the feed itself, which is indexed by `bot_id` and
+costs nothing per client: `bot.token_revealed`, whose messages were dropped, which client's
+handler raised.
 
 Failures need no metric of their own: `outbound.failed`, `outbound.dropped`, `inbound.failed`
 and the rest are kinds, so `sum(rate(django_aiogram_events_total{kind=~".*failed|.*dropped"}[5m]))`
@@ -506,7 +539,9 @@ serve), and no substring search — the three searchable columns are matched
 exactly, so each uses its index. Sorting is limited to three columns:
 `created_at`, `kind` and `chat_id`. Sortable, not merely indexed: `short_id` has an index too, for
 the exact search, and is deliberately not sortable because ordering messages by a random code
-answers nothing. The other headers are not links, and an `?o=`
+answers nothing. `bot_id` is the same case for a different reason — its index is `(bot_id, -id)`
+and a header asks for `ORDER BY bot_id DESC, id DESC`, which that cannot provide; *narrowing* to
+one bot is the question anybody has, and that is the filter. The other headers are not links, and an `?o=`
 naming one of them — from a bookmark, or a link shared before this restriction — is
 dropped rather than honoured, because ordering the whole table by `worker` is a
 sequential scan and a sort on every page.
@@ -666,7 +701,7 @@ for you.
 ## A separate database
 
 ```python
-TELEGRAM_BOT = {'EVENT_LOG_DATABASE': 'logs'}
+TELEGRAM_BOT_DEFAULTS = {'EVENT_LOG_DATABASE': 'logs'}
 DATABASE_ROUTERS = ['django_aiogram.eventlog.dbrouter.TelegramEventLogRouter', ...]
 ```
 

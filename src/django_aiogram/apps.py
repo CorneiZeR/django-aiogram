@@ -40,6 +40,14 @@ class TelegramBotAppConfig(AppConfig):
 
             register_event_log_admin()
 
+        # not behind `recording` and not behind `enabled`: the bots a deployment serves are
+        # configured from this page, and the process that renders it is a web container that
+        # may send nothing and record nothing. The import chain is admin -> models -> django.db
+        if apps.is_installed('django.contrib.admin'):
+            from django_aiogram.admin_bots import register_bot_admin  # noqa: PLC0415 - as above
+
+            register_bot_admin()
+
         if not (enabled or recording):
             logger.debug('django-aiogram is disabled in this process')
             return
@@ -49,6 +57,15 @@ class TelegramBotAppConfig(AppConfig):
         from django_aiogram.config.checks import check_settings  # noqa: PLC0415 - only when there is a report to make
 
         register(check_settings)
+
+        if enabled:
+            # what makes a bot added through a project's own interface reach a running
+            # container in a second rather than at the next poll. Connected here rather than at
+            # import, and per model rather than for every save in the project: Django checks
+            # for `post_delete` receivers before taking its fast-delete path
+            from django_aiogram.runtime import control  # noqa: PLC0415 - nothing expensive at import
+
+            control.connect()
 
         if enabled and coerce_bool(conf['AUTODISCOVER'], f"{SETTINGS_NAME}['AUTODISCOVER']"):
             from django_aiogram.consumer.routers import autodiscover_tg_routers  # noqa: PLC0415 - only when enabled

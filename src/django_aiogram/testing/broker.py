@@ -10,7 +10,7 @@ takes, acknowledges, releases, reclaims and counts, so the path under test is th
 It is held to the same contract as the four that ship, in ``tests/test_broker_conformance.py``.
 
 **Its state belongs to the instance**, which is what makes it usable at all: the registry
-builds one broker per process and drops it whenever ``TELEGRAM_BOT`` changes, so each
+builds one broker per process and drops it whenever ``TELEGRAM_BOT_DEFAULTS`` changes, so each
 ``override_settings`` block starts from an empty queue rather than from whatever the last test
 left. Nothing here is written down, so nothing survives the process -- which is what
 :attr:`crash_safe` says out loud.
@@ -87,21 +87,26 @@ class InMemoryBroker(Broker):
 
     # ------------------------------------------------------------------ consumer
 
-    def take(self, timeout: float) -> Taken | None:
+    def take(self, timeout: float, queues: 'Sequence[str] | None' = None) -> Taken | None:
         """Take one, waiting up to ``timeout`` seconds for it to arrive.
 
         A real wait rather than an immediate ``None``, because the consumer's loop is built
         around one: a broker that returned at once would spin it at the speed of the CPU and
         make every timing assumption in `Delivery` untestable here.
+
+        One queue: this broker *is* its contents, and its contents belong to the instance, so
+        there is no second queue for it to read. See :attr:`MULTIPLEXES`.
         """
+        self.one_queue(queues)
         deadline = min(float(timeout), self.call_ceiling)
         with self._ready:
             if not self._ready.wait_for(lambda: bool(self._waiting), timeout=max(0.0, deadline)):
                 return None
             return self._issue()
 
-    def take_nowait(self) -> Taken | None:
+    def take_nowait(self, queues: 'Sequence[str] | None' = None) -> Taken | None:
         """Take one if one is there, and answer ``None`` if none is."""
+        self.one_queue(queues)
         with self._ready:
             return self._issue() if self._waiting else None
 
@@ -149,12 +154,13 @@ class InMemoryBroker(Broker):
 
     # ---------------------------------------------------------------- operations
 
-    def reclaim(self) -> int:
+    def reclaim(self, queues: 'Sequence[str] | None' = None) -> int:
         """Put everything this instance holds back on the queue, and say how many.
 
         A number rather than ``None``: this broker keeps its own books, so the question does
         apply -- there is simply nobody else who could answer it.
         """
+        self.one_queue(queues)
         with self._ready:
             count = len(self._inflight)
             for payload in reversed(list(self._inflight.values())):
@@ -163,6 +169,30 @@ class InMemoryBroker(Broker):
             if count:
                 self._ready.notify_all()
             return count
+
+    @property
+    def removes_queues(self) -> bool:
+        """It can: a memory queue is its contents, and it owns them."""
+        return True
+
+    def discard(self, *, if_empty: bool = False) -> bool:
+        """Throw away everything this queue holds, waiting and taken alike.
+
+        A memory queue *is* its contents, so removing it is emptying it -- there is no key to
+        delete and nothing outside this instance to tell. Answering ``True`` is what lets a
+        project's own tests exercise `manage.py tgbot_prune_queues` at all.
+
+        ``if_empty`` is exact here and needs no transaction: the lock this holds is the same
+        one a publish and a take take, so nothing can arrive between the read and the throwing
+        away. **Taken counts as held** -- a message somebody is still sending is not an empty
+        queue, which is the distinction the Redis transports go to a ``WATCH`` for.
+        """
+        with self._ready:
+            if if_empty and (self._waiting or self._inflight):
+                return False
+            self._waiting.clear()
+            self._inflight.clear()
+        return True
 
     def depth(self) -> int:
         """How many are waiting to be taken."""
@@ -207,7 +237,7 @@ class InMemoryBroker(Broker):
     def close(self) -> None:
         """Keep what is queued, since there is nothing to release.
 
-        The registry closes a broker whenever ``TELEGRAM_BOT`` changes, which in a test suite
+        The registry closes a broker whenever ``TELEGRAM_BOT_DEFAULTS`` changes, which in a test suite
         is often and in the middle of things. Dropping the messages there would make a helper
         that reads them after an ``override_settings`` block return an empty list rather than
         what the block queued.

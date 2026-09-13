@@ -50,7 +50,7 @@ def record(identifier, kind, **fields):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_send_and_then_its_outcome_is_the_whole_point():
     """End to end, because every test below builds the rows by hand instead.
 
@@ -97,7 +97,7 @@ def an_album_bot(messages):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_an_album_keeps_every_id_telegram_gave():
     """`send_media_group` answers with a list, so the `message_id` column is empty for it.
 
@@ -121,7 +121,7 @@ def test_an_album_keeps_every_id_telegram_gave():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_call_that_produced_no_message_still_says_it_went_out():
     """`send_chat_action` answers `True`, so there is no id and the entry is what matters."""
     identifier = uuid.uuid4()
@@ -135,7 +135,7 @@ def test_a_call_that_produced_no_message_still_says_it_went_out():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_failed_send_is_told_apart_from_one_nothing_recorded():
     failed, silent = uuid.uuid4(), uuid.uuid4()
     record(failed, EventKind.OUTBOUND_FAILED, error='telegram said no', error_code='RuntimeError', attempt=3)
@@ -148,7 +148,7 @@ def test_a_failed_send_is_told_apart_from_one_nothing_recorded():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 @pytest.mark.parametrize(
     'kind',
     [EventKind.OUTBOUND_QUEUED, EventKind.OUTBOUND_CONSUMED, EventKind.OUTBOUND_RETRIED],
@@ -161,7 +161,7 @@ def test_a_message_still_on_its_way_is_pending(kind):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_sent_row_settles_the_state_whatever_was_written_after_it():
     """A later `retried` belongs to another message under the same id, not to this one.
 
@@ -177,7 +177,7 @@ def test_a_sent_row_settles_the_state_whatever_was_written_after_it():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_several_messages_under_one_id_all_come_back_newest_first():
     """A handler's replies inherit the update's id, so one id can name several messages."""
     identifier = uuid.uuid4()
@@ -191,14 +191,14 @@ def test_several_messages_under_one_id_all_come_back_newest_first():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG': False})
 def test_the_log_being_off_is_a_refusal_rather_than_a_permanent_unknown():
     with pytest.raises(OutcomesUnavailableError, match='EVENT_LOG'):
         outcome(uuid.uuid4())
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_KINDS': ('outbound.queued',)})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG_KINDS': ('outbound.queued',)})
 def test_kinds_that_leave_the_result_out_are_refused_too():
     """The send is recorded and its result is not, so the answer would never arrive."""
     with pytest.raises(OutcomesUnavailableError, match='EVENT_LOG_KINDS'):
@@ -217,14 +217,14 @@ def test_a_kind_an_answer_needs_is_refused_by_name_even_with_the_result_kept(abs
     """
     kept = tuple(kind for kind in REQUIRED_KINDS if kind != absent)
     with (
-        override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_KINDS': kept}),
+        override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG_KINDS': kept}),
         pytest.raises(OutcomesUnavailableError, match=absent),
     ):
         outcome(uuid.uuid4())
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_KINDS': REQUIRED_KINDS})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG_KINDS': REQUIRED_KINDS})
 def test_the_four_kinds_an_answer_needs_are_enough_on_their_own():
     """`consumed` and `retried` are precision, not correctness, so they are not demanded.
 
@@ -238,7 +238,7 @@ def test_the_four_kinds_an_answer_needs_are_enough_on_their_own():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_KINDS': ('outbound.sent',)})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG_KINDS': ('outbound.sent',)})
 def test_the_refusal_names_every_missing_kind_at_once():
     """Four exceptions in turn is four deploys for one mistake."""
     with pytest.raises(OutcomesUnavailableError) as refused:
@@ -249,7 +249,7 @@ def test_the_refusal_names_every_missing_kind_at_once():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_id_may_arrive_as_the_string_a_project_stored():
     identifier = uuid.uuid4()
     record(identifier, EventKind.OUTBOUND_SENT, chat_id=7, message_id=11)
@@ -260,7 +260,7 @@ def test_the_id_may_arrive_as_the_string_a_project_stored():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_awaiting_twin_answers_the_same():
     identifier = uuid.uuid4()
     record(identifier, EventKind.OUTBOUND_SENT, chat_id=7, message_id=11)
@@ -272,7 +272,7 @@ def test_the_awaiting_twin_answers_the_same():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 @pytest.mark.parametrize('reader', ['outcome', 'aoutcome'])
 def test_the_methods_on_the_bot_reach_the_functions_behind_them(reader):
     """Both delegates, driven rather than introspected.
@@ -292,7 +292,7 @@ def test_the_methods_on_the_bot_reach_the_functions_behind_them(reader):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_failure_describes_the_newest_row_that_ended_it():
     """An older `failed` beside a newer terminal drop described the older one.
 
@@ -311,7 +311,7 @@ def test_a_failure_describes_the_newest_row_that_ended_it():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_pending_answer_describes_the_newest_row_too():
     """The same defect facing the other way: a drop that may still land is newer than the
     `queued` row before it, and the attempt count came from the older one."""
@@ -326,7 +326,7 @@ def test_a_pending_answer_describes_the_newest_row_too():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_shared_id_resolves_the_drop_the_way_that_cannot_duplicate_a_message():
     """Two messages under one id, one queued and one direct, both dropped by a shutdown.
 
@@ -344,7 +344,7 @@ def test_a_shared_id_resolves_the_drop_the_way_that_cannot_duplicate_a_message()
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_publish_that_may_still_have_landed_is_pending_and_not_failed():
     """The one drop a caller must not re-send: `queueing` means the write may have applied.
 
@@ -358,7 +358,7 @@ def test_a_publish_that_may_still_have_landed_is_pending_and_not_failed():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 @pytest.mark.parametrize(
     ('fields', 'why'),
     [
@@ -374,7 +374,7 @@ def test_a_drop_the_row_says_is_the_end_is_a_failure(fields, why):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_shutdown_drop_is_pending_for_a_queued_send_and_failed_for_a_direct_one():
     """Same kind, same error code, opposite answers -- and the feed says which.
 
@@ -392,7 +392,7 @@ def test_a_shutdown_drop_is_pending_for_a_queued_send_and_failed_for_a_direct_on
 
 
 @pytest.mark.django_db(transaction=True, databases=['default', 'logs'])
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_DATABASE': 'logs'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG_DATABASE': 'logs'})
 def test_it_reads_the_alias_the_log_is_written_to():
     """Read from `default`, every outcome on a project with a log database of its own is
     `unknown` -- which reads as "not yet" for a message that was delivered."""
@@ -405,7 +405,7 @@ def test_it_reads_the_alias_the_log_is_written_to():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_recorded_instant_comes_back_as_a_datetime():
     """`at` is what a caller compares against its own timestamps, so it is not a float."""
     identifier = uuid.uuid4()

@@ -40,7 +40,7 @@ queued, naming the alternative:
 
 ```text
 FooInputFile cannot be queued. Send a file_id or a URL instead,
-or set TELEGRAM_BOT['SERIALIZER'] to 'pickle' together with
+or set TELEGRAM_BOT_DEFAULTS['SERIALIZER'] to 'pickle' together with
 ALLOW_PICKLE = True, or the reader will refuse what it writes.
 ```
 
@@ -48,7 +48,7 @@ Falling back to pickle takes both keys, and a queue nothing untrusted can write
 to — the reader refuses pickled payloads unless told otherwise:
 
 ```python
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'SERIALIZER': 'pickle',
     'ALLOW_PICKLE': True,
 }
@@ -175,7 +175,7 @@ AMQP queue, a Kafka topic — so this is a trust boundary, not a preference.
 Reading pickled payloads takes one key:
 
 ```python
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'ALLOW_PICKLE': True,
 }
 ```
@@ -184,7 +184,7 @@ Writing them takes both — writing a format the reader refuses would discard
 every message, which is what `E022` reports before deployment:
 
 ```python
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'SERIALIZER': 'pickle',
     'ALLOW_PICKLE': True,
 }

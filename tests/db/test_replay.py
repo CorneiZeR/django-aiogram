@@ -80,7 +80,7 @@ def since(minutes=60):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_failed_send_goes_back_on_the_queue(queued):
     """The whole point: the arguments the feed recorded, queued again."""
     a_failure()
@@ -93,7 +93,7 @@ def test_a_failed_send_goes_back_on_the_queue(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_replay_gets_an_id_of_its_own_joined_to_the_one_it_stands_in_for(queued):
     """Reusing the id would make one message look as though it had been sent twice."""
     original = a_failure()
@@ -110,7 +110,7 @@ def test_a_replay_gets_an_id_of_its_own_joined_to_the_one_it_stands_in_for(queue
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_dry_run_queues_nothing_and_says_what_it_would_have_sent(queued):
     """The look before the leap, for a command whose mistake is a message somebody reads."""
     a_failure()
@@ -126,7 +126,7 @@ def test_a_dry_run_queues_nothing_and_says_what_it_would_have_sent(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_dry_run_predicts_the_live_one(queued):
     """A dry run is read *instead of* the live run, so it has to answer the same.
 
@@ -159,7 +159,7 @@ def test_a_dry_run_predicts_the_live_one(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 @pytest.mark.parametrize(
     ('arguments', 'expected'),
     [
@@ -188,7 +188,7 @@ def test_a_row_that_is_not_what_was_sent_is_refused_by_name(queued, arguments, e
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_body_too_long_to_record_is_refused_end_to_end(queued):
     """The case the local review caught before this shipped, driven through the real producer.
 
@@ -217,7 +217,7 @@ def test_a_body_too_long_to_record_is_refused_end_to_end(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_row_written_before_the_cap_was_marked_is_refused_by_its_length(queued):
     """4.0 wrote the truncation as a prefix and an ellipsis, and those rows are still in the table.
 
@@ -236,7 +236,7 @@ def test_a_row_written_before_the_cap_was_marked_is_refused_by_its_length(queued
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 @pytest.mark.parametrize(
     'arguments',
     [
@@ -257,7 +257,7 @@ def test_a_structure_cut_to_its_cap_is_refused(queued, arguments):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 @pytest.mark.parametrize('shape', ['keys', 'items'], ids=['keys', 'items'])
 def test_a_structure_sitting_at_a_cap_is_refused_however_it_was_written(queued, shape):
     """The loss with no signal: 4.0 cut a mapping to fifty keys and stored fifty keys.
@@ -282,7 +282,7 @@ def test_a_structure_sitting_at_a_cap_is_refused_however_it_was_written(queued, 
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_an_eta_send_replays_from_its_scheduled_row_without_the_due_time(queued):
     """A scheduled send has no queued row of its own until a mover writes one, and that one
     carries no description -- so the arguments are on `outbound.scheduled`, beside `due_at`.
@@ -312,7 +312,7 @@ def test_an_eta_send_replays_from_its_scheduled_row_without_the_due_time(queued)
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_bound_holds(queued):
     """No unbounded replay: a slipped date range must not empty a month into the queue."""
     for _ in range(3):
@@ -324,7 +324,7 @@ def test_the_bound_holds(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_bound_applies_with_nobody_asking_for_it(queued):
     """And the default is the bound, which the case above claimed and never exercised.
 
@@ -350,7 +350,7 @@ def test_the_bound_applies_with_nobody_asking_for_it(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_walk_crosses_its_own_window(queued, monkeypatch):
     """The rows are read in windows, and nothing tested the second one.
 
@@ -372,7 +372,7 @@ def test_the_walk_crosses_its_own_window(queued, monkeypatch):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_selection_narrows_by_window_chat_and_id(queued):
     """Three ways to select, because the operator knows one of them and not the others.
 
@@ -403,7 +403,7 @@ def test_selection_narrows_by_window_chat_and_id(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_both_endings_are_replayed_by_default_because_exhaustion_is_a_drop(queued):
     """The default had to be both kinds, and the reason is not guessable from the names.
 
@@ -425,7 +425,7 @@ def test_both_endings_are_replayed_by_default_because_exhaustion_is_a_drop(queue
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_one_ending_may_be_selected_alone(queued):
     """`--kind` narrows, for an operator who knows which half they are looking at."""
     a_failure(chat_id=1)
@@ -437,7 +437,7 @@ def test_one_ending_may_be_selected_alone(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_send_the_worker_never_acknowledged_is_left_to_the_queue(queued):
     """`NotScheduled` has two callers and they do not mean the same thing.
 
@@ -465,7 +465,7 @@ def test_a_send_the_worker_never_acknowledged_is_left_to_the_queue(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_message_the_deployment_discarded_on_purpose_is_not_a_loss(queued):
     """`--grace` refused it deliberately, and replaying it would be that outage twice.
 
@@ -486,7 +486,7 @@ def test_a_message_the_deployment_discarded_on_purpose_is_not_a_loss(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_retry_is_not_selectable_at_all():
     """`outbound.retried` is not an ending: that message went on to succeed or fail under the
     same id, and replaying it would duplicate whichever it was.
@@ -500,7 +500,7 @@ def test_a_retry_is_not_selectable_at_all():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_credential_redacted_inside_a_body_is_refused(queued):
     """Redaction happens *inside* a string as well as instead of a whole value.
 
@@ -518,7 +518,7 @@ def test_a_credential_redacted_inside_a_body_is_refused(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_body_that_merely_contains_stars_is_refused_too(queued):
     """The cost of the check above, asserted rather than left to be discovered.
 
@@ -537,7 +537,7 @@ def test_a_body_that_merely_contains_stars_is_refused_too(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_feed_that_refuses_the_join_row_outright_does_not_end_the_run(queued, monkeypatch):
     """A total refusal raises where a partial one is counted, and the message has already gone.
 
@@ -565,7 +565,7 @@ def test_a_feed_that_refuses_the_join_row_outright_does_not_end_the_run(queued, 
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(
-    TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_DATABASE': 'logs'},
+    TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG_DATABASE': 'logs'},
     DATABASE_ROUTERS=['django_aiogram.eventlog.dbrouter.TelegramEventLogRouter'],
 )
 def test_the_claim_is_not_created_on_the_log_database():
@@ -584,7 +584,7 @@ def test_the_claim_is_not_created_on_the_log_database():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_window_nobody_bounded_is_refused():
     """A replay of everything ever recorded is not a default."""
     with pytest.raises(CommandError, match='--since is required'):
@@ -592,7 +592,7 @@ def test_a_window_nobody_bounded_is_refused():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG': False})
 def test_a_replay_without_the_log_says_where_it_reads_from():
     """The feed is the only source there is, so an empty report would be a lie about it."""
     with pytest.raises(CommandError, match='EVENT_LOG'):
@@ -600,7 +600,7 @@ def test_a_replay_without_the_log_says_where_it_reads_from():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'ENABLED': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'ENABLED': False})
 def test_a_replay_on_a_disabled_process_refuses_rather_than_reporting_nothing():
     """With `ENABLED` off every send is a no-op that answers with an id, so a run would have
     reported a hundred messages queued and queued none. `--dry-run` still works, because
@@ -614,7 +614,7 @@ def test_a_replay_on_a_disabled_process_refuses_rather_than_reporting_nothing():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_one_row_the_queue_refuses_does_not_take_the_run_down(queued, monkeypatch):
     """A traceback halfway through a hundred replays leaves nobody able to say which half went.
 
@@ -646,7 +646,7 @@ def test_one_row_the_queue_refuses_does_not_take_the_run_down(queued, monkeypatc
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_message_that_was_sent_in_the_end_is_not_replayed(queued):
     """The ending selected is not always the end of the story.
 
@@ -670,7 +670,7 @@ def test_a_message_that_was_sent_in_the_end_is_not_replayed(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_several_endings_for_one_message_replay_it_once(queued):
     """The mover writes an `outbound.dropped` row per failed publish and retries the same row,
     so one lost message can have a column of endings -- and one message is what should go.
@@ -695,7 +695,7 @@ def test_several_endings_for_one_message_replay_it_once(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_bounded_run_repeated_walks_the_incident_rather_than_the_first_page(queued):
     """`--limit` counts replays, not rows examined, which is the difference between a bound
     and a wall.
@@ -724,7 +724,7 @@ def test_a_bounded_run_repeated_walks_the_incident_rather_than_the_first_page(qu
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_what_needs_nothing_is_counted_apart_from_what_cannot_be_replayed(queued):
     """An operator reads the two differently, so the report does not add them up.
 
@@ -751,7 +751,7 @@ def test_what_needs_nothing_is_counted_apart_from_what_cannot_be_replayed(queued
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_failure_another_run_holds_is_left_to_it(queued, monkeypatch):
     """The claim decides the race now, rather than narrowing it.
 
@@ -785,7 +785,7 @@ def test_a_failure_another_run_holds_is_left_to_it(queued, monkeypatch):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_claim_taken_over_mid_queue_does_not_take_the_run_down(queued, monkeypatch, caplog):
     """A queue write slower than `--claim-lease` loses the row it is holding.
 
@@ -822,7 +822,7 @@ def test_a_claim_taken_over_mid_queue_does_not_take_the_run_down(queued, monkeyp
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_claim_that_finished_while_being_read_is_not_taken_over(queued, monkeypatch):
     """The takeover is a delete, so the delete has to be the transition -- not the read before it.
 
@@ -850,7 +850,7 @@ def test_a_claim_that_finished_while_being_read_is_not_taken_over(queued, monkey
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_losing_the_insert_to_a_claim_that_is_then_gone_is_retried(queued, monkeypatch):
     """The constraint refuses the second insert; by the read after it, the row may not be there.
 
@@ -880,7 +880,7 @@ def test_losing_the_insert_to_a_claim_that_is_then_gone_is_retried(queued, monke
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_row_two_runs_keep_taking_from_each_other_is_left_for_the_next_run(queued, monkeypatch):
     """Retrying is bounded, and what it gives up with is not `already replayed`.
 
@@ -904,7 +904,7 @@ def test_a_row_two_runs_keep_taking_from_each_other_is_left_for_the_next_run(que
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_two_runs_cannot_both_take_one_failure(queued):
     """The constraint, asked directly: one insert wins and the other is refused.
 
@@ -919,7 +919,7 @@ def test_two_runs_cannot_both_take_one_failure(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_claim_whose_run_died_is_taken_over_after_its_lease(queued):
     """A claim whose queue write never answered outlives its run -- it died, or `publish` raised.
 
@@ -941,7 +941,7 @@ def test_a_claim_whose_run_died_is_taken_over_after_its_lease(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_fresh_claim_is_not_taken_over(queued):
     """The other half of the lease: a run that is working is left alone."""
     identifier = a_failure()
@@ -954,7 +954,7 @@ def test_a_fresh_claim_is_not_taken_over(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_queue_write_that_raised_keeps_its_claim(queued, monkeypatch):
     """A raise is not proof the message stayed out of the queue.
 
@@ -988,7 +988,7 @@ def test_a_queue_write_that_raised_keeps_its_claim(queued, monkeypatch):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_dry_run_takes_no_claims(queued):
     """It is read instead of the live run, and a claim taken here would be held by a run that
     queued nothing -- locking every row it looked at until the lease ran out."""
@@ -1000,7 +1000,7 @@ def test_a_dry_run_takes_no_claims(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_dry_run_does_not_release_a_stale_claim_either(queued):
     """Reading is not writing, and the takeover is a delete.
 
@@ -1020,7 +1020,7 @@ def test_a_dry_run_does_not_release_a_stale_claim_either(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS, USE_TZ=False)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS, USE_TZ=False)
 def test_a_claim_is_reported_on_a_project_that_stores_naive_datetimes(queued):
     """`timezone.localtime` raises on a naive datetime, and `USE_TZ = False` stores nothing else.
 
@@ -1046,7 +1046,7 @@ def test_a_claim_is_reported_on_a_project_that_stores_naive_datetimes(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_negative_limit_is_not_the_unbounded_mode(queued):
     """`--limit 0` is the deliberate one; `--limit -1` is a typo that would replay everything."""
     a_failure()
@@ -1058,7 +1058,7 @@ def test_a_negative_limit_is_not_the_unbounded_mode(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT={**SETTINGS, 'EVENT_LOG_KINDS': ['outbound.failed', 'outbound.queued']})
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'EVENT_LOG_KINDS': ['outbound.failed', 'outbound.queued']})
 def test_a_replay_the_feed_would_not_record_is_refused(queued):
     """`EVENT_LOG_KINDS` excluding the replay kind means the message goes and nothing joins it
     to the failure -- the feed shows a fresh send, and no one can read which failure it repaired.
@@ -1076,7 +1076,7 @@ def test_a_replay_the_feed_would_not_record_is_refused(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_join_row_the_feed_would_not_take_is_reported_rather_than_assumed(queued, monkeypatch):
     """The audit row is written through the writer and its answer is read.
 
@@ -1103,7 +1103,7 @@ def test_a_join_row_the_feed_would_not_take_is_reported_rather_than_assumed(queu
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_correlation_id_that_is_not_one_is_refused_by_name():
     """An operator pastes these by hand, so the typo has to say what it was."""
     with pytest.raises(CommandError, match='is not a uuid'):
@@ -1111,7 +1111,7 @@ def test_a_correlation_id_that_is_not_one_is_refused_by_name():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_moment_that_is_not_one_is_refused_by_name():
     """`--since yesterday` is a reasonable thing to try and a bad thing to guess at."""
     with pytest.raises(CommandError, match='ISO 8601'):
@@ -1119,7 +1119,7 @@ def test_a_moment_that_is_not_one_is_refused_by_name():
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_row_dated_in_the_future_is_left_alone(queued):
     """`--until` says it defaults to now, and the code left the upper end open.
 
@@ -1138,7 +1138,7 @@ def test_a_row_dated_in_the_future_is_left_alone(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_naive_moment_is_read_in_the_project_s_timezone(queued):
     """The opposite of what an `eta` does, and deliberately: this is an operator typing a
     moment they just read off a log line, not code promising a future one.
@@ -1168,7 +1168,7 @@ def test_a_naive_moment_is_read_in_the_project_s_timezone(queued):
 
 
 @pytest.mark.django_db(transaction=True)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_newest_description_wins(queued):
     """A message queued, failed, replayed and failed again has two describing rows, and the
     one that describes *this* attempt is the later of them."""

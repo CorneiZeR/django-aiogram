@@ -1,4 +1,4 @@
-"""Rules about the bot itself: its credentials, its storage, its webhook, its serializer.
+"""Rules about the bot itself: which bots there are, and each one's credentials and storage.
 
 The settings a project sets to make the bot work at all, and the checks that read them without
 importing aiogram -- which is what keeps `manage.py check` from paying most of a second on every
@@ -11,22 +11,29 @@ import math
 from collections.abc import Collection, Mapping
 from dataclasses import fields
 
+from django.conf import settings as django_settings
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 
+from django_aiogram.config.bots import BOTS_SETTINGS_NAME, BotRecord, parse_bot_id, records, sections
 from django_aiogram.config.checks.problems import Problem
-from django_aiogram.config.checks.shapes import _setting
+from django_aiogram.config.checks.shapes import _a_collection_of_strings, _setting
+from django_aiogram.config.defaults import PROCESS_SCOPED
 from django_aiogram.config.enums import (
     KNOWN_RATE_LIMIT_KEYS,
     PayloadDetail,
+    RemovedQueuePolicy,
     SerializerKind,
     StorageKind,
     UpdateMode,
     choices,
 )
-from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
+from django_aiogram.config.settings import REMOVED_SETTINGS_NAME, SETTINGS_NAME, coerce_bool
+from django_aiogram.runtime.queues import declaration
 
 MODE_CHOICES = choices(UpdateMode)
+#: what `REMOVED_QUEUE_POLICY` may say, from the enum rather than a list written twice
+QUEUE_POLICY_CHOICES = choices(RemovedQueuePolicy)
 
 
 SERIALIZER_CHOICES = choices(SerializerKind)
@@ -38,9 +45,9 @@ PAYLOAD_CHOICES = choices(PayloadDetail)
 _STORAGE_CHOICES = choices(StorageKind)
 
 
-def _known_bot_properties(key: str) -> list[Problem]:
+def _known_bot_properties(key: str, record: BotRecord) -> list[Problem]:
     """Reject names ``DefaultBotProperties`` does not have, which it would drop."""
-    value = _setting(key)
+    value = _setting(key, record)
     if not isinstance(value, Mapping):
         return []
     # before the import, not after: the default is {}, which is a Mapping, so without
@@ -77,7 +84,7 @@ def _the_storage_driver() -> list[Problem]:
     ]
 
 
-def _importable_storage(key: str) -> list[Problem]:
+def _importable_storage(key: str, record: BotRecord) -> list[Problem]:
     """Resolve a dotted path here, so a typo fails before the first message.
 
     And judge the driver behind ``'redis'``, which is the default. The storage is aiogram's
@@ -92,7 +99,7 @@ def _importable_storage(key: str) -> list[Problem]:
     ``find_spec`` rather than an import: this rule runs on every ``manage.py`` invocation, and
     the point of the deferred imports above is that a check pays for nothing it can avoid.
     """
-    value = _setting(key)
+    value = _setting(key, record)
     if not isinstance(value, str):
         return []
     if value in _STORAGE_CHOICES:
@@ -112,9 +119,9 @@ def _importable_storage(key: str) -> list[Problem]:
     return []
 
 
-def _sane_rate_limits(key: str) -> list[Problem]:
+def _sane_rate_limits(key: str, record: BotRecord) -> list[Problem]:
     """Require known budget names holding non-negative numbers."""
-    value = _setting(key)
+    value = _setting(key, record)
     if value is None:
         return []
     if not isinstance(value, Mapping):
@@ -132,14 +139,14 @@ def _sane_rate_limits(key: str) -> list[Problem]:
     return []
 
 
-def _readable_serializer(key: str) -> list[Problem]:
+def _readable_serializer(key: str, record: BotRecord) -> list[Problem]:
     """Refuse to write pickle the reader would throw away: sends would vanish."""
     # coerced like the reader coerces it: from the environment this is a string
-    if _setting(key) != SerializerKind.PICKLE:
+    if _setting(key, record) != SerializerKind.PICKLE:
         return []
     try:
         # coerced like the reader coerces it: from the environment this is a string
-        allowed = coerce_bool(conf.get('ALLOW_PICKLE'), f"{SETTINGS_NAME}['ALLOW_PICKLE']")
+        allowed = coerce_bool(record.get('ALLOW_PICKLE'), record.label('ALLOW_PICKLE'))
     except ImproperlyConfigured:
         # unreadable is E017's finding; this check cannot say anything about it
         return []
@@ -154,14 +161,14 @@ def _readable_serializer(key: str) -> list[Problem]:
     ]
 
 
-def _serviceable_webhook(key: str) -> list[Problem]:
+def _serviceable_webhook(key: str, record: BotRecord) -> list[Problem]:
     """Reject a webhook Telegram cannot reach, or one anybody could post to."""
-    url = str(_setting(key) or '').strip()
+    url = str(_setting(key, record) or '').strip()
     # a member first, for the reason `_redis_fsm_storage` gives: `UpdateMode` mixes in `str`, and
     # since 3.11 `str(UpdateMode.WEBHOOK)` is `'UpdateMode.WEBHOOK'`. Normalising that matches
     # nothing, so a project passing the enum this package publishes had the required-URL finding
     # silently dropped -- measured: no finding at all where the string form reports one
-    mode = conf.get('MODE')
+    mode = record.get('MODE')
     webhook_mode = mode is UpdateMode.WEBHOOK or str(mode or '').strip().lower() == UpdateMode.WEBHOOK.value
     if not url:
         if webhook_mode:
@@ -174,7 +181,7 @@ def _serviceable_webhook(key: str) -> list[Problem]:
         return []
 
     problems: list[Problem] = []
-    if not str(conf.get('WEBHOOK_SECRET') or '').strip():
+    if not str(record.get('WEBHOOK_SECRET') or '').strip():
         problems.append(
             Problem(
                 'is required when WEBHOOK_URL is set: the view compares it with the header '
@@ -188,9 +195,9 @@ def _serviceable_webhook(key: str) -> list[Problem]:
     return problems
 
 
-def _known_update_types(key: str) -> list[Problem]:
+def _known_update_types(key: str, record: BotRecord) -> list[Problem]:
     """Require a real collection: a string would reach Telegram as single characters."""
-    allowed = _setting(key)
+    allowed = _setting(key, record)
     # a mapping is refused for the reason `_a_collection_of_strings` gives: `webhook_settings`
     # calls `list()` on this, so a dict would register its keys as the allowed updates -- and
     # before the empty check, since `{}` is falsy and would otherwise slip past the same sentence
@@ -214,3 +221,303 @@ def _known_update_types(key: str) -> list[Problem]:
             Problem(f'contains update types Telegram does not have: {sorted(invalid)}. Valid ones are {sorted(known)}.')
         ]
     return []
+
+
+def _a_token_with_an_identity(key: str, record: BotRecord) -> list[Problem]:
+    """Refuse a token no identity can be read out of.
+
+    The number before the colon is what identifies the bot, and it is read without asking
+    Telegram. A token that has none cannot be told from another bot's, in a deployment where
+    "the bot" is not an answer.
+
+    An empty token is `W001`'s finding: a project may boot without credentials.
+    """
+    token = str(_setting(key, record) or '').strip()
+    if not token or parse_bot_id(token) is not None:
+        return []
+    return [
+        Problem(
+            "is not a bot token: one reads '<bot id>:<secret>'.",
+            hint='The number before the colon is the identity a rotated token keeps.',
+        )
+    ]
+
+
+def _a_readable_bots_dict(_key: str, _record: BotRecord) -> list[Problem]:
+    """Report a ``TELEGRAM_BOTS`` no bot can be resolved out of.
+
+    A finding rather than the traceback resolution raises, because `manage.py check` is where a
+    reader goes to be told what is wrong with their settings. Every other rule about a bot stands
+    down while this one is reporting: there are no bots to judge.
+    """
+    try:
+        sections()
+    except ImproperlyConfigured as unreadable:
+        return [Problem(str(unreadable).removeprefix(f'{BOTS_SETTINGS_NAME} '), label=BOTS_SETTINGS_NAME)]
+    return []
+
+
+def _one_bot_per_token(_key: str, _record: BotRecord) -> list[Problem]:
+    """Refuse two aliases holding one token, which are one bot under two names.
+
+    Telegram meters the token and delivers each update once, so the pair would race for the same
+    updates and pace against two budgets for one bot.
+
+    **Each alias is named with the place its token came from**, which is not one place: two
+    sections can hold the same string, and two sections that hold nothing can both inherit it
+    from the defaults. A single label cannot say both, so the label is the dict that configures
+    several bots -- there is no duplicate without one -- and the origins go in the message.
+    """
+    seen: dict[int, list[BotRecord]] = {}
+    try:
+        configured = records()
+    except ImproperlyConfigured:
+        return []  # E054 owns a dict that cannot be read at all
+    for found in configured:
+        if found.bot_id is not None:
+            seen.setdefault(found.bot_id, []).append(found)
+    shared = sorted((bot_id, found) for bot_id, found in seen.items() if len(found) > 1)
+    return [
+        Problem(
+            f'configures bot {bot_id} more than once: '
+            + ', '.join(f'{one.alias} from {one.label("TOKEN")}' for one in found)
+            + '.',
+            label=BOTS_SETTINGS_NAME,
+            hint='One token is one bot. Give each alias its own, or drop the duplicates.',
+        )
+        for bot_id, found in shared
+    ]
+
+
+def _settings_one_process_decides(_key: str, _record: BotRecord) -> list[Problem]:
+    """Refuse a bot section holding a setting the process owns rather than the bot.
+
+    The event log has one writer thread, router discovery runs once and the in-flight list is
+    keyed on one name, so a per-bot value could only mean "whichever bot resolved last wins" --
+    silently, and differently depending on the order the sections were written in.
+    """
+    problems = []
+    try:
+        configured = sections()
+    except ImproperlyConfigured:
+        return []  # E054 owns a dict that cannot be read at all
+    for alias, section in configured.items():
+        named = sorted(key for key in section if key in PROCESS_SCOPED)
+        if named:
+            problems.append(
+                Problem(
+                    f'sets {", ".join(named)}, which belong to the process rather than to one bot.',
+                    label=f"{BOTS_SETTINGS_NAME}['{alias}']",
+                    hint=f'Move them to {SETTINGS_NAME}, which every bot in this process shares.',
+                )
+            )
+    return problems
+
+
+def _a_lease_a_pass_can_renew(key: str, record: BotRecord) -> list[Problem]:
+    """Warn when the lease is not comfortably longer than the pass that renews it.
+
+    A polling process renews its leases once per :setting:`BOT_REFRESH_INTERVAL`, so a lease
+    shorter than that expires between renewals and the bots are traded between containers on
+    every pass -- each trade a 409 from Telegram for whoever was polling. Twice the interval
+    is the floor here, which survives one missed pass.
+
+    Silent where nothing polls: a webhook update arrives wherever the request landed, so no
+    lease is taken and this deployment would be failing ``check --fail-level WARNING`` over a
+    number nothing reads. ``MODE`` is a bot's setting rather than the process's, so the
+    question is whether *any* configured bot polls -- and one finding covers them all, since
+    the two numbers in it are the process's.
+    """
+    if not _anything_polls():
+        return []
+    try:
+        lease = float(_setting(key, record))
+        # the floor the supervisor applies, not the number as written: `interval()` clamps to
+        # a second, so a `BOT_REFRESH_INTERVAL` of 0.5 renews every second and a lease of 1.2s
+        # would pass a comparison against the raw value while lapsing between renewals
+        interval = max(1.0, float(record['BOT_REFRESH_INTERVAL']))
+    except (TypeError, ValueError, OverflowError, ImproperlyConfigured):
+        return []  # E056 and the interval's own rule own the type complaints
+    if lease >= interval * 2:
+        return []
+    return [
+        Problem(
+            f'is {lease:g}s, which a process renewing every {interval:g}s cannot keep held.',
+            hint=(
+                f'Raise it above twice {SETTINGS_NAME}["BOT_REFRESH_INTERVAL"], or lower that: '
+                'a lease that lapses between renewals moves the bot to another container, and '
+                'both of them poll it until it settles.'
+            ),
+        )
+    ]
+
+
+def _a_declared_queue(key: str, record: BotRecord) -> list[Problem]:
+    """Refuse a bot whose queue nothing declares, which is a typo with no other symptom.
+
+    A message published to an undeclared name is a send that succeeds and arrives nowhere:
+    nothing consumes that queue, so the message waits in it and the feed says it was queued.
+    Reported here as well as refused at run time, because boot is where a typo is cheap.
+
+    A table that cannot be read declares nothing and this reports nothing: `manage.py check`
+    runs where a database may be unreachable or unmigrated, and a check that fails then would
+    make an outage look like a configuration error.
+    """
+    wanted = str(_setting(key, record) or '').strip()
+    if not wanted:
+        return []
+    # one read for both answers: two would let the first fail and the second succeed, and
+    # `E059` would then report a queue the table declares as one nothing does
+    known, readable = declaration()
+    if wanted in known or not readable:
+        return []
+    return [
+        Problem(
+            f'is {wanted!r}, which this deployment has not declared.',
+            hint=(
+                f'Declared: {", ".join(sorted(known)) or "none"}. Add it to '
+                f'{SETTINGS_NAME}["QUEUES"] or to the TelegramQueue table -- a queue nothing '
+                'declares is one nothing consumes, and a message published to it is lost quietly.'
+            ),
+        )
+    ]
+
+
+def _a_section_named_like_a_bot(_key: str, _record: BotRecord) -> list[Problem]:
+    """Report a section whose name is a bot identity, which is a row's alias.
+
+    A row from `TelegramBot` is known by its identity written out -- `123456` -- and a section
+    may legally be *named* that. The two then share an alias, and an alias is what a bot
+    resolves its settings by: nothing here can tell which of them a reader meant.
+
+    Harmless in this release, and reported anyway: the runtime keeps a row's bot apart from a
+    section of the same name -- see `Bots.for_record` -- so this is the confusion rather than
+    the failure. It is still worth renaming the section, because every message about either
+    bot names the same alias.
+    """
+    try:
+        configured = sections()
+    except ImproperlyConfigured:
+        return []  # E054 owns a dict that cannot be read at all
+    numeric = sorted(alias for alias in configured if alias.isdigit())
+    if not numeric:
+        return []
+    return [
+        Problem(
+            f'names a section {", ".join(numeric)}, which is the shape of a bot identity.',
+            label=BOTS_SETTINGS_NAME,
+            hint=(
+                'A bot that lives in the `TelegramBot` table is known by its identity written '
+                'out, so the two share an alias and every message about either names it. '
+                'Rename the section to something a person chose.'
+            ),
+        )
+    ]
+
+
+def _anything_polls() -> bool:
+    """Whether any configured bot takes its updates by polling, which is the default.
+
+    A member check before the string one, for the reason :func:`_serviceable_webhook` gives:
+    ``UpdateMode`` mixes in ``str``, and since 3.11 ``str(UpdateMode.POLLING)`` is
+    ``'UpdateMode.POLLING'``.
+    """
+    try:
+        configured = records()
+    except ImproperlyConfigured:
+        return True  # E054 owns an unreadable dict; a rule about polling assumes it happens
+    for bot in configured:
+        mode = bot.get('MODE')
+        if mode is UpdateMode.POLLING or str(mode or '').strip().lower() == UpdateMode.POLLING.value:
+            return True
+    return not configured
+
+
+def _the_dict_5_0_replaced(_key: str, _record: BotRecord) -> list[Problem]:
+    """Name the setting 5.0 split in two, where a project still holds the old one.
+
+    Kept as a rule rather than as silence: the old dict configured the bot, so every value left
+    in it is now ignored and whatever it configured falls back to the environment or to this
+    package's defaults. Reported whether or not the new dicts are also present, because a value
+    sitting in a dict nothing reads is a value the project believes is in effect.
+    """
+    if getattr(django_settings, REMOVED_SETTINGS_NAME, None) is None:
+        return []
+    return [
+        Problem(
+            f'is no longer read. 5.0 splits it into {SETTINGS_NAME}, which every bot inherits, '
+            f'and {BOTS_SETTINGS_NAME}, which holds one section per bot.',
+            label=REMOVED_SETTINGS_NAME,
+            hint='Rename it to ' + SETTINGS_NAME + ' if this project runs one bot; see Upgrading.',
+        )
+    ]
+
+
+def _a_usable_token_storage(key: str, record: BotRecord) -> list[Problem]:
+    """Refuse a ``TOKEN_STORAGE`` that cannot be built, naming what was wrong with it.
+
+    Built rather than only imported: the encrypting storage reads its keys in ``__init__``, so
+    a deployment whose keys are missing or unusable finds out here rather than on the first
+    row it tries to read -- at which point every bot in the table is a bot nothing can serve.
+    """
+    path = str(_setting(key, record) or '').strip()
+    if not path:
+        return [Problem('is empty; it names the class a token is stored through.')]
+    # deferred: this reaches the seam, which imports whatever the project configured -- and
+    # for the encrypting storage that is `cryptography`
+    from django_aiogram.tokens import get_token_storage  # noqa: PLC0415 - as above
+
+    try:
+        get_token_storage()
+    except ImproperlyConfigured as refused:
+        return [Problem(f'cannot be used: {refused}')]
+    return []
+
+
+def _keys_for_a_storage_that_needs_them(key: str, record: BotRecord) -> list[Problem]:
+    """Refuse keys that are not a collection of strings, and say who is asking for them.
+
+    Asked of the storage class rather than matched on its dotted path: a project's own
+    ``TokenStorage`` declares ``needs_keys`` for itself, and a rule keyed on our class name
+    would have nothing to say about it. Read from the class without building one, so this
+    reports the missing keys even where the storage refuses to be built *because* they are
+    missing -- `E062` says it cannot be built and this says what is absent.
+    """
+    keys = _setting(key, record)
+    if not isinstance(keys, str):
+        # a bare string is one key rather than a collection of characters, which is what
+        # `FernetTokenStorage` does with it -- so the shape rule is skipped for that one case
+        # and refusing it here would block a configuration the storage supports
+        problems = _a_collection_of_strings(key, record)
+        if problems:
+            return problems
+    if keys and isinstance(keys, (set, frozenset)):
+        # a set cannot say which key is newest, and *newest first* is the whole contract here:
+        # iterated in whatever order it happens to have, the ring would encrypt under a key an
+        # operator is about to drop -- and the rewrapped rows would go with it
+        return [
+            Problem(
+                f'is a {type(keys).__name__}, which has no order, and the first key is the one that '
+                'encrypts. Write the keys as a list or a tuple, newest first.',
+            )
+        ]
+    # through the seam's own loader rather than `import_string` here: what a check may resolve
+    # is a rule of its own -- `tests/test_checks.py` plants a mine on this module's importer
+    # for the paths that cost aiogram -- and the storage is the one path a check has to
+    # resolve, because whether it can be imported at all is what `E062` reports
+    from django_aiogram.tokens import storage_class  # noqa: PLC0415 - as above
+
+    try:
+        storage = storage_class(str(_setting('TOKEN_STORAGE', record) or '').strip())
+    except ImproperlyConfigured:
+        # `E062` is the row about a path that cannot be imported; saying it twice would send
+        # the reader to the keys for a problem that is not about them
+        return []
+    if not storage.needs_keys or _setting(key, record):
+        return []
+    return [
+        Problem(
+            f'is empty, and {storage.__name__} needs it: it holds the keys, newest first, '
+            'and the first one is what encrypts.',
+        )
+    ]

@@ -203,17 +203,17 @@ def test_non_mapping_payload_is_rejected():
         JsonSerializer().loads(b'[1, 2]')
 
 
-@override_settings(TELEGRAM_BOT={'SERIALIZER': 'json'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'SERIALIZER': 'json'})
 def test_get_serializer_json():
     assert isinstance(get_serializer(), JsonSerializer)
 
 
-@override_settings(TELEGRAM_BOT={'SERIALIZER': 'pickle', 'ALLOW_PICKLE': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'SERIALIZER': 'pickle', 'ALLOW_PICKLE': True})
 def test_get_serializer_pickle():
     assert isinstance(get_serializer(), PickleSerializer)
 
 
-@override_settings(TELEGRAM_BOT={'SERIALIZER': 'yaml'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'SERIALIZER': 'yaml'})
 def test_get_serializer_rejects_unknown():
     with pytest.raises(SerializationError, match='Unknown serializer'):
         get_serializer()
@@ -224,7 +224,7 @@ def test_reader_detects_json():
     assert loads(raw)['chat_id'] == 1
 
 
-@override_settings(TELEGRAM_BOT={'ALLOW_PICKLE': True})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'ALLOW_PICKLE': True})
 def test_legacy_pickle_drains_during_the_upgrade_window():
     """A queue written by 1.x drains once the operator opts in."""
     raw = PickleSerializer().dumps({'function': 'send_message', 'chat_id': 1})
@@ -289,18 +289,18 @@ def test_a_queue_holding_both_formats_is_read_per_message():
     json_payload = JsonSerializer().dumps({'function': 'send_message', 'chat_id': 1})
     pickle_payload = PickleSerializer().dumps({'function': 'send_message', 'chat_id': 2})
 
-    with override_settings(TELEGRAM_BOT={'ALLOW_PICKLE': True}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'ALLOW_PICKLE': True}):
         assert loads(json_payload)['chat_id'] == 1
         assert loads(pickle_payload)['chat_id'] == 2
 
     # ALLOW_PICKLE applies only to the non-JSON one
-    with override_settings(TELEGRAM_BOT={'ALLOW_PICKLE': False}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={'ALLOW_PICKLE': False}):
         assert loads(json_payload)['chat_id'] == 1
         with pytest.raises(SerializationError, match='ALLOW_PICKLE'):
             loads(pickle_payload)
 
 
-@override_settings(TELEGRAM_BOT={'ALLOW_PICKLE': 'false'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'ALLOW_PICKLE': 'false'})
 def test_a_textual_allow_pickle_still_refuses():
     """From the environment the flag is a string, and 'false' is truthy."""
     raw = PickleSerializer().dumps({'function': 'send_message', 'chat_id': 1})
@@ -308,13 +308,13 @@ def test_a_textual_allow_pickle_still_refuses():
         loads(raw)
 
 
-@override_settings(TELEGRAM_BOT={'ALLOW_PICKLE': 'yes'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'ALLOW_PICKLE': 'yes'})
 def test_a_textual_allow_pickle_still_permits():
     raw = PickleSerializer().dumps({'function': 'send_message', 'chat_id': 2})
     assert loads(raw)['chat_id'] == 2
 
 
-@override_settings(TELEGRAM_BOT={'SERIALIZER': 'pickle', 'ALLOW_PICKLE': False})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'SERIALIZER': 'pickle', 'ALLOW_PICKLE': False})
 def test_writing_pickle_the_reader_refuses_is_rejected_at_runtime():
     """E022 reports this, but a WSGI process never runs the system checks."""
     with pytest.raises(ImproperlyConfigured, match='ALLOW_PICKLE'):

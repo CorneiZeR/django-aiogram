@@ -53,4 +53,4 @@ TEMPLATES = [
 ROOT_URLCONF = 'tests.db_urls'
 STATIC_URL = '/static/'
 
-TELEGRAM_BOT: dict[str, object] = {}
+TELEGRAM_BOT_DEFAULTS: dict[str, object] = {}

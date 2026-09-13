@@ -53,7 +53,7 @@ def test_no_writer_thread_exists_when_the_flag_is_off():
     assert not [thread for thread in threading.enumerate() if thread.name == WRITER_THREAD]
 
 
-@override_settings(TELEGRAM_BOT={'EVENT_LOG': 'maybe'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG': 'maybe'})
 def test_an_unreadable_flag_turns_recording_off_rather_than_raising(caplog):
     """A misconfigured flag is E031's finding at boot. At runtime it must not
     become the reason a message was not sent."""
@@ -74,7 +74,7 @@ def test_recording_never_raises():
         msg = 'database on fire'
         raise RuntimeError(msg)
 
-    with pytest.MonkeyPatch.context() as patch, override_settings(TELEGRAM_BOT={'EVENT_LOG_SYNC': True}):
+    with pytest.MonkeyPatch.context() as patch, override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG_SYNC': True}):
         patch.setattr(EventRecorder, '_write', staticmethod(explode))
         recorder._enabled = True
         recorder.record(Event(kind=EventKind.OUTBOUND_SENT.value))  # must not raise
@@ -156,14 +156,14 @@ def test_the_router_stays_quiet_without_an_alias():
     assert router.allow_migrate('default', 'django_aiogram') is None
 
 
-@override_settings(TELEGRAM_BOT={'EVENT_LOG_DATABASE': 'logs'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG_DATABASE': 'logs'})
 def test_the_router_has_no_opinion_on_relations():
     """None, not True: this app owns no relation in either direction, and
     claiming otherwise would let Django allow one across databases."""
     assert TelegramEventLogRouter().allow_relation(TelegramEvent(), TelegramEvent()) is None
 
 
-@override_settings(TELEGRAM_BOT={'EVENT_LOG_DATABASE': 'logs'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'EVENT_LOG_DATABASE': 'logs'})
 def test_the_router_moves_only_this_app():
     router = TelegramEventLogRouter()
 

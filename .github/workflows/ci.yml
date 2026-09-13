@@ -226,11 +226,14 @@ jobs:
             pins: ''
             image: redis:6.2
           # the rest of the integration suite belongs to neither transport: the async
-          # producer and FSM-across-restart cases are about the client and the storage
+          # producer and FSM-across-restart cases are about the client and the storage, and
+          # the two-bot scenario is about what one server has to keep apart — two queues, two
+          # in-flight lists and two conversations
           - transport: redis shared
             suite: >-
               tests/integration/test_async_producer_against_redis.py
               tests/integration/test_fsm_across_restart.py
+              tests/integration/test_two_bots_against_redis.py
             deps: latest
             pins: ''
             image: redis:7

@@ -159,6 +159,20 @@ WINDOW = 200
 SHOWN_WIDTH = 40
 
 
+def _claimed_bot(row: TelegramEvent) -> int:
+    """Return the identity a claim is filed under, which is the row's or ``0`` for none.
+
+    The claim is unique on the pair, so this is what makes it one claim *per bot*: two bots can
+    have a message under the same correlation id, and filing both under ``0`` would refuse the
+    second replay as already handled -- the failure the pair exists to prevent, reached from
+    the only place that files a claim.
+
+    ``0`` rather than ``None`` for a row that names no bot, because a unique index treats two
+    NULLs as distinct: a nullable column here would let two runs claim one failure.
+    """
+    return row.bot_id if row.bot_id is not None else 0
+
+
 class Command(BaseCommand):
     """Select failed sends and queue them again, or say why they cannot be.
 
@@ -212,6 +226,16 @@ class Command(BaseCommand):
             help='which endings to replay; repeatable (default: both, since exhausted retries are recorded as a drop).',
         )
         parser.add_argument('--chat', type=int, default=None, help='only failures for this chat id.')
+        parser.add_argument(
+            '--bot',
+            action='append',
+            default=[],
+            dest='bots',
+            type=int,
+            help='only failures for these identities, however many times it is given. Defaults '
+            "to every bot. An incident is usually one client's, and a replay that swept the "
+            'others would re-send messages nobody asked about.',
+        )
         parser.add_argument(
             '--correlation-id',
             action='append',
@@ -374,6 +398,11 @@ class Command(BaseCommand):
         rows = rows.filter(created_at__lt=until)
         if options['chat'] is not None:
             rows = rows.filter(chat_id=options['chat'])
+        if options['bots']:
+            # the feed's own column, which is indexed leading with it: an incident is one
+            # client's, and a replay is the one command that *sends* -- sweeping the others
+            # would put messages nobody asked about back on their queues
+            rows = rows.filter(bot_id__in=list(options['bots']))
         return rows.order_by('created_at', 'id')
 
     @staticmethod
@@ -509,7 +538,9 @@ class Command(BaseCommand):
             try:
                 with transaction.atomic():
                     return TelegramReplayClaim.objects.create(
-                        correlation_id=row.correlation_id, claimed_by=worker_identity()
+                        correlation_id=row.correlation_id,
+                        bot_id=_claimed_bot(row),
+                        claimed_by=worker_identity(),
                     ), None
             except IntegrityError:
                 # the other run inserted between the read above and this line, which is exactly
@@ -532,7 +563,7 @@ class Command(BaseCommand):
         dry run was the shape this had first, and it made ``--dry-run`` a command that changes
         the database.
         """
-        claim = TelegramReplayClaim.objects.filter(correlation_id=row.correlation_id).first()
+        claim = TelegramReplayClaim.objects.filter(correlation_id=row.correlation_id, bot_id=_claimed_bot(row)).first()
         if claim is None:
             return None
         if claim.queued_at is not None:
@@ -615,6 +646,16 @@ class Command(BaseCommand):
             .filter(correlation_id=row.correlation_id, kind__in=ARGUMENT_KINDS)
             .order_by('-created_at', '-id')
         )
+        if row.bot_id is not None:
+            # the bot as well as the id, where the failure names one: a correlation id is
+            # unique to a *message*, not to the feed, and since 5.0 two bots can carry one --
+            # a caller reusing an id, a broadcast joined under one thread. Matching on the id
+            # alone would replay one client's failure with another client's arguments.
+            #
+            # Only where it names one, though: a row written before 5.0, or by a path that did
+            # not know the bot, carries `None` -- and narrowing to that would find nothing for
+            # every failure in an upgraded deployment's history
+            described = described.filter(bot_id=row.bot_id)
         for candidate in described:
             arguments = {key: value for key, value in (candidate.detail or {}).items() if key != DUE_AT_DETAIL}
             if not arguments:

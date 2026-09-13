@@ -36,8 +36,15 @@ _OMITTED = '__omitted__'
 #: written by `bounded` into the marker that replaces a payload too big for the column
 _TRUNCATED = '__truncated__'
 _REDACTED = '***'
-#: <bot id>:<35 base64url characters>, the shape Telegram issues
-_TOKEN_RE = re.compile(r'\b\d{5,}:[A-Za-z0-9_-]{30,}\b')
+#: <bot id>:<35 base64url characters>, the shape Telegram issues.
+#:
+#: The left edge is `(?<!\d)` rather than `\b`, and that is the difference between redacting
+#: the realistic case and missing it: the token appears in the API **URL**, as
+#: `.../bot123456:AA.../sendMessage`, where there is no word boundary between `bot` and the
+#: digits -- so a `\b` version matched a token surrounded by spaces and left every aiogram
+#: error message intact. It went unnoticed while every token was in the settings, because
+#: those are also redacted by value; a bot configured in a *row* has no such second chance
+_TOKEN_RE = re.compile(r'(?<!\d)\d{5,}:[A-Za-z0-9_-]{30,}\b')
 
 
 def detail_level() -> PayloadDetail:

@@ -12,6 +12,7 @@ or a view of its own. This only fills a registry in.
 
 import contextlib
 import logging
+import threading
 from typing import TYPE_CHECKING
 
 from prometheus_client import REGISTRY, CollectorRegistry, Counter, Histogram
@@ -33,6 +34,13 @@ logger = logging.getLogger('django_aiogram')
 #: a real tail above that. The default buckets stop at 10s and start at 5ms
 DURATION_BUCKETS = (0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0)
 
+#: how many distinct bots a process will label before it stops, when `METRICS_PER_BOT` is on.
+#: A bound is required rather than tidy: `queue.rejected` is recorded *before* a message is
+#: routed, so its identity is whatever an envelope claimed -- and anything that can publish to
+#: the queue could otherwise mint a series per message. Beyond this every further bot is
+#: counted under `other`, so the totals stay right while the series stop growing
+MAX_BOT_LABELS = 512
+
 
 class EventMetrics:
     """One counter and one histogram, filled from every batch the feed publishes.
@@ -43,10 +51,10 @@ class EventMetrics:
     package's ``connect``, which names it -- so a failure here cannot take the dispatch down
     with it. `test_metrics.py` holds that.
 
-    Metrics, and why there are two rather than fourteen:
+    Metrics, and why there are two rather than one per kind:
 
     * ``django_aiogram_events_total{kind}`` -- one counter for every kind, because a counter
-      per kind is fourteen names to learn and a query per panel, while a label is one of each.
+      per kind is a name to learn and a panel to write for each, while a label is one of each.
       The kinds are a registry with a documented convention, so the label is bounded by code
       rather than by traffic.
     * ``django_aiogram_event_duration_seconds{kind}`` -- observed for every event that carries
@@ -65,6 +73,23 @@ class EventMetrics:
     process it scraped, and putting the name in the series as well is the same fact twice --
     with a redeploy's worth of new series behind it in any deployment that names workers by
     pod.
+
+    **And the bot is a label only where a project asks for one.** ``METRICS_PER_BOT`` is off
+    by default, so the number of series does not grow with the number of bots: a label per
+    bot is a series per bot *per kind*, and the histogram multiplies that again by its
+    buckets -- a thousand clients counted that way are hundreds of thousands of series, which
+    is a Prometheus problem rather than a dashboard. Turned on, every series gains a ``bot`` label
+    carrying the identity -- and a row written by something that did not know which bot it
+    was about carries ``unknown`` rather than an empty label, so a query can tell the two
+    apart. The feed answers the same question per bot without any of that, and it is where a
+    deployment with many clients should ask it.
+
+    **The label is bounded even then.** A ``queue.rejected`` row is recorded before a message
+    is routed, so the identity on it is whatever the envelope *claimed* -- and anything able to
+    publish to the queue could mint a series per message with it. After
+    :data:`MAX_BOT_LABELS` distinct bots this process labels the rest ``other``: the counts
+    stay right, and the series stop growing. The feed keeps the real identity, because a row
+    is not a series.
     """
 
     def __init__(self, registry: CollectorRegistry | None = None) -> None:
@@ -75,16 +100,30 @@ class EventMetrics:
         the default, which is what a project with no opinion has.
         """
         self.registry = REGISTRY if registry is None else registry
+        # read once, at build time, and deliberately: a label set cannot change under a live
+        # metric -- `prometheus_client` refuses a `labels()` call with a different set -- so
+        # this is a decision a process makes when it starts. A suite that overrides the
+        # setting builds a new exporter, which is what `connect` does
+        self.per_bot = per_bot()
+        #: the identities this process has already labelled, so the set cannot grow without
+        #: bound. Not an LRU: evicting one would start a *new* series for a bot that is still
+        #: sending, and the first bots seen are the ones a deployment actually serves
+        self._labelled: set[str] = set()
+        #: held across the *whole* decision below. The feed publishes from the writer thread
+        #: and a project may connect other producers to the same signal, so an unguarded
+        #: read-then-insert lets two batches both find room at the cap and admit more than it
+        self._naming = threading.Lock()
+        labels = ('kind', 'bot') if self.per_bot else ('kind',)
         self.events = Counter(
             'django_aiogram_events',
             'Events recorded by django-aiogram, by kind.',
-            ('kind',),
+            labels,
             registry=self.registry,
         )
         self.duration = Histogram(
             'django_aiogram_event_duration_seconds',
             'How long the work an event describes took, where it was measured.',
-            ('kind',),
+            labels,
             buckets=DURATION_BUCKETS,
             registry=self.registry,
         )
@@ -104,6 +143,27 @@ class EventMetrics:
         for event in events:
             self.observe(event)
 
+    def _label_for(self, bot_id: int | None) -> str:
+        """Return the ``bot`` label for one event, bounded and never empty.
+
+        ``unknown`` rather than an empty string where nothing named a bot -- an undecodable
+        payload does not -- because a label nobody can tell from "not set" is one a query
+        cannot exclude. ``other`` past :data:`MAX_BOT_LABELS`, for the reason the class
+        docstring gives: an identity off the wire is a claim, not a fact.
+        """
+        if not bot_id:
+            return 'unknown'
+        said = str(bot_id)
+        with self._naming:
+            # membership, capacity and insertion under one lock: interleaved, two threads at
+            # the cap both see room and the bound stops being one
+            if said in self._labelled:
+                return said
+            if len(self._labelled) >= MAX_BOT_LABELS:
+                return 'other'
+            self._labelled.add(said)
+            return said
+
     def observe(self, event: 'Event') -> None:
         """Record one event, and refuse to be the reason a batch fails.
 
@@ -114,12 +174,35 @@ class EventMetrics:
         a test with a registry that refuses everything.
         """
         try:
-            kind = str(event.kind)
-            self.events.labels(kind=kind).inc()
+            said = {'kind': str(event.kind)}
+            if self.per_bot:
+                said['bot'] = self._label_for(event.bot_id)
+            self.events.labels(**said).inc()
             if event.duration_ms is not None:
-                self.duration.labels(kind=kind).observe(event.duration_ms / 1000)
+                self.duration.labels(**said).observe(event.duration_ms / 1000)
         except Exception:
             logger.exception('the prometheus exporter could not record an event', extra={'tg_kind': event.kind})
+
+
+def per_bot() -> bool:
+    """Whether the exporter labels its series by bot, from ``METRICS_PER_BOT``.
+
+    Read through the settings rather than taken as an argument, so a project turns it on
+    where it configures everything else -- and a value nobody can read is `E064`'s finding
+    rather than a traceback out of the receiver that counts sends.
+    """
+    # deferred: this module is imported by a project, and the settings are read per process
+    from django.core.exceptions import ImproperlyConfigured  # noqa: PLC0415 - as above
+
+    from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf  # noqa: PLC0415 - as above
+
+    try:
+        return coerce_bool(conf['METRICS_PER_BOT'], f"{SETTINGS_NAME}['METRICS_PER_BOT']")
+    except ImproperlyConfigured:
+        # the same trade `admin.log_is_on` makes about `EVENT_LOG`: a flag nobody can read is
+        # a check's finding, and the safe half of the choice is this exporter's answer
+        logger.warning('METRICS_PER_BOT is unreadable; labelling by kind alone')
+        return False
 
 
 #: what :func:`connect` installed, so :func:`disconnect` can find it and -- more importantly --

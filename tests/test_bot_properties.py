@@ -18,65 +18,65 @@ from django_aiogram.config.checks import check_settings
 from django_aiogram.producer.from_settings import build_default_properties, build_storage
 
 
-@override_settings(TELEGRAM_BOT={'DEFAULT_BOT_PROPERTIES': {'parse_mode': 'HTML'}})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'DEFAULT_BOT_PROPERTIES': {'parse_mode': 'HTML'}})
 def test_default_properties_are_built():
     properties = build_default_properties()
     assert isinstance(properties, DefaultBotProperties)
     assert properties.parse_mode == 'HTML'
 
 
-@override_settings(TELEGRAM_BOT={})
+@override_settings(TELEGRAM_BOT_DEFAULTS={})
 def test_default_properties_default_to_empty():
     assert build_default_properties().parse_mode is None
 
 
-@override_settings(TELEGRAM_BOT={'DEFAULT_BOT_PROPERTIES': {'parse_moed': 'HTML'}})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'DEFAULT_BOT_PROPERTIES': {'parse_moed': 'HTML'}})
 def test_unknown_property_is_reported_clearly():
     with pytest.raises(ImproperlyConfigured, match='DEFAULT_BOT_PROPERTIES'):
         build_default_properties()
 
 
-@override_settings(TELEGRAM_BOT={'TOKEN': '42:test', 'DEFAULT_BOT_PROPERTIES': {'parse_mode': 'MarkdownV2'}})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'TOKEN': '42:test', 'DEFAULT_BOT_PROPERTIES': {'parse_mode': 'MarkdownV2'}})
 def test_bot_receives_the_properties():
     instance = TelegramBot()
     assert instance.bot.default.parse_mode == 'MarkdownV2'
 
 
-@override_settings(TELEGRAM_BOT={'FSM_STORAGE': 'memory'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'FSM_STORAGE': 'memory'})
 def test_memory_storage():
     assert isinstance(build_storage(), MemoryStorage)
 
 
-@override_settings(TELEGRAM_BOT={'REDIS_URL': 'redis://localhost:6379/2'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/2'})
 def test_redis_storage_is_the_default_choice():
     """No FSM_STORAGE here on purpose: this must fail if the default changes."""
     assert isinstance(build_storage(), RedisStorage)
 
 
-@override_settings(TELEGRAM_BOT={'FSM_STORAGE': 'redis', 'REDIS_URL': ''})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'FSM_STORAGE': 'redis', 'REDIS_URL': ''})
 def test_redis_storage_without_a_url_is_reported():
     with pytest.raises(ImproperlyConfigured, match='REDIS_URL'):
         build_storage()
 
 
-@override_settings(TELEGRAM_BOT={'FSM_STORAGE': 'aiogram.fsm.storage.memory.MemoryStorage'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'FSM_STORAGE': 'aiogram.fsm.storage.memory.MemoryStorage'})
 def test_dotted_path_storage():
     assert isinstance(build_storage(), MemoryStorage)
 
 
-@override_settings(TELEGRAM_BOT={'FSM_STORAGE': 'django_aiogram.producer.client.TelegramBot'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'FSM_STORAGE': 'django_aiogram.producer.client.TelegramBot'})
 def test_dotted_path_must_be_a_storage():
     with pytest.raises(ImproperlyConfigured, match='BaseStorage'):
         build_storage()
 
 
-@override_settings(TELEGRAM_BOT={'FSM_STORAGE': 'memory', 'TOKEN': '42:test'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'FSM_STORAGE': 'memory', 'TOKEN': '42:test'})
 def test_dispatcher_uses_the_configured_storage():
     assert isinstance(TelegramBot().dispatcher.storage, MemoryStorage)
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'DEFAULT_BOT_PROPERTIES': {'parse_moed': 'HTML'},
         'TOKEN': '42:x',
         'REDIS_URL': 'r://x',
@@ -86,32 +86,32 @@ def test_check_catches_a_misspelled_property():
     assert 'django_aiogram.E018' in {message.id for message in check_settings()}
 
 
-@override_settings(TELEGRAM_BOT={'FSM_STORAGE': 'nonsense', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'FSM_STORAGE': 'nonsense', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_check_catches_a_bad_storage_name():
     assert 'django_aiogram.E019' in {message.id for message in check_settings()}
 
 
-@override_settings(TELEGRAM_BOT={'FSM_STORAGE': 'redis', 'REDIS_URL': '   '})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'FSM_STORAGE': 'redis', 'REDIS_URL': '   '})
 def test_whitespace_only_redis_url_is_reported_as_missing():
     """Otherwise it fails later inside RedisStorage with a vaguer message."""
     with pytest.raises(ImproperlyConfigured, match='REDIS_URL'):
         build_storage()
 
 
-@override_settings(TELEGRAM_BOT={'DEFAULT_BOT_PROPERTIES': {1: 'HTML'}, 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'DEFAULT_BOT_PROPERTIES': {1: 'HTML'}, 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_non_string_property_key_does_not_crash_the_check():
     """manage.py check must report the problem, not raise TypeError from join."""
     assert 'django_aiogram.E018' in {message.id for message in check_settings()}
 
 
-@override_settings(TELEGRAM_BOT={'FSM_STORAGE': 'does.not.Exist', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'FSM_STORAGE': 'does.not.Exist', 'TOKEN': '42:x', 'REDIS_URL': 'r://x'})
 def test_check_catches_a_dotted_path_that_does_not_import():
     """It used to pass the check and then raise ModuleNotFoundError at runtime."""
     assert 'django_aiogram.E019' in {message.id for message in check_settings()}
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'FSM_STORAGE': 'django_aiogram.producer.client.TelegramBot',
         'TOKEN': '42:x',
         'REDIS_URL': 'r://x',
@@ -121,7 +121,7 @@ def test_check_catches_a_dotted_path_that_is_not_a_storage():
     assert 'django_aiogram.E019' in {message.id for message in check_settings()}
 
 
-@override_settings(TELEGRAM_BOT={'FSM_STORAGE': 'does.not.Exist'})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'FSM_STORAGE': 'does.not.Exist'})
 def test_unimportable_storage_is_reported_as_configuration():
     """A raw ModuleNotFoundError does not tell the operator what to fix."""
     with pytest.raises(ImproperlyConfigured, match='cannot be imported'):
@@ -139,7 +139,10 @@ def test_a_storage_that_is_not_a_string_is_refused_in_this_package_words(value):
     it rather than falling back to the default, so `FSM_STORAGE: None` is a value and not an
     absence.
     """
-    with override_settings(TELEGRAM_BOT={'FSM_STORAGE': value}), pytest.raises(ImproperlyConfigured) as refusal:
+    with (
+        override_settings(TELEGRAM_BOT_DEFAULTS={'FSM_STORAGE': value}),
+        pytest.raises(ImproperlyConfigured) as refusal,
+    ):
         build_storage()
 
     assert 'FSM_STORAGE' in str(refusal.value)
@@ -147,7 +150,7 @@ def test_a_storage_that_is_not_a_string_is_refused_in_this_package_words(value):
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost:6379/0',
         'FSM_STORAGE': 'aiogram.fsm.storage.memory.MemoryStorage',
@@ -161,7 +164,7 @@ def test_a_valid_configuration_reports_neither_e018_nor_e019():
     assert 'django_aiogram.E019' not in reported
 
 
-@override_settings(TELEGRAM_BOT={'REDIS_URL': 'redis://localhost:6379/2', 'REDIS_TIMEOUT': 7})
+@override_settings(TELEGRAM_BOT_DEFAULTS={'REDIS_URL': 'redis://localhost:6379/2', 'REDIS_TIMEOUT': 7})
 def test_the_fsm_storage_is_bounded_by_the_same_deadline(monkeypatch):
     """Every update reads FSM state, so an unbounded client here wedges the bot.
 

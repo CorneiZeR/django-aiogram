@@ -12,20 +12,127 @@ import threading
 from argparse import ArgumentParser
 from collections.abc import Callable
 from types import FrameType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from django.core.exceptions import ImproperlyConfigured
 from django.core.management import BaseCommand, CommandError
 
-from django_aiogram import bot
+from django_aiogram import bot, bots
 from django_aiogram.broker.registry import get_broker
+from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import UpdateMode
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 from django_aiogram.consumer.delivery import Delivery, get_delivery
+from django_aiogram.consumer.serving import Consumers, Lane, lane_name, lanes, settle
 from django_aiogram.consumer.webhook import MODES, current_mode
 from django_aiogram.eventlog.events import worker_identity
 from django_aiogram.eventlog.recorder import recorder
+from django_aiogram.runtime.queues import named, served_by, settings_for
+
+if TYPE_CHECKING:
+    from django_aiogram.broker.base import Broker
 
 logger = logging.getLogger('django_aiogram')
+
+
+def _routing() -> 'Callable[[int], Callable[..., Any]] | None':
+    """Return the route to deliver by, or ``None`` where there is nothing to route.
+
+    A process with one bot has every message addressed to it or to nobody, and a project's own
+    `Delivery` written before 5.0 takes no route at all -- so asking for one where it cannot
+    matter would refuse a consumer that works. `get_delivery` refuses such a class only where
+    the addressing does matter, which is what this decides.
+    """
+    from django_aiogram.config.bots import records  # noqa: PLC0415 - after the enabled gate, like the rest
+
+    return _send_raw_of if len(records()) > 1 else None
+
+
+def _split(written: str) -> list[str]:
+    """Read a comma-separated option the way Celery's `-Q` reads one."""
+    return [part.strip() for part in written.split(',') if part.strip()]
+
+
+def _built_for(
+    serving: 'dict[Lane, tuple[str, ...]]', build: 'Callable[[tuple[str, ...]], Delivery]'
+) -> dict['Lane', 'Delivery']:
+    """Build the startup set, one consumer per lane, settling what was built if one refuses.
+
+    The whole set is built before anything is started, so a refusal -- `REQUIRE_CRASH_SAFE` on
+    a transport that cannot promise crash safety -- reaches the operator as a command that
+    would not start rather than a warning per queue from a thread.
+
+    One at a time, and settled on the way out, because a consumer that was built has already
+    reclaimed: a refusal on the third queue would otherwise strand what the first two took,
+    and nothing in this process could acknowledge those messages again.
+    """
+    ready: dict[Lane, Delivery] = {}
+    try:
+        for lane, queues in serving.items():
+            ready[lane] = build(queues)
+    except BaseException:
+        for lane, built in ready.items():
+            settle(built, lane_name(built, lane))
+        raise
+    return ready
+
+
+def _only_its_own_queue(serving: tuple[str, ...], pools: str) -> bool:
+    """Whether this container serves exactly the queue its settings name, and only ever will.
+
+    A container that does is every deployment before there were several queues, so it is
+    handed no settings at all and a ``DELIVERY`` written then keeps working -- including where
+    the operator named that same queue on the command line, which changes nothing about what
+    is served.
+
+    A pool is the exception, and not a cautious one: a pool holding one queue today holds two
+    after the next pass, and a consumer built without settings could not be told which of them
+    it is for.
+    """
+    return serving == (named(),) and not _split(pools)
+
+
+def _consumer_for(queues: 'tuple[str, ...]', *, one_queue: bool) -> Delivery:
+    """Build the consumer for one lane, telling it which queues only when that is news.
+
+    A container serving exactly the queue its settings already name is every deployment
+    before this, and it is handed no settings at all -- so a `DELIVERY` a project wrote
+    before there were several queues keeps working, and is refused only where it is asked
+    to serve a queue that is not its own.
+
+    A lane of several is a transport that reads them over one connection, and the whole set
+    goes down with the settings of the first: they agree on everything but which queue they
+    name, which is what put them in one lane.
+    """
+    if one_queue:
+        return get_delivery(handler=bot.send_raw, route=_routing())
+    return get_delivery(
+        handler=bot.send_raw,
+        route=_routing(),
+        settings=settings_for(queues[0]),
+        queues=queues if len(queues) > 1 else None,
+    )
+
+
+def _transport_for(queue: str) -> 'Broker':
+    """Return the transport one queue is consumed through, from the registry."""
+    if queue == named():
+        return get_broker()
+    return get_broker(settings_for(queue))
+
+
+def _send_raw_of(bot_id: int) -> 'Callable[..., Any]':
+    """Return the send of the bot a queued message names, or raise if this process has none.
+
+    Raising is the answer rather than falling back to the default bot: a message queued for
+    one bot and delivered by another would go out under the wrong token, to a chat that bot
+    may not even be in. The consumer leaves such a message in flight, where a process
+    configured for it can still take it.
+    """
+    from django_aiogram.runtime.registry import bots  # noqa: PLC0415 - after the enabled gate, like the rest
+
+    return bots.by_id(bot_id).send_raw
+
 
 #: what signal.signal returns: a handler, one of the SIG_* constants, or None
 Handler = Callable[[int, FrameType | None], Any] | int | None
@@ -46,10 +153,48 @@ class Command(BaseCommand):
             choices=sorted(MODES),
             default=None,
             help=(
-                "how updates reach the bot for this run. Defaults to TELEGRAM_BOT['MODE'] "
+                "how updates reach the bot for this run. Defaults to TELEGRAM_BOT_DEFAULTS['MODE'] "
                 "(env: DJANGO_AIOGRAM_MODE), itself 'polling'. In webhook mode this "
                 'process consumes the queue and never calls getUpdates, because the updates '
                 'arrive over HTTP instead.'
+            ),
+        )
+        parser.add_argument(
+            '--queues',
+            default='',
+            help=(
+                'comma-separated queues this container consumes, as `-Q` does in Celery. '
+                "Defaults to the one TELEGRAM_BOT_DEFAULTS['QUEUE'] names, which is the "
+                "transport's own where that is empty. A name that is not declared in "
+                "TELEGRAM_BOT_DEFAULTS['QUEUES'] or in the TelegramQueue table is refused."
+            ),
+        )
+        parser.add_argument(
+            '--pools',
+            default='',
+            help=(
+                'comma-separated pools whose queues this container consumes. A pool is the '
+                'label on a TelegramQueue row, so a queue created after this container '
+                'started is served without a redeploy -- which is what enumeration cannot do '
+                'when clients arrive at run time. Combined with --queues as a union.'
+            ),
+        )
+        parser.add_argument(
+            '--no-updates',
+            action='store_true',
+            help=(
+                'consume the queues and never ask Telegram for updates. The shape a webhook '
+                'deployment wants, where updates arrive in the web tier and this process '
+                'exists to send -- and the shape a sender pool wants at any scale.'
+            ),
+        )
+        parser.add_argument(
+            '--updates-only',
+            action='store_true',
+            help=(
+                'receive updates and consume nothing. Pair it with '
+                '`tgbot_healthcheck --no-consumer`, or the probe will call a container with '
+                'no consumer in it unhealthy for not having one.'
             ),
         )
         parser.add_argument(
@@ -63,11 +208,16 @@ class Command(BaseCommand):
 
     def handle(self, *args: Any, **options: Any) -> None:
         """Receive updates, drain the queue, and unwind both on a signal."""
+        # before the disabled check, because a contradiction in the flags is a contradiction
+        # whatever `ENABLED` says: a deployment that has both of them in its compose file
+        # would otherwise be told nothing while the bot was off, and told the truth only
+        # once somebody switched it on
+        self._refuse_contradictory_flags(options)
         if not bot.enabled:
             self.stdout.write(
                 self.style.WARNING(
                     'django-aiogram is disabled '
-                    "(TELEGRAM_BOT['ENABLED'] or DJANGO_AIOGRAM_ENABLED); "
+                    "(TELEGRAM_BOT_DEFAULTS['ENABLED'] or DJANGO_AIOGRAM_ENABLED); "
                     'not starting the bot.'
                 )
             )
@@ -75,26 +225,29 @@ class Command(BaseCommand):
                 self._idle_until_signalled()
             return
 
-        configured = current_mode()
-        mode = options['mode'] or configured
-        self.stdout.write(f'Updates arrive by {mode}.')
-        if mode != configured:
-            # the webhook view reads the setting, not this flag, so it would
-            # refuse the updates this process is no longer polling for
-            self.stdout.write(
-                self.style.WARNING(
-                    f"--mode {mode} disagrees with TELEGRAM_BOT['MODE'] ({configured}), and it "
-                    'changes this process only: '
-                    + (
-                        'the webhook view still refuses updates while the setting says polling'
-                        if mode == UpdateMode.WEBHOOK
-                        else 'getUpdates fails while a webhook is registered'
-                    )
-                )
-            )
+        mode = self._mode_for_this_run(options)
+        receives, consumes = self._roles(options, mode)
 
-        delivery = get_delivery(handler=bot.send_raw)
-        self._preflight(delivery)
+        serving = self._queues_to_serve(options) if consumes else ()
+        one_queue = _only_its_own_queue(serving, options['pools'])
+
+        def consumer_for(queues: tuple[str, ...]) -> Delivery:
+            """Build the consumer for one lane and prove what it promises before it runs.
+
+            A refusal from the preflight settles the consumer it was proving: `reclaim` has
+            already run by then, so a consumer dropped here takes what it reclaimed with it --
+            and nothing else in this process can acknowledge those messages.
+            """
+            built = _consumer_for(queues, one_queue=one_queue)
+            try:
+                self._preflight(built)
+            except BaseException:
+                settle(built, ', '.join(queues))
+                raise
+            return built
+
+        ready = _built_for(lanes(serving), consumer_for)
+
         # the transport's own deadline, not `REDIS_TIMEOUT`: this bounds the thread being
         # joined below, and reading it from one transport's setting meant a consumer could be
         # inside a call the join had already given up on. Measured: at `KAFKA_TIMEOUT = 45`
@@ -109,10 +262,11 @@ class Command(BaseCommand):
         # Asked of the registry rather than through `delivery.broker`. `DELIVERY` names a class
         # a project may write, so a `Delivery` here is not necessarily one of ours -- and the
         # attribute is set in `Delivery.__init__`, which a double standing in for a consumer need
-        # not have run. The broker is process-global, so this is the same instance the delivery
-        # holds when it has one
-        join_timeout = get_broker().call_ceiling + 1
-        threads: list[threading.Thread] = []
+        # not have run. The registry is asked once per queue with that queue's settings, which
+        # is the same instance each delivery holds when it has one
+        # 1 where nothing is consumed: there is no thread to join, and `max` of nothing raises
+        join_timeout = max((_transport_for(name).call_ceiling for name in serving), default=0.0) + 1
+        consumers = Consumers(build=consumer_for, join_timeout=join_timeout, ready=ready)
 
         # Both modes: starting the consumer before the loop runs would let a
         # backlog reach send_raw while loop.is_running() is still False, so the
@@ -138,57 +292,226 @@ class Command(BaseCommand):
             if shutting_down.is_set():
                 logger.info('not starting the consumer: the shutdown had already begun')
                 return
-            threads.append(delivery.start_thread())
+            consumers.reconcile(serving)
+            if consumes:
+                watch.start()
+
+        # the queues are re-read while the container runs, and that is what selecting by pool
+        # is *for*: a queue created for a client an hour after the deploy is served without one.
+        # A pass that could not read the table leaves the set alone, like the bot providers'
+        watch = threading.Thread(
+            target=self._watch_the_queues,
+            args=(consumers, options, shutting_down),
+            name='django-aiogram-queues',
+            daemon=True,
+        )
 
         bot.loop.call_soon(start_consuming)
         previous = self._install_sigterm_handler()
 
         try:
             with contextlib.suppress(KeyboardInterrupt, SystemExit):
-                if mode == UpdateMode.WEBHOOK:
+                if not receives:
+                    # the consumers are on their own threads, so this process has to keep a
+                    # loop turning for the sends they hand over -- exactly what webhook mode
+                    # has always done, for exactly that reason
+                    self.stdout.write('Consuming the queues; this process asks for no updates.')
+                    self._idle_on_the_loop()
+                elif mode == UpdateMode.WEBHOOK:
                     self.stdout.write('Consuming the queue; updates are expected over HTTP.')
                     self._idle_on_the_loop()
                 else:
                     bot.start_polling()
         finally:
-            logger.info('shutting down')
-            # before stop(), so the callback above cannot slip a consumer in
-            # behind the joins below
-            shutting_down.set()
-            delivery.stop()
-            for thread in threads:
-                # derived from the bound that actually governs the thread, which is
-                # the transport's own call ceiling -- see where join_timeout is read.
-                # BLPOP_TIMEOUT + 1 was six seconds against a worst case of ten, so a
-                # consumer that outlived the join went on to acknowledge a message
-                # close() had already refused
-                thread.join(timeout=join_timeout)
-                if thread.is_alive():
-                    logger.warning(
-                        'the delivery consumer did not stop in time',
-                        extra={'tg_timeout': join_timeout},
-                    )
+            self._unwind(consumers, shutting_down, previous)
+
+    def _watch_the_queues(
+        self,
+        consumers: Consumers,
+        options: dict[str, Any],
+        shutting_down: threading.Event,
+    ) -> None:
+        """Re-read the queues this container serves until the shutdown begins.
+
+        A daemon thread and a poll rather than a signal, for the reason the bot supervisor
+        gives: the push arrives on one queue and the poll is what makes a change arrive at
+        all. `BOT_REFRESH_INTERVAL` is the interval, because it is the same question about a
+        different table.
+        """
+        asked = (_split(options['queues']), _split(options['pools']))
+        if not any(asked):
+            # nothing to re-read: the queue was the process's own and settings do not change
+            # under a running container
+            return
+        while not shutting_down.wait(self._refresh_interval()):
             try:
-                bot.close()
-            finally:
-                # the sends close() just drained reported themselves finished into a
-                # queue whose only reader is the consumer loop, and that returned before
-                # the join above — so without this every message the drain delivered
-                # stays in the in-flight list and the next start sends it again. A
-                # graceful stop duplicated whatever the drain had time to finish, which
-                # is the one thing `Delivery.md` says a *kill* is needed for
+                wanted = served_by(*asked)
+            except Exception:
+                # a table that could not be read has not said this container serves nothing
+                logger.exception('could not re-read the queues to serve; keeping the ones running')
+                continue
+            consumers.reconcile(wanted)
+
+    @staticmethod
+    def _refresh_interval() -> float:
+        """How long between re-reads, never below a second and never unreadable."""
+        try:
+            return max(1.0, float(conf['BOT_REFRESH_INTERVAL']))
+        except (TypeError, ValueError, ImproperlyConfigured):
+            # a container that refuses to re-read its queues because a number is unreadable
+            # serves the startup set for ever, which is the trade `Supervisor.interval` makes
+            logger.warning('BOT_REFRESH_INTERVAL is unreadable; falling back to the default')
+            return float(DEFAULTS['BOT_REFRESH_INTERVAL'])
+
+    def _unwind(
+        self,
+        consumers: Consumers,
+        shutting_down: threading.Event,
+        previous: 'Handler | None',
+    ) -> None:
+        """Stop the consumers, wait for their threads, close the bot, and settle the log.
+
+        Its own method because the order in it is the whole of a clean shutdown, and every
+        line carries the reason it is where it is. Extracted when a container gained several
+        queues -- `handle` had grown past what one function should decide.
+        """
+        logger.info('shutting down')
+        # before stop(), so the callback above cannot slip a consumer in
+        # behind the joins below
+        shutting_down.set()
+        # stops each consumer and waits out its thread, on the bound that actually governs it
+        # -- the transport's own call ceiling. `BLPOP_TIMEOUT + 1` was six seconds against a
+        # worst case of ten, so a consumer that outlived the join went on to acknowledge a
+        # message close() had already refused
+        try:
+            failure: Exception | None = None
+            try:
+                consumers.stop()
+            except Exception as error:  # noqa: BLE001 - the bots still have to be closed and the log settled
+                # inside the try, unlike before: a consumer that refuses to stop used to take
+                # `collect()` and `recorder.stop()` with it, so the sends the drain had already
+                # finished stayed in flight and the next start sent them again
+                failure = error
+            # every bot this process built, not only the one this module imported: each holds
+            # a loop, a runner thread and sends a drain has to finish, and a container serving
+            # several closed exactly one of them -- the rest kept their threads and dropped
+            # whatever was still in flight. Measured on a two-bot container, where it also
+            # closed the shared session on a loop that had not opened it.
+            #
+            # `bot` last, because it is what this module holds and what a test replaces: the
+            # registry answers with what it built, and a double put here is not in it.
+            #
+            # Every close attempted before any failure is raised -- stopping at the first would
+            # leave the bots after it holding exactly what this loop exists to release. The
+            # first failure is the one re-raised: the ones after it are usually its consequences
+            for made in (*(one for one in bots.built() if one is not bot), bot):
                 try:
-                    delivery.collect()
-                finally:
-                    # after close(), never before: closing drains in-flight sends,
-                    # and those are what produce the final rows. In its own finally
-                    # because a close() that raises must not also lose the rows
-                    recorder.stop()
-            if previous is not None:
-                # the command may be called in-process; leaving our handler
-                # installed would turn a later SIGTERM into a stray interrupt
-                with contextlib.suppress(ValueError):
-                    signal.signal(signal.SIGTERM, previous)
+                    made.close()
+                except Exception as error:  # noqa: BLE001, PERF203 - the rest still have to be closed
+                    failure = failure or error
+            if failure is not None:
+                raise failure
+        finally:
+            # the sends close() just drained reported themselves finished into a
+            # queue whose only reader is the consumer loop, and that returned before
+            # the join above — so without this every message the drain delivered
+            # stays in the in-flight list and the next start sends it again. A
+            # graceful stop duplicated whatever the drain had time to finish, which
+            # is the one thing `Delivery.md` says a *kill* is needed for
+            try:
+                consumers.collect()
+            finally:
+                # after close(), never before: closing drains in-flight sends,
+                # and those are what produce the final rows. In its own finally
+                # because a close() that raises must not also lose the rows
+                recorder.stop()
+        if previous is not None:
+            # the command may be called in-process; leaving our handler
+            # installed would turn a later SIGTERM into a stray interrupt
+            with contextlib.suppress(ValueError):
+                signal.signal(signal.SIGTERM, previous)
+
+    def _roles(self, options: dict[str, Any], mode: str) -> tuple[bool, bool]:
+        """Say which of the two jobs this run does, and refuse a run that does neither.
+
+        `start_tgbot` has always done both, and at scale they do not scale together: a
+        webhook deployment wants a process that only sends, a busy pool wants receivers
+        without consumers, and a small installation wants what it has always had. Which is
+        why both is the default and each flag takes one away.
+
+        A container that does neither is refused rather than started: it would sit there
+        looking alive, answering a probe, and doing nothing at all. That is two
+        configurations, not one -- the flags together, and ``--updates-only`` in webhook
+        mode, where this process receives nothing anyway because the updates arrive over HTTP
+        in whatever serves them. Consuming is all a bot container *is* there, so taking it
+        away leaves an idle loop.
+        """
+        self._refuse_contradictory_flags(options)
+        receives = not options['no_updates']
+        consumes = not options['updates_only']
+        if not consumes and mode == UpdateMode.WEBHOOK:
+            msg = (
+                '--updates-only leaves nothing for this process to do in webhook mode: the '
+                'updates arrive over HTTP in whatever serves the webhook, so consuming the '
+                'queues is all this process was doing. Drop the flag, or run it where MODE '
+                'is polling.'
+            )
+            raise CommandError(msg)
+        if not consumes:
+            self.stdout.write(
+                self.style.WARNING(
+                    'Consuming nothing: this process only receives updates. Give the probe '
+                    '`--no-consumer`, or it will call this container unhealthy for having no '
+                    'consumer in it.'
+                )
+            )
+        return receives, consumes
+
+    @staticmethod
+    def _refuse_contradictory_flags(options: dict[str, Any]) -> None:
+        """Refuse the pair of flags that leave nothing for this process to do.
+
+        Read before anything else, including whether the bot is enabled: the pair is wrong
+        however the deployment is configured, and a compose file carrying both should hear
+        about it now rather than the first time somebody switches `ENABLED` back on.
+        """
+        if options['no_updates'] and options['updates_only']:
+            msg = '--no-updates and --updates-only together leave nothing for this process to do.'
+            raise CommandError(msg)
+
+    def _mode_for_this_run(self, options: dict[str, Any]) -> str:
+        """Say how updates reach this process, and warn where the flag and the setting differ."""
+        configured = current_mode()
+        mode = options['mode'] or configured
+        self.stdout.write(f'Updates arrive by {mode}.')
+        if mode != configured:
+            # the webhook view reads the setting, not this flag, so it would
+            # refuse the updates this process is no longer polling for
+            self.stdout.write(
+                self.style.WARNING(
+                    f"--mode {mode} disagrees with TELEGRAM_BOT_DEFAULTS['MODE'] ({configured}), and it "
+                    'changes this process only: '
+                    + (
+                        'the webhook view still refuses updates while the setting says polling'
+                        if mode == UpdateMode.WEBHOOK
+                        else 'getUpdates fails while a webhook is registered'
+                    )
+                )
+            )
+        return str(mode)
+
+    def _queues_to_serve(self, options: dict[str, Any]) -> tuple[str, ...]:
+        """Say which queues this run consumes, and refuse a run that would consume none.
+
+        Pools that exist and hold nothing are not the same as asking for nothing: a consumer
+        with no queue at all idles while every probe reads it as healthy.
+        """
+        serving = served_by(_split(options['queues']), _split(options['pools']))
+        if not serving:
+            msg = 'No queues to consume: the pools asked for hold none.'
+            raise CommandError(msg)
+        self.stdout.write(f'Consuming {", ".join(name or "the transport default" for name in serving)}.')
+        return serving
 
     def _idle_on_the_loop(self) -> None:
         """Wait on the bot's loop rather than on an Event.
@@ -254,9 +577,10 @@ class Command(BaseCommand):
         This process is the consumer. The same rule, reused rather than restated, so the
         two cannot drift.
         """
-        from django_aiogram.config.checks import worker_name_problems  # noqa: PLC0415 - no aiogram at import
+        from django_aiogram.config.bots import defaults_record  # noqa: PLC0415 - no aiogram at import
+        from django_aiogram.config.checks import worker_name_problems  # noqa: PLC0415 - as above
 
-        for problem in worker_name_problems():
+        for problem in worker_name_problems(defaults_record()):
             logger.warning(
                 'the worker name will not survive a replacement container',
                 extra={'tg_worker': worker_identity()},

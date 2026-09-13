@@ -59,7 +59,7 @@ pip install 'django-aiogram[kafka,redis]'   # Kafka for the queue, redis for the
 or keep one extra and say the state lives in the process:
 
 ```python
-TELEGRAM_BOT = {'FSM_STORAGE': 'memory', ...}   # per process, lost on restart
+TELEGRAM_BOT_DEFAULTS = {'FSM_STORAGE': 'memory', ...}   # per process, lost on restart
 ```
 
 `manage.py check` reports **`E019`** for exactly one configuration — `FSM_STORAGE` naming
@@ -80,17 +80,22 @@ happens to be installed, so the two have to agree; when they do not, `manage.py 
 says so with the install line for the one you named:
 
 ```text
-?: (django_aiogram.E047) TELEGRAM_BOT['BROKER'] names
+?: (django_aiogram.E047) TELEGRAM_BOT_DEFAULTS['BROKER'] names
    'django_aiogram.broker.redis_list.RedisListBroker', whose driver is not installed.
 	HINT: pip install "django-aiogram[redis]"
 ```
 
-**Two extras are not transports.** `hiredis` swaps redis-py's parser for the C one, and
-`prometheus` (`prometheus-client>=0.20`) installs the client the shipped exporter fills:
+**Three extras are not transports.** `hiredis` swaps redis-py's parser for the C one,
+`prometheus` (`prometheus-client>=0.20`) installs the client the shipped exporter fills, and
+`crypto` (`cryptography>=42`) the encrypting `TOKEN_STORAGE`:
 
 ```shell
-pip install 'django-aiogram[redis,prometheus]'
+pip install 'django-aiogram[redis,prometheus,crypto]'
 ```
+
+`crypto` is needed only where `TOKEN_STORAGE` names the encrypting storage; a deployment whose
+database is already the trust boundary keeps its tokens as they are and never imports
+`cryptography`. See **[Tokens](Tokens.md)**.
 
 `django_aiogram.contrib.prometheus` is the only module that imports `prometheus_client`, and
 nothing in this package imports *that* module — a project does, from its own
@@ -122,7 +127,7 @@ INSTALLED_APPS = [
     'django_aiogram',
 ]
 
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'TOKEN': os.environ.get('TELEGRAM_BOT_TOKEN', ''),
     'REDIS_URL': os.environ.get('REDIS_URL', ''),
 }
@@ -132,8 +137,23 @@ That is the whole minimum, and both values may be empty at startup. The
 package needs them only when something actually reaches Telegram or Redis, so
 tests, migrations and a build all run without them.
 
-The package ships two tables — the event log, and the schedule table that an `eta` writes
-to — so run migrations after adding it:
+A project with one bot writes nothing more. A second bot is a section under `TELEGRAM_BOTS`,
+which inherits everything above and overrides what it names:
+
+```python
+TELEGRAM_BOTS = {
+    'default': {'TOKEN': os.environ.get('TELEGRAM_BOT_TOKEN', '')},
+    'support': {'TOKEN': os.environ.get('SUPPORT_BOT_TOKEN', '')},
+}
+```
+
+See **[Multiple bots](Multiple-bots.md)**, and **[Dynamic bots](Dynamic-bots.md)** where they
+arrive while the container runs.
+
+The package ships tables of its own — the event log, the schedule an `eta` writes to, and the
+rows a project configures bots in — so run migrations after adding it. With
+`EVENT_LOG_DATABASE` naming a database of its own, migrate both: the feed lives there and
+everything else does not.
 
 ```shell
 python manage.py migrate
@@ -153,6 +173,17 @@ DJANGO_AIOGRAM_TOKEN=123:abc
 DJANGO_AIOGRAM_REDIS_URL=redis://redis:6379/0
 DJANGO_AIOGRAM_ENABLED=0
 ```
+
+One bot's own setting is `DJANGO_AIOGRAM_<ALIAS>_<NAME>`, so a bot's token can stay out of
+`settings.py`:
+
+```ini
+DJANGO_AIOGRAM_SUPPORT_TOKEN=456:def
+```
+
+**The section still has to exist.** `TELEGRAM_BOTS` is what declares which bots there are, and
+a variable is read only for an alias already declared there — so `'support': {}` is the whole
+of what the settings need, and the environment fills it in.
 
 Django settings win over the environment. Callables and mappings —
 `DEFAULT_KWARGS`, `DEFAULT_BOT_PROPERTIES`, `RATE_LIMIT` — have no sensible

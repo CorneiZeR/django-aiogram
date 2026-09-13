@@ -89,6 +89,11 @@ kafka = [
 # is imported by a project rather than by this package -- so the absence is an ImportError
 # where somebody asked for it, not a broken install
 prometheus = ["prometheus-client>=0.20"]
+# the encrypting `TOKEN_STORAGE`, and nothing else in the package touches it: a deployment
+# whose database is already the trust boundary keeps its tokens as they are, and one that
+# needs them encrypted at rest installs this. A base dependency would charge every project
+# for a decision only some of them made
+crypto = ["cryptography>=42"]
 # not a runtime dependency: redis-py parses the protocol in C when this is
 # present. Worth it on a busy consumer, pointless on a web tier that only ever
 # pushes, which is why it is opt-in rather than pulled in for everybody
@@ -105,6 +110,9 @@ dev = [
     "fakeredis>=2.26",
     # the exporter's extra, so its suite runs on every leg rather than skipping quietly
     "prometheus-client>=0.20",
+    # the crypto extra, for the same reason: the encrypting token storage has a suite, and a
+    # leg without the driver would skip it quietly
+    "cryptography>=42",
     "ruff>=0.9",
     "mypy>=1.14",
     # <6.1: 6.1.0 resolves every Self-returning QuerySet method to Any, so a plain

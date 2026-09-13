@@ -8,6 +8,7 @@ settings are already safe to read.
 """
 
 import json
+import logging
 import uuid
 from typing import TYPE_CHECKING, Any, cast
 
@@ -24,6 +25,8 @@ from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 from django_aiogram.eventlog.events import failure_kinds, kind_choices, normalise_short_id
 from django_aiogram.eventlog.writer import log_alias
 from django_aiogram.models import TelegramEvent
+
+logger = logging.getLogger('django_aiogram')
 
 #: fetched only on the page that renders them; see TelegramEventAdmin.get_queryset
 PAYLOAD_COLUMNS = ('error', 'detail')
@@ -139,11 +142,79 @@ class BoundedPaginator(Paginator):  # type: ignore[type-arg]  # generic in the s
         return min(found, COUNT_LIMIT)
 
 
+class BotFilter(admin.SimpleListFilter):
+    """Filters by bot, from the bots there are rather than from the table.
+
+    A plain ``list_filter`` on the column would build its dropdown with ``SELECT DISTINCT``
+    over a table sized by traffic, which is the scan `KindFilter` exists to avoid. The set of
+    bots is small and lives elsewhere -- the settings and the `TelegramBot` table -- so it is
+    read from there, and a bot with no rows yet is still offered rather than missing.
+    """
+
+    title = 'bot'
+    parameter_name = 'bot'
+
+    def lookups(self, _request: HttpRequest, _model_admin: AnyModelAdmin) -> list[tuple[str, str]]:
+        """Every configured bot, by identity, labelled the way a person reads it."""
+        # deferred: these reach the settings and the ORM, and this module is imported by
+        # `admin.autodiscover` while the app registry is still loading
+        from django_aiogram.config.bots import records  # noqa: PLC0415 - as above
+        from django_aiogram.models import TelegramBot  # noqa: PLC0415 - as above
+
+        seen: dict[str, str] = {}
+        try:
+            for record in records():
+                if record.bot_id is not None:
+                    seen[str(record.bot_id)] = f'{record.alias} ({record.bot_id})'
+        except ImproperlyConfigured:
+            # a settings dict `E054` already reports; the rows below are still worth offering
+            logger.warning('could not read the configured sections for the feed filter')
+        try:
+            # by the label a person gave the row, which is what they called the client -- a
+            # row's alias is its identity written out, and "123456 (123456)" says nothing.
+            # The switched-off rows are included: those are exactly what somebody reads after
+            # turning a client off
+            for identity, label in TelegramBot.objects.values_list('bot_id', 'label'):
+                seen.setdefault(str(identity), f'{label or identity} ({identity})')
+        except Exception:
+            # a database that blinked must not turn a changelist into a traceback: the filter
+            # is a convenience, and the search box answers regardless
+            logger.exception('could not read the bots for the feed filter')
+        offered = sorted(seen.items(), key=lambda pair: pair[1])
+        chosen = self.value()
+        if chosen and chosen not in seen:
+            # a client who has gone, and their rows have not: Django drops a value that is
+            # not among the lookups, so without this the one question a feed is kept *for* --
+            # what happened to the bot that is no longer configured -- silently shows
+            # everything. Offered from the value rather than from a `SELECT DISTINCT` over a
+            # table sized by traffic, which is the scan this filter exists to avoid
+            offered.append((chosen, f'{chosen} (no longer configured)'))
+        return offered
+
+    def queryset(self, _request: HttpRequest, queryset: QuerySet[TelegramEvent]) -> QuerySet[TelegramEvent]:
+        """Narrow to the chosen bot, which leads the index the feed keeps for it."""
+        value = self.value()
+        if not value:
+            return queryset
+        try:
+            identity = int(value)
+        except (TypeError, ValueError):
+            # a query string somebody typed by hand. Nothing matches it, and saying so beats
+            # a changelist that answers as though no filter had been asked for
+            return queryset.none()
+        if not -(2**63) <= identity < 2**63:
+            # the column is a BIGINT, and a number outside it raises while the query is being
+            # built rather than matching nothing -- the same bound `get_search_results` keeps,
+            # and for the same reason
+            return queryset.none()
+        return queryset.filter(bot_id=identity)
+
+
 class TelegramEventAdmin(ModelAdminBase):
     """Read-only, and deliberately narrow about what it will ask the database."""
 
-    list_display = ('created_at', 'kind', 'function', 'chat_id', 'thread', 'worker', 'error_code')
-    list_filter = (KindFilter, OutcomeFilter)
+    list_display = ('created_at', 'kind', 'bot_id', 'function', 'chat_id', 'thread', 'worker', 'error_code')
+    list_filter = (KindFilter, OutcomeFilter, BotFilter)
     # what makes the box appear; the lookup itself is get_search_results below
     search_fields = ('short_id', 'correlation_id', 'chat_id')
     search_help_text = 'A short id, an exact correlation id, or an exact chat id.'
@@ -156,6 +227,13 @@ class TelegramEventAdmin(ModelAdminBase):
     ordering = ('-id',)
     # only the columns an index can serve: function, worker and error_code have
     # none, and one click on those headers sorts a table sized by traffic
+    # only the columns an index can serve: function, worker and error_code have
+    # none, and one click on those headers sorts a table sized by traffic.
+    #
+    # `bot_id` is **not** here although it has an index: Django appends `-pk`, so the header
+    # asks for `ORDER BY bot_id DESC, id DESC`, and `(bot_id, -id)` cannot provide that -- its
+    # reverse is `(bot_id DESC, id ASC)`. Sorting by bot is also not a question anybody has;
+    # *narrowing* to one is, and that is the filter
     sortable_by = ('created_at', 'kind', 'chat_id')
     # no date_hierarchy: its drilldown truncates created_at for every row, which
     # is a full scan no index can serve
@@ -262,6 +340,9 @@ class TelegramEventAdmin(ModelAdminBase):
             'created_at',
             'correlation_id',
             'kind',
+            # named on the page as well as on the list: a row somebody opened from a search
+            # has to say whose bot it is about without going back
+            'bot_id',
             'function',
             'chat_id',
             'user_id',

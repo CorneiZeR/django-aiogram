@@ -666,7 +666,7 @@ class EventRecorder:
     def reset(self) -> None:
         """Re-read the settings next time; used by override_settings.
 
-        It does not flush. Every ``override_settings(TELEGRAM_BOT=...)`` in a
+        It does not flush. Every ``override_settings(TELEGRAM_BOT_DEFAULTS=...)`` in a
         consumer's own test suite fires this twice, and waiting for the writer
         there would put a second on each one. A test that needs its rows calls
         :meth:`flush`; queued events survive the reset either way.

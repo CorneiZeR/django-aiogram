@@ -7,15 +7,29 @@ integrating the package into a project, see the wiki page
 ## What this is
 
 A Django app that runs aiogram in a neighbouring container and queues Telegram
-messages through Redis. The Django processes never poll; they push a payload
-onto a Redis list, and the bot container consumes it.
+messages through whichever transport `BROKER` names — a Redis list or stream, an
+AMQP queue, a Kafka topic. The Django processes never poll; they publish a
+payload and the bot container consumes it.
+
+Since 5.0 it serves **any number of bots**, from `TELEGRAM_BOTS` and from rows a
+project's own clients create, and a queued message names the bot it is for
+wherever that bot has an identity -- one whose token carries none is send-only:
+it queues a message that names nobody, which a consumer already running delivers
+through its own bot, and the providers leave it out of the served set, so nothing
+polls it and no webhook route resolves it. The
+dispatcher and the handler tree are one per **process**, whatever any bot's
+settings say — a `Router` cannot be attached to two dispatchers. What resolved
+settings decide is the *transport* and the consumer thread: bots that agree share
+one, and what they must agree on is computed, never configured.
 
 ```text
 src/django_aiogram/
     __init__.py     lazy exports: bot, conf, redis_conn, get_redis, __version__
     apps.py         AppConfig.ready(): checks and autodiscover, both behind ENABLED
-    models.py       TelegramEvent, the append-only feed, and TelegramScheduledSend,
-                    the sends waiting for a time; migrations/ beside it
+    models.py       the append-only feed, and the operational state around it: the
+                    schedule, the replay claim, the bots a project configures at run
+                    time with their profiles and queues, and the polling lease;
+                    migrations/ beside it
     admin.py        the read-only changelist; registered from ready(), not on import
     healthcheck.py  the container probe; must import nothing needing the app registry
     api.py          the allowlist of Telegram API method names a payload may use
@@ -25,6 +39,7 @@ src/django_aiogram/
     redis.py        lazy connection
     config/
         settings.py     lazy settings with an environment fallback
+        bots.py         which bots are configured, and how each resolves its own
         defaults.py     the only place a default lives
         enums.py        the values a setting accepts
         checks/         system checks E001-E049, W001-W009, I001-I003:
@@ -32,6 +47,18 @@ src/django_aiogram/
                         (bot, transport, eventlog), shapes for what a value
                         must look like, conditions for what a rule asks first
     broker/         one transport per package, and the contract they answer
+    runtime/
+        process.py      what every bot shares whatever its settings say: the dispatcher,
+                        the handler tree and the HTTP session
+        providers.py    where the bots come from: the settings, the table, or a project's own
+        supervisor.py   the pass that makes what is running match what is configured
+        lifecycle.py    what a bot's failure was, and who is told about it
+        leases.py       which process polls which bot, when several of them could
+        queues.py       which queues a deployment has, and why naming one declares it
+        control.py      the notice that says "read again", and what it may not cost a save
+        profiles.py     what two bots must agree on before they share anything
+        groups.py       the objects a profile owns: the transport, and what drains it
+        registry.py     one TelegramBot per configured alias; `bots['support']`
     producer/
         client.py       TelegramBot: bot/dispatcher/loop, send, send_raw, shutdown
         outbound.py     what names one send in flight, and what settles it
@@ -45,6 +72,7 @@ src/django_aiogram/
                         live in a transport, so it lives above the broker contract
     consumer/
         delivery.py     BlpopDelivery, the one consumer
+        serving.py      the consumers a container runs, one per lane of queues
         webhook.py      the view an update arrives at
         routers.py      autodiscover
     wire/
@@ -221,6 +249,22 @@ Packaging-only work does not need the Redis suite, and vice versa.
   `tgbot_replay` is the only place in the package that writes a row that way,
   and the reason is written where it does it — 4.1 built that row on the
   recorder first, which drops rather than waits.
+- **A provider says what it read, or raises.** A reader of the configured bots
+  never answers "nothing" to mean "I could not look": a database that blinked
+  would deregister every bot in the process. The supervisor keeps what it has
+  when a read raises, and an answer of *no bots at all* is held for one pass
+  before it is believed. This is the read-side twin of the rule below about a
+  write that raised.
+- **Level-triggered, never edge-triggered.** Nothing in `runtime/` acts on "what
+  changed": every pass reads the whole desired set and compares. A control
+  message says *read again*, never *set the token to X*, so a duplicate costs
+  nothing, a loss costs one interval, and a reordered pair cannot leave a process
+  serving the wrong bots.
+- **A field on a public record goes last.** `Event`, `Sent`, `Taken`,
+  `Queueing`, `Outbound` — a project may be unpacking or constructing them
+  positionally, so a field in the middle rebinds everything after it. Last is a
+  break only for code unpacking every value at once, and `Upgrading.md` is where
+  that is said out loud.
 - **Values go in `extra`, not in the message.** `logger.warning('rate limited',
   extra={'tg_function': name})`, never an f-string. Keys are `tg_`-prefixed so
   they cannot collide with `LogRecord` attributes.
@@ -313,6 +357,7 @@ Packaging-only work does not need the Redis suite, and vice versa.
 | --- | --- |
 | `config/` | what a project configures, and what refuses a bad value |
 | `broker/` | one transport per package; the contract they answer |
+| `runtime/` | what a bot needs while the process runs: its profile, its group, and the object a project sends through |
 | `producer/` | the send side: the bot, the producer, the pacing |
 | `consumer/` | the receive side: the queue consumer, the webhook view, router discovery |
 | `wire/` | how a message becomes bytes and comes back |

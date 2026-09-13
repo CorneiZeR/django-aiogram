@@ -36,7 +36,7 @@ def test_a_message_queued_asynchronously_is_readable_synchronously(server, redis
     """The two producers have to agree byte for byte, and only a real server can
     say so: fakeredis is one store behind both halves of the fixture, so a shape
     that differed would still round trip."""
-    with override_settings(TELEGRAM_BOT=settings(redis_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings(redis_url)):
         bot = TelegramBot()
         identifier = asyncio.run(bot.aenqueue(chat_id=7, text='hi'))
         asyncio.run(bot.aclose())
@@ -67,7 +67,7 @@ def test_a_client_does_not_outlive_the_loop_it_belongs_to(server, redis_url):
         await client.rpush('drai:integration:probe', b'x')
         references.append(weakref.ref(client))
 
-    with override_settings(TELEGRAM_BOT=settings(redis_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings(redis_url)):
         for _ in range(3):
             loop = asyncio.new_event_loop()
             try:
@@ -90,7 +90,7 @@ def test_closing_releases_the_connection_on_the_loop_that_owns_it(server, redis_
     the point is the socket, and a client that has let go of its pool still looks
     the same from here.
     """
-    with override_settings(TELEGRAM_BOT=settings(redis_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings(redis_url)):
 
         async def queue_then_close():
             await TelegramBot().aenqueue(chat_id=1, text='hi')
@@ -118,7 +118,7 @@ def test_the_async_client_survives_the_loop_being_recreated(server, redis_url):
     answers `Event loop is closed` on its first command, and the registry would
     hand it out for ever if it keyed on anything but the running loop.
     """
-    with override_settings(TELEGRAM_BOT=settings(redis_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings(redis_url)):
         bot = TelegramBot()
         first = asyncio.run(bot.aenqueue(chat_id=1, text='one'))
         second = asyncio.run(bot.aenqueue(chat_id=2, text='two'))
@@ -155,7 +155,7 @@ def test_a_broadcast_writes_one_round_trip_per_chunk(server, redis_url):
     if before is None:
         pytest.skip('this server does not report INFO commandstats, so round trips cannot be counted')
 
-    with override_settings(TELEGRAM_BOT=settings(redis_url)):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings(redis_url)):
         identifiers = asyncio.run(TelegramBot().asend_many(range(10), chunk_size=4, text='hi'))
         asyncio.run(TelegramBot().aclose())
 

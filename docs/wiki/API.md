@@ -259,7 +259,7 @@ fresh event loop and HTTP session that nothing closes — see **[Sending message
 from django_aiogram import TelegramBot, bot, conf, __version__
 ```
 
-`conf` reads `settings.TELEGRAM_BOT` on first access, falls back to
+`conf` reads `settings.TELEGRAM_BOT_DEFAULTS` on first access, falls back to
 `DJANGO_AIOGRAM_<NAME>` for scalars, and resets itself on `override_settings`.
 
 **`get_redis` and `redis_conn` left this list in 4.0**, along with `bot.redis_conn`. They are
@@ -279,14 +279,17 @@ token, a broker or a running loop.
 
 | | |
 | --- | --- |
-| `capture_sends()` | a context manager; the block's queued sends, as records with `function`, `kwargs`, `correlation_id` and `queued_at` |
+| `capture_sends(bot=None, *, queue=None)` | a context manager; the block's queued sends, as records with `function`, `kwargs`, `correlation_id`, `queued_at` and `bot_id`. `bot` and `queue` narrow what it captures |
+| `Captured.for_bot(bot)` | the sends one bot made, by alias or identity; raises `NotCapturedError` for a bot this capture is not watching |
+| `NotCapturedError` | an `AssertionError`, so a wrong question fails the test rather than passing it |
 | `InMemoryBroker` | a real `Broker` with no server — point `BROKER` at `'django_aiogram.testing.InMemoryBroker'` for a whole suite |
 | `SendCaptureMixin` | the same capture for a `TestCase`, as `self.sent` |
 | `telegram_sends` | the pytest fixture, from `django_aiogram.testing.plugin` |
-| `use_broker(broker)` | the seam under all of it, in `django_aiogram.broker.registry` |
+| `capture_telegram_sends` | the fixture that narrows: `capture_telegram_sends(bot='support')`, for the rest of the test |
+| `use_broker(broker, *, queue=None, bots=None)` | the seam under all of it, in `django_aiogram.broker.registry` |
 
 ```python
-from django_aiogram.testing import InMemoryBroker, SendCaptureMixin, capture_sends
+from django_aiogram.testing import InMemoryBroker, NotCapturedError, SendCaptureMixin, capture_sends
 ```
 
 They exist so that a project's tests stop depending on this package's wire format: reading a
@@ -301,7 +304,7 @@ so a project can import the value instead of spelling the string:
 ```python
 from django_aiogram.config.enums import StorageKind, UpdateMode
 
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'FSM_STORAGE': StorageKind.REDIS,
     'MODE': UpdateMode.POLLING,
 }

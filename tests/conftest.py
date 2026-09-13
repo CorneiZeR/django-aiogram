@@ -10,7 +10,10 @@ from django_aiogram import conf
 # tells a project to write, and it is only honoured in the *rootdir* `conftest.py` -- which
 # this is not, the rootdir being the repository. Importing the fixture here is the same
 # registration by hand, and `test_testing_helpers.py` is what uses it
-from django_aiogram.testing.plugin import telegram_sends  # noqa: F401 - a fixture, reached by name
+from django_aiogram.testing.plugin import (  # noqa: F401 - fixtures, reached by name
+    capture_telegram_sends,
+    telegram_sends,
+)
 
 # `django_aiogram.bot` is the singleton instance, so the class lives in
 # `client`; patching the wrong one silently leaves the real connection in place.
@@ -65,6 +68,29 @@ def _uncached_settings():
     conf.reset()
 
 
+@pytest.fixture(autouse=True)
+def _providers_read_afresh():
+    """Forget the watermark and the held answers between cases.
+
+    Both are process-wide caches over rows a `django_db` case rolls back, and the held answer
+    is the one that bites: a case whose provider reads nothing after a case whose provider read
+    a bot is exactly the shape the empty-answer guard holds back, so it would be handed the
+    other case's bot.
+
+    The unwritten states go with them: a case whose database refused a write leaves one held,
+    and the next pass anywhere in the suite would write it to whatever row now has that id.
+    """
+    from django_aiogram.runtime import lifecycle, providers
+
+    def afresh():
+        providers.forget()
+        lifecycle._unwritten.clear()
+
+    afresh()
+    yield
+    afresh()
+
+
 @pytest.fixture
 def redis_server(monkeypatch):
     """Swap the shared connection for an in-memory one, sync and async alike.
@@ -79,7 +105,33 @@ def redis_server(monkeypatch):
     for target in PATCH_TARGETS:
         monkeypatch.setattr(target, lambda *args, client=client, **kwargs: client)
     monkeypatch.setattr(
+        # `*args` because the accessors take the settings a client is for since 5.0: bound to
+        # `server` positionally, a bot's settings arrived where the fake server goes
         'django_aiogram.redis.build_async_client',
-        lambda server=server: fakeredis.aioredis.FakeRedis(server=server),
+        lambda *args, server=server, **kwargs: fakeredis.aioredis.FakeRedis(server=server),
     )
     return client
+
+
+@pytest.fixture(autouse=True)
+def _handlers_stay_in_their_own_case():
+    """Undo whatever a case registered on the shared router.
+
+    The router is one per process since 5.0, and for the reason `runtime.process` gives: a
+    `Router` cannot be attached to two dispatchers, so a tree per bot would make whether a
+    project's handlers serve a bot depend on its transport settings. The cost lands here —
+    a handler registered by one case is registered for the rest of the session, and aiogram
+    stops at the first that matches, so an early catch-all silently swallows every later
+    case's updates.
+
+    Truncated rather than replaced: `django.setup()` registers the fake app's handlers on this
+    router before any case runs, and a fresh one would lose them — which is what
+    `test_autodiscover` is about.
+    """
+    from django_aiogram.runtime import process
+
+    router = process.router()
+    before = {name: len(observer.handlers) for name, observer in router.observers.items()}
+    yield
+    for name, observer in router.observers.items():
+        del observer.handlers[before.get(name, 0) :]

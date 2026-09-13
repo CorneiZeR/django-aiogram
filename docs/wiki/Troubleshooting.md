@@ -105,6 +105,23 @@ ahead. Without `LMOVE` it is at-most-once, unless `REQUIRE_CRASH_SAFE` is on —
 then the worker refuses to start rather than deliver that way. A send that
 exhausted `MAX_RETRIES` is logged and acknowledged, not redelivered.
 
+## The probe says nothing ever started, and the consumers are running
+
+Look at what the container serves and what the probe asks about. A container started with
+`--queues client-a --queues client-b` serves those; a probe with no `--queue` asks about the
+queue this process's *settings* name, which is a queue nobody here is reading — so it reports
+`no heartbeat has been written` however well the consumers are doing.
+
+```shell
+python manage.py tgbot_queues                       # what is actually being consumed
+
+# the module form runs no django.setup(), so it needs the settings module in its environment
+DJANGO_SETTINGS_MODULE=myproject.settings python -m django_aiogram.healthcheck \
+    --queue client-a --queue client-b
+```
+
+The same names, in both places. **[Deployment](Deployment.md)** has the compose shape.
+
 ## The container is unhealthy while the probe says `healthy`
 
 The probe was killed by Docker's `timeout`, so its exit code never arrived — `docker
@@ -145,7 +162,7 @@ Grepping one out of `docker inspect` should land here.
 | --- | --- |
 | `the broker is unreachable: …` | The transport could not be addressed or refused the connection. Covers a missing or malformed `REDIS_URL`, an unreadable `REDIS_TIMEOUT`, and a broker that is genuinely down or has dropped the connection mid-probe. This line was `redis is unreachable` up to 3.1 — it moved when the probe stopped pinging Redis before every check, which is what lets it run at all on a transport that is not Redis. The old wording survives in one place: `--guarantee` and `--stranded` build a Redis client of their own, and when that fails they log `redis is unreachable` as `tg_reason` rather than refusing — the guarantee then reads `unknown`, and the sweep says it did not finish |
 | `… needs the '…' package, which is not installed. Install it with: pip install "django-aiogram[…]"` | `BROKER` names a transport whose driver this image does not carry. Every driver is an extra since 4.0, so an image built for one transport and pointed at another gets this — the line names the extra that fixes it. Both forms of the probe report it; neither tracebacks |
-| `TELEGRAM_BOT['…'] is not a number: …` | `HEARTBEAT_INTERVAL` or `HEALTHCHECK_MAX_QUEUE` holds something `int()` refuses. `manage.py check` reports these as `E023`/`E024`, but the container form never runs it — that is the point of it — so it says so itself |
+| `TELEGRAM_BOT_DEFAULTS['…'] is not a number: …` | `HEARTBEAT_INTERVAL` or `HEALTHCHECK_MAX_QUEUE` holds something `int()` refuses. `manage.py check` reports these as `E023`/`E024`, but the container form never runs it — that is the point of it — so it says so itself |
 | `cannot read the settings: …` | `DJANGO_SETTINGS_MODULE` is missing from the container's environment, or names a module that does not import. See the section above |
 | `no heartbeat has been written: nothing within Ns, or the consumer never started` | Redis list: the key is absent — the consumer never ran, died before its first beat, or has been silent longer than the key's TTL. If the line adds that a limit over the TTL cannot be observed, `--max-age` is set above `3 × HEARTBEAT_INTERVAL` and is doing nothing |
 | `no consumer has joined the group: nothing within Ns, or the consumer never started` | Redis Streams: the group exists and nothing has ever read from it. Nothing is written for this transport — the group's own record of when each member last spoke is the signal — so this means no worker has started, not that a key is missing |
@@ -172,21 +189,35 @@ that part rather than fail the container over it:
 ## The webhook answers 503, or every update 403s
 
 **503** means the view refused the update rather than handling it, so Telegram will
-redeliver — which is what you want. Four reasons, each with its own log line:
+redeliver — which is what you want. Each reason has its own log line:
 
 - `webhook received an update while the bot is disabled` — `ENABLED` is off here
-- `webhook is not configured to serve updates` — `MODE` or `WEBHOOK_SECRET` cannot be
-  read: an unknown mode and an empty secret each raise `ImproperlyConfigured`, and this is
-  the view answering for it rather than raising through. The secret is only read once the
-  mode says to serve, so a polling deployment is told it polls instead
+- `webhook is not configured to serve updates` — `MODE` cannot be read: an unknown one
+  raises `ImproperlyConfigured`, and this is the view answering for it rather than raising
+  through
 - `webhook received an update while this deployment polls` — `MODE` is not `webhook`, so
   a worker is polling and this process must not also feed the dispatcher
+- `webhook cannot resolve the bot the path names` — the identity in the URL is one this
+  deployment serves, and building its bot still failed: a settings dict that cannot be read is
+  the case that gets here. A row whose token carries no identity never does — the providers
+  skip it, so nothing could have matched the path
+- `webhook has no secret to serve this update with` — `WEBHOOK_SECRET` is empty for the bot
+  the path names, or for this process where the path names none. Read only once the mode says
+  to serve, so a polling deployment is told it polls instead. A bot with no secret of its own
+  is refused rather than served under another bot's: one shared secret makes a leak from one
+  client's bot a way to post as every other
 - `webhook cannot build the bot` — building it raised `ImproperlyConfigured`; a
   missing or malformed `TOKEN` is the common example, not the only one
 - `webhook refused an update` — nothing ran it: the process is shutting down, its loop was
   already closed by an earlier `close()`, or the loop's own thread had not started yet.
   The closed-loop case is worth knowing about in a web worker that stays up — something
   closed the bot and requests kept arriving
+
+**404** means the path named a bot this deployment does not serve, and it is a 404 rather
+than a 503 on purpose: nothing here can ever handle that update, so redelivery would be
+Telegram trying for ever. The line is `webhook refused an update for a bot this deployment
+does not serve`, and it is answered from a cached set of identities — a stranger posting at
+the URL costs no database read.
 
 **403** means the `X-Telegram-Bot-Api-Secret-Token` header did not match
 `WEBHOOK_SECRET`. Check that the value you registered with `manage.py tgbot_webhook set`
@@ -291,7 +322,7 @@ among them, and none of those decides anything. Several things produce that:
 record an outcome: `EVENT_LOG` on, and `EVENT_LOG_KINDS` empty or keeping all four of
 `outbound.sent`, `outbound.failed`, `outbound.dropped` and `outbound.queued` —
 **[Event log](Event-log.md#what-became-of-one-message)** says what each is for. The bot
-container reads its own `TELEGRAM_BOT`, so the refusal cannot fire for *its* configuration:
+container reads its own `TELEGRAM_BOT_DEFAULTS`, so the refusal cannot fire for *its* configuration:
 that is [the event log writes nothing](#the-event-log-writes-nothing) below, item 3, and the
 half-a-story it describes is exactly this symptom seen from the reading end. Nor does the
 refusal say the writer succeeded; that is what the `log.dropped` row above is for.
@@ -354,6 +385,95 @@ Then, in the order these bite:
 `ENABLED` is parsed, so `'false'` disables. If a value cannot be parsed you get
 `ImproperlyConfigured` rather than a silent fallback. Both the app startup and
 the send path read it the same way.
+
+## Two containers, and a bot polled by neither or both
+
+Polling is exclusive, so a polling container holds a lease per bot: one row in
+`django_aiogram_bot_lease`, named by `WORKER_NAME`, renewed on every pass.
+
+```shell
+manage.py shell -c "from django_aiogram.models import TelegramBotLease as L; print(list(L.objects.values_list('bot_id', 'holder', 'expires_at')))"
+```
+
+- **A bot nobody holds** while containers are running means every one of them is at
+  `MAX_BOTS_PER_WORKER` — or none of them could read the leases at all. A container
+  that cannot reach them keeps only the bots it is already serving, and takes nothing
+  new, which is the same rule a provider that could not look gets; the log says
+  `could not read the bot leases`. Read that before changing the capacity.
+- **A bot that keeps changing holder** means the lease lapses between renewals:
+  `BOT_LEASE_SECONDS` is not comfortably longer than `BOT_REFRESH_INTERVAL`, which
+  `manage.py check` reports as `W011`. Each trade is a 409 for whoever was polling.
+- **A lease held by a container that is gone** is taken by the next one to ask, once
+  `expires_at` passes. A container that shut down cleanly released it already.
+- **Two containers with the same `WORKER_NAME`** share one lease, which is not
+  exclusivity at all — they will both poll every bot either of them claims. `I001` is
+  about that name for the same reason.
+
+## A message went out under the wrong bot
+
+One cause, and it is a deployment order rather than a bug: **a consumer older than 5.0**. A
+queued message names the bot it is for in a field a 4.1 consumer cannot read, so that consumer
+delivers everything through the one bot it has — the wrong token, and a chat that bot may not
+even be in. Nothing raises and nothing is dropped.
+
+So every container running `start_tgbot` has to be on 5.0 **before** a second bot starts
+sending. The web tier and the bot container may be deployed in either order while you run one
+bot, which is what makes the upgrade rolling; adding the second bot is the step that is not.
+**[Upgrading](Upgrading.md)** has the order.
+
+The other cause is a token with no identity in it — `E052` reports one. A message queued by
+such a bot names nobody, and a consumer delivers it through its own default, which is the same
+symptom from the other end.
+
+## One client's bot stopped answering
+
+Read the row: `quarantine_reason` says what happened and `quarantined_until` says
+when it will be tried again. An empty reason means nothing is wrong with the bot,
+and `enabled` is then the switch to look at — that one is a person's decision, and
+the quarantine is the software's.
+
+The reason is prefixed by what the failure was, and the three that are told apart
+have different answers:
+
+| prefix | what happened | what fixes it |
+| --- | --- | --- |
+| `revoked` | 401: the token is gone — revoked in BotFather, or the bot deleted | a new token, and nothing else. `quarantined_until` is empty because no wait ends this one |
+| `conflict` | 409: something else is polling this token, usually an old process that has not exited | itself, on the wait shown |
+| `transient` | 429, a closed socket, a 5xx | itself, on the wait shown |
+| `unknown` | anything this package does not recognise — a transport that cannot be imported, a bug | look at the container's log: the line carries `tg_fate` and the exception |
+
+A new token clears a quarantine on the next pass rather than on the wait, including
+a `revoked` one: the bot is identified by the number in front of the colon, so a
+rotated token is the same bot with a changed configuration, and its queue, its feed
+history and its pending sends stay where they are.
+
+To reach the client whose bot it was, connect the signal — the container cannot fix
+a revoked token and the person who owns it can:
+
+```python
+from django_aiogram.runtime.lifecycle import Fate, bot_quarantined
+
+
+def tell_them(bot_id, fate, reason, until, **kwargs):
+    if fate is Fate.REVOKED:
+        ...  # e-mail the account this bot belongs to
+
+
+bot_quarantined.connect(tell_them, dispatch_uid='billing.bot_quarantined')
+```
+
+`bot_recovered` is sent with `bot_id` when a quarantined bot is being served again.
+
+A quarantine belongs to the process that earned it, so a restarted container tries
+every configured bot once — a revoked token included. The row cannot say whether the
+token in it is still the one Telegram refused, so inheriting the quarantine would
+outlive a token corrected while the container was down; one refused request per bot
+per start is the cheaper end of that.
+
+**Edit those rows through a saved instance, not `QuerySet.update()`.** The notice
+that wakes a container is a `post_save` receiver and the poll compares
+`updated_at`; `update()` fires no signal and moves no `auto_now` column, so a
+change made that way is invisible until something else moves either.
 
 ## Sends are slow
 
@@ -497,7 +617,7 @@ settings module is `django_aiogram.config.settings`. See **[Upgrading](Upgrading
 
 In order of how often it is the answer:
 
-1. `TELEGRAM_BOT['EVENT_LOG']` is off. It is off by default, and `record()`
+1. `TELEGRAM_BOT_DEFAULTS['EVENT_LOG']` is off. It is off by default, and `record()`
    returns before it reads anything else.
 2. `migrate` has not run. The writer logs `no such table` once per batch and
    drops what it held; after five failures in a row it suspends for a minute

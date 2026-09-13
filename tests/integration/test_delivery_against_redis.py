@@ -59,7 +59,7 @@ def drain(delivery, expected, timeout=10, settle=0.0):
 
 
 def test_blpop_delivers_and_acknowledges(server, redis_url):
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': redis_url}):
         server.rpush(QUEUE, payload(1), payload(2))
         delivery = Recording()
 
@@ -75,7 +75,7 @@ def test_the_server_supports_the_crash_safe_path(server, redis_url, version):
     if version < (6, 2):
         pytest.skip(f'this server is {version}, so the fallback is the only path')
 
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': redis_url}):
         delivery = Recording()
         assert delivery.reclaim() is True
         assert delivery.crash_safe is True, 'the consumer downgraded on a server that has LMOVE'
@@ -83,7 +83,7 @@ def test_the_server_supports_the_crash_safe_path(server, redis_url, version):
 
 def test_a_message_left_in_flight_is_reclaimed(server, redis_url):
     """What a worker killed mid-send leaves behind, and what the next one does."""
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': redis_url}):
         server.rpush(PROCESSING, payload(7))
         server.rpush(QUEUE, payload(8))
 
@@ -96,7 +96,7 @@ def test_a_message_left_in_flight_is_reclaimed(server, redis_url):
 
 
 def test_a_worker_does_not_reclaim_another_workers_message(server, redis_url):
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': redis_url}):
         other = f'{QUEUE}:processing:someone-else'
         server.rpush(other, payload(9))
 
@@ -109,7 +109,7 @@ def test_a_worker_does_not_reclaim_another_workers_message(server, redis_url):
 
 def test_a_mixed_backlog_drains(server, redis_url):
     """A 1.x queue and a 2.x queue in the same list, which is the upgrade."""
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'ALLOW_PICKLE': True, 'REDIS_URL': redis_url}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'ALLOW_PICKLE': True, 'REDIS_URL': redis_url}):
         server.rpush(QUEUE, payload(1, PickleSerializer), payload(2), payload(3, PickleSerializer))
 
         delivery = Recording()
@@ -152,7 +152,7 @@ def test_two_workers_split_the_queue_without_duplicating(server, redis_url):
             super().__init__()
             self.broker = NamedBroker(name)
 
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': redis_url}):
         for chat_id in range(20):
             server.rpush(QUEUE, payload(chat_id))
 
@@ -173,7 +173,7 @@ def test_two_workers_split_the_queue_without_duplicating(server, redis_url):
 
 def test_the_consumer_survives_the_server_going_away(server, redis_url):
     """A dropped connection must be retried, not end the thread."""
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': redis_url}):
         delivery = Recording()
         thread = delivery.start_thread()
         try:
@@ -195,7 +195,7 @@ def test_the_consumer_survives_the_server_going_away(server, redis_url):
 
 def test_threading_is_not_needed_to_drain(server, redis_url):
     """What the Testing page tells a reader to use: no thread, no timeout."""
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': redis_url}):
         server.rpush(QUEUE, payload(4), payload(5))
         delivery = Recording()
         before = threading.active_count()
@@ -210,7 +210,7 @@ def test_threading_is_not_needed_to_drain(server, redis_url):
 
 def test_the_heartbeat_expires_on_its_own(server, redis_url):
     """A worker that dies must stop looking alive, and only the server can do that."""
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url, 'HEARTBEAT_INTERVAL': 1}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': redis_url, 'HEARTBEAT_INTERVAL': 1}):
         delivery = Recording()
         delivery.heartbeat()
 
@@ -233,7 +233,7 @@ def test_a_read_longer_than_the_heartbeat_interval_keeps_it_fresh(server, redis_
         'BLPOP_TIMEOUT': 30,  # ten times the interval
         'HEARTBEAT_INTERVAL': 3,
     }
-    with override_settings(TELEGRAM_BOT=settings):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings):
         delivery = Recording()
         key = delivery.heartbeat_key
         thread = delivery.start_thread()
@@ -256,7 +256,7 @@ def test_a_read_longer_than_the_heartbeat_interval_keeps_it_fresh(server, redis_
 
 
 def test_the_running_consumer_keeps_its_heartbeat_fresh(server, redis_url):
-    with override_settings(TELEGRAM_BOT={**SETTINGS, 'REDIS_URL': redis_url, 'HEARTBEAT_INTERVAL': 1}):
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'REDIS_URL': redis_url, 'HEARTBEAT_INTERVAL': 1}):
         delivery = Recording()
         key = delivery.heartbeat_key
         thread = delivery.start_thread()
@@ -293,7 +293,7 @@ def test_an_idle_consumer_survives_more_rounds_than_the_deadline(server, redis_u
         'BLPOP_TIMEOUT': 2,
         'REDIS_TIMEOUT': 2,  # the pop gets capped to 1, and must not exceed it
     }
-    with override_settings(TELEGRAM_BOT=settings), caplog.at_level(logging.WARNING):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings), caplog.at_level(logging.WARNING):
         server.delete(QUEUE)
         handled = []
         # the consumer also passes correlation_id and queued_at; what this test

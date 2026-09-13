@@ -86,7 +86,7 @@ class UnsupportedInputFileError(SerializationError):
         """Name the refused type and the two ways to send the file anyway."""
         super().__init__(
             f'{type(value).__name__} cannot be queued. Send a file_id or a URL instead, '
-            "or set TELEGRAM_BOT['SERIALIZER'] to 'pickle' together with "
+            "or set TELEGRAM_BOT_DEFAULTS['SERIALIZER'] to 'pickle' together with "
             'ALLOW_PICKLE = True, or the reader will refuse what it writes.',
         )
 
@@ -133,7 +133,7 @@ class PickleReadRefusedError(SerializationError):
         """Explain the refusal and the setting that lifts it."""
         super().__init__(
             'Refusing to unpickle a queued payload, because unpickling queue data '
-            "is code execution. Set TELEGRAM_BOT['ALLOW_PICKLE'] = True to accept "
+            "is code execution. Set TELEGRAM_BOT_DEFAULTS['ALLOW_PICKLE'] = True to accept "
             'it, and only on a queue nothing untrusted can write to.',
         )
 

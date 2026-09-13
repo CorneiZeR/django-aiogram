@@ -4,10 +4,14 @@ Run [aiogram](https://docs.aiogram.dev/) in a container next to Django, write ha
 ordinary Django app code, and send Telegram messages from anywhere in the project.
 
 ```python
-from django_aiogram import bot
+from django_aiogram import bot, bots
 
 bot.send(chat_id=CHAT_ID, text='hello')
+bots['support'].send(chat_id=CHAT_ID, text='and from the second one')
 ```
+
+One bot or twenty: `bot` is the one a single-bot project has, `bots[alias]` is the rest, and
+they share a connection wherever their settings agree. **[Multiple bots](Multiple-bots.md)**.
 
 Only the bot container runs the polling loop. Elsewhere `send()` queues the message and
 returns — where the process is enabled; `ENABLED=0` makes it a no-op that still names the
@@ -15,8 +19,8 @@ message. `send_raw()` skips the queue and talks to Telegram from the calling pro
 
 ## Four transports, one setting
 
-`BROKER` names the queue, and your code does not change with it: the same `bot.send()`, the
-same handlers, the same event log, the same `manage.py start_tgbot`. What differs is what
+`BROKER` names the transport, and your code does not change with it: the same `bot.send()`,
+the same handlers, the same event log, the same `manage.py start_tgbot`. What differs is what
 becomes of a message whose worker was killed mid-send, and what recovery is — a command, a
 clock, or the broker's own doing.
 
@@ -78,7 +82,20 @@ defaults to aiogram's Redis one, and `FSM_STORAGE: 'memory'` is what drops it.
 
     ---
 
-    Every key under `TELEGRAM_BOT`, with its default and the check id that guards it.
+    Every key under `TELEGRAM_BOT_DEFAULTS` and `TELEGRAM_BOTS`, with its default and the
+    check id that guards it.
+
+-   **[Multiple bots](Multiple-bots.md)**
+
+    ---
+
+    Aliases and identities, what a section may say, and what twenty bots actually cost.
+
+-   **[Dynamic bots](Dynamic-bots.md)**
+
+    ---
+
+    Bots that arrive while it runs: providers, reconciliation, quarantine, intents, leases.
 
 -   **[Handlers](Handlers.md)**
 
@@ -129,11 +146,29 @@ defaults to aiogram's Redis one, and `FSM_STORAGE: 'memory'` is what drops it.
 
     Updates over HTTP instead of polling for them, in four steps.
 
+-   **[Scaling](Scaling.md)**
+
+    ---
+
+    Where polling stops, why a webhook costs nothing per bot, and what grows with the bots.
+
 -   **[Rate limits](Rate-limits.md)**
 
     ---
 
     Staying inside Telegram's published limits, and what the pacer does when you do not.
+
+-   **[Tokens](Tokens.md)**
+
+    ---
+
+    Where a bot's credential is kept, encrypting the column, and rotating the key with nothing down.
+
+-   **[Admin](Admin.md)**
+
+    ---
+
+    Configuring bots, profiles and queues from the admin, and the permission the token is behind.
 
 -   **[Logging](Logging.md)**
 
@@ -145,7 +180,7 @@ defaults to aiogram's Redis one, and `FSM_STORAGE: 'memory'` is what drops it.
 
     ---
 
-    An optional table recording what the bot did, and a signal to count it without one.
+    An optional table recording what each bot did, and a signal to count it without one.
 
 </div>
 

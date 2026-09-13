@@ -1,6 +1,6 @@
 """What a project configures, and what refuses a bad value.
 
-`settings` reads the `TELEGRAM_BOT` dict and the `DJANGO_AIOGRAM_` environment twins;
+`settings` reads the `TELEGRAM_BOT_DEFAULTS` dict and the `DJANGO_AIOGRAM_` environment twins;
 `defaults` is the only place a default lives; `enums` holds the values a setting accepts;
 `checks` judges the result and is the only module here that reports to Django.
 

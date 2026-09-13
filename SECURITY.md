@@ -21,7 +21,7 @@ that has not been made yet; until it is, it keeps the answer it had.
 
 ## The event log stores what the bot did
 
-`TELEGRAM_BOT['EVENT_LOG']` is off by default. Turning it on writes a row per
+`TELEGRAM_BOT_DEFAULTS['EVENT_LOG']` is off by default. Turning it on writes a row per
 event, and two things follow from that.
 
 Message bodies are **not** stored unless `EVENT_LOG_PAYLOAD` is `'full'`. That
@@ -60,7 +60,7 @@ extending the bot container's trust boundary to everything that can write to
 the queue, whichever broker holds it:
 
 ```python
-TELEGRAM_BOT = {
+TELEGRAM_BOT_DEFAULTS = {
     'ALLOW_PICKLE': True,
 }
 ```
@@ -85,7 +85,7 @@ behind it must stay inside your own trust boundary, whichever of the four it is.
 
 ## Tokens
 
-The bot token is read from `TELEGRAM_BOT['TOKEN']` or the
+The bot token is read from `TELEGRAM_BOT_DEFAULTS['TOKEN']` or the
 `DJANGO_AIOGRAM_TOKEN` environment variable. It is never logged.
 
 `ENABLED=0` means a process needs no token: it sends to neither Telegram nor the

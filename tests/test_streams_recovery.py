@@ -12,6 +12,7 @@ import pytest
 from django.test import override_settings
 
 from django_aiogram.broker.redis_streams import RedisStreamsBroker
+from django_aiogram.redis import heartbeat_ttl
 from django_aiogram.wire.serializers import JsonSerializer
 
 STREAM = 'TELEGRAM_BOT_STREAM'
@@ -33,11 +34,11 @@ def payload(chat_id):
 
 @pytest.fixture
 def broker(redis_server):
-    with override_settings(TELEGRAM_BOT=SETTINGS):
+    with override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS):
         yield RedisStreamsBroker()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_recovery_steps_over_an_entry_this_package_cannot_read(broker, redis_server):
     """One undecodable entry must not hide every valid one behind it.
 
@@ -68,7 +69,7 @@ def test_recovery_steps_over_an_entry_this_package_cannot_read(broker, redis_ser
     assert again.payload == payload(1)
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_every_reclaimed_entry_comes_back_not_just_the_first(broker, redis_server):
     """A page of pending entries must be delivered entry by entry.
 
@@ -95,7 +96,7 @@ def test_every_reclaimed_entry_comes_back_not_just_the_first(broker, redis_serve
     assert sorted(seen) == sorted(sent), f'{len(seen)} of {len(sent)} released messages came back'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_liveness_comes_from_the_group_with_no_key_to_write(broker, redis_server):
     """The transport answers for itself, and writes nothing to do it.
 
@@ -126,7 +127,7 @@ def test_liveness_comes_from_the_group_with_no_key_to_write(broker, redis_server
     )
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_release_does_not_hand_back_a_send_that_is_still_running(broker, redis_server):
     """The consumer holds several messages at once, so recovery must skip the live ones.
 
@@ -153,7 +154,7 @@ def test_a_release_does_not_hand_back_a_send_that_is_still_running(broker, redis
     assert broker.take_nowait() is None, 'something else came back too'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_a_url_that_asks_for_decoding_still_delivers(monkeypatch):
     """`decode_responses` is tolerated, so it must not silently deliver nothing.
 
@@ -170,7 +171,7 @@ def test_a_url_that_asks_for_decoding_still_delivers(monkeypatch):
     decoding one answers `'payload'`.
     """
     decoding = fakeredis.FakeRedis(server=fakeredis.FakeServer(), decode_responses=True)
-    monkeypatch.setattr('django_aiogram.broker.redis_streams.broker.get_redis', lambda: decoding)
+    monkeypatch.setattr('django_aiogram.broker.redis_streams.broker.get_redis', lambda *args, **kwargs: decoding)
     broker = RedisStreamsBroker()
 
     broker.publish([payload(5)])
@@ -181,7 +182,7 @@ def test_a_url_that_asks_for_decoding_still_delivers(monkeypatch):
     assert taken.payload == payload(5), 'the payload did not survive the round trip'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_async_half_does_not_reach_for_the_synchronous_client(broker, redis_server, monkeypatch):
     """Creating the group is two round trips, and on `apublish` they belong on the loop.
 
@@ -214,7 +215,7 @@ def test_the_async_half_does_not_reach_for_the_synchronous_client(broker, redis_
     assert inflight == 0, 'nothing was taken, so nothing is in flight'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_reclaiming_by_worker_name_is_refused_here(redis_server):
     """`tgbot_reclaim` names a worker, and on this transport a name selects nothing.
 
@@ -229,7 +230,7 @@ def test_reclaiming_by_worker_name_is_refused_here(redis_server):
         call_command('tgbot_reclaim', worker='gone')
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_awaiting_reads_answer_nothing_rather_than_raising(broker, redis_server):
     """Nothing published yet is nothing waiting, on the awaited halves too.
 
@@ -249,3 +250,95 @@ def test_the_awaiting_reads_answer_nothing_rather_than_raising(broker, redis_ser
     assert depth == 0, 'a stream that does not exist reported messages waiting'
     assert inflight == 0, 'a group that does not exist reported work in flight'
     assert not redis_server.exists(STREAM), 'reading created the stream'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_stream_deleted_by_somebody_else_is_grouped_again(redis_server):
+    """A consumer that remembered creating a group must not read `NOGROUP` for ever.
+
+    Another container's `tgbot_prune_queues`, an operator, a client removed: the stream goes and
+    the group goes with it, while this instance still believes it has one. Before the retry that
+    was every take for the life of the process -- and on a multiplexed read, every queue in the
+    lane rather than the one that went.
+    """
+    broker = RedisStreamsBroker()
+    broker.publish([payload(1)])
+    taken = broker.take_nowait()
+    assert taken is not None, 'the message was not delivered in the first place'
+    broker.ack(taken.handle)
+
+    redis_server.delete(STREAM)  # what another process does, with this instance none the wiser
+    broker.publish([payload(2)])
+
+    again = broker.take_nowait()
+
+    assert again is not None, 'the read never recovered from the group being gone'
+    assert again.payload == payload(2)
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_reclaim_recovers_from_a_stream_somebody_deleted(redis_server):
+    """The same recovery as a read, because a reclaim walks *every* stream in the lane.
+
+    Without it the first deleted stream raises and the walk stops, so one queue an operator
+    removed leaves the other nineteen unreclaimed -- a container that comes back holding work
+    nobody will hand out again.
+    """
+    broker = RedisStreamsBroker()
+    broker.publish([payload(1)])
+    taken = broker.take_nowait()
+    assert taken is not None, 'the message was not delivered in the first place'
+    broker.ack(taken.handle)
+
+    # a second stream with work left on it, idle long enough to be reclaimable, so the walk has
+    # somewhere to get to after the deleted one
+    beside = f'{STREAM}-also'
+    aside = RedisStreamsBroker.configured({**SETTINGS, 'QUEUE': beside})
+    aside.publish([payload(2)])
+    left = aside.take_nowait()
+    assert left is not None, 'the second stream never delivered'
+    redis_server.xclaim(
+        beside,
+        str(aside.opt('REDIS_STREAM_GROUP')),
+        'the-worker-that-died',
+        min_idle_time=0,
+        message_ids=[left.handle.identifier],
+        idle=heartbeat_ttl() * 1000,
+    )
+    redis_server.delete(STREAM)  # and the first one goes, with its group
+
+    claimed = broker.reclaim((STREAM, beside))
+
+    assert claimed == 1, f'the walk stopped at the deleted stream: {claimed}'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_one_stream_that_cannot_carry_a_group_does_not_stop_the_lane(redis_server, caplog):
+    """A key holding something else is one queue's problem, not the container's.
+
+    ``WRONGTYPE`` is what a name holding a list answers to ``XGROUP CREATE``, and the read
+    raised before any stream was looked at -- so nineteen healthy queues waited behind the
+    twentieth while the consumer logged and retried. The bad one is left out and reported.
+    """
+    broken = f'{STREAM}-not-a-stream'
+    redis_server.rpush(broken, b'a list, which is what somebody else put here')
+    broker = RedisStreamsBroker()
+    broker.publish([payload(1)])
+
+    with caplog.at_level('WARNING', logger='django_aiogram'):
+        taken = broker.take_nowait((STREAM, broken))
+
+    assert taken is not None, 'the healthy stream was not read'
+    assert taken.payload == payload(1)
+    assert any(record.tg_key == broken for record in caplog.records if hasattr(record, 'tg_key'))
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_read_with_nothing_usable_left_says_why(redis_server):
+    """Leaving every stream out would be a read that answers "nothing" about a broken server."""
+    broken = f'{STREAM}-not-a-stream'
+    redis_server.rpush(broken, b'a list again')
+    broker = RedisStreamsBroker()
+
+    with pytest.raises(Exception, match='WRONGTYPE'):
+        broker.take_nowait((broken,))

@@ -1,0 +1,14 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+  <h1>{{ title }}</h1>
+  {% if token %}
+    <p>Copy it now — this page does not show it again, and reading it was recorded in the event feed.</p>
+    <p><code>{{ token }}</code></p>
+  {% else %}
+    <p>Revealing this token is recorded in the event feed: the bot, and who asked.</p>
+    <form method="post">{% csrf_token %}
+      <button type="submit" class="default">Show the token</button>
+    </form>
+  {% endif %}
+  <p><a href="../change/">Back to the bot</a></p>
+{% endblock %}

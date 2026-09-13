@@ -19,12 +19,15 @@ APP_LABEL = 'django_aiogram'
 #: the model this router is about, by name rather than by import: this module is read while
 #: the app registry is still loading, and importing `models` from here would be a cycle.
 #:
-#: **The app's other table is deliberately not in it.** `TelegramScheduledSend` is
-#: operational state a producer writes and a mover consumes -- it belongs with the caller's
-#: own writes, on the default connection, which is also what lets a scheduled send roll back
-#: with the transaction that made it. Routed by app label, as this was until 4.1, a log
-#: database would have taken the schedule with it and `allow_migrate` would have created the
-#: table *only* there, so nothing on `default` would have had one at all
+#: **The app's other tables are deliberately not in it, and the rule is what they are rather
+#: than how many.** Everything else this app ships is *operational state* -- the schedule a
+#: producer writes and a mover consumes, the replay claim, the bots and profiles a supervisor
+#: reads, the queues, the leases -- and operational state belongs with the caller's own
+#: writes, on the default connection. That is also what lets a scheduled send roll back with
+#: the transaction that made it, and what makes a claim enforceable without the log's alias
+#: being reachable at all. Routed by app label, as this was until 4.1, a log database would
+#: have taken every one of them with it and `allow_migrate` would have created the tables
+#: *only* there, so nothing on `default` would have had one
 LOG_MODELS = frozenset({'telegramevent'})
 
 

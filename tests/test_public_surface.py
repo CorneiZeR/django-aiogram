@@ -82,12 +82,22 @@ FOUR_ONE_COROUTINES = ('aoutcome',)
 #: exists: the names below are supported the way `bot.send` is, so that the wire format and the
 #: transport key stop being things other people's tests can depend on. Pinned by import rather
 #: than through the bot, because none of them hangs off the client
-TESTING_HELPERS = ('Captured', 'InMemoryBroker', 'SendCaptureMixin', 'Sent', 'capture_sends')
+TESTING_HELPERS = (
+    'Captured',
+    'InMemoryBroker',
+    # 5.0: a narrowed capture refuses a bot it is not watching, and a project's suite catches
+    # that refusal by name
+    'NotCapturedError',
+    'SendCaptureMixin',
+    'Sent',
+    'capture_sends',
+)
 
 #: what `import django_aiogram` gives you. `redis_conn` and `get_redis` left in 4.0: one
 #: transport's client is not the package's business to export, and both are still importable
-#: from `django_aiogram.redis`, which the case below pins
-MODULE_EXPORTS = ('TelegramBot', 'bot', 'conf', '__version__')
+#: from `django_aiogram.redis`, which the case below pins. `bots` arrived in 5.0, beside the
+#: `bot` that is still what a project with one of them writes
+MODULE_EXPORTS = ('TelegramBot', 'bot', 'bots', 'conf', '__version__')
 
 #: what 4.0 took away, pinned by its absence. The tuples above are membership checks, and
 #: membership cannot fail when a name comes *back*: `hasattr` would find a restored
@@ -117,6 +127,10 @@ EVENT_FIELDS = (
     'error_code',
     'error',
     'detail',
+    # 5.0.0: which bot it happened to. **At the end**, because this list is the positional
+    # constructor as much as it is the field names: a receiver reading the fields it already
+    # read is unaffected, and so is a caller that built one positionally
+    'bot_id',
 )
 
 SETTINGS = {'TOKEN': '42:x', 'REDIS_URL': 'redis://localhost:6379/0', 'FSM_STORAGE': 'memory'}
@@ -170,7 +184,7 @@ def test_the_client_no_longer_carries_it(name):
 
 
 @pytest.mark.parametrize('name', OBSERVER_DECORATORS)
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_every_decorator_registers_on_the_router(name):
     """A decorator that silently stops registering is worse than a missing one."""
     instance = TelegramBot()
@@ -184,7 +198,7 @@ def test_every_decorator_registers_on_the_router(name):
     assert len(observer.handlers) == before + 1, f'{name} registered nothing'
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_pre_2_0_shape_still_works_end_to_end():
     """What 1.x code does: build it, reach inside, drive the loop yourself."""
     instance = TelegramBot()
@@ -201,11 +215,16 @@ def test_the_pre_2_0_shape_still_works_end_to_end():
     instance.close()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_construction_arguments_1_x_accepted():
-    """`TelegramBot(max_retries=..., loop=...)` is how 1.x code built it."""
+    """`TelegramBot(max_retries=..., loop=...)` is how 1.x code built it.
+
+    `record` joined them in 5.0 and is asserted here rather than merely tolerated: adding to
+    this surface is allowed and removing from it is not, so the set is what says which of the
+    two happened.
+    """
     signature = inspect.signature(TelegramBot)
-    assert set(signature.parameters) == {'max_retries', 'loop'}
+    assert set(signature.parameters) == {'max_retries', 'loop', 'record'}
 
     supplied = asyncio.new_event_loop()
     instance = TelegramBot(max_retries=3, loop=supplied)
@@ -219,7 +238,7 @@ def test_the_construction_arguments_1_x_accepted():
             supplied.close()
 
 
-@override_settings(TELEGRAM_BOT=SETTINGS)
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_redis_client_is_shared_and_lives_in_its_own_module(redis_server):
     """Still one connection, and still reachable — through the module rather than the package.
 
@@ -292,7 +311,7 @@ def test_one_family_catches_everything_the_package_raises():
 
 
 @override_settings(
-    TELEGRAM_BOT={
+    TELEGRAM_BOT_DEFAULTS={
         'TOKEN': '42:x',
         'REDIS_URL': 'redis://localhost:6379/0',
         'DELIVERY': 'django_aiogram.consumer.delivery.BlpopDelivery',
@@ -470,13 +489,17 @@ def test_the_fixture_and_the_seam_under_it_are_still_there():
     """The two halves that are not classes: the pytest fixture and the registry's override.
 
     `Testing.md` tells a project to write `pytest_plugins = ('django_aiogram.testing.plugin',)`
-    and reach for `telegram_sends`; `use_broker` is what the helper is built on and what a
-    project's own fixtures reach for when they want the same thing by hand.
+    and reach for `telegram_sends` -- or for `capture_telegram_sends`, which narrows the
+    capture to one bot; `use_broker` is what both are built on and what a project's own
+    fixtures reach for when they want the same thing by hand.
     """
     from django_aiogram.broker.registry import use_broker
-    from django_aiogram.testing.plugin import telegram_sends
+    from django_aiogram.testing.plugin import capture_telegram_sends, telegram_sends
 
     assert callable(use_broker)
+    assert any(
+        hasattr(capture_telegram_sends, name) for name in ('_pytestfixturefunction', '_fixture_function_marker')
+    ), 'capture_telegram_sends stopped being a fixture'
     # pytest wraps a fixture in an object that carries the marker; the attribute it hangs it
     # on has changed name across releases, so ask for either rather than pinning pytest's
     assert any(hasattr(telegram_sends, name) for name in ('_pytestfixturefunction', '_fixture_function_marker')), (

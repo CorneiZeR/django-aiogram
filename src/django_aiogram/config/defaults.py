@@ -110,4 +110,83 @@ DEFAULTS: dict[str, Any] = {
     'EVENT_LOG_DATABASE': '',
     # write on the calling thread instead of the writer's: tests only
     'EVENT_LOG_SYNC': False,
+    # where the bots come from, by dotted path and in order. The shipped one reads
+    # `TELEGRAM_BOTS`; a project whose clients bring their own bot adds the one that reads the
+    # table, or writes its own. Process-scoped: which sources exist is not a bot's decision
+    # which queue a bot's messages go to, whatever the transport calls one. Empty means the
+    # transport's own option decides, which is what every 4.x deployment has set. A bot's
+    # setting rather than the process's: two bots on different queues get a broker each
+    # how many sends one bot may have in flight on one queue; 0 is as many as the queue's own
+    # budget allows. The second of two bounds, and the reason there are two: one bound over
+    # the whole queue lets a single chatty or rate-limited client fill it
+    'MAX_IN_FLIGHT_PER_BOT': 0,
+    'QUEUE': '',
+    # the queues this deployment has: a name in `QUEUE` that is not one of these, or a row in
+    # `TelegramQueue`, is refused where it was written. Naming a queue means declaring it,
+    # because the alternative is a typo creating a queue nobody reads
+    # what `manage.py tgbot_prune_queues` does with a queue no bot publishes to: 'park'
+    # (leave it and report it), 'hold' (remove it once empty) or 'drop' (remove it now).
+    # Nothing acts on this on its own -- removing a queue is not a signal handler's decision
+    'REMOVED_QUEUE_POLICY': 'park',
+    # where a bot's credential is kept, as a dotted path to a `TokenStorage`. The shipped
+    # default writes the value as it was given: what protects a token then is the database's
+    # own access control and the admin permission on the column. `[crypto]` ships the
+    # encrypting one, so a project that needs it at rest pays for `cryptography` and the
+    # rest do not
+    # whether the shipped Prometheus exporter labels its series by bot. Off, and that is the
+    # load-bearing default: a label per bot is a series per bot *per kind*, and the histogram
+    # multiplies that again by its buckets -- so a deployment with a thousand clients counts
+    # its series in the hundreds of thousands, which is a Prometheus problem rather than a
+    # dashboard. On, it is one label and the operator's own decision
+    'METRICS_PER_BOT': False,
+    'TOKEN_STORAGE': 'django_aiogram.tokens.PlainTokenStorage',
+    # the keys an encrypting storage uses, newest first: the first one writes and every one
+    # of them reads, which is what makes a rotation `manage.py tgbot_rewrap_tokens` can walk
+    # through while the old rows are still being read
+    'TOKEN_ENCRYPTION_KEYS': (),
+    'QUEUES': (),
+    'BOT_PROVIDERS': ('django_aiogram.runtime.providers.from_settings',),
+    # how often a supervisor re-reads them. The push through the transport is what makes a
+    # change arrive in a second; this is the poll that makes it arrive at all
+    'BOT_REFRESH_INTERVAL': 30,
+    # how many bots one polling process may hold at once; 0 is as many as it is given.
+    # Process-scoped: it is a statement about this container, not about any bot
+    'MAX_BOTS_PER_WORKER': 0,
+    # how long a bot's polling lease is believed. Renewed every pass, so it has to be
+    # comfortably longer than `BOT_REFRESH_INTERVAL` -- `W011` says so when it is not
+    'BOT_LEASE_SECONDS': 90,
 }
+
+
+#: settings a bot may not have of its own, because the thing they configure is one per
+#: process rather than one per bot: the event log's writer thread, the name this worker's
+#: in-flight list is keyed on, the router discovery that runs once at startup, and the FSM
+#: store.
+#:
+#: The store is here because the handlers are. A ``Router`` cannot be attached to two
+#: dispatchers, so a dispatcher per bot would mean a handler tree per bot -- and whether a
+#: project's handlers served a bot would depend on whether its transport settings happened to
+#: match another's. One dispatcher, one router tree and one store per process is what makes
+#: ``bot.router`` mean the same thing for every bot; ``with_bot_id`` is what keeps two bots'
+#: chat state apart inside that one store.
+#:
+#: A section naming one of these is refused by `E053` rather than honoured for whichever bot
+#: resolved last.
+PROCESS_SCOPED: frozenset[str] = frozenset(
+    {
+        'AUTODISCOVER',
+        'MODULE_NAME',
+        'WORKER_NAME',
+        'FSM_STORAGE',
+        'BOT_PROVIDERS',
+        'BOT_REFRESH_INTERVAL',
+        'MAX_BOTS_PER_WORKER',
+        'BOT_LEASE_SECONDS',
+        'QUEUES',
+        'REMOVED_QUEUE_POLICY',
+        'METRICS_PER_BOT',
+        'TOKEN_STORAGE',
+        'TOKEN_ENCRYPTION_KEYS',
+    }
+    | {key for key in DEFAULTS if key.startswith('EVENT_LOG')},
+)

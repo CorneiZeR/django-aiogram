@@ -23,6 +23,29 @@ bot.send('send_photo', chat_id=CHAT_ID, photo=URL, caption='look')
 bot.send('send_chat_action', chat_id=CHAT_ID, action='typing')
 ```
 
+## Which bot it goes through
+
+`bot` is the one a single-bot project has. A project with several reaches the rest by alias,
+and everything on this page works the same through either:
+
+```python
+from django_aiogram import bot, bots
+
+bots['support'].send(chat_id=CHAT_ID, text='from the support bot')
+bots.by_id(123456789).send(chat_id=CHAT_ID, text='from whoever that is')
+```
+
+A queued message **names the bot that made it**, so a container serving several delivers each
+through the right token — and a bot whose token has no identity queues a message that names
+none, which a consumer delivers through the bot it has.
+
+That is what makes the upgrade from 4.1 rolling **while the deployment has one bot**: a 4.1
+consumer cannot read the field and delivers everything through the bot it has, which is the
+right one when there is only one. **Before a second bot sends, every consumer has to be on
+5.0** — otherwise its messages go out under the first bot's token, to chats it may not be in,
+with nothing raised and nothing dropped. **[Upgrading](Upgrading.md)** has the order and
+**[Multiple bots](Multiple-bots.md)** the rest.
+
 ## Checked before it is sent
 
 A method name is a string, so `bot.send('send_mesage', ...)` passes every type checker and
@@ -333,7 +356,7 @@ The row is gone and the message is not. `TRANSACTIONAL` holds the **queue** writ
 commit, so the block above announces nothing when it rolls back:
 
 ```python
-TELEGRAM_BOT = {'TRANSACTIONAL': True}
+TELEGRAM_BOT_DEFAULTS = {'TRANSACTIONAL': True}
 ```
 
 It is off by default because it moves when a message reaches the queue.

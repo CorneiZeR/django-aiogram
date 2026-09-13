@@ -5,4 +5,4 @@ INSTALLED_APPS = ['django_aiogram', 'tests.fake_app']
 
 # deliberately no TOKEN and no REDIS_URL: the suite asserts the package stays
 # importable and Django stays bootable without them
-TELEGRAM_BOT: dict[str, object] = {}
+TELEGRAM_BOT_DEFAULTS: dict[str, object] = {}

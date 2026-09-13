@@ -55,6 +55,14 @@ class Outbound:
     correlation_id: uuid.UUID
     function: str
     call_kwargs: dict[str, Any]
+    #: which bot the send went out under, read when the send was *made*. A bot resolves its
+    #: settings on every ask, so a token rotated while Telegram is answering would otherwise
+    #: put the replacement identity on the row describing a request the old one made -- one
+    #: client's failure attributed to another.
+    #:
+    #: Last, because this dataclass is built positionally in several places and a field in
+    #: the middle rebinds every argument after it
+    bot_id: int | None = None
 
 
 def task_correlation_id(task: 'asyncio.Task[Any]') -> uuid.UUID:

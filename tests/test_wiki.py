@@ -19,6 +19,16 @@ import pytest
 import yaml
 from markdown.extensions.toc import slugify, unique
 
+from django_aiogram.config.defaults import PROCESS_SCOPED
+
+#: what marks a sentence as one of the lists of the process-owned settings: the two keys
+#: every one of them opens with. The settings table and the release history name each key
+#: without ever putting these two side by side
+MARKER = '`AUTODISCOVER`, `MODULE_NAME`'
+#: where one sentence ends and the next begins, so a list left short is not covered by a
+#: neighbouring sentence naming what it dropped
+SENTENCE = re.compile(r'(?<=[.!?])\s+')
+
 ROOT = Path(__file__).resolve().parent.parent
 WIKI = ROOT / 'docs' / 'wiki'
 MKDOCS = ROOT / 'mkdocs.yml'
@@ -512,7 +522,16 @@ def test_the_config_validates_what_it_claims():
 #: has to carry that no wiki page can: four rows saying what `BROKER`, the extra and the
 #: required settings are for each transport. Routing, not prose — the number is here to
 #: refuse a second copy of the documentation, and it still does.
-README_BUDGET = 148
+#:
+#: Raised by one in 5.0.0 for the Scaling row, and again for Tokens and Admin, and twice more
+#: for Multiple bots and Dynamic bots: every page has to be reachable from here --
+#: `test_the_readme_links_to_every_page` -- so a new page is one more line of routing, which is
+#: what this budget is for rather than what it is against. Prose is what it refuses.
+#:
+#: And eight more for the paragraph that says a project may have several bots, which is 5.0's
+#: headline: a front page that did not say so would send every multi-bot reader to the wiki to
+#: find out whether the package does the thing they came for.
+README_BUDGET = 161
 #: `## Title`, with the three leading spaces markdown still renders as a heading
 #: the `{...}` block `attr_list` reads off the end of a heading
 ATTR_BLOCK = re.compile(r'\{:?\s*([^}]*)\}\s*$')
@@ -800,3 +819,64 @@ def test_the_documentation_url_is_declared():
     declared = f'Documentation = "{SITE_URL}"'
 
     assert declared in PYPROJECT.read_text(encoding='utf-8')
+
+
+#: the release that renamed the settings dict. A section about an upgrade that ends before it
+#: describes a version that read the old name, and has to say so
+RENAMED_IN = (5, 0)
+
+UPGRADE_SECTION = re.compile(r'^# From .+ to ([0-9]+)\.([0-9x]+)', re.MULTILINE)
+
+
+def test_a_historical_upgrade_section_keeps_the_name_of_its_own_time():
+    """A blanket rename writes today's name into a section documenting yesterday's release.
+
+    `TELEGRAM_BOT_DEFAULTS` is what 5.0 calls the dict; every release below it reads
+    `TELEGRAM_BOT` and ignores the new name. So a reader upgrading 4.0 to 4.1 from a page
+    carrying the new spelling configures a key that version never reads — measured on the
+    rename itself, which reached five snippets across three historical sections before this
+    case existed. `CHANGELOG.md` was excluded from that rename by hand for the same reason;
+    this page was not, and nothing noticed.
+    """
+    text = (WIKI / 'Upgrading.md').read_text(encoding='utf-8')
+    bounds = [(match.start(), match.group(1, 2)) for match in UPGRADE_SECTION.finditer(text)]
+    assert bounds, 'no upgrade sections were found, so this case proves nothing'
+
+    offending = []
+    for index, (start, (major, minor)) in enumerate(bounds):
+        end = bounds[index + 1][0] if index + 1 < len(bounds) else len(text)
+        target = (int(major), 0 if minor == 'x' else int(minor))
+        if target < RENAMED_IN and 'TELEGRAM_BOT_DEFAULTS' in text[start:end]:
+            offending.append(text[start:end].splitlines()[0])
+
+    assert not offending, f'sections about releases that read TELEGRAM_BOT use the new name: {offending}'
+
+
+@pytest.mark.parametrize('path', [WIKI / 'Settings.md', WIKI / 'Upgrading.md', ROOT / 'CHANGELOG.md'])
+def test_every_process_owned_setting_is_named_where_the_set_is_listed(path):
+    """A sentence that lists the set has to list all of it, and `PROCESS_SCOPED` is the set.
+
+    Four of these enumerations exist because each answers a different question -- what a
+    section may hold, what `E053` reports, what an upgrade keeps shared, what the release
+    changed -- and a key added to the frozenset reaches none of them on its own. Measured: 5.0
+    added `BOT_PROVIDERS` and `BOT_REFRESH_INTERVAL` to the set and to no sentence about it,
+    and `MAX_BOTS_PER_WORKER` was on its way to being the third.
+
+    Per sentence rather than per page or per paragraph, which is the difference that makes
+    this bite: every one of these pages names each key *somewhere*, and the paragraph holding
+    a list usually goes on to mention several of them again -- so both of the wider searches
+    pass with the enumeration itself left short. A sentence is one of these lists when it opens the
+    enumeration -- `AUTODISCOVER` followed by `MODULE_NAME` -- which the settings table and
+    the release history mention each key without doing.
+
+    The `EVENT_LOG_*` ones are covered by the wildcard each of these sentences uses, which is
+    why they are excluded rather than each looked for.
+    """
+    wanted = sorted(key for key in PROCESS_SCOPED if not key.startswith('EVENT_LOG_'))
+    flattened = ' '.join(path.read_text(encoding='utf-8').split())
+    listing = [sentence for sentence in SENTENCE.split(flattened) if MARKER in sentence]
+
+    assert listing, f'{path.name} no longer lists the process-owned settings at all'
+    for sentence in listing:
+        missing = [key for key in wanted if f'`{key}`' not in sentence]
+        assert not missing, f'{path.name} lists them without {", ".join(missing)}: {sentence[:120]}...'

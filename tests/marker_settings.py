@@ -10,4 +10,4 @@ USE_TZ = True
 DATABASES: dict[str, dict[str, str]] = {}
 INSTALLED_APPS = ['django_aiogram', 'tests.marker_app.apps.MarkerConfig']
 
-TELEGRAM_BOT: dict[str, object] = {}
+TELEGRAM_BOT_DEFAULTS: dict[str, object] = {}

@@ -18,7 +18,7 @@ from tests.db_settings import (
     ROOT_URLCONF,
     SECRET_KEY,
     STATIC_URL,
-    TELEGRAM_BOT,
+    TELEGRAM_BOT_DEFAULTS,
     TEMPLATES,
     USE_TZ,
 )
@@ -30,7 +30,7 @@ __all__ = [
     'ROOT_URLCONF',
     'SECRET_KEY',
     'STATIC_URL',
-    'TELEGRAM_BOT',
+    'TELEGRAM_BOT_DEFAULTS',
     'TEMPLATES',
     'USE_TZ',
 ]

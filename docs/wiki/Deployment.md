@@ -186,7 +186,16 @@ drains across the upgrade — the reverse does not hold: a 2.x consumer handed a
 new payload calls the Telegram method with `__envelope__` as a keyword, raises,
 logs it and swallows it, and the message is gone with nothing to redeliver.
 
-Both are one-time concerns. After 3.0 the order is whatever you like.
+Both are one-time concerns. After 3.0 the order is whatever you like **while the deployment
+has one bot**, and 5.0 keeps it that way: a queued message names the bot it is for, and that
+arrived as a field the reader ignores where it does not know it rather than as a new envelope
+version, so nothing is lost in either direction.
+
+**A second bot changes that.** A 4.1 consumer cannot read the field, so it delivers every
+message through the one bot it has — including one queued for the other, which then goes out
+under the wrong token, to a chat that bot may not be in. Nothing is dropped and nothing
+raises; it is simply the wrong bot. So: upgrade the consumers to 5.0 first, and start queueing
+for a second bot only once they are all there.
 
 Note the absence of `ports:` on `redis`. Nothing outside the compose network
 reaches it, which is why no password appears here. Publish that port and Redis
@@ -202,18 +211,58 @@ purpose. See below.
 
 ## The jobs nothing runs for you
 
-Two commands do work no request path does, so a deployment that never schedules them is a
+Three commands do work no request path does, so a deployment that never schedules them is a
 deployment where that work never happens:
 
 | command | what waits on it |
 | --- | --- |
 | `manage.py tgbot_prune_events` | the event log's size. `W006` warns while `EVENT_LOG_RETENTION_DAYS` is unset |
 | `manage.py tgbot_dispatch_scheduled` | every send made with an `eta`. Without it a scheduled message waits for ever |
+| `manage.py tgbot_intents` | every check and webhook change asked for in the admin. Without it those actions are recorded and never carried out. `--watch` is the always-on form; a person is waiting, so seconds is the useful interval |
 
-`manage.py tgbot_replay` is the third command, and deliberately not on that list: it is run by
-a person, after an incident, with `--dry-run` first — see
+**The commands that are deliberately not on that list**, each for its own reason.
+
+`manage.py tgbot_replay` is run by a person, after an incident, with `--dry-run` first — see
 **[Troubleshooting](Troubleshooting.md#telegram-was-down-what-did-we-lose-and-can-it-be-sent-again)**.
 Scheduling it would mean re-sending failures nobody has looked at.
+
+`manage.py tgbot_rewrap_tokens` is run when the storage the tokens are kept in changes: after turning an encrypting `TOKEN_STORAGE` on, which leaves the rows written
+before it in plain, and after rotating its key. Not on a schedule — it has nothing to do until
+one of those two things happens — see **[Tokens](Tokens.md)**.
+
+`manage.py tgbot_prune_queues` belongs on neither list, because that depends on your
+`REMOVED_QUEUE_POLICY`. A queue per client is what keeps one client's backlog off
+another's, and it is also how a deployment leaks: a client goes, their bot's row goes, and a
+Redis key, an AMQP queue or a consumer group stays for ever. The command finds the queues no
+bot points at and does what the policy says:
+
+| policy | what happens |
+| --- | --- |
+| `park` (default) | the queue is reported and nothing is removed. An operator decides, which is right where a client may come back and the messages may still be worth reading |
+| `hold` | the queue is removed once it is empty, and reported while it is not |
+| `drop` | the queue is removed, with whatever is still in it |
+
+Under `park` it is safe to schedule and tells you what is accumulating; under `drop` it
+deletes, so run it by hand or schedule it knowing that. `--dry-run` says what would happen,
+`--queue` bounds a run to the queues you name — and a name is refused rather than skipped
+where a bot still points at it *or* where no row has it at all: filtered out, a typo would
+look like a cleanup that completed while the queue you meant is still there. A bot that is merely **switched off still counts**: a client paused for a
+month has not given up their backlog.
+
+Under `hold` the transport decides emptiness in **one step** — the read and the delete
+together — because a producer can publish between a depth read and a delete, and a caller
+that checked for itself would delete the message it had just been told about. A message a
+consumer has *taken and not settled* counts as held: somebody is still sending it.
+
+Two transports say they cannot prove that, and say so rather than guessing:
+
+- **Kafka** cannot remove a queue at all. Deleting a topic is an administrative act against
+  the cluster, not something a producer may take, so the line names the topic for whoever owns
+  it — under every policy, and without reaching the cluster to find out.
+- **RabbitMQ** refuses `hold` only. AMQP's own `if_empty` counts *ready* messages, so a queue
+  whose one message is an unacknowledged delivery in another container reads as empty and
+  would be deleted with the message; nothing here can see that delivery. Use `drop` when you
+  know what is sending.
 
 From cron, or as a container of its own:
 
@@ -393,6 +442,45 @@ reading a message at a time off a queue all day, and buys a web tier that only e
 pushes almost nothing. Install it in the bot container if you have measured the
 parsing and not before.
 
+## What is this deployment actually serving?
+
+`manage.py check` reads the settings, and a client connected through your own interface is a
+**row** — so for a deployment whose bots arrive at run time, the checks cannot see them at all.
+Two commands can:
+
+```shell
+python manage.py tgbot_bots
+python manage.py tgbot_queues
+```
+
+`tgbot_bots` lists every bot the providers resolve with the things that decide what it does:
+where it came from (a settings section or a row), its **profile digest**, the queue it
+publishes to, its mode, whether it is switched on, and which container holds its lease. The
+digest is the answer to the question grouping raises — twenty bots configured alike should
+show **one** digest between them, and a deployment that quietly built twenty groups is paying
+for twenty transports. `--bot` narrows it, `--all` includes the bots that are switched off,
+`--json` is the form a script reads. It prints the digest rather than the settings behind it,
+because those hold `REDIS_URL` and its password.
+
+Four commands take the bots or the queue they are meant for: `--bot` on `tgbot_replay`,
+`tgbot_prune_events` and `tgbot_dispatch_scheduled`, `--queue` on `tgbot_reclaim` (and
+`tgbot_webhook` has had `--bot` since the webhook work). Each defaults to what a single-bot
+deployment already had, and a name `tgbot_reclaim` cannot find among the declared queues is
+refused rather than read as an empty in-flight list — which is exactly what a drained queue
+looks like.
+
+**`tgbot_move_events` and `tgbot_backfill_short_ids` take neither**, and that is not an
+omission: one copies a 4.x feed into the 5.x table and the other fills a column in it. Both
+are one-time migrations over the whole table, addressed by `--database` rather than by bot,
+and a half-migrated feed is worse than an unmigrated one.
+
+`tgbot_queues` lists the declared queues with their pool, their depth, what is in flight and
+how long ago something said it was consuming them — and names the queues that hold messages
+with **nobody reading them**, which is the failure that otherwise looks like a slow bot. It
+asks the transport, so it reaches the network; `--no-depth` is the form that does not, and a
+queue whose transport cannot be reached reads `?` rather than `0`, because an unreachable
+broker is not an empty queue. `--queue` and `--pool` narrow it.
+
 ## Is it working?
 
 `docker ps` answers the wrong question: the process being up says nothing about
@@ -407,6 +495,50 @@ otherwise. It checks two things, and asks the transport both: the consumer repor
 in recently, and the queue is not piling up. A warning — a stranded in-flight list is
 the one it has — goes to stderr *without* changing the verdict, so a healthy probe
 can write to both streams and still exit 0.
+
+### Several queues in one container
+
+```shell
+python manage.py tgbot_healthcheck --queue client-a --queue client-b
+
+# the module form calls no django.setup(), so it needs the settings module in its environment
+DJANGO_SETTINGS_MODULE=myproject.settings python -m django_aiogram.healthcheck \
+    --queue client-a --queue client-b
+```
+
+Each named queue is probed through a transport built for *it*, one line each, and the worst
+answer decides — a container serving five clients is healthy or not per client, and a report
+that summed the depths would hide the one queue filling up behind four empty ones.
+
+**The probe has to name the same queues the command does.** Left out, it asks about the queue
+this process's settings name — which a container started with `--queues client-a` is not
+serving — so it reports *no heartbeat has been written* for ever while the consumers it cannot
+see are perfectly well. Measured on a two-queue container: the queues showed a consumer eight
+seconds old, and the probe with no `--queue` said nothing had ever started.
+
+The verdict for a named queue is not the one for this container's own, deliberately:
+
+| what the probe finds | what it says |
+| --- | --- |
+| more waiting than `--max-queue` allows | **fails**, whether or not anything is consuming it — that limit is read first. `0` turns the check off rather than allowing nothing, which is also what `HEALTHCHECK_MAX_QUEUE` means |
+| messages waiting and no live consumer | **fails** — they are going nowhere and nobody is coming |
+| empty and no live consumer | **warns** — a queue declared for a client who has not written yet is waiting, not broken |
+| a live consumer, within the limit | healthy, with the depth and how old the consumer's last word is |
+
+This is the question a multi-queue deployment has no other way to ask — and *who* answers it
+is the transport's business, not this package's. A Redis list has nothing that knows a
+consumer exists, so the consumer writes a heartbeat key with a TTL; a Redis stream's consumer
+group already records when each member last spoke, so nothing is written and nothing expires;
+RabbitMQ and Kafka report that liveness is not observable from outside at all, and a named
+queue on those is judged by its depth alone. `manage.py tgbot_queues` reads the same answer for
+a person rather than for a container, and its **consumer** column says `tracked` for exactly
+that case.
+
+**The command form also names the quarantined bots**, with the reason a supervisor wrote — a
+probe that says *healthy* while three clients' bots are quarantined is answering a narrower
+question than the person reading it asked. It does not change the verdict: a revoked token is
+fixed by a person, not by a restart. The module form says nothing about them on purpose, and
+that is the next paragraph.
 
 It opens no client of its own to do it, which is why it runs on all four transports:
 the driver is an extra, and a probe that imported redis-py could not start on an
@@ -597,7 +729,105 @@ acknowledged and logged either way, never redelivered for ever. See
 
 Do not run two containers polling the **same token**, though. Telegram allows
 only one `getUpdates` consumer per bot, and the second will fight the first for
-updates.
+updates — which is what the polling lease is for: containers agree through a row,
+and `MAX_BOTS_PER_WORKER` is what splits the bots between them.
+
+### Receiving and sending are two jobs
+
+`start_tgbot` does both by default, which is what a small installation wants and what it has
+always had. At scale they do not scale together, so each half can be turned off:
+
+```shell
+python manage.py start_tgbot --no-updates    # consume the queues; never call getUpdates
+python manage.py start_tgbot --updates-only  # receive updates; consume nothing
+```
+
+- **`--no-updates`** is the sender: the shape a webhook deployment wants, where updates arrive
+  in the web tier and this process exists to send, and the shape a sender pool wants at any
+  scale. A loop still turns in it, because the consumers hand their sends to one.
+- **`--updates-only`** is the receiver. Give its probe `--no-consumer` as well:
+
+  ```shell
+  python manage.py tgbot_healthcheck --no-consumer
+  # the module form reads the settings itself, so it needs the variable `manage.py` sets
+  DJANGO_SETTINGS_MODULE=core.settings python -m django_aiogram.healthcheck --no-consumer
+  ```
+
+  Without it the probe asks whether a consumer is turning, finds no heartbeat — nothing in that
+  container writes one — and restarts a container that is doing exactly what it was told. The
+  transport is still read either way: a receiver has to *send* what its handlers produce, so a
+  queue it cannot reach is a real failure. The command warns about this at startup.
+- Both flags together are refused: a container that neither receives nor consumes would sit
+  there looking alive, answering the probe, and doing nothing. So is `--updates-only` in
+  **webhook mode** — there the updates arrive over HTTP in whatever serves the webhook, so
+  this process receives nothing anyway and consuming is all it was doing.
+
+Shutdown is unchanged — whatever is running stops together, and it preserves whichever
+guarantee your transport gives: at-least-once where there is an in-flight list, at-most-once
+on a Redis server without `LMOVE` (see **Crash safety** above). Splitting the roles changes
+neither, which is why `close()` and the drain stay one story.
+
+### One container, several queues
+
+A queue is the isolation boundary: give a client one of their own and their
+backlog is theirs. A container is then told which queues to consume, the way
+Celery's worker is told with `-Q`:
+
+```shell
+python manage.py start_tgbot --queues default,vip
+python manage.py start_tgbot --pools vip
+```
+
+- **`--queues`** names them. Each has to be declared, in
+  `TELEGRAM_BOT_DEFAULTS['QUEUES']` or as a `TelegramQueue` row; a name that is
+  not is refused rather than consumed, because a container reading a queue
+  nobody publishes to looks healthy and delivers nothing. The exception is a
+  database that could not be *read* — down, or not migrated here: the table's
+  answer is then unknown, so nothing is refused and the container serves what it
+  was told. A deployment with no database at all is not that case, and its
+  settings are the whole declaration.
+- **`--pools`** names the *labels* on those rows instead, and that is the one
+  Celery has no equivalent for: a queue created after this container started is
+  served with no redeploy, which is what enumeration cannot do when clients
+  arrive at run time. No globs — a glob would include a queue by the accident of
+  its name. A pool that holds no queues refuses the run.
+
+  Re-read every `BOT_REFRESH_INTERVAL` while the container runs, which is what
+  makes "no redeploy" true: a queue added to a pool starts being consumed within
+  that interval, and one moved out of it stops. A pass that could not read the
+  table leaves the consumers as they are, and one queue that cannot be consumed
+  is one queue — the container keeps serving the rest, and the next pass tries it
+  again.
+- Given both, the container serves the union, each queue once.
+- Given neither, it serves the one queue its settings name, which is every
+  deployment before 5.0.
+
+**A budget per queue, whatever shape the consumers run in.** That is the point
+rather than an implementation detail: a backlog on one queue is a backlog on one
+queue, and `MAX_IN_FLIGHT` is applied to each of them separately. A queue at its
+bound simply stops being read from until one of its sends finishes; the others
+keep being read.
+
+**What it costs depends on the transport.** RabbitMQ, Kafka and Redis Streams
+read several queues over the connection they already have — several
+`basic_consume` on one channel, one `subscribe` naming several topics, one
+`XREADGROUP` naming several streams — so twenty queues on any of them are
+**one** connection and **one** consumer thread. A queue arriving there is told
+to the consumer that is already running, so the clients it was already serving
+are not paused.
+
+That is per **lane**, and a lane is the queues whose settings agree on
+everything but which queue they name — the same arithmetic that decides what a
+set of bots shares, which **[Multiple bots](Multiple-bots.md)** is the page for: the transport, the server, the serializer,
+`MAX_IN_FLIGHT`. Queues that disagree cannot share a connection and get a
+consumer each, which is the same arithmetic the runtime groups bots by. A
+container whose twenty client queues are configured alike — the ordinary case,
+since they differ by name and nothing else — is one connection.
+
+A crash-safe Redis list cannot: `BLMOVE` takes one source, and reading several
+keys would mean `BLPOP`, which loses the message between the pop and the send.
+There a container serving twenty queues holds twenty connections and twenty
+threads, so serve them from a few containers by pool rather than all from one.
 
 ## Not using containers
 

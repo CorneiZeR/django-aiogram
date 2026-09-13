@@ -35,12 +35,25 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_max_retries` | the limit that was reached |
 | `tg_delivery` | the consumer that started, always `blpop` |
 | `tg_key` | the queue being consumed: a Redis list, a stream, an AMQP queue, or a Kafka topic |
+| `tg_partition` | which partition of `tg_key` a Kafka line is about, since a consumer reading several topics has a partition 0 on each of them |
 | `tg_timeout` | blocking-pop timeout, or how long a shutdown waited |
 | `tg_error` | the class name of a non-fatal error, not its text — a webhook secret or a chat id can end up in the message, and this field is what a log aggregator groups on |
 | `tg_crash_safe` | whether the consumer holds messages in flight. The transport answers for itself: false on a Redis without `LMOVE`, and always true on a stream, where the pending list is how delivery works |
 | `tg_mode` | `polling` or `webhook` |
 | `tg_update` | the update id being handled |
 | `tg_correlation_id` | the id every event about one message carries |
+| `tg_attempts` | how many times a bot has failed to start, which is what makes its quarantine wait grow |
+| `tg_control` | a notice on the queue this version does not know, by the word it carried |
+| `tg_reason` | why a bot stopped being served: no longer configured, or reconfigured under it |
+| `tg_bot` | which bot a line is about, by the alias it is configured under — the section's name, or the identity written out for a bot that came from the database |
+| `tg_intent` | what an operator asked to have done to a bot — `check`, `set_webhook`, `delete_webhook` — on the line saying it failed |
+| `tg_paced_by` | which of two configurations holding one token its rate limit was taken from, on the line reporting that they disagree |
+| `tg_other` | the second bot in a line about two of them: the one a conflict was resolved against |
+| `tg_provider` | the dotted path of the provider a line is about |
+| `tg_queue` | which queue a line is about, where a container serves several |
+| `tg_fate` | what a failure to serve a bot was: `revoked`, `conflict`, `transient` or `unknown` |
+| `tg_bots` | how many bots a held-back answer is keeping, when a provider read none |
+| `tg_bot_id` | which bot the line is about, by the number in its token. On the lines a bot's identity is known at: every send and its outcome, the drain and the loop-thread warnings, a delivery and a handler that raised, a quarantine, a reconciliation, an intent, a webhook that could not resolve its bot. A line written before anything knew which bot it was about — an undecodable payload, the queue watcher — carries none, and that is the honest answer rather than a guess. In `extra` and never interpolated into the message: a value in the text is still there to `grep`, but it is not a **field** — nothing can filter, group or alert on it, and every line becomes its own message string rather than one an aggregator can count |
 | `tg_short_id` | that id as the admin shows it: twelve characters to paste into the log's search box |
 | `tg_alternative` | the awaitable method a synchronous send from a loop should move to |
 | `tg_pending` | work still in flight at shutdown: sends, or the updates a webhook process is answering |

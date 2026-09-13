@@ -10,14 +10,34 @@ import logging
 import math
 import time
 from collections.abc import Mapping, Sequence
-from typing import Any, ClassVar
+from collections.abc import Sequence as Seq
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from django_aiogram.broker.base import Broker
 from django_aiogram.broker.models import Liveness, Taken
 from django_aiogram.eventlog.events import worker_identity
-from django_aiogram.redis import aget_redis, as_bytes, as_command_argument, get_redis, heartbeat_key, heartbeat_ttl
+from django_aiogram.redis import (
+    _escaped,
+    aget_redis,
+    as_bytes,
+    as_command_argument,
+    get_redis,
+    heartbeat_key,
+    heartbeat_ttl,
+)
+
+if TYPE_CHECKING:
+    from redis import Redis
+    from redis.asyncio import Redis as AsyncRedis
 
 logger = logging.getLogger('django_aiogram')
+
+
+def _watch_error() -> type[Exception]:
+    """Return the driver's class for a watched key that changed, fetched when it is needed."""
+    from redis import WatchError  # noqa: PLC0415 - the driver is an extra; see the note above
+
+    return WatchError
 
 
 def _response_error() -> type[Exception]:
@@ -37,7 +57,15 @@ def _response_error() -> type[Exception]:
 class RedisListBroker(Broker):
     """``RPUSH`` to publish, ``BLMOVE`` to take, ``LREM`` to settle."""
 
+    #: ``BLMOVE`` takes one source, and the move *is* the crash safety: reading several keys
+    #: would mean ``BLPOP``, which loses the message between the pop and the send. So a
+    #: container serving three queues on this transport runs three consumers and holds three
+    #: connections -- stated rather than worked around, and `Deployment.md` says to spread the
+    #: queues across containers by pool where that cost matters
+    MULTIPLEXES: ClassVar[bool] = False
+
     #: this broker's own keys, which stopped being everyone's in 4.0
+    QUEUE_OPTION: ClassVar[str] = 'REDIS_MESSAGES_KEY'
     CALL_TIMEOUT_OPTION: ClassVar[str] = 'REDIS_TIMEOUT'
 
     OPTIONS: ClassVar[Mapping[str, Any]] = {
@@ -53,7 +81,7 @@ class RedisListBroker(Broker):
         to this transport: a stream has a name and a group, a topic has partitions, and none
         of them is a Redis list key. Each broker declares what it needs and reads it here.
         """
-        return str(self.option('REDIS_MESSAGES_KEY'))
+        return self.addressed()
 
     def _inflight(self, worker: str | None = None) -> str:
         """Where one worker keeps what it is sending, derived from the queue's own name.
@@ -72,6 +100,25 @@ class RedisListBroker(Broker):
 
     # ------------------------------------------------------------------ producer
 
+    def _redis(self) -> 'Redis':
+        """Return this instance's client, for the server its own settings name.
+
+        Through here rather than `get_redis()` at each call site: ``REDIS_URL`` is a bot's
+        setting, and a client asked for without them is the process's -- so a bot on its own
+        Redis would address its own queue key on everybody else's server.
+        """
+        # the zero-argument call where this instance has no settings of its own, so a project
+        # that swaps the accessor -- and every case in this suite that does -- keeps working:
+        # `None` already means "the process's client", and asking for it by name is the same
+        # question with one more argument
+        return get_redis() if self.settings is None else get_redis(self.settings)
+
+    async def _aredis(self) -> 'AsyncRedis':
+        """Return the same client for a caller already on a loop, for the same reason."""
+        if self.settings is None:
+            return await aget_redis()
+        return await aget_redis(self.settings)
+
     def publish(self, payloads: Sequence[bytes]) -> None:
         """One variadic ``RPUSH``, so a chunk is one round trip.
 
@@ -81,26 +128,29 @@ class RedisListBroker(Broker):
         """
         if not payloads:
             return
-        get_redis().rpush(self._queue(), *payloads)
+        self._redis().rpush(self._queue(), *payloads)
 
     async def apublish(self, payloads: Sequence[bytes]) -> None:
         """Queue the same write, on the loop the caller is already on."""
         if not payloads:
             return
-        client = await aget_redis()
+        client = await self._aredis()
         await client.rpush(self._queue(), *payloads)
 
     # ------------------------------------------------------------------ consumer
 
-    def take(self, timeout: float) -> Taken | None:
+    def take(self, timeout: float, queues: 'Seq[str] | None' = None) -> Taken | None:
         """``BLMOVE`` where the server has it, ``BLPOP`` where it does not.
 
         Rounded up to whole seconds, and never to zero: Redis reads a zero timeout as
         *block for ever*, so a sub-second wait truncated to an integer would swallow
         `stop()` and let the liveness marker expire under a consumer that is fine.
+
+        One queue, whatever the caller holds: see :attr:`MULTIPLEXES`.
         """
+        self.one_queue(queues)
         waiting = max(1, math.ceil(timeout))
-        connection = get_redis()
+        connection = self._redis()
         if self._reliable:
             try:
                 raw = connection.blmove(self._queue(), self._inflight(), waiting, 'LEFT', 'RIGHT')
@@ -118,9 +168,10 @@ class RedisListBroker(Broker):
             raw = None if item is None else item[1]
         return None if raw is None else Taken(as_bytes(raw), raw)
 
-    def take_nowait(self) -> Taken | None:
+    def take_nowait(self, queues: 'Seq[str] | None' = None) -> Taken | None:
         """Move the same way without waiting, for a drain that has no thread to block."""
-        connection = get_redis()
+        self.one_queue(queues)
+        connection = self._redis()
         raw: bytes | str | None
         if self._reliable:
             try:
@@ -152,7 +203,7 @@ class RedisListBroker(Broker):
             # took the message off the queue and the in-flight list stayed empty
             return
         try:
-            get_redis().lrem(self._inflight(), 1, as_command_argument(handle))
+            self._redis().lrem(self._inflight(), 1, as_command_argument(handle))
         except Exception:
             # worst case the message is redelivered on the next start
             logger.exception('failed to acknowledge a delivered message', extra={'tg_key': self._inflight()})
@@ -167,9 +218,69 @@ class RedisListBroker(Broker):
         copy of a message that never left.
         """
 
+    @property
+    def removes_queues(self) -> bool:
+        """A list and its derived keys are this package's own, so it can remove them."""
+        return True
+
+    def discard(self, *, if_empty: bool = False) -> bool:
+        """Delete this queue, every worker's in-flight list for it, and their heartbeats.
+
+        All of them, because each is derived from the queue's own name: leaving the in-flight
+        lists behind would leave the messages a dead worker held, which is the state
+        `tgbot_reclaim` exists for and nothing will ever reclaim for a queue nobody serves.
+
+        **The two derived shapes by name, not everything under the prefix.** A queue name may
+        contain a colon, so `client` and `client:archive` can both be declared -- and Redis
+        reads a colon as ordinary text, so a scan for `client:*` matches the *other queue's
+        own list*. Deleting that would destroy a live client's messages, which is why this
+        asks for `:processing:*` and `:heartbeat:*` and nothing wider.
+
+        Under ``if_empty`` the read and the delete are one step: ``WATCH`` on every key, the
+        lengths read inside it, and the delete in a transaction that fails if anything
+        changed -- so a message published or taken in between costs a retry rather than the
+        message.
+        """
+        connection = self._redis()
+        queue = self._queue()
+        pattern = _escaped(queue)
+        derived = [
+            *connection.scan_iter(match=f'{pattern}:processing:*', count=100),
+            *connection.scan_iter(match=f'{pattern}:heartbeat:*', count=100),
+        ]
+        if not if_empty:
+            connection.delete(queue, *derived)
+            return True
+        return self._discarded_if_empty(connection, queue, derived)
+
+    @staticmethod
+    def _discarded_if_empty(connection: 'Redis', queue: str, derived: list[Any]) -> bool:
+        """Delete the queue and its derived keys only while every one of them is empty.
+
+        The lists are watched, so a publish or a take between the read and the delete aborts
+        the transaction: the answer is then "not empty", which is the truth by the time it is
+        given. A heartbeat is not a message and is not counted -- it is a key a live consumer
+        keeps warm, and a queue nothing publishes to has none for long.
+        """
+        holding = [queue, *[key for key in derived if b':processing:' in as_bytes(key)]]
+        with connection.pipeline() as pipe:
+            try:
+                # untyped in redis-py's stubs, and the call is the whole mechanism here
+                pipe.watch(*holding)  # type: ignore[no-untyped-call]
+                if any(pipe.llen(key) for key in holding):
+                    return False
+                pipe.multi()
+                pipe.delete(queue, *derived)
+                pipe.execute()
+            except _watch_error():
+                # somebody published or took a message while this was deciding, so the queue
+                # was not empty after all -- which is what the caller is told
+                return False
+            return True
+
     # ---------------------------------------------------------------- operations
 
-    def reclaim(self) -> int | None:
+    def reclaim(self, queues: 'Seq[str] | None' = None) -> int | None:
         """Move everything in flight back to the front of the queue, oldest first.
 
         Also the probe for crash safety: on a server without ``LMOVE`` the very first call
@@ -177,8 +288,11 @@ class RedisListBroker(Broker):
 
         Raises so the caller can retry — a Redis that was unreachable at startup left
         messages stranded, and reporting zero would look like a settled list.
+
+        One queue, as :meth:`take` is.
         """
-        connection = get_redis()
+        self.one_queue(queues)
+        connection = self._redis()
         count = 0
         try:
             # RIGHT->LEFT keeps the original order at the front of the queue
@@ -193,7 +307,7 @@ class RedisListBroker(Broker):
 
     def depth(self) -> int:
         """One ``LLEN`` on the queue."""
-        return int(get_redis().llen(self._queue()) or 0)
+        return int(self._redis().llen(self._queue()) or 0)
 
     def inflight_depth(self, worker: str | None = None) -> int:
         """One ``LLEN`` on an in-flight list -- this worker's, or the one named.
@@ -203,25 +317,25 @@ class RedisListBroker(Broker):
         back was holding is asking a question the key can answer. `tgbot_reclaim` addresses the
         same key by the same name.
         """
-        return int(get_redis().llen(self._inflight(worker)) or 0)
+        return int(self._redis().llen(self._inflight(worker)) or 0)
 
     async def adepth(self) -> int:
         """Count the same way, on the client belonging to the loop the caller is on."""
-        client = await aget_redis()
+        client = await self._aredis()
         return int(await client.llen(self._queue()) or 0)
 
     async def ainflight_depth(self, worker: str | None = None) -> int:
         """Count the same way, for this worker's in-flight list or the one named."""
-        client = await aget_redis()
+        client = await self._aredis()
         return int(await client.llen(self._inflight(worker)) or 0)
 
     def alive(self) -> None:
         """Write the key the healthcheck reads, with a TTL a stalled loop cannot renew."""
-        get_redis().set(heartbeat_key(), str(int(time.time())), ex=heartbeat_ttl())
+        self._redis().set(heartbeat_key(queue=self._queue()), str(int(time.time())), ex=heartbeat_ttl())
 
     def liveness(self) -> Liveness:
         """How old the heartbeat is, or that there is none."""
-        raw = get_redis().get(heartbeat_key())
+        raw = self._redis().get(heartbeat_key(queue=self._queue()))
         if raw is None:
             return Liveness(reported=True, age=None, detail='no heartbeat has been written')
         try:
@@ -237,7 +351,7 @@ class RedisListBroker(Broker):
         The socket deadline rather than ``BLPOP_TIMEOUT``: the pop is asked to wait for less
         than this on purpose, so the longest a call can take is the deadline, not the wait.
         """
-        return type(self).call_timeout()
+        return self.deadline()
 
     @property
     def crash_safe(self) -> bool:
