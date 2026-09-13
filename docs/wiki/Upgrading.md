@@ -58,9 +58,14 @@ CREATE INDEX CONCURRENTLY dja_event_bot ON django_aiogram_event (bot_id, id DESC
 
 ```shell
 python manage.py migrate django_aiogram 0007 --fake --database=warehouse
+python manage.py migrate                                             # and the rest of them
 ```
 
-In that order. `--fake` records the migration as applied without running it, so a
+In that order, and **finish**: `0006` and `0007` are the two this section is about, and there
+are four. `0008` and `0009` are a watermark column on the queue table and the intent columns on
+the bot table — both small, both on `default`, and a deployment that stopped at the index would
+have the admin writing an intent into a column that is not there. Measured: the rehearsal for
+this release stopped exactly where the recipe did. `--fake` records the migration as applied without running it, so a
 `CREATE INDEX CONCURRENTLY` that fails after it leaves the index missing with Django believing
 it exists, and nothing will build it again. A concurrent build that fails also leaves an
 invalid index behind — `DROP INDEX dja_event_bot` and start over.

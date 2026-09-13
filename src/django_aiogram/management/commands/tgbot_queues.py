@@ -168,7 +168,12 @@ class Command(BaseCommand):
             return UNKNOWN
         if not report.reported:
             return 'tracked'
-        return 'never' if report.age is None else f'{report.age}s ago'
+        if report.age is None:
+            return 'never'
+        # rounded, because this is a column a person reads: the age comes off a clock as a
+        # float, and `26.487100839614868s ago` says nothing the second does not. Measured on a
+        # real deployment, where that is exactly what it printed
+        return f'{report.age:.0f}s ago'
 
     def _as_a_table(self, rows: list[dict[str, Any]]) -> None:
         """Print the rows as columns, and say which queues nobody is reading."""
