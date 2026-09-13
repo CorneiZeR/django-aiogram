@@ -238,3 +238,29 @@ def test_every_permission_a_page_names_is_one_a_model_declares():
 
     assert named, 'no page names a permission, so this case is checking nothing'
     assert named <= declared, f'pages name permissions nothing declares: {sorted(named - declared)}'
+
+
+def test_a_bot_with_no_identity_sends_but_is_never_served():
+    """Multiple-bots says both halves, and they are easy to confuse.
+
+    It **sends**: the alias resolves, `send` queues, and the message names no bot -- which is
+    what a 4.x payload looks like and what makes the upgrade rolling. It is not **served**: the
+    providers leave it out, so nothing polls it and no webhook path resolves it, there being no
+    number for a route to carry. A page that promised the first without the second would send a
+    reader to look for updates that are never coming.
+    """
+    from django.test import override_settings
+
+    defaults = {'BROKER': 'django_aiogram.testing.InMemoryBroker', 'FSM_STORAGE': 'memory'}
+    sections = {'default': {'TOKEN': '111111:AAone'}, 'nameless': {'TOKEN': 'no-identity-here'}}
+    with override_settings(TELEGRAM_BOT_DEFAULTS=defaults, TELEGRAM_BOTS=sections):
+        from django_aiogram.runtime.providers import desired
+        from django_aiogram.runtime.registry import bots
+        from django_aiogram.testing import capture_sends
+
+        with capture_sends() as sent:
+            bots['nameless'].send(chat_id=1, text='from the anonymous bot')
+
+        assert len(sent) == 1, 'a bot with no identity could not send'
+        assert sent[0].bot_id is None, 'a bot with no identity named one anyway'
+        assert [found.alias for found in desired()] == ['default'], 'a bot with no identity was offered to be served'

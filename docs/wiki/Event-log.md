@@ -1,8 +1,9 @@
 # Event log
 
 An optional table recording what each bot did: a message queued, delivered,
-retried or dropped, an update received, an FSM transition, a payload refused. Every row names
-the bot it is about, so a deployment serving twenty clients can answer for one of them.
+retried or dropped, an update received, an FSM transition, a payload refused. A row names the
+bot it is about **wherever that was known** — see `bot_id` in the table below — so a deployment
+serving twenty clients can answer for one of them.
 It exists to answer the question the structured log cannot once it has rotated —
 *this user says they never got the message; did we send it?*
 

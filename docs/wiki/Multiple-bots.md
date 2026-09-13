@@ -32,10 +32,15 @@ That number is the one thing that holds still. A token is a credential a project
 alias is a label it renames; the identity survives both, so it is what a queued message carries,
 what the event log records, what a metric is labelled with and what the admin finds a bot by.
 
-A token with no identity in it is still usable — it is just anonymous: `E052` reports it, and a
-message it queues names no bot, so a consumer delivers it through the bot it has. That is the
-4.x shape, and it is what makes the upgrade rolling **while there is one bot** -- see
-*Everything a message carries says which bot* below for what a second one changes.
+A token with no identity in it still **sends**: `bots['nameless'].send(...)` queues, and the
+message names no bot, so a consumer delivers it through the bot it has. That is the 4.x shape,
+and it is what makes the upgrade rolling **while there is one bot** — see *Everything a message
+carries says which bot* below for what a second one changes.
+
+It is not **served**, though, and that is the half worth knowing: a bot with no identity is left
+out of the set the providers answer with, so nothing polls it and no webhook path resolves it —
+there is no number for a route to carry. `E052` reports the section, and the log says so once
+per read for a row. A bot that has to receive anything needs a token Telegram issued.
 
 ## Reaching a bot
 
