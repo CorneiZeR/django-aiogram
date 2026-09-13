@@ -18,7 +18,9 @@ Project uses django-aiogram 5.x. Rules:
   construct TelegramBot() per task or per request — that builds an event loop and
   an HTTP session nothing closes.
 - Settings live in TELEGRAM_BOT_DEFAULTS. In 4.x the dict was called TELEGRAM_BOT;
-  that name is dead and `manage.py check` reports E050 where it is still set.
+  that name is dead and `manage.py check` reports E050 where it is still set — in
+  a process that registers the checks at all, which is one with ENABLED on or the
+  event log recording.
 - Several bots: one section per bot under TELEGRAM_BOTS, keyed by an alias, each
   overriding what it names and inheriting the rest from TELEGRAM_BOT_DEFAULTS.
   Reach them with `from django_aiogram import bots` — `bots['support'].send(...)`,
