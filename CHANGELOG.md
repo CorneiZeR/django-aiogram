@@ -154,6 +154,14 @@ feed.
   which is what lets a container probe answer in hundredths of a second rather than paying for
   `AppConfig.ready()`.
 
+- **A profile digest is the same number in every process.** `manage.py tgbot_bots` prints it so
+  that twenty bots configured alike can be *seen* to be one group, and for a bot naming a
+  `QUEUE` it changed on every run: the digest is hashed from the repr of what the profile
+  holds, and the sentinel standing in for the transport's own queue option was a bare object,
+  whose repr is the address it happens to be at. The grouping itself was right; the number an
+  operator compares between two containers was noise. Found by running the upgrade on a real
+  project.
+
 - **A shutdown closes every bot the process built, not only the one it imported.** Each holds
   a loop, a runner thread and the sends a drain has to finish, so a container serving several
   kept the other threads and dropped whatever was still in flight -- and then closed the shared
