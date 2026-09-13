@@ -12,6 +12,7 @@ import pytest
 from django.test import override_settings
 
 from django_aiogram.broker.redis_streams import RedisStreamsBroker
+from django_aiogram.redis import heartbeat_ttl
 from django_aiogram.wire.serializers import JsonSerializer
 
 STREAM = 'TELEGRAM_BOT_STREAM'
@@ -289,6 +290,23 @@ def test_a_reclaim_recovers_from_a_stream_somebody_deleted(redis_server):
     assert taken is not None, 'the message was not delivered in the first place'
     broker.ack(taken.handle)
 
-    redis_server.delete(STREAM)
+    # a second stream with work left on it, idle long enough to be reclaimable, so the walk has
+    # somewhere to get to after the deleted one
+    beside = f'{STREAM}-also'
+    aside = RedisStreamsBroker.configured({**SETTINGS, 'QUEUE': beside})
+    aside.publish([payload(2)])
+    left = aside.take_nowait()
+    assert left is not None, 'the second stream never delivered'
+    redis_server.xclaim(
+        beside,
+        str(aside.opt('REDIS_STREAM_GROUP')),
+        'the-worker-that-died',
+        min_idle_time=0,
+        message_ids=[left.handle.identifier],
+        idle=heartbeat_ttl() * 1000,
+    )
+    redis_server.delete(STREAM)  # and the first one goes, with its group
 
-    assert broker.reclaim() == 0, 'the reclaim did not recover from the group being gone'
+    claimed = broker.reclaim((STREAM, beside))
+
+    assert claimed == 1, f'the walk stopped at the deleted stream: {claimed}'

@@ -599,7 +599,9 @@ def test_two_topics_settle_separately_under_one_consumer(broker, kafka_bootstrap
             assert broker.inflight_depth() == 1, "settling one topic's message settled the other"
 
             close_clients()  # the group hands both partitions to the consumer built below
-            again = _read_until(KafkaBroker(), both, expected=1)
+            # the same, and here it is the whole assertion: a settled message coming back is
+            # exactly what a commit against the wrong topic causes, and it would arrive second
+            again = _read_until(KafkaBroker(), both, expected=1, keep_reading=3.0)
 
             assert sorted(again) == [kafka_topic], f'the wrong topic came back: {sorted(again)}'
             assert again[kafka_topic].payload == payload(1)
@@ -609,11 +611,15 @@ def test_two_topics_settle_separately_under_one_consumer(broker, kafka_bootstrap
             future.result(timeout=30)
 
 
-def _read_until(broker, topics, *, expected):
-    """Read both topics until this many distinct ones have answered, or the budget is out.
+def _read_until(broker, topics, *, expected, keep_reading=0.0):
+    """Read these topics until this many distinct ones have answered, or the budget is out.
 
     A budget rather than a count of reads: joining a group is a round trip -- measured at three
     seconds against a local broker -- and a rebalance after a consumer is replaced is another.
+
+    ``keep_reading`` goes on polling for that long *after* the expected topics have arrived,
+    which is what a case asserting a topic stays **absent** needs: stopping at the first
+    delivery passes whenever the topic under test simply answered second.
     """
     seen = {}
     deadline = time.monotonic() + 30
@@ -621,6 +627,11 @@ def _read_until(broker, topics, *, expected):
         taken = broker.take(0.5, topics)
         if taken is not None:
             seen[taken.queue] = taken
+    over = time.monotonic() + keep_reading
+    while time.monotonic() < over:
+        taken = broker.take(0.5, topics)
+        if taken is not None:
+            seen.setdefault(taken.queue, taken)
     return seen
 
 
@@ -658,7 +669,9 @@ def test_reading_fewer_topics_pauses_them_rather_than_rejoining_the_group(broker
             # what a queue at its budget does: read the other one, and only the other one
             broker.publish([payload(3)])
             KafkaBroker.configured(settings_for(kafka_bootstrap, beside)).publish([payload(4)])
-            narrowed = _read_until(broker, (kafka_topic,), expected=1)
+            # and kept reading after it arrived, because a paused topic that merely answered
+            # second would pass a check that stopped at the first delivery
+            narrowed = _read_until(broker, (kafka_topic,), expected=1, keep_reading=3.0)
 
             assert sorted(narrowed) == [kafka_topic], f'a paused topic was still delivered: {sorted(narrowed)}'
             assert broker._consumer() is before, 'the consumer was rebuilt, which rebalances the group'

@@ -301,13 +301,16 @@ class Delivery(ABC):
         and a `None` handed to that is a `TypeError` out of the consumer's own loop. The
         argument exists for the transports that were asked for a set.
 
-        Where every queue is at its budget, `hold_for_capacity` has already stopped the loop
-        before this is asked.
+        **Empty** is not the same as either, and it is the answer where every queue this
+        consumer serves is at its budget: `hold_for_capacity` usually stops the loop before
+        that, but it returns as soon as *one* queue has room and `serve` can take that queue
+        away in between. A caller reads the empty answer as "wait", never as a set to hand
+        down -- an empty one means *the queue I address* to every transport here, which would
+        be a read against a queue at its budget.
         """
         if self._asked is None:
             return None
-        readable = tuple(one for one in self._asked if not self.at_capacity(one))
-        return readable or self._asked
+        return tuple(one for one in self._asked if not self.at_capacity(one))
 
     @property
     def processing_key(self) -> str:
@@ -627,7 +630,10 @@ class Delivery(ABC):
         heard of a method the contract gained.
         """
         told = getattr(self.broker, 'serving', None)
-        if callable(told) and self._asked is not None:
+        if callable(told):
+            # including ``None``, which means *the queue this broker addresses* -- a lane that
+            # shrank to one queue has to say so, or a transport whose subscription follows this
+            # keeps holding a queue somebody else is now serving
             told(self._asked)
 
     def in_flight(self, on_queue: str = '') -> int:
@@ -1025,6 +1031,10 @@ class Delivery(ABC):
                 return
             self._forget_retired()
             asked = self.readable()
+            if asked == ():
+                # every queue this consumer serves is at its budget, and a drain has no thread
+                # to wait on -- the blocking loop goes round again instead
+                return
             taken = self.broker.take_nowait(asked) if asked else self.broker.take_nowait()
             if taken is None:
                 self.collect()
@@ -1068,6 +1078,10 @@ class BlpopDelivery(Delivery):
             try:
                 self._forget_retired()
                 asked = self.readable()
+                if asked == ():
+                    # `hold_for_capacity` returns when *one* queue has room, and `serve` can
+                    # have taken that queue away since. Nothing to read from, so round again
+                    continue
                 taken = self.broker.take(timeout, asked) if asked else self.broker.take(timeout)
             except Exception:
                 # a dropped connection must not kill the worker thread

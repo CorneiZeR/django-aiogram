@@ -152,6 +152,16 @@ def test_a_queue_at_its_budget_is_not_read_from_while_another_still_is(redis_ser
     assert delivery.at_capacity('vip') is True
     assert delivery.readable() == ('bulk',), delivery.readable()
 
+    # and with every served queue at its budget the answer is *nothing to read* rather than
+    # the saturated set: `hold_for_capacity` returns as soon as one queue has room, and `serve`
+    # can take that queue away in between -- a read against the rest would then put a budget
+    # past itself
+    publish('bulk', 'fills the bulk slot too')
+    delivery.consume_pending()
+
+    assert delivery.at_capacity('bulk') is True
+    assert delivery.readable() == (), delivery.readable()
+
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=STREAMS)
 def test_a_message_says_which_queue_it_came_off(redis_server):
@@ -344,14 +354,18 @@ def test_the_broker_is_told_the_set_a_consumer_is_for_rather_than_what_it_reads_
     that moves when a queue is added or taken away. It is told at construction and again on
     `serve`, and never on a capacity change.
     """
-    told: list[tuple[str, ...]] = []
+    told: list[tuple[str, ...] | None] = []
     handler = Deferring()
     delivery = consuming(handler)
-    delivery.broker.serving = lambda queues=None: told.append(tuple(queues or ()))
+    delivery.broker.serving = lambda queues=None: told.append(queues and tuple(queues))
 
     delivery._tell_the_broker()
     delivery.serve(('vip', 'bulk', 'later'))
     publish('vip', 'fills the vip budget')
     delivery.consume_pending()
+    # and a lane that shrinks to the queue this broker addresses says so too, as `None`: a
+    # transport whose subscription follows this would otherwise keep holding the queue that
+    # went, while the container now serving it waits
+    delivery.serve(('vip',))
 
-    assert told == [('vip', 'bulk'), ('vip', 'bulk', 'later')], told
+    assert told == [('vip', 'bulk'), ('vip', 'bulk', 'later'), None], told
