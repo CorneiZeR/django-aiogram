@@ -23,7 +23,7 @@ from django_aiogram.config.defaults import DEFAULTS
 from django_aiogram.config.enums import UpdateMode
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 from django_aiogram.consumer.delivery import Delivery, get_delivery
-from django_aiogram.consumer.serving import Consumers, settle
+from django_aiogram.consumer.serving import Consumers, Lane, lane_name, lanes, settle
 from django_aiogram.consumer.webhook import MODES, current_mode
 from django_aiogram.eventlog.events import worker_identity
 from django_aiogram.eventlog.recorder import recorder
@@ -53,8 +53,10 @@ def _split(written: str) -> list[str]:
     return [part.strip() for part in written.split(',') if part.strip()]
 
 
-def _built_for(serving: 'tuple[str, ...]', build: 'Callable[[str], Delivery]') -> dict[str, 'Delivery']:
-    """Build the startup set, settling what was already built if one of them refuses.
+def _built_for(
+    serving: 'dict[Lane, tuple[str, ...]]', build: 'Callable[[tuple[str, ...]], Delivery]'
+) -> dict['Lane', 'Delivery']:
+    """Build the startup set, one consumer per lane, settling what was built if one refuses.
 
     The whole set is built before anything is started, so a refusal -- `REQUIRE_CRASH_SAFE` on
     a transport that cannot promise crash safety -- reaches the operator as a command that
@@ -64,13 +66,13 @@ def _built_for(serving: 'tuple[str, ...]', build: 'Callable[[str], Delivery]') -
     reclaimed: a refusal on the third queue would otherwise strand what the first two took,
     and nothing in this process could acknowledge those messages again.
     """
-    ready: dict[str, Delivery] = {}
+    ready: dict[Lane, Delivery] = {}
     try:
-        for queue in serving:
-            ready[queue] = build(queue)
+        for lane, queues in serving.items():
+            ready[lane] = build(queues)
     except BaseException:
-        for queue, built in ready.items():
-            settle(built, queue)
+        for lane, built in ready.items():
+            settle(built, lane_name(built, lane))
         raise
     return ready
 
@@ -90,17 +92,26 @@ def _only_its_own_queue(serving: tuple[str, ...], pools: str) -> bool:
     return serving == (named(),) and not _split(pools)
 
 
-def _consumer_for(queue: str, *, one_queue: bool) -> Delivery:
-    """Build the consumer for one queue, telling it which queue only when that is news.
+def _consumer_for(queues: 'tuple[str, ...]', *, one_queue: bool) -> Delivery:
+    """Build the consumer for one lane, telling it which queues only when that is news.
 
     A container serving exactly the queue its settings already name is every deployment
     before this, and it is handed no settings at all -- so a `DELIVERY` a project wrote
     before there were several queues keeps working, and is refused only where it is asked
     to serve a queue that is not its own.
+
+    A lane of several is a transport that reads them over one connection, and the whole set
+    goes down with the settings of the first: they agree on everything but which queue they
+    name, which is what put them in one lane.
     """
     if one_queue:
         return get_delivery(handler=bot.send_raw, route=_routing())
-    return get_delivery(handler=bot.send_raw, route=_routing(), settings=settings_for(queue))
+    return get_delivery(
+        handler=bot.send_raw,
+        route=_routing(),
+        settings=settings_for(queues[0]),
+        queues=queues if len(queues) > 1 else None,
+    )
 
 
 def _transport_for(queue: str) -> 'Broker':
@@ -220,22 +231,22 @@ class Command(BaseCommand):
         serving = self._queues_to_serve(options) if consumes else ()
         one_queue = _only_its_own_queue(serving, options['pools'])
 
-        def consumer_for(queue: str) -> Delivery:
-            """Build the consumer for one queue and prove what it promises before it runs.
+        def consumer_for(queues: tuple[str, ...]) -> Delivery:
+            """Build the consumer for one lane and prove what it promises before it runs.
 
             A refusal from the preflight settles the consumer it was proving: `reclaim` has
             already run by then, so a consumer dropped here takes what it reclaimed with it --
             and nothing else in this process can acknowledge those messages.
             """
-            built = _consumer_for(queue, one_queue=one_queue)
+            built = _consumer_for(queues, one_queue=one_queue)
             try:
                 self._preflight(built)
             except BaseException:
-                settle(built, queue)
+                settle(built, ', '.join(queues))
                 raise
             return built
 
-        ready = _built_for(serving, consumer_for)
+        ready = _built_for(lanes(serving), consumer_for)
 
         # the transport's own deadline, not `REDIS_TIMEOUT`: this bounds the thread being
         # joined below, and reading it from one transport's setting meant a consumer could be

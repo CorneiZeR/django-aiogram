@@ -93,8 +93,9 @@
   stops, with no redeploy. A pass that could not read the table leaves the consumers alone, and
   one queue that cannot be consumed does not stop the others.
 
-  One consumer per queue, each with its own transport and its own `MAX_IN_FLIGHT`, so a
-  backlog on one queue is a backlog on one queue.
+  `MAX_IN_FLIGHT` is applied per queue, so a backlog on one queue is a backlog on one queue: a
+  queue at its bound stops being read from until one of its sends finishes, and the others go
+  on being read.
 
   **And a bound per bot inside that**, `MAX_IN_FLIGHT_PER_BOT`, because a single bound over a
   shared queue is what turns one slow client into everybody's outage: their sends fill it and
@@ -112,8 +113,7 @@
   instead, which is bounded and is the head-of-line blocking the per-bot budget avoids; `W012`
   is what says the better behaviour is one setting away. A `DELIVERY` of your own is told which queue
   it serves through a third argument, `settings`, and is refused by name where it takes none
-  and a queue other than the process's own was asked for. The cost is a connection and a
-  thread per queue: the transports that could multiplex are not doing it yet.
+  and a queue other than the process's own was asked for.
 
   **Naming a queue means declaring it.** `QUEUES` in the settings, rows in `TelegramQueue`, or
   both; a name in neither is refused where the transport for it is built and reported at boot
@@ -136,6 +136,50 @@
   restart. `python -m django_aiogram.healthcheck` does not, and cannot: it reads no models,
   which is what lets a container probe answer in hundredths of a second rather than paying for
   `AppConfig.ready()`.
+
+- **Several queues over one connection, where the transport can.** A container serving twenty
+  client queues held twenty connections and twenty consumer threads, because a consumer was one
+  queue's. `Broker.MULTIPLEXES` is the capability and each transport answers it: RabbitMQ
+  consumes several queues on one channel, Kafka subscribes to several topics on one consumer,
+  Redis Streams reads several streams in one `XREADGROUP`, and a crash-safe Redis list cannot
+  -- `BLMOVE` takes one source, and the move is what makes it crash-safe -- so there a consumer
+  per queue stays the honest answer.
+
+  Kafka's bookkeeping moved with it: the unsettled and settled offsets, the rewinds, and the
+  handle a message is settled by are keyed by `(topic, partition)` rather than by partition
+  alone, because partition 0 is a different place on every topic. A commit against the wrong
+  one would move an offset on a queue nobody had read -- the settled message coming back and
+  the unsettled one being skipped -- which is asserted by replacing the consumer and reading
+  what comes back, since the in-flight counts cannot see it.
+
+  `Broker.serving(queues)` says which queues a consumer is *for* -- told at construction and
+  when the container's set moves, never on a capacity change -- and three of the four
+  transports need nothing from it. Kafka does: a subscription there is group membership, so
+  following a narrower read would rebalance the group once per backlog; it pauses the
+  partitions of the topics left out instead.
+
+  `Broker.take(timeout, queues)`, `take_nowait(queues)` and `reclaim(queues)` take the set;
+  `None` is the one queue the broker addresses, which is what every caller before this passed
+  and what a `Broker` somebody else wrote still gets. `Taken.queue` names which queue a message
+  came off -- last on the `NamedTuple`, like `Sent.bot_id`, so `Taken(payload, handle)` still
+  builds one and only unpacking both values at once has to change, which the upgrading page
+  says out loud -- because the budget is per queue and a message that cannot say where it came
+  from cannot be counted against one.
+
+  The consumer keeps a count per queue and reads only the queues below their bound, so a
+  saturated client is not read from while everybody else is, and nothing is taken and given
+  back. The queues one consumer reads are a **lane**: those whose settings agree on everything
+  but which queue they name, which is the same arithmetic that decides whether two bots share a
+  transport. Queues that disagree cannot share a connection and get a consumer each. A `DELIVERY` of your own adds `queues=None` to its `__init__` and hands it to
+  `Delivery.__init__`; its `run()` then reads `self.readable()` -- this consumer's queues minus
+  the ones at their bound -- and hands `Taken.queue` to `dispatch`. That answer has three
+  readings and a `run()` has to keep them apart: `None` is one queue and the argument is left
+  **off**, a set is passed, and `()` means every queue is at its budget, so the loop reads
+  nothing and goes round again rather than passing an empty set to a transport that would read
+  it as *the queue I address*. A `DELIVERY` that does not take `queues` at all is refused by
+  name rather than served one queue of several. A queue arriving in a group that is already
+  running is told to that consumer instead of restarting it, so one client connecting does not
+  pause the others.
 
 - **The testing helpers know which bot a send was made through.** Each record carries
   `bot_id` -- at the end of the `NamedTuple`, so every attribute reads as before and only

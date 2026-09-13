@@ -58,22 +58,27 @@ _opened: 'weakref.WeakSet[Any]' = weakref.WeakSet()
 _lock = threading.Lock()
 
 
-def channel_for_thread(url: str, queue: str, prefetch: int, blocked_timeout: float) -> 'BlockingChannel':
+def channel_for_thread(url: str, prefetch: int, blocked_timeout: float) -> 'BlockingChannel':
     """Open or reuse the calling thread's channel, confirmed for publishing.
 
     ``confirm_delivery`` here rather than per publish: it is a channel mode, and turning it on
-    once is what makes every ``basic_publish`` on this channel answerable. The queue is
-    declared durable on the way, so a broker restart does not lose the queue itself — the
-    messages in it are marked persistent by the publisher.
+    once is what makes every ``basic_publish`` on this channel answerable.
+
+    **Which queues is not part of this.** A consumer's set moves while it runs -- a client
+    arrives, another goes away -- and a channel keyed by the queues would be replaced on every
+    such move: closing it requeues every delivery it still holds, so a send that finished
+    across the change would be settled against a dead channel and the message delivered again.
+    The queues are declared by `RabbitMQBroker` on whichever channel this hands back, which is
+    idempotent and costs one round trip the first time each is seen.
 
     Reused only while every part of its identity still matches. A settings change that moves
-    the queue or the prefetch has to reach a thread that is not the one running the receiver,
-    and comparing here is how it does: that thread rebuilds on its next ask, without anybody
-    reaching across a connection they do not own.
+    the URL, the prefetch or the deadline has to reach a thread that is not the one running the
+    receiver, and comparing here is how it does: that thread rebuilds on its next ask, without
+    anybody reaching across a connection they do not own.
     """
     from pika import BlockingConnection, URLParameters  # noqa: PLC0415 - the driver is an extra
 
-    identity = (url, queue, prefetch, blocked_timeout)
+    identity = (url, prefetch, blocked_timeout)
     existing: BlockingChannel | None = getattr(_local, 'channel', None)
     if existing is not None and getattr(_local, 'identity', None) == identity and existing.is_open:
         return existing
@@ -103,7 +108,6 @@ def channel_for_thread(url: str, queue: str, prefetch: int, blocked_timeout: flo
     try:
         channel = connection.channel()
         channel.confirm_delivery()
-        channel.queue_declare(queue=queue, durable=True)
         # always, including zero. Skipping the call is not the same as asking for no limit: a
         # server with `default_consumer_prefetch` configured applies it to a consumer that
         # never sent QoS, so a package documenting 0 as unlimited has to say 0 out loud.

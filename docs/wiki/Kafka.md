@@ -124,6 +124,28 @@ meant a setting nothing here reads shortened the poll: measured, `REDIS_TIMEOUT:
 setting. The name is unchanged because a queued message is still a queued message; what it means is
 the transport's own.
 
+## Several topics on one consumer
+
+A container serving twenty client queues subscribes one consumer to all of them, so it holds
+one client and is one member of the group however many queues it reads — for the queues that
+share a lane, which is those whose settings agree on everything but the queue name. Two queues
+on different bootstrap servers or different groups are two consumers, because they are two
+clients by definition.
+
+Everything this broker remembers about an offset is keyed by **`(topic, partition)`** for that
+reason, the handle included: partition 0 is a different place on every topic, and a commit that
+named the wrong one would move an offset on a queue nobody had read — the settled message would
+come back and the unsettled one would be skipped. That is asserted by replacing the consumer
+and reading what comes back, in `tests/integration/test_kafka_against_broker.py`; the in-flight
+counts alone cannot see it.
+
+A poll answers from whichever subscribed topic has something. **The subscription follows the
+queues the container serves, not what a read asks for**, and those are different questions: a
+consumer narrows its read whenever a queue reaches its in-flight budget, and resubscribing for
+that would rebalance the group — partitions moving to other members and back — once per
+backlog. A narrower read pauses the assigned partitions of the topics left out and resumes them
+when they are asked for again, which the group never hears about.
+
 ## Where it shows through
 
 - **What a payload may weigh is smallest here, by a wide margin, and it is the one to check

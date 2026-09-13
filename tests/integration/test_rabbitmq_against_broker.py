@@ -599,3 +599,86 @@ def test_a_confirmed_publish_survives_the_broker_going_away(amqp_url, amqp_conta
 
         assert taken is not None, 'a confirmed publish did not survive the broker restarting'
         assert taken.payload == payload(11), 'something came back, but not the message published'
+
+
+def test_a_send_that_finished_across_a_queue_set_change_is_still_settled(broker, broker_channel, amqp_url):
+    """A client arriving or leaving must not turn finished sends into duplicates.
+
+    `Delivery.serve` moves the set while sends are in flight, and a channel keyed by that set
+    would be replaced on the next read: closing it requeues every unacknowledged delivery, and
+    the acknowledgement that follows names a generation that is gone. The message a real person
+    has already received is then delivered again.
+
+    So the set is not part of the channel's identity, and this is the sequence that proves it:
+    take from two queues, read from one, and settle what the first read handed over.
+    """
+    beside = f'{AMQP_QUEUE}-also'
+    broker_channel.queue_declare(queue=beside, durable=True)
+    try:
+        with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
+            broker.publish([payload(1)])
+            taken = broker.take(1.0, (AMQP_QUEUE, beside))
+            assert taken is not None, 'the message was not delivered in the first place'
+
+            # the set shrinks, which is what a client going away does to a lane
+            assert broker.take(0.5, (AMQP_QUEUE,)) is None, 'something else was waiting on the queue'
+            broker.ack(taken.handle)
+
+            assert broker.inflight_depth() == 0, 'the settle was refused, so the message will come back'
+            assert broker.take_nowait((AMQP_QUEUE,)) is None, 'a finished send was redelivered'
+    finally:
+        broker_channel.queue_delete(queue=beside)
+
+
+def test_publishing_from_another_thread_does_not_disturb_the_consumer(broker, broker_channel, amqp_url):
+    """One broker instance is shared, and a channel belongs to the thread that opened it.
+
+    A runtime group hands the same broker to every bot on its profile, so a web thread
+    publishing through it reaches `_channel()` -- and everything registered on a channel is
+    registered on *that thread's*. Read off the instance, a publisher would see a channel that
+    is not the consumer's, drop its subscriptions and its deliveries, and take its handles out
+    of the in-flight count: a settle then refused, a message left unacknowledged, and a depth
+    answering for a channel that has taken nothing.
+    """
+    with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
+        broker.publish([payload(1)])
+        taken = broker.take(1.0, (AMQP_QUEUE,))
+        assert taken is not None, 'the message was not delivered in the first place'
+        assert broker.inflight_depth() == 1
+
+        elsewhere = ThreadPoolExecutor(max_workers=1)
+        try:
+            # a publish from a thread with no channel of its own, which is every web worker
+            elsewhere.submit(broker.publish, [payload(2)]).result(timeout=30)
+        finally:
+            elsewhere.shutdown(wait=True)
+
+        assert broker.inflight_depth() == 1, "a publisher dropped the consumer's in-flight handle"
+        broker.ack(taken.handle)
+        assert broker.inflight_depth() == 0, 'the settle was refused after a publish from elsewhere'
+
+
+def test_a_lane_shrinking_to_the_addressed_queue_cancels_what_it_stops_serving(broker, broker_channel, amqp_url):
+    """`None` means *the queue I address*, and a lane can arrive at that by shrinking.
+
+    The subscriptions of the queues it used to serve are still registered then, and the
+    single-queue path never reads the deque their callbacks fill -- so those queues would go on
+    being consumed into a buffer nothing drains, with the addressed queue consumed twice.
+    """
+    beside = f'{AMQP_QUEUE}-leaving'
+    broker_channel.queue_declare(queue=beside, durable=True)
+    try:
+        with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(amqp_url)):
+            broker.publish([payload(1)])
+            taken = broker.take(1.0, (AMQP_QUEUE, beside))
+            assert taken is not None, 'the lane never delivered'
+            broker.ack(taken.handle)
+            assert broker._mine.subscribed == (AMQP_QUEUE, beside)
+
+            # the lane shrinks to the queue this broker addresses, which `Delivery` says as None
+            assert broker.take(0.2) is None
+
+            assert broker._mine.subscribed in ((), (AMQP_QUEUE,)), broker._mine.subscribed
+            assert beside not in broker._mine.tags, 'a queue this lane stopped serving is still consumed'
+    finally:
+        broker_channel.queue_delete(queue=beside)

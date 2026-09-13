@@ -270,18 +270,22 @@ def test_the_awaited_halves_work_off_the_loop(broker, kafka_bootstrap, kafka_top
 
 
 def test_a_handle_from_another_broker_is_refused(broker, kafka_bootstrap, kafka_topic):
-    """A position is a pair, so anything else came from a different transport."""
+    """A position names a place, so anything else came from a different transport."""
     with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
-        with pytest.raises(TypeError, match='partition, offset, epoch'):
+        with pytest.raises(TypeError, match='topic, partition, offset, epoch'):
             broker.ack(b'a redis payload')
 
-        with pytest.raises(TypeError, match='partition, offset, epoch'):
+        with pytest.raises(TypeError, match='topic, partition, offset, epoch'):
             broker.release(7)
 
         # a pair is the shape this broker used to hand out, and it is no longer enough: the
-        # rewind count is what makes a position mean something
-        with pytest.raises(TypeError, match='partition, offset, epoch'):
+        # rewind count is what makes a position mean something, and the topic is what makes the
+        # partition mean somewhere now that one consumer reads several
+        with pytest.raises(TypeError, match='topic, partition, offset, epoch'):
             broker.ack((0, 0))
+
+        with pytest.raises(TypeError, match='topic, partition, offset, epoch'):
+            broker.ack((0, 0, 0))
 
 
 def test_a_single_publish_does_not_wait_for_a_batch(broker):
@@ -461,7 +465,8 @@ def test_a_settle_from_another_thread_fails_rather_than_corrupting_the_offsets(b
 def test_a_handle_this_broker_is_not_holding_settles_nothing(broker, kafka_bootstrap, kafka_topic):
     """The shape of a handle is not enough: it has to be one that was handed out and not returned.
 
-    `_position` checks that a handle is a `(partition, offset, epoch)` triple and nothing more,
+    `_position` checks that a handle is a `(topic, partition, offset, epoch)` tuple and nothing
+    more,
     so a duplicate — or a tuple somebody built — with the right epoch would otherwise reach
     `commit` or `seek`. A second `ack` would put an already-committed offset back among the
     settled ones, and a `release` for an offset nobody took would move the live consumer to it.
@@ -474,11 +479,12 @@ def test_a_handle_this_broker_is_not_holding_settles_nothing(broker, kafka_boots
         broker.publish([payload(1), payload(2)])
         first = broker.take_nowait()
         assert first is not None, 'the first message was not delivered'
-        partition, offset, epoch = first.handle
+        topic, partition, offset, epoch = first.handle
         broker.ack(first.handle)
 
         broker.ack(first.handle)  # the same send reported twice
-        broker.release((partition, offset, epoch))  # and a release for what is already settled
+        # and a release for what is already settled
+        broker.release((topic, partition, offset, epoch))
 
         assert broker.inflight_depth() == 0, 'a settled offset came back into the in-flight count'
         second = broker.take_nowait()
@@ -557,3 +563,182 @@ def test_a_produced_record_survives_the_broker_going_away(
 
         assert taken is not None, 'an acknowledged produce did not survive the broker restarting'
         assert taken.payload == payload(12), 'something came back, but not the record produced'
+
+
+def test_two_topics_settle_separately_under_one_consumer(broker, kafka_bootstrap, kafka_topic):
+    """Partition 0 is a different place on every topic, which is what the handle has to carry.
+
+    One consumer subscribed to both and a message on each; one of them is settled and the other
+    is not, and then the consumer is replaced. What comes back is the whole assertion: a commit
+    that named the topic this broker was *built from* rather than the one the handle names would
+    move the offset on the wrong queue -- the settled message would come back and the unsettled
+    one would be skipped, which is the loss this keying exists to prevent. Measured by making
+    that mistake on purpose: the counts alone cannot see it, only the redelivery can.
+
+    The second topic is created and dropped here rather than by a fixture, because it exists
+    only for this case -- the rest of the file is about one topic's order.
+    """
+    from confluent_kafka.admin import AdminClient
+
+    beside = f'{kafka_topic}-also'
+    admin = AdminClient({'bootstrap.servers': kafka_bootstrap})
+    _a_topic(admin, beside)
+    try:
+        with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
+            broker.publish([payload(1)])
+            KafkaBroker.configured(settings_for(kafka_bootstrap, beside)).publish([payload(2)])
+            both = (kafka_topic, beside)
+
+            seen = _read_until(broker, both, expected=2)
+            assert sorted(seen) == sorted(both), f'one topic was never read: {sorted(seen)}'
+
+            # only the one on the second topic, so what is committed and what is not are on
+            # different topics and a commit against the wrong one is visible
+            broker.ack(seen[beside].handle)
+            assert broker.inflight_depth() == 1, "settling one topic's message settled the other"
+
+            close_clients()  # the group hands both partitions to the consumer built below
+            # the same, and here it is the whole assertion: a settled message coming back is
+            # exactly what a commit against the wrong topic causes, and it would arrive second
+            again = _read_until(KafkaBroker(), both, expected=1, keep_reading=3.0)
+
+            assert sorted(again) == [kafka_topic], f'the wrong topic came back: {sorted(again)}'
+            assert again[kafka_topic].payload == payload(1)
+    finally:
+        close_clients()
+        for future in admin.delete_topics([beside]).values():
+            future.result(timeout=30)
+
+
+def _a_topic(admin, name):
+    """Create one topic and wait until the cluster reports it, the way the fixture does.
+
+    Creating is not the same as being visible: metadata propagates, and a publish or a
+    subscribe against a topic the cluster has not caught up on is the intermittent failure this
+    suite would otherwise spend a morning on. The `kafka_topic` fixture waits for exactly this;
+    a case making a second topic of its own has to wait for it too.
+    """
+    from confluent_kafka.admin import NewTopic
+
+    for future in admin.create_topics([NewTopic(name, num_partitions=1, replication_factor=1)]).values():
+        future.result(timeout=30)
+    for _ in range(100):
+        if name in admin.list_topics(timeout=10).topics:
+            return
+        time.sleep(0.1)
+    pytest.skip(f'kafka did not report the topic {name!r} after creating it')
+
+
+def _read_until(broker, topics, *, expected, keep_reading=0.0):
+    """Read these topics until this many distinct ones have answered, or the budget is out.
+
+    A budget rather than a count of reads: joining a group is a round trip -- measured at three
+    seconds against a local broker -- and a rebalance after a consumer is replaced is another.
+
+    ``keep_reading`` goes on polling for that long *after* the expected topics have arrived,
+    which is what a case asserting a topic stays **absent** needs: stopping at the first
+    delivery passes whenever the topic under test simply answered second.
+    """
+    seen = {}
+    deadline = time.monotonic() + 30
+    while len(seen) < expected and time.monotonic() < deadline:
+        taken = broker.take(0.5, topics)
+        if taken is not None:
+            seen[taken.queue] = taken
+    over = time.monotonic() + keep_reading
+    while time.monotonic() < over:
+        taken = broker.take(0.5, topics)
+        if taken is not None:
+            seen.setdefault(taken.queue, taken)
+    return seen
+
+
+def test_reading_fewer_topics_pauses_them_rather_than_rejoining_the_group(broker, kafka_bootstrap, kafka_topic):
+    """A queue at its in-flight budget must not cost the group a rebalance.
+
+    The consumer narrows what it reads on every capacity change -- that is what the per-queue
+    budget *is* -- and a subscription here is group membership: resubscribing for it moves
+    partitions to other members and back, per backlog. So the subscription follows what
+    `serving` was told and a narrower `take` pauses the rest.
+
+    Asserted three ways, because two of them alone would pass on a resubscribe: the topic asked
+    for keeps answering, the one left out does not, and the consumer object is the same one
+    before and after.
+    """
+    from confluent_kafka.admin import AdminClient
+
+    beside = f'{kafka_topic}-paused'
+    admin = AdminClient({'bootstrap.servers': kafka_bootstrap})
+    _a_topic(admin, beside)
+    try:
+        with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
+            broker.serving((kafka_topic, beside))
+            broker.publish([payload(1)])
+            KafkaBroker.configured(settings_for(kafka_bootstrap, beside)).publish([payload(2)])
+
+            # both, so the group has assigned this member the partitions of each
+            seen = _read_until(broker, (kafka_topic, beside), expected=2)
+            assert sorted(seen) == sorted((kafka_topic, beside)), f'one topic was never read: {sorted(seen)}'
+            for taken in seen.values():
+                broker.ack(taken.handle)
+            before = broker._consumer()
+
+            # what a queue at its budget does: read the other one, and only the other one
+            broker.publish([payload(3)])
+            KafkaBroker.configured(settings_for(kafka_bootstrap, beside)).publish([payload(4)])
+            # and kept reading after it arrived, because a paused topic that merely answered
+            # second would pass a check that stopped at the first delivery
+            narrowed = _read_until(broker, (kafka_topic,), expected=1, keep_reading=3.0)
+
+            assert sorted(narrowed) == [kafka_topic], f'a paused topic was still delivered: {sorted(narrowed)}'
+            assert broker._consumer() is before, 'the consumer was rebuilt, which rebalances the group'
+
+            # and the pause lifts when it is asked for again
+            resumed = _read_until(broker, (kafka_topic, beside), expected=1)
+
+            assert sorted(resumed) == [beside], f'the paused topic did not come back: {sorted(resumed)}'
+    finally:
+        close_clients()
+        for future in admin.delete_topics([beside]).values():
+            future.result(timeout=30)
+
+
+def test_a_settle_after_the_subscription_moved_commits_rather_than_redelivering(broker, kafka_bootstrap, kafka_topic):
+    """A container given one more queue must not send twice what it had already sent.
+
+    An explicit offset commit needs no assignment, so "it did not raise" says very little. What
+    matters is what the commit *did*: a regressed `_lost` swallowing a failure here would leave
+    the books reading empty while Kafka still held the message uncommitted -- and the next
+    member to take that partition would send it again.
+
+    So the assertion is the absence of a redelivery over a bounded window, which is the only
+    thing that tells a committed offset from a forgotten one. What happens when the partition
+    really has moved is `_lost`'s own decision, and both of its answers are pinned offline in
+    `tests/test_kafka_publish.py`: a second member joining is a timing this suite should not
+    rest on.
+    """
+    from confluent_kafka.admin import AdminClient
+
+    arriving = f'{kafka_topic}-arriving'
+    admin = AdminClient({'bootstrap.servers': kafka_bootstrap})
+    _a_topic(admin, arriving)
+    try:
+        with override_settings(TELEGRAM_BOT_DEFAULTS=settings_for(kafka_bootstrap, kafka_topic)):
+            broker.serving((kafka_topic,))
+            broker.publish([payload(1)])
+            taken = _read_until(broker, (kafka_topic,), expected=1).get(kafka_topic)
+            assert taken is not None, 'the message was not delivered in the first place'
+
+            # the queue that arrives, which is what moves the subscription under the send
+            broker.serving((kafka_topic, arriving))
+
+            broker.ack(taken.handle)
+
+            assert broker.inflight_depth() == 0, 'the settled message is still counted as held'
+            close_clients()  # the next member of the group reads from the committed offset
+            came_back = _read_until(KafkaBroker(), (kafka_topic, arriving), expected=1, keep_reading=5.0)
+            assert came_back == {}, f'a settled message was redelivered: {sorted(came_back)}'
+    finally:
+        close_clients()
+        for future in admin.delete_topics([arriving]).values():
+            future.result(timeout=30)

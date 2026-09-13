@@ -27,7 +27,7 @@ from django_aiogram.broker.registry import broker_class
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-__all__ = ('Profile', 'profile_of')
+__all__ = ('Profile', 'connection_of', 'profile_of')
 
 #: the package-wide settings a group is built from. A transport's own options are added to
 #: these, read off whichever class ``BROKER`` names
@@ -116,6 +116,24 @@ def profile_of(settings: 'Mapping[str, Any]') -> Profile:
     transport = broker_class(settings, verify_driver=False)
     keys = sorted({*SHARED, *transport.OPTIONS})
     return Profile(settings=tuple((key, _value_of(key, settings, transport.QUEUE_OPTION)) for key in keys))
+
+
+def connection_of(settings: 'Mapping[str, Any]') -> Profile:
+    """Return the profile of everything **except** which queue these settings name.
+
+    What two queues have to agree on before one consumer can read them over one connection.
+    A profile keeps ``QUEUE`` because two bots on different queues must not share a transport
+    -- each would read the other's messages -- and that is exactly the distinction a
+    multiplexing consumer is allowed to collapse: it reads both, and every message says which
+    queue it came off.
+
+    Everything else still has to agree, and that is not a formality: the URL and the transport
+    are what a connection *is*, and ``MAX_IN_FLIGHT`` is the bound the consumer applies per
+    queue -- two queues with different bounds under one consumer would be one number applied
+    to both.
+    """
+    whole = profile_of(settings)
+    return Profile(settings=tuple((key, value) for key, value in whole.settings if key != 'QUEUE'))
 
 
 #: what a key contributes when nothing reads it, distinct from every value a project can write.

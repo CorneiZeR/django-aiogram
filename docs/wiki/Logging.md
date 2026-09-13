@@ -35,6 +35,7 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_max_retries` | the limit that was reached |
 | `tg_delivery` | the consumer that started, always `blpop` |
 | `tg_key` | the queue being consumed: a Redis list, a stream, an AMQP queue, or a Kafka topic |
+| `tg_partition` | which partition of `tg_key` a Kafka line is about, since a consumer reading several topics has a partition 0 on each of them |
 | `tg_timeout` | blocking-pop timeout, or how long a shutdown waited |
 | `tg_error` | the class name of a non-fatal error, not its text — a webhook secret or a chat id can end up in the message, and this field is what a log aggregator groups on |
 | `tg_crash_safe` | whether the consumer holds messages in flight. The transport answers for itself: false on a Redis without `LMOVE`, and always true on a stream, where the pending list is how delivery works |

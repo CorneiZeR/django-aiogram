@@ -796,12 +796,31 @@ python manage.py start_tgbot --pools vip
 - Given neither, it serves the one queue its settings name, which is every
   deployment before 5.0.
 
-**One consumer per queue, each with its own transport and its own
-`MAX_IN_FLIGHT`.** That is the point rather than an implementation detail: a
-backlog on one queue is a backlog on one queue. The cost is a connection and a
-thread per queue — the transports that could multiplex several queues over one
-connection do not do so yet, so a container serving twenty queues holds twenty
-connections. Serve them from a few containers by pool rather than all from one.
+**A budget per queue, whatever shape the consumers run in.** That is the point
+rather than an implementation detail: a backlog on one queue is a backlog on one
+queue, and `MAX_IN_FLIGHT` is applied to each of them separately. A queue at its
+bound simply stops being read from until one of its sends finishes; the others
+keep being read.
+
+**What it costs depends on the transport.** RabbitMQ, Kafka and Redis Streams
+read several queues over the connection they already have — several
+`basic_consume` on one channel, one `subscribe` naming several topics, one
+`XREADGROUP` naming several streams — so twenty queues on any of them are
+**one** connection and **one** consumer thread. A queue arriving there is told
+to the consumer that is already running, so the clients it was already serving
+are not paused.
+
+That is per **lane**, and a lane is the queues whose settings agree on
+everything but which queue they name: the transport, the server, the serializer,
+`MAX_IN_FLIGHT`. Queues that disagree cannot share a connection and get a
+consumer each, which is the same arithmetic the runtime groups bots by. A
+container whose twenty client queues are configured alike — the ordinary case,
+since they differ by name and nothing else — is one connection.
+
+A crash-safe Redis list cannot: `BLMOVE` takes one source, and reading several
+keys would mean `BLPOP`, which loses the message between the pop and the send.
+There a container serving twenty queues holds twenty connections and twenty
+threads, so serve them from a few containers by pool rather than all from one.
 
 ## Not using containers
 

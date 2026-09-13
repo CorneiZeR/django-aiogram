@@ -10,6 +10,7 @@ import logging
 import math
 import time
 from collections.abc import Mapping, Sequence
+from collections.abc import Sequence as Seq
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from django_aiogram.broker.base import Broker
@@ -55,6 +56,13 @@ def _response_error() -> type[Exception]:
 
 class RedisListBroker(Broker):
     """``RPUSH`` to publish, ``BLMOVE`` to take, ``LREM`` to settle."""
+
+    #: ``BLMOVE`` takes one source, and the move *is* the crash safety: reading several keys
+    #: would mean ``BLPOP``, which loses the message between the pop and the send. So a
+    #: container serving three queues on this transport runs three consumers and holds three
+    #: connections -- stated rather than worked around, and `Deployment.md` says to spread the
+    #: queues across containers by pool where that cost matters
+    MULTIPLEXES: ClassVar[bool] = False
 
     #: this broker's own keys, which stopped being everyone's in 4.0
     QUEUE_OPTION: ClassVar[str] = 'REDIS_MESSAGES_KEY'
@@ -131,13 +139,16 @@ class RedisListBroker(Broker):
 
     # ------------------------------------------------------------------ consumer
 
-    def take(self, timeout: float) -> Taken | None:
+    def take(self, timeout: float, queues: 'Seq[str] | None' = None) -> Taken | None:
         """``BLMOVE`` where the server has it, ``BLPOP`` where it does not.
 
         Rounded up to whole seconds, and never to zero: Redis reads a zero timeout as
         *block for ever*, so a sub-second wait truncated to an integer would swallow
         `stop()` and let the liveness marker expire under a consumer that is fine.
+
+        One queue, whatever the caller holds: see :attr:`MULTIPLEXES`.
         """
+        self.one_queue(queues)
         waiting = max(1, math.ceil(timeout))
         connection = self._redis()
         if self._reliable:
@@ -157,8 +168,9 @@ class RedisListBroker(Broker):
             raw = None if item is None else item[1]
         return None if raw is None else Taken(as_bytes(raw), raw)
 
-    def take_nowait(self) -> Taken | None:
+    def take_nowait(self, queues: 'Seq[str] | None' = None) -> Taken | None:
         """Move the same way without waiting, for a drain that has no thread to block."""
+        self.one_queue(queues)
         connection = self._redis()
         raw: bytes | str | None
         if self._reliable:
@@ -268,7 +280,7 @@ class RedisListBroker(Broker):
 
     # ---------------------------------------------------------------- operations
 
-    def reclaim(self) -> int | None:
+    def reclaim(self, queues: 'Seq[str] | None' = None) -> int | None:
         """Move everything in flight back to the front of the queue, oldest first.
 
         Also the probe for crash safety: on a server without ``LMOVE`` the very first call
@@ -276,7 +288,10 @@ class RedisListBroker(Broker):
 
         Raises so the caller can retry — a Redis that was unreachable at startup left
         messages stranded, and reporting zero would look like a settled list.
+
+        One queue, as :meth:`take` is.
         """
+        self.one_queue(queues)
         connection = self._redis()
         count = 0
         try:

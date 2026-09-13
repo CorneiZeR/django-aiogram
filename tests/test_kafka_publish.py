@@ -10,6 +10,8 @@ means a hundred thousand records and a broker that has actually gone away.
 """
 
 import time
+from collections import deque
+from typing import NamedTuple
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
@@ -269,6 +271,17 @@ class NeverAssigned:
         time.sleep(timeout)
 
 
+class _Partition(NamedTuple):
+    """What `assignment()` answers with, as much of it as the broker reads.
+
+    The broker pauses and resumes by `(topic, partition)` since it learnt to read several
+    topics, so a double that answers with strings is one the pacing cannot walk.
+    """
+
+    topic: str
+    partition: int
+
+
 class AssignedAfter:
     """A consumer that joins partway through, which is the case that ends the join early.
 
@@ -283,13 +296,24 @@ class AssignedAfter:
         self.polls = []
 
     def assignment(self):
-        """Nothing until `after` polls have gone by, then one partition."""
-        return [] if len(self.polls) < self.after else ['a partition']
+        """Nothing until `after` polls have gone by, then one partition of the topic under test.
+
+        Of *that* topic rather than any: the broker pauses what it is not reading, so a double
+        answering with somebody else's partition would make it pause -- and reach for the
+        driver, which this suite runs without.
+        """
+        return [] if len(self.polls) < self.after else [_Partition(SETTINGS['KAFKA_TOPIC'], 0)]
 
     def poll(self, timeout):
         """Spend the asked-for time and answer nothing, as `NeverAssigned` does and why."""
         self.polls.append(timeout)
         time.sleep(timeout)
+
+    def pause(self, partitions):
+        """Take a pause, which this double has nothing to do with beyond accepting it."""
+
+    def resume(self, partitions):
+        """And the other half of it."""
 
 
 def test_take_does_not_poll_again_for_time_it_already_spent_joining(broker, monkeypatch):
@@ -300,7 +324,7 @@ def test_take_does_not_poll_again_for_time_it_already_spent_joining(broker, monk
     after that makes `take(0.3)` come back at 0.6.
     """
     consumer = AssignedAfter(after=2)
-    monkeypatch.setattr(broker, '_consumer', lambda: consumer)
+    monkeypatch.setattr(broker, '_consumer', lambda queues=None: consumer)
 
     # one second, because the join polls in slices of `_JOIN_SLICE` and this needs the
     # assignment to land with time to spare: two slices is 0.4s, leaving 0.6s for the poll that
@@ -326,7 +350,7 @@ def test_take_does_not_spend_longer_than_it_was_given_on_joining(broker, monkeyp
     bound, so the case cannot pass by accident.
     """
     consumer = NeverAssigned()
-    monkeypatch.setattr(broker, '_consumer', lambda: consumer)
+    monkeypatch.setattr(broker, '_consumer', lambda queues=None: consumer)
 
     started = time.monotonic()
     assert broker.take(0.05) is None
@@ -343,7 +367,7 @@ def test_take_nowait_still_gives_the_join_its_own_budget(broker, monkeypatch):
     about a topic with something in it — which is exactly what it exists not to do.
     """
     consumer = NeverAssigned()
-    monkeypatch.setattr(broker, '_consumer', lambda: consumer)
+    monkeypatch.setattr(broker, '_consumer', lambda queues=None: consumer)
 
     started = time.monotonic()
     assert broker.take_nowait() is None
@@ -401,3 +425,84 @@ def test_the_producer_states_its_acknowledgement_level(monkeypatch):
 
     assert built.get('acks') == 'all', f'the producer does not state acks: {built}'
     assert built.get('enable.idempotence') is True, f'the producer does not state idempotence: {built}'
+
+
+class _Holding:
+    """A consumer that holds one partition, which is what a settled message needs."""
+
+    def __init__(self, assignment=((SETTINGS['KAFKA_TOPIC'], 0),)):
+        """Hold whatever the case says this member was given."""
+        self._assigned = [_Partition(*spot) for spot in assignment]
+
+    def assignment(self):
+        """Answer with what this member holds, which may be nothing."""
+        return self._assigned
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_partition_this_member_no_longer_holds_is_forgotten_rather_than_raised(monkeypatch):
+    """A subscription that moved rebalances the group, and a settle then names somebody else's.
+
+    Not a failure to report upwards: whoever holds that partition now reads from the last
+    committed offset, so everything this process had taken and not settled is already on its
+    way to them. What must not stay is the bookkeeping of a place this member has given up --
+    a later handle from it would be judged against offsets that belong to another member.
+    """
+    broker = KafkaBroker()
+    gone = (SETTINGS['KAFKA_TOPIC'], 7)
+    broker._unsettled[gone] = {3}
+    broker._settled[gone] = {2}
+    broker._rewinds[gone] = [1]
+    broker._rewound[gone] = 1
+    holding = _Holding()
+    monkeypatch.setattr(broker, '_consumer', lambda: holding)
+
+    swallowed = broker._lost(Exception('_UNKNOWN_PARTITION: Failed to seek to offset 0'), gone)
+
+    assert swallowed is True
+    for books in (broker._unsettled, broker._settled, broker._rewinds, broker._rewound):
+        assert gone not in books, f'the books of a partition this member gave up were kept: {books}'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_settle_from_a_thread_that_never_joined_still_raises(monkeypatch):
+    """The other reading of the same refusal, and the one that must keep raising.
+
+    The consumer is per thread, so a caller on another one reaches a client that never joined
+    and Kafka refuses everything it asks. Swallowing that would let a stray caller drop the
+    books of the thread actually holding the message -- which is the guarantee
+    `test_a_settle_from_another_thread_fails_rather_than_corrupting_the_offsets` rests on, and
+    the one this nearly took away.
+    """
+    broker = KafkaBroker()
+    held = (SETTINGS['KAFKA_TOPIC'], 0)
+    broker._unsettled[held] = {1}
+    monkeypatch.setattr(broker, '_consumer', lambda: _Holding(assignment=()))
+
+    swallowed = broker._lost(Exception('_UNKNOWN_PARTITION: Failed to seek to offset 0'), held)
+
+    assert swallowed is False, 'a settle from a thread with no assignment was swallowed'
+    assert broker._unsettled[held] == {1}, 'a stray caller dropped the books of the holding thread'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_what_a_replaced_consumer_had_fetched_is_not_handed_out_by_the_next_one(monkeypatch):
+    """A record belongs to the consumer that fetched it, and a subscription that moved is a new one.
+
+    The offset was never committed, so the group hands that message to whoever holds the
+    partition now. Handing it over here as well would send it a second time, on a handle the
+    member that has it cannot settle -- and the local books would be a second member's.
+    """
+    broker = KafkaBroker()
+    first, second = _Holding(), _Holding()
+    consumers = iter((first, first, second))
+    monkeypatch.setattr(broker, '_consumer', lambda: next(consumers))
+    broker._forget_what_another_consumer_fetched(broker._consumer())  # the first one, taking ownership
+    broker._spare.append(object())  # which is when a record can be kept at all
+
+    broker._forget_what_another_consumer_fetched(broker._consumer())  # still the first
+    kept = len(broker._spare)
+    broker._forget_what_another_consumer_fetched(broker._consumer())  # and now a replacement
+
+    assert kept == 1, 'the consumer that fetched them lost them'
+    assert broker._spare == deque(), 'a replaced consumer handed its records to the next one'

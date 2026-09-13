@@ -877,7 +877,7 @@ def test_a_message_is_only_counted_off_once(redis_server):
     # deterministically, rather than hoping the loop's last collect() won the
     # race: a second report sitting in the queue is the drift, just not yet applied
     delivery.collect()
-    assert delivery._in_flight == 0, f'the in-flight count drifted to {delivery._in_flight}'
+    assert delivery.in_flight() == 0, f'the in-flight count drifted to {delivery.in_flight()}'
     assert redis_server.llen(PROCESSING) == 0
 
 
@@ -923,7 +923,7 @@ def test_a_callback_called_twice_counts_once(redis_server):
     delivery.collect()
 
     assert delivery.handled, 'the handler never ran'
-    assert delivery._in_flight == 0, f'the in-flight count drifted to {delivery._in_flight}'
+    assert delivery.in_flight() == 0, f'the in-flight count drifted to {delivery.in_flight()}'
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'ENABLED': False, 'MAX_IN_FLIGHT': 2})
@@ -953,7 +953,7 @@ def test_a_disabled_bot_gives_the_slot_back_too(redis_server):
     delivery.consume_pending()
 
     assert len(handed) == 4, f'the bound never reopened: {len(handed)} of 4 taken'
-    assert delivery._in_flight == 0, f'the in-flight count drifted to {delivery._in_flight}'
+    assert delivery.in_flight() == 0, f'the in-flight count drifted to {delivery.in_flight()}'
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'MAX_IN_FLIGHT': 2})
@@ -975,7 +975,7 @@ def test_a_refused_send_gives_its_slot_back(redis_server):
     delivery.consume_pending()
 
     assert len(delivery.handled) == 4, f'the bound never reopened: {len(delivery.handled)} of 4 taken'
-    assert delivery._in_flight == 0, f'the in-flight count drifted to {delivery._in_flight}'
+    assert delivery.in_flight() == 0, f'the in-flight count drifted to {delivery.in_flight()}'
     assert redis_server.llen(PROCESSING) == 4, 'a refused send was acknowledged'
 
 
@@ -1055,7 +1055,7 @@ def test_an_unconfigured_project_gets_the_old_behavior():
     and neither default is exercised by any test that overrides the setting.
     """
     unbounded = Deferring()
-    unbounded._in_flight = 10_000
+    unbounded._in_flight = dict.fromkeys(unbounded.queues, 10_000)
     assert unbounded.at_capacity() is False, 'an unconfigured consumer grew a bound'
 
     without_lmove = Deferring()

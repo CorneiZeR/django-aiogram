@@ -100,6 +100,16 @@ values now, and `function, kwargs, correlation_id, queued_at = sent[0]` raises `
 Read the fields by name. See **[Testing](Testing.md#several-bots)** for `for_bot` and the
 narrowed captures.
 
+**If you ship a `Broker` or a `DELIVERY` of your own**, two shapes moved for the queues a
+container reads over one connection. `Taken` carries `queue` — added at the end, so
+`Taken(payload, handle)` still builds one and `taken.payload` reads as before, but the record
+is three values now and `payload, handle = taken` raises `ValueError`. And `take`,
+`take_nowait` and `reclaim` take a set of queues, defaulting to `None` — the one queue the
+broker addresses, which is every call anything made before this. A broker that leaves
+`MULTIPLEXES` alone is never asked for a set; one that sets it fills `Taken.queue`, or the
+consumer cannot count what it hands back. See **[Delivery](Delivery.md)** for the consumer's
+half.
+
 If you ship a `Broker` of your own, `option`, `call_timeout` and `broker_class` now take the
 settings to read from. Calling them is unchanged — the argument is optional and falls back to
 the shared settings. An **override** is not: `def option(cls, key, settings=None)` and

@@ -22,6 +22,7 @@ from django.test import override_settings
 from django.utils.module_loading import import_string
 
 from django_aiogram.broker.base import Broker
+from django_aiogram.broker.exceptions import QueueMultiplexingUnavailableError
 from django_aiogram.broker.registry import SHIPPED
 from django_aiogram.wire.serializers import JsonSerializer
 
@@ -38,6 +39,9 @@ from django_aiogram.wire.serializers import JsonSerializer
 REDIS_URL = os.environ.get('DJANGO_AIOGRAM_TEST_REDIS_URL', '')
 AMQP_URL = os.environ.get('DJANGO_AIOGRAM_TEST_AMQP_URL', '')
 AMQP_QUEUE = 'conformance'
+#: what the multiplexed case reads beside it, named here so the AMQP fixture can delete both --
+#: a queue this suite declared on somebody's broker and left behind is a message left behind
+SECOND_QUEUE = f'{AMQP_QUEUE}-also'
 KAFKA_BOOTSTRAP = os.environ.get('DJANGO_AIOGRAM_TEST_KAFKA_BOOTSTRAP', '')
 SETTINGS = {
     'TOKEN': '42:x',
@@ -78,6 +82,18 @@ def payload(chat_id: int) -> bytes:
 #: `InMemoryBroker` has neither. It is a `Broker` all the same, and a double that answers the
 #: contract loosely is exactly the thing this file exists to catch
 CONFORMANT = (*SHIPPED, 'django_aiogram.testing.InMemoryBroker')
+
+#: what each transport answers about reading several queues over one connection, pinned here
+#: rather than read off the class. The multiplexed case skips a transport that says ``False``,
+#: so a regression from ``True`` would turn that case into a skip and the refusal case into one
+#: asserting the wrong behaviour -- both green, and nothing saying the capability had gone
+MULTIPLEXING = {
+    'django_aiogram.broker.rabbitmq.RabbitMQBroker': True,
+    'django_aiogram.broker.kafka.KafkaBroker': True,
+    'django_aiogram.broker.redis_streams.RedisStreamsBroker': True,
+    'django_aiogram.broker.redis_list.RedisListBroker': False,
+    'django_aiogram.testing.InMemoryBroker': False,
+}
 
 
 @pytest.fixture(params=sorted(CONFORMANT), ids=lambda path: path.rsplit('.', 1)[-1])
@@ -203,6 +219,10 @@ def _against_kafka(path):
     # A transport's contract is that the topic exists; making it is the operator's job, or the
     # broker's `auto.create.topics.enable`, and here it is the fixture's
     _make_kafka_topic(unique)
+    # and the one the multiplexed case reads beside it, for the same reason: a subscription
+    # naming a topic that does not exist yet leaves the consumer with no assignment at all,
+    # so the case would time out on the topic it *can* read
+    _make_kafka_topic(f'{unique}-also')
     with override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS):
         broker = import_string(path)()
         broker.conformance_path = path
@@ -233,7 +253,9 @@ def _against_rabbitmq(path):
     quietly passing: a transport whose contract nobody checked is worse than one that says so.
 
     The queue is deleted and redeclared per case, because these assertions are about counts
-    and a message left by the previous one would answer them wrongly.
+    and a message left by the previous one would answer them wrongly. Both of them: the
+    multiplexed case declares a second queue beside it, and a server left holding that queue
+    and its message would answer the next run's counts wrongly too.
     """
     if not AMQP_URL:
         pytest.skip('set DJANGO_AIOGRAM_TEST_AMQP_URL to run the contract against RabbitMQ')
@@ -243,7 +265,8 @@ def _against_rabbitmq(path):
     from django_aiogram.broker.rabbitmq.client import close_connections
 
     scrub = pika.BlockingConnection(pika.URLParameters(AMQP_URL)).channel()
-    scrub.queue_delete(queue=AMQP_QUEUE)
+    for queue in (AMQP_QUEUE, SECOND_QUEUE):
+        scrub.queue_delete(queue=queue)
     with override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS):
         broker = import_string(path)()
         broker.conformance_path = path
@@ -251,7 +274,8 @@ def _against_rabbitmq(path):
             yield broker
         finally:
             close_connections()
-            scrub.queue_delete(queue=AMQP_QUEUE)
+            for queue in (AMQP_QUEUE, SECOND_QUEUE):
+                scrub.queue_delete(queue=queue)
             scrub.connection.close()
 
 
@@ -400,6 +424,82 @@ def test_the_handle_is_opaque_and_round_trips(broker: Broker):
     broker.ack(taken.handle)
 
     assert broker.take_nowait() is None, 'the message survived being settled by its handle'
+
+
+@pytest.mark.parametrize('path', sorted(CONFORMANT))
+def test_each_shipped_transport_answers_what_it_did_about_reading_several_queues(path):
+    """The capability by name, so losing one is a failure rather than two quiet skips.
+
+    Every case below that is *about* multiplexing chooses its branch from `MULTIPLEXES`, so a
+    transport that stopped answering ``True`` would skip the case that checks it and run the
+    one that checks the refusal -- a suite that goes green over a capability that has gone.
+    """
+    assert MULTIPLEXING[path] == import_string(path).MULTIPLEXES, (
+        f'{path} changed its answer about reading several queues over one connection'
+    )
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_broker_says_whether_it_can_read_several_queues_at_once(broker: Broker):
+    """Whatever the answer, there has to be one — a consumer chooses its shape from it."""
+    assert isinstance(type(broker).MULTIPLEXES, bool)
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_several_queues_are_read_over_the_one_connection(broker: Broker):
+    """A container serving three queues holds one connection, and hears from all of them.
+
+    The point of the capability, asserted the only way it can be from outside: a message on
+    each queue, one broker reading both, and each answer naming the queue it came off --
+    because the consumer keeps a budget per queue and cannot count what will not say.
+    """
+    if not type(broker).MULTIPLEXES:
+        pytest.skip(f'{type(broker).__name__} reads one queue per connection, and says so')
+    mine = broker.addressed()
+    # the same name the AMQP fixture deletes, so this case leaves nothing on a real broker
+    second = f'{mine}-also'
+    beside = type(broker).configured({**SETTINGS, 'QUEUE': second})
+    broker.publish([payload(21)])
+    beside.publish([payload(22)])
+
+    seen: dict[str, bytes] = {}
+    # a budget rather than two reads: a transport may hand back nothing while it joins -- Kafka
+    # measured three seconds for an assignment -- and this is about what arrives rather than
+    # about how many reads it took or how long the first one waited
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        taken = broker.take(0.5, (mine, second))
+        if taken is None:
+            continue
+        seen[taken.queue] = taken.payload
+        broker.ack(taken.handle)
+        if len(seen) == 2:
+            break
+
+    assert seen == {mine: payload(21), second: payload(22)}, 'a queue in the set was not read'
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
+def test_a_transport_that_reads_one_queue_refuses_a_set_rather_than_reading_one(broker: Broker):
+    """The refusal that keeps a container honest about how many backlogs it is serving.
+
+    Its own queue is not a set: a consumer hands its queues down whether or not there is one of
+    them, and a transport that refused that would refuse every single-queue deployment.
+    """
+    if type(broker).MULTIPLEXES:
+        pytest.skip(f'{type(broker).__name__} reads several queues, which the case above asserts')
+    mine = broker.addressed()
+
+    assert broker.take_nowait((mine,)) is None, 'a transport refused the one queue it addresses'
+    beside = (mine, f'{mine}-also')
+    # every method that takes the set, because a consumer calls all three and a refusal that
+    # only `take` makes is one the drain and the recovery walk straight past
+    with pytest.raises(QueueMultiplexingUnavailableError, match='reads one queue per connection'):
+        broker.take(0.01, beside)
+    with pytest.raises(QueueMultiplexingUnavailableError, match='reads one queue per connection'):
+        broker.take_nowait(beside)
+    with pytest.raises(QueueMultiplexingUnavailableError, match='reads one queue per connection'):
+        broker.reclaim(beside)
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)

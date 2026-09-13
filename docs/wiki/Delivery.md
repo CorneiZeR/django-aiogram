@@ -89,19 +89,51 @@ Without it, `manage.py start_tgbot` refuses to build the consumer where more tha
 configured, and says so by name — rather than delivering every addressed message through the
 process's own bot, under a token the producer did not name.
 
-**Serving several queues asks for one more.** A container told `--queues` or `--pools` runs one
-consumer per queue, and each is told which queue it is for:
+**Serving several queues asks for one more.** A container told `--queues` or `--pools` tells
+each consumer which queue — or which queues — it is for:
 
 ```python
 class QueuedDelivery(Delivery):
-    def __init__(self, handler, route=None, settings=None):
-        super().__init__(handler, route, settings)
+    def __init__(self, handler, route=None, settings=None, queues=None):
+        super().__init__(handler, route, settings, queues)
 ```
 
 `self.settings` is that queue's resolved settings, and `self.broker` is already built from
 them — so a `run()` written against `self.broker` needs no change. A consumer that takes
 neither argument is refused the same way and for the same shape of reason: it would take every
 message from the process's own queue while the container believes it is serving another.
+
+`queues` is the set read over **one** connection, where the transport can
+(`Broker.MULTIPLEXES`). A `run()` of your own hands it down and counts what comes back:
+
+```python
+asked = self.readable()
+if asked == ():
+    continue  # every queue this consumer serves is at its budget
+taken = self.broker.take(self.read_timeout, asked) if asked else self.broker.take(self.read_timeout)
+if taken is not None and self.dispatch(taken.payload, taken.handle, taken.queue):
+    self.acknowledge(taken.handle)
+```
+
+`readable()` is this consumer's queues minus the ones already at their budget — a bound is per
+queue, so a saturated one stops being read while the rest are — and it has **three** answers,
+none of which may be confused with another:
+
+| it answers | what it means | what to do |
+| --- | --- | --- |
+| `None` | this consumer serves one queue, the one its broker addresses | leave the argument off: a `Broker` written before 5.0 declares `take(self, timeout)`, and one more positional is a `TypeError` out of your own loop |
+| `()` | every queue it serves is at its budget | read nothing and go round again. An empty set means *the queue I address* to all four transports, so passing it down is a read past a budget |
+| a set | those are below their budget | `take(timeout, asked)` |
+
+A `Delivery` also tells its broker which queues it is *for*, through `Broker.serving`, at
+construction and whenever `serve()` moves the set — never on a capacity change. Only Kafka does
+anything with it, and the reason is on its page: a subscription there is group membership.
+
+`Taken.queue` names which queue a message came off, and that is what its send is counted
+against. Whether it is filled is the transport's own answer — the three that read several
+queues fill it always, and a Redis list leaves it empty because there is only ever one queue it
+could be — so a `run()` reads it as *the queue if the transport named one*. `dispatch` does
+exactly that: an empty name is counted under the one queue the consumer serves.
 
 ```python
 from django_aiogram.consumer.delivery import Delivery
