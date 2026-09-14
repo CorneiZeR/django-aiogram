@@ -10,6 +10,7 @@ import json
 from io import StringIO
 
 import pytest
+from asgiref.sync import async_to_sync
 from django.core.management import CommandError, call_command
 from django.test import override_settings
 from django.test.client import RequestFactory
@@ -36,7 +37,9 @@ def posted(bot_id=None, secret='the-process-secret'):  # noqa: S107 - a test sec
     request = RequestFactory().post(
         '/tg/', data=json.dumps(UPDATE), content_type='application/json', **{SECRET_HEADER: secret}
     )
-    return telegram_webhook(request, bot_id) if bot_id is not None else telegram_webhook(request)
+    # the view is a coroutine function; a synchronous case drives it the way WSGI would
+    view = async_to_sync(telegram_webhook)
+    return view(request, bot_id) if bot_id is not None else view(request)
 
 
 @pytest.fixture(autouse=True)
