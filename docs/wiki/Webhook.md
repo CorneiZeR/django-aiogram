@@ -108,16 +108,19 @@ It is CSRF-exempt and accepts `POST` only. The view is a coroutine: it hands the
 update to the loop the bot already runs on — the one its HTTP session is bound
 to, under ASGI and WSGI alike — and *awaits* the handlers, so the response still
 says what they did. Under WSGI Django drives it on a loop of its own per
-request, which costs nothing here because no aiogram object is built on that
-loop.
+request, and no aiogram object is ever built on that loop -- the bot, its
+session and its dispatcher belong to the bot's own.
 
 Awaiting rather than blocking is what makes it safe under ASGI. A synchronous
 view runs on the thread asgiref lends the request, and that thread is also the
 thread-sensitive executor a handler gets when it reaches the ORM through
 `afirst`, `aget` or `sync_to_async`: blocking it means the update waits for a
-thread that is waiting for the update. Telegram gives up after a minute and
-redelivers, so every retry strands one more thread — and the database
-connection it opened — until the process runs out of connections.
+thread that is waiting for the update. Telegram does not wait for ever: it
+times out the delivery and redelivers, so every retry strands one more thread —
+and the database connection it opened — until the process runs out of
+connections. Measured on an affected deployment, the timeout fell at about a
+minute and the redelivery a minute after that; Telegram documents neither, so
+do not build anything on those numbers.
 
 **3. Register it with Telegram.**
 

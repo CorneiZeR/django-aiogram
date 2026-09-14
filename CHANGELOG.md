@@ -9,7 +9,7 @@
   is also the thread-sensitive executor a handler is given when it reaches the
   ORM -- through `afirst`, `aget` or `sync_to_async`. Waiting for the update on
   that thread meant the handler waited for a thread that was waiting for the
-  handler: neither side ever moved, Telegram gave up after a minute and
+  handler: neither side ever moved, Telegram timed the delivery out and
   redelivered, and every retry stranded one more request thread and the database
   connection it had opened. A deployment taking a handful of updates an hour ran
   out of `max_connections` overnight, and every request after that -- the

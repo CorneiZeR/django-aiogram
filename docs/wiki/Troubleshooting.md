@@ -237,7 +237,7 @@ fails on the database refusing new connections.
 That is the deadlock 5.1 fixed, and the fix is the release: before it the view
 was synchronous, so under ASGI it waited for the update on the very thread a
 handler is given when it reaches the ORM. The update waited for the thread, the
-thread waited for the update, Telegram timed out after a minute and redelivered
+thread waited for the update, Telegram timed out the delivery and redelivered
 — and each retry left one more thread parked on an open connection.
 
 On 5.0 and below the symptom is worth recognising: threads in the web process

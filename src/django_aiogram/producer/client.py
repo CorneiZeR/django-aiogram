@@ -396,8 +396,8 @@ class TelegramBot(RouterShortcuts):
         synchronous form blocks its thread, and under ASGI that thread is the
         thread-sensitive executor of the request's own context: a handler
         reaching the ORM through Django's async API waits for that executor,
-        which is waiting for the handler. Neither side ever moves, Telegram gives
-        up after a minute and redelivers, and every retry strands one more thread
+        which is waiting for the handler. Neither side ever moves, Telegram times
+        the delivery out and redelivers, and every retry strands one more thread
         and the database connection it opened — a web process ran out of
         ``max_connections`` overnight that way.
 
