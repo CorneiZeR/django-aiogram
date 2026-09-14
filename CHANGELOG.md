@@ -1,5 +1,61 @@
 # Changelog
 
+## 5.1.0 - unreleased
+
+### Fixed
+
+- **The webhook awaits its handlers instead of blocking on them.** Under ASGI a
+  synchronous view runs on the thread asgiref lends the request, and that thread
+  is also the thread-sensitive executor a handler is given when it reaches the
+  ORM -- through `afirst`, `aget` or `sync_to_async`. Waiting for the update on
+  that thread meant the handler waited for a thread that was waiting for the
+  handler: neither side ever moved, Telegram timed the delivery out and
+  redelivered, and every retry stranded one more request thread and the database
+  connection it had opened. A deployment taking a handful of updates an hour ran
+  out of `max_connections` overnight, and every request after that -- the
+  health probe included -- was refused by the database.
+
+  `telegram_webhook` is a coroutine now, and `TelegramBot.afeed_update` is the
+  awaiting half of `feed_update`. Nothing about the update's path changes: it
+  still goes to the loop the bot runs on, the response still says what the
+  handlers did, and a shutdown still answers `503` so Telegram redelivers. A
+  project that routes the view by name needs no edit; one that **calls**
+  `telegram_webhook` itself now awaits it, as does a test driving it directly.
+
+  `feed_update` keeps its synchronous shape for the callers that have one, and
+  says in its docstring what it costs an async caller.
+
+  The update is handed to the loop from a plain worker thread rather than one
+  asgiref is borrowing. A borrowed thread carries its context into everything
+  scheduled from it, and an update outlives the submission: on 3.10 and 3.11 a
+  handler reaching the ORM asked for an executor that had already quit and died
+  with `CurrentThreadExecutor already quit or is broken`. It also means an
+  update no longer inherits the request's context at all, which is the right way
+  round -- what Telegram sent is not part of the request that carried it.
+
+- **A cancelled request is no longer answered as a shutdown.** Only `close()`
+  refuses an update in flight, and only that refusal is worth a `503` asking
+  Telegram to redeliver. A caller that went away -- the client hung up, the
+  server is tearing the request down -- cancels the coroutine instead, and that
+  cancellation now travels on rather than becoming an answer nobody is left to
+  read. The two look alike on the future, since `asyncio.wrap_future` passes a
+  cancellation down to the one it wraps, so the shutdown marks what it cancels.
+  Reachable only from `afeed_update`: a thread blocked in `feed_update` has
+  nobody to cancel it.
+
+  A caller that leaves *during* the hand-over leaves nothing behind either. The
+  hand-over runs on a thread and cannot be stopped, so it still produces an
+  update nobody is waiting on; that one is forgotten rather than left in the set
+  `close()` drains, where every shutdown would have waited the whole drain for it
+  and then cancelled it.
+
+  The set those updates are tracked in has a guard of its own, held for an `add`,
+  a `discard` or the shutdown's snapshot and never while an update is being
+  handed over. It was `loop_lock`, which a submission holds for the whole
+  hand-over -- and the awaiting half forgets its update from the event loop, so
+  waiting for that lock there would have stalled every other request behind one
+  submission.
+
 ## 5.0.0 - 2026-09-13
 
 A major, and the one thing it changes for every project is the name of the settings dict. What

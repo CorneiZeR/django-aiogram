@@ -4,6 +4,23 @@ What each major release changed, newest first — so an upgrade is read from the
 the lowest section that applies to the version you are on and work **up** the page, one release
 at a time: each covers a single hop and assumes the ones below it are done.
 
+# From 5.0 to 5.1
+
+**Nothing to run, and nothing to rename.** A project that routes
+`telegram_webhook` from its `urls.py` upgrades by installing the release.
+
+The view is a coroutine now, so the two places that hold a reference to it
+rather than a route need one edit each:
+
+* code that **calls** the view — a wrapper of your own, a smoke check — awaits
+  it, or drives it with `asgiref.sync.async_to_sync` from synchronous code;
+* a test that posts to it directly does the same.
+
+`TelegramBot.feed_update` is unchanged and still synchronous. Its awaiting twin,
+`afeed_update`, is what the view uses and what a view of your own should use:
+blocking a request thread on an update is what this release exists to stop, and
+**[Webhook](Webhook.md)** says why.
+
 # From 4.1 to 5.0
 
 **Two required steps: the migration, and the rename.** Read this whole section before running

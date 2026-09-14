@@ -14,6 +14,7 @@ from io import StringIO
 
 import pytest
 from aiogram import Dispatcher, F, types
+from asgiref.sync import ThreadSensitiveContext, async_to_sync, sync_to_async
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import CommandError, call_command
 from django.test import RequestFactory, override_settings
@@ -27,7 +28,6 @@ from django_aiogram.consumer.webhook import (
     webhook_settings,
 )
 from django_aiogram.exceptions import LoopThreadNotStartedError, ShuttingDownError
-from django_aiogram.producer.looping import loop_lock
 from django_aiogram.producer.outbound import Outbound
 
 SECRET = 'a-long-random-string'
@@ -58,7 +58,8 @@ def an_update(text='/start', update_id=1):
 def post(payload, secret=SECRET, path='/tg/hook/'):
     headers = {SECRET_HEADER: secret} if secret is not None else {}
     request = RequestFactory().post(path, data=json.dumps(payload), content_type='application/json', **headers)
-    return telegram_webhook(request)
+    # the view is a coroutine function; a synchronous case drives it the way WSGI would
+    return async_to_sync(telegram_webhook)(request)
 
 
 @pytest.fixture
@@ -160,7 +161,7 @@ def test_serving_without_a_secret_answers_503_rather_than_raising(handled, caplo
 def test_get_is_not_allowed():
     request = RequestFactory().get('/tg/hook/')
 
-    response = telegram_webhook(request)
+    response = async_to_sync(telegram_webhook)(request)
 
     assert response.status_code == 405
 
@@ -187,7 +188,7 @@ def test_a_body_that_is_not_json_is_rejected(handled):
         '/tg/hook/', data=b'{oops', content_type='application/json', **{SECRET_HEADER: SECRET}
     )
 
-    assert telegram_webhook(request).status_code == 400
+    assert async_to_sync(telegram_webhook)(request).status_code == 400
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
@@ -922,17 +923,20 @@ def test_a_loop_thread_that_dies_is_replaced(monkeypatch):
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_forgetting_an_update_waits_for_the_shutdown_snapshot():
-    """The set is added to and read under `loop_lock`; removal has to match.
+    """The set is snapshotted and mutated under one guard; removal has to take it.
 
-    `_stop_runner` takes `list()` over this set while holding that lock. A
-    `discard` from a request thread mid-iteration raises `RuntimeError: Set
-    changed size during iteration` **inside `close()`**, which aborts the
-    shutdown before anything is torn down — the loop, the session and the storage
-    all left open, from a request that merely finished at the wrong moment.
+    `_stop_runner` takes `list()` over this set while holding that guard. A `discard`
+    mid-iteration raises `RuntimeError: Set changed size during iteration` **inside
+    `close()`**, which aborts the shutdown before anything is torn down — the loop, the
+    session and the storage all left open, from a request that merely finished at the wrong
+    moment.
+
+    Its own guard rather than `loop_lock`, and that is the point of it: an awaited update
+    is forgotten from the event loop, and `loop_lock` is held for a whole hand-over, so
+    waiting for *that* on the loop would stall every other request behind a submission.
     """
     instance = TelegramBot()
     instance._ensure_loop_runs()
-    loop = instance.loop
     finished = object()
     instance._updates.add(finished)  # type: ignore[arg-type] - a stand-in for a future
     done = threading.Event()
@@ -948,7 +952,7 @@ def test_forgetting_an_update_waits_for_the_shutdown_snapshot():
             instance._forget_update(finished)  # type: ignore[arg-type] - the same stand-in as above
             done.set()
 
-        with loop_lock(loop):
+        with instance._updates_guard:
             threading.Thread(target=remove, daemon=True).start()
             assert entered.wait(5), 'the removal thread never ran, so nothing was held off'
             # it must not get in while the snapshot could be running
@@ -1211,4 +1215,153 @@ def test_a_close_that_gave_up_still_cancels_what_arrived_after_it(monkeypatch):
             instance._runner.join(timeout=5)
         # and the loop itself: the close under test gave up while the thread still held
         # it, so nothing had closed it by the time that thread finally exited
+        instance.close()
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'DRAIN_TIMEOUT': 0.2})
+def test_an_update_whose_handler_touches_the_orm_is_served_under_asgi(monkeypatch):
+    """A thread-sensitive handler must not be scheduled onto the thread waiting for it.
+
+    Under ASGI the view runs on a thread asgiref lends to the loop, and that thread
+    then blocks in `feed_update`. A handler reaching the ORM asks for the
+    thread-sensitive executor of the context it inherited — the blocked thread's —
+    so the update waits for a thread that is waiting for the update. Telegram gave
+    up after a minute, redelivered, and every retry stranded one more request
+    thread and the database connection it had opened.
+    """
+    instance = TelegramBot()
+    served = []
+
+    @instance.message(F.text)
+    async def touch_the_orm(message: types.Message) -> None:
+        await sync_to_async(served.append, thread_sensitive=True)(message.text)
+
+    monkeypatch.setattr('django_aiogram.consumer.webhook.bot', instance)
+
+    async def serve():
+        """What ASGIHandler does around a view: one thread-sensitive context per request."""
+        headers = {SECRET_HEADER: SECRET}
+        request = RequestFactory().post(
+            '/tg/hook/',
+            data=json.dumps(an_update('/start')),
+            content_type='application/json',
+            **headers,
+        )
+        async with ThreadSensitiveContext():
+            try:
+                return await asyncio.wait_for(telegram_webhook(request), timeout=5)
+            # `asyncio.TimeoutError`, which is the builtin from 3.11 and its own class
+            # before that: caught by the spelling that means the same on every version
+            except asyncio.TimeoutError:
+                # the failure this case is about parks a thread on the update for
+                # ever, and `asyncio.run` joins the executor's threads on its way
+                # out: without cancelling the update here, a red case would hang
+                # instead of reporting
+                await sync_to_async(instance.close, thread_sensitive=False)()
+                raise
+
+    try:
+        response = asyncio.run(serve())
+    finally:
+        instance.close()
+
+    assert response.status_code == 200
+    assert served == ['/start']
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'DRAIN_TIMEOUT': 0.2})
+def test_a_request_cancelled_mid_handler_is_not_reported_as_a_shutdown():
+    """Only `close()` refuses an update; a caller that went away is not refused at all.
+
+    `ShuttingDownError` is what answers `503`, and Telegram reads that as "try again".
+    Raising it for a cancellation that came from *outside* — the client hung up, the
+    server is tearing the request down — would tell Telegram to redeliver an update
+    whose handlers are still running, and would swallow a cancellation the caller
+    asked for. The synchronous twin never meets this: a blocked thread has nobody
+    to cancel it.
+    """
+    instance = TelegramBot()
+    running = threading.Event()
+    release = threading.Event()
+
+    @instance.message(F.text)
+    async def wait_to_be_let_go(message: types.Message) -> None:
+        running.set()
+        await asyncio.get_running_loop().run_in_executor(None, release.wait)
+
+    update = types.Update(
+        update_id=1,
+        message=types.Message(
+            message_id=1,
+            date=datetime.now(timezone.utc),
+            chat=types.Chat(id=42, type='private'),
+            text='/start',
+        ),
+    )
+
+    async def serve():
+        fed = asyncio.ensure_future(instance.afeed_update(update))
+        await asyncio.get_running_loop().run_in_executor(None, running.wait)
+        fed.cancel()
+        return await asyncio.wait_for(fed, timeout=5)
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(serve())
+    finally:
+        release.set()
+        instance.close()
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'DRAIN_TIMEOUT': 0.2})
+def test_a_caller_that_leaves_mid_handover_leaves_nothing_behind(monkeypatch):
+    """The set a shutdown drains holds the updates somebody is waiting on, and only those.
+
+    The hand-over runs on a thread and cannot be stopped, so a caller cancelled during it
+    still produces a future — one nobody will ever await. Left in the set, it is an update
+    `close()` waits the whole drain for and then cancels, every time, for the life of the
+    process.
+    """
+    instance = TelegramBot()
+    handed_over = threading.Event()
+
+    @instance.message(F.text)
+    async def record(message: types.Message) -> None:
+        """Nothing to do: the case is about the submission, not the handling."""
+
+    submitting = instance._submit_update
+
+    def slowly(update):
+        """Hand over, but not before the caller has had time to go away."""
+        handed_over.wait(5)
+        return submitting(update)
+
+    monkeypatch.setattr(instance, '_submit_update', slowly)
+    update = types.Update(
+        update_id=1,
+        message=types.Message(
+            message_id=1,
+            date=datetime.now(timezone.utc),
+            chat=types.Chat(id=42, type='private'),
+            text='/start',
+        ),
+    )
+
+    async def leave():
+        fed = asyncio.ensure_future(instance.afeed_update(update))
+        await asyncio.sleep(0)
+        fed.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await fed
+        handed_over.set()
+        # the submission is still on its thread; give it the loop until it has finished
+        for _ in range(100):
+            if not instance._updates:
+                break
+            await asyncio.sleep(0.05)
+
+    try:
+        asyncio.run(leave())
+        assert instance._updates == set(), 'an abandoned update was left for the shutdown to drain'
+    finally:
         instance.close()
