@@ -25,6 +25,14 @@
   `feed_update` keeps its synchronous shape for the callers that have one, and
   says in its docstring what it costs an async caller.
 
+  The update is handed to the loop from a plain worker thread rather than one
+  asgiref is borrowing. A borrowed thread carries its context into everything
+  scheduled from it, and an update outlives the submission: on 3.10 and 3.11 a
+  handler reaching the ORM asked for an executor that had already quit and died
+  with `CurrentThreadExecutor already quit or is broken`. It also means an
+  update no longer inherits the request's context at all, which is the right way
+  round -- what Telegram sent is not part of the request that carried it.
+
 - **A cancelled request is no longer answered as a shutdown.** Only `close()`
   refuses an update in flight, and only that refusal is worth a `503` asking
   Telegram to redeliver. A caller that went away -- the client hung up, the

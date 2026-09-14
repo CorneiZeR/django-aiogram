@@ -41,7 +41,6 @@ from typing import TYPE_CHECKING, Any
 
 from aiogram import Bot, Dispatcher, Router, exceptions
 from aiogram.types import Update
-from asgiref.sync import sync_to_async
 from django.core.exceptions import ImproperlyConfigured
 
 from django_aiogram.api import check_function, resolve_call
@@ -401,12 +400,19 @@ class TelegramBot(RouterShortcuts):
         and the database connection it opened — a web process ran out of
         ``max_connections`` overnight that way.
 
-        Awaiting leaves the executor free, so the handler runs on it as it would
-        in any other request. The submission itself goes to a thread of its own
-        (``thread_sensitive=False``): it takes the loop lock and may start the
-        loop thread, neither of which belongs on an event loop.
+        Awaiting leaves that executor free, and the handler asks for one of its
+        own: the submission goes through ``run_in_executor`` rather than
+        ``sync_to_async``, so the thread it runs on lends nothing to the update.
+        A thread asgiref is borrowing carries its context into everything
+        scheduled from it, and the update outlives that thread -- on 3.10 and
+        3.11 a handler reaching the ORM then asked for an executor that had
+        already quit, and the update died with
+        ``CurrentThreadExecutor already quit or is broken``. It is also work that
+        does not belong on an event loop either way: it takes the loop lock, and
+        it may start the loop's thread.
         """
-        future = await sync_to_async(self._submit_update, thread_sensitive=False)(update)
+        loop = asyncio.get_running_loop()
+        future = await loop.run_in_executor(None, self._submit_update, update)
         if future is None:
             return
         try:
