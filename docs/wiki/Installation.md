@@ -85,9 +85,10 @@ says so with the install line for the one you named:
 	HINT: pip install "django-aiogram[redis]"
 ```
 
-**Three extras are not transports.** `hiredis` swaps redis-py's parser for the C one,
-`prometheus` (`prometheus-client>=0.20`) installs the client the shipped exporter fills, and
-`crypto` (`cryptography>=42`) the encrypting `TOKEN_STORAGE`:
+**Four extras are not transports.** `hiredis` swaps redis-py's parser for the C one,
+`prometheus` (`prometheus-client>=0.20`) installs the client the shipped exporter fills,
+`crypto` (`cryptography>=42`) the encrypting `TOKEN_STORAGE`, and `webhook`
+(`uvicorn>=0.30`) the server `start_tgbot --serve` runs:
 
 ```shell
 pip install 'django-aiogram[redis,prometheus,crypto]'
@@ -96,6 +97,11 @@ pip install 'django-aiogram[redis,prometheus,crypto]'
 `crypto` is needed only where `TOKEN_STORAGE` names the encrypting storage; a deployment whose
 database is already the trust boundary keeps its tokens as they are and never imports
 `cryptography`. See **[Tokens](Tokens.md)**.
+
+`webhook` is needed only by a deployment that receives its updates in the bot container
+rather than in its web tier: serving the view from the project's own ASGI server needs
+nothing extra at all. `start_tgbot --serve` refuses to start without it, naming every package
+of the group that is missing. See **[Webhook](Webhook.md)**.
 
 `django_aiogram.contrib.prometheus` is the only module that imports `prometheus_client`, and
 nothing in this package imports *that* module — a project does, from its own

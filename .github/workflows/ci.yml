@@ -31,13 +31,14 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       # every extra, in this job alone: `mypy` checks the whole package, and a transport whose
-      # driver is absent is a module it cannot resolve. The stubs in the dev group cover pika,
+      # driver is absent is a module it cannot resolve -- `webhook` for the same reason, since
+      # the server imports `uvicorn`. The stubs in the dev group cover pika,
       # which ships none of its own — but confluent-kafka carries its types *in the package*,
       # so the type check needs the package installed rather than a stub for it.
       #
       # This was found by CI rather than by me: my own `mypy` was green because every driver
       # was in that virtualenv, so the gate I ran was weaker than the one here
-      - run: pip install -e '.[redis,rabbitmq,kafka]' --group dev
+      - run: pip install -e '.[redis,rabbitmq,kafka,webhook]' --group dev
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy

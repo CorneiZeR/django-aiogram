@@ -59,6 +59,9 @@ All prefixed with `tg_`, to avoid colliding with `LogRecord` attributes.
 | `tg_pending` | work still in flight at shutdown: sends, or the updates a webhook process is answering |
 | `tg_low` | the first id of the range a copy is retrying, when a row landed under an id it was about to move |
 | `tg_drain_timeout` | how long shutdown gave them |
+| `tg_host` | the address `start_tgbot --serve` bound its webhook server to |
+| `tg_port` | the port it bound |
+| `tg_route` | the path that server answers on, read from `WEBHOOK_URL` -- the one Telegram was given |
 | `tg_kind` | the event log kind of a row |
 | `tg_replay_of` | the correlation id a replayed send is standing in for |
 | `tg_claimed_by` | the process whose replay claim is being taken over, from `django_aiogram_replay_claim.claimed_by` |
