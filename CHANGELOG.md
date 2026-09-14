@@ -16,9 +16,11 @@
   one and the process's own -- so serving a second bot stays a row rather than a redeploy.
 
   It needs the new `webhook` extra: `pip install "django-aiogram[webhook]"`. The refusal
-  names every package of that group that is absent, read from the installed metadata rather
-  than from a list in the source, so a package added to the extra is required from the next
-  release with nothing else edited. `--serve` is also refused where it would bind a port
+  names every package of that group that is absent *or older than the floor the extra
+  declares*, read from the installed metadata rather than from a list in the source, so a
+  package added to the extra is required from the next release with nothing else edited.
+  Where that metadata cannot be read at all -- a source tree nobody installed -- it falls
+  back to the one package the server imports, rather than letting the check pass. `--serve` is also refused where it would bind a port
   nothing posts to: a polling deployment, or a run that also passed `--no-updates`.
 
 ### Fixed
@@ -74,13 +76,6 @@
   update nobody is waiting on; that one is forgotten rather than left in the set
   `close()` drains, where every shutdown would have waited the whole drain for it
   and then cancelled it.
-
-  The set those updates are tracked in has a guard of its own, held for an `add`,
-  a `discard` or the shutdown's snapshot and never while an update is being
-  handed over. It was `loop_lock`, which a submission holds for the whole
-  hand-over -- and the awaiting half forgets its update from the event loop, so
-  waiting for that lock there would have stalled every other request behind one
-  submission.
 
 ## 5.0.0 - 2026-09-13
 

@@ -6,15 +6,19 @@ would be nothing to serve.
 """
 
 import importlib
+import importlib.metadata
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import CommandError, call_command
 from django.test import override_settings
+from django.urls.resolvers import RegexPattern, URLResolver
 
 from django_aiogram.consumer import serving_http
+from django_aiogram.consumer.webhook import telegram_webhook, webhook_settings
 from django_aiogram.exceptions import WebhookServerDependencyError
 
 SETTINGS = {
@@ -29,7 +33,73 @@ SETTINGS = {
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_the_route_is_the_one_telegram_was_given():
     """Nothing configures the path twice: `WEBHOOK_URL` is what `tgbot_webhook set` registers."""
-    assert serving_http.webhook_route() == 'tg/9c1f2b7a'
+    assert serving_http.webhook_route() == 'tg/9c1f2b7a/'
+
+
+@pytest.mark.parametrize('registered', ['https://example.test/tg/9c1f2b7a/', 'https://example.test/tg/9c1f2b7a'])
+def test_the_route_answers_the_url_telegram_posts_to(registered):
+    """Telegram posts to the URL it was registered with, character for character.
+
+    A route that normalised the trailing slash answered 404 to every update of whichever
+    spelling it did not keep -- and `tgbot_webhook set` registers `WEBHOOK_URL` as it is
+    written, so both spellings are somebody's working deployment.
+    """
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WEBHOOK_URL': registered}):
+        resolver = URLResolver(RegexPattern(r'^/'), serving_http.urlpatterns())
+        posted = urlsplit(registered).path
+
+        assert resolver.resolve(posted).func is telegram_webhook
+
+
+@pytest.mark.parametrize('registered', ['https://example.test/tg/9c1f2b7a/', 'https://example.test/tg/9c1f2b7a'])
+def test_a_bots_own_route_answers_what_the_command_registers(registered):
+    """`tgbot_webhook` appends the identity to a stripped URL, so that route ends in a slash."""
+    with override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WEBHOOK_URL': registered}):
+        resolver = URLResolver(RegexPattern(r'^/'), serving_http.urlpatterns())
+        registered_for_a_bot = webhook_settings(bot_id=123456)['url']
+        posted = urlsplit(registered_for_a_bot).path
+
+        match = resolver.resolve(posted)
+
+        assert match.func is telegram_webhook
+        assert match.kwargs == {'bot_id': 123456}
+
+
+def test_a_package_older_than_the_extra_asks_for_counts_as_missing(monkeypatch):
+    """The extra names a floor because the server needs what that release added.
+
+    Installed but too old passes a presence check and fails at whichever line first depends
+    on it -- which is the failure mode the refusal exists to replace.
+    """
+    monkeypatch.setattr(serving_http, 'webhook_requirements', lambda: ('uvicorn',))
+    monkeypatch.setattr(serving_http, 'webhook_floors', lambda: {'uvicorn': '0.30'})
+    monkeypatch.setattr('importlib.metadata.version', lambda name: '0.29.1')
+
+    assert serving_http.missing_requirements() == ('uvicorn',)
+
+
+def test_a_package_at_the_floor_is_not_missing(monkeypatch):
+    """The bound is documented as `>=`, so the version at it is the one that satisfies it."""
+    monkeypatch.setattr(serving_http, 'webhook_requirements', lambda: ('uvicorn',))
+    monkeypatch.setattr(serving_http, 'webhook_floors', lambda: {'uvicorn': '0.30'})
+    monkeypatch.setattr('importlib.metadata.version', lambda name: '0.30')
+
+    assert serving_http.missing_requirements() == ()
+
+
+def test_unreadable_metadata_still_requires_what_the_server_imports(monkeypatch):
+    """A source tree nobody installed has no `Requires-Dist` to read, and still needs uvicorn.
+
+    Answering "nothing is missing" there would let the refusal pass and move the failure to
+    the `import uvicorn` inside `serve`, which is the shape this exists to replace.
+    """
+
+    def unreadable(name):
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr('importlib.metadata.requires', unreadable)
+
+    assert serving_http.webhook_requirements() == (serving_http.FALLBACK_REQUIREMENT,)
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'WEBHOOK_URL': ''})
