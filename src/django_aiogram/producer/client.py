@@ -139,6 +139,11 @@ class TelegramBot(RouterShortcuts):
         #: updates a request thread is blocked on. Stopping the loop under one of
         #: these would leave that thread waiting on a future nothing will finish
         self._updates: set[futures.Future[None]] = set()
+        #: the updates the shutdown cancelled, out of those. A cancellation from
+        #: outside looks the same on the future -- `asyncio.wrap_future` passes one
+        #: on to it -- and the two mean opposite things to the caller, so which of
+        #: them it was is recorded rather than inferred
+        self._refused: set[futures.Future[None]] = set()
         # only true while close() is flushing the loop, so the refusal below can tell
         # a hand-off queued before shutdown from one queued during it
         self._draining = False
@@ -407,6 +412,16 @@ class TelegramBot(RouterShortcuts):
         try:
             await asyncio.wrap_future(future)
         except (futures.CancelledError, asyncio.CancelledError) as cancelled:
+            if future not in self._refused:
+                # not `_stop_runner`: this coroutine was cancelled from outside, which is
+                # what a client hanging up looks like under ASGI. Nobody is left to be
+                # answered, so the cancellation travels on rather than becoming a `503`
+                # that would ask Telegram to redeliver an update whose handlers are
+                # running. Asked of the set rather than of `future.cancelled()`, which
+                # says yes to both: `wrap_future` cancels the one it wraps. The
+                # synchronous twin cannot meet this at all -- a blocked thread has
+                # nobody to cancel it
+                raise
             raise ShuttingDownError from cancelled
         finally:
             self._forget_update(future)
@@ -416,6 +431,11 @@ class TelegramBot(RouterShortcuts):
 
         Answers the future to wait on, or ``None`` when the update has already
         been handled inline — the case where no loop was running to take it.
+
+        Reaches no database: what the update needed read was read before it got
+        here, which is what lets :meth:`afeed_update` run this off the
+        thread-sensitive executor without stranding a connection on a thread
+        nothing closes.
         """
         # touching it is what attaches the shared router: the dispatcher includes it as it is
         # built, so every bot in the process gets the same handlers
@@ -467,9 +487,11 @@ class TelegramBot(RouterShortcuts):
         loop = self._loop
         if loop is None:
             self._updates.discard(future)
+            self._refused.discard(future)
             return
         with loop_lock(loop):
             self._updates.discard(future)
+            self._refused.discard(future)
 
     def _ensure_loop_runs(self) -> bool:
         """Give this process's loop a thread of its own, once.
@@ -601,6 +623,9 @@ class TelegramBot(RouterShortcuts):
                     extra={'tg_bot_id': self.bot_id, 'tg_pending': len(unfinished)},
                 )
                 for future in unfinished:
+                    # marked before it is cancelled: the waiter wakes on the cancel,
+                    # and a mark written after it would arrive too late to be read
+                    self._refused.add(future)
                     future.cancel()
         if loop is not None and not loop.is_closed() and runner.is_alive():
             # only while the thread is there to consume it: queued at a loop nobody is

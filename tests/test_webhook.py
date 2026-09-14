@@ -1263,3 +1263,47 @@ def test_an_update_whose_handler_touches_the_orm_is_served_under_asgi(monkeypatc
 
     assert response.status_code == 200
     assert served == ['/start']
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'DRAIN_TIMEOUT': 0.2})
+def test_a_request_cancelled_mid_handler_is_not_reported_as_a_shutdown():
+    """Only `close()` refuses an update; a caller that went away is not refused at all.
+
+    `ShuttingDownError` is what answers `503`, and Telegram reads that as "try again".
+    Raising it for a cancellation that came from *outside* — the client hung up, the
+    server is tearing the request down — would tell Telegram to redeliver an update
+    whose handlers are still running, and would swallow a cancellation the caller
+    asked for. The synchronous twin never meets this: a blocked thread has nobody
+    to cancel it.
+    """
+    instance = TelegramBot()
+    running = threading.Event()
+    release = threading.Event()
+
+    @instance.message(F.text)
+    async def wait_to_be_let_go(message: types.Message) -> None:
+        running.set()
+        await asyncio.get_running_loop().run_in_executor(None, release.wait)
+
+    update = types.Update(
+        update_id=1,
+        message=types.Message(
+            message_id=1,
+            date=datetime.now(timezone.utc),
+            chat=types.Chat(id=42, type='private'),
+            text='/start',
+        ),
+    )
+
+    async def serve():
+        fed = asyncio.ensure_future(instance.afeed_update(update))
+        await asyncio.get_running_loop().run_in_executor(None, running.wait)
+        fed.cancel()
+        return await asyncio.wait_for(fed, timeout=5)
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(serve())
+    finally:
+        release.set()
+        instance.close()

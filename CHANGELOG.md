@@ -25,6 +25,16 @@
   `feed_update` keeps its synchronous shape for the callers that have one, and
   says in its docstring what it costs an async caller.
 
+- **A cancelled request is no longer answered as a shutdown.** Only `close()`
+  refuses an update in flight, and only that refusal is worth a `503` asking
+  Telegram to redeliver. A caller that went away -- the client hung up, the
+  server is tearing the request down -- cancels the coroutine instead, and that
+  cancellation now travels on rather than becoming an answer nobody is left to
+  read. The two look alike on the future, since `asyncio.wrap_future` passes a
+  cancellation down to the one it wraps, so the shutdown marks what it cancels.
+  Reachable only from `afeed_update`: a thread blocked in `feed_update` has
+  nobody to cancel it.
+
 ## 5.0.0 - 2026-09-13
 
 A major, and the one thing it changes for every project is the name of the settings dict. What
