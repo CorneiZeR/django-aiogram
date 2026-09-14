@@ -1248,7 +1248,9 @@ def test_an_update_whose_handler_touches_the_orm_is_served_under_asgi(monkeypatc
         async with ThreadSensitiveContext():
             try:
                 return await asyncio.wait_for(telegram_webhook(request), timeout=5)
-            except TimeoutError:
+            # `asyncio.TimeoutError`, which is the builtin from 3.11 and its own class
+            # before that: caught by the spelling that means the same on every version
+            except asyncio.TimeoutError:
                 # the failure this case is about parks a thread on the update for
                 # ever, and `asyncio.run` joins the executor's threads on its way
                 # out: without cancelling the update here, a red case would hang
