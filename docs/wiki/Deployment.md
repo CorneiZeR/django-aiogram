@@ -218,6 +218,7 @@ deployment where that work never happens:
 | --- | --- |
 | `manage.py tgbot_prune_events` | the event log's size. `W006` warns while `EVENT_LOG_RETENTION_DAYS` is unset |
 | `manage.py tgbot_dispatch_scheduled` | every send made with an `eta`. Without it a scheduled message waits for ever |
+| `manage.py start_tgbot --serve` | the bot container receives its own updates, on a server of its own. Webhook mode, the `webhook` extra, and a proxy route to the port it binds. Without it the webhook is served by the project's web tier, which needs neither |
 | `manage.py tgbot_intents` | every check and webhook change asked for in the admin. Without it those actions are recorded and never carried out. `--watch` is the always-on form; a person is waiting, so seconds is the useful interval |
 
 **The commands that are deliberately not on that list**, each for its own reason.

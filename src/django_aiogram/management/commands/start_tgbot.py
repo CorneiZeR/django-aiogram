@@ -24,6 +24,7 @@ from django_aiogram.config.enums import UpdateMode
 from django_aiogram.config.settings import SETTINGS_NAME, coerce_bool, conf
 from django_aiogram.consumer.delivery import Delivery, get_delivery
 from django_aiogram.consumer.serving import Consumers, Lane, lane_name, lanes, settle
+from django_aiogram.consumer.serving_http import DEFAULT_HOST, DEFAULT_PORT, serve
 from django_aiogram.consumer.webhook import MODES, current_mode
 from django_aiogram.eventlog.events import worker_identity
 from django_aiogram.eventlog.recorder import recorder
@@ -198,6 +199,27 @@ class Command(BaseCommand):
             ),
         )
         parser.add_argument(
+            '--serve',
+            action='store_true',
+            help=(
+                'receive updates over HTTP in this container, on a server of its own. Webhook '
+                'mode only, and it needs the `webhook` extra. Without it the webhook is served '
+                "by whatever runs the project's own ASGI application, which is the other shape "
+                'and needs no flag.'
+            ),
+        )
+        parser.add_argument(
+            '--serve-host',
+            default=DEFAULT_HOST,
+            help=f'the address --serve binds. Defaults to {DEFAULT_HOST}, reached through the proxy.',
+        )
+        parser.add_argument(
+            '--serve-port',
+            type=int,
+            default=DEFAULT_PORT,
+            help=f'the port --serve binds. Defaults to {DEFAULT_PORT}.',
+        )
+        parser.add_argument(
             '--idle',
             action='store_true',
             help=(
@@ -311,19 +333,32 @@ class Command(BaseCommand):
 
         try:
             with contextlib.suppress(KeyboardInterrupt, SystemExit):
-                if not receives:
-                    # the consumers are on their own threads, so this process has to keep a
-                    # loop turning for the sends they hand over -- exactly what webhook mode
-                    # has always done, for exactly that reason
-                    self.stdout.write('Consuming the queues; this process asks for no updates.')
-                    self._idle_on_the_loop()
-                elif mode == UpdateMode.WEBHOOK:
-                    self.stdout.write('Consuming the queue; updates are expected over HTTP.')
-                    self._idle_on_the_loop()
-                else:
-                    bot.start_polling()
+                self._hold_the_process(mode, receives=receives, options=options)
         finally:
             self._unwind(consumers, shutting_down, previous)
+
+    def _hold_the_process(self, mode: str, *, receives: bool, options: dict[str, Any]) -> None:
+        """Keep this process alive doing the one thing this run is for, until it is signalled.
+
+        Four shapes, and each of them has to turn the loop: the consumers are on their own
+        threads and hand their sends to it.
+        """
+        if not receives:
+            # exactly what webhook mode has always done, and for exactly that reason
+            self.stdout.write('Consuming the queues; this process asks for no updates.')
+            self._idle_on_the_loop()
+        elif mode == UpdateMode.WEBHOOK and options.get('serve'):
+            # the server turns the loop, so nothing else here has to: it runs until the
+            # process is signalled, which is what the idle below does for the deployment
+            # whose updates arrive in its web tier instead
+            host, port = options.get('serve_host', DEFAULT_HOST), options.get('serve_port', DEFAULT_PORT)
+            self.stdout.write(f'Serving the webhook on {host}:{port}.')
+            serve(bot.loop, host, port)
+        elif mode == UpdateMode.WEBHOOK:
+            self.stdout.write('Consuming the queue; updates are expected over HTTP.')
+            self._idle_on_the_loop()
+        else:
+            bot.start_polling()
 
     def _watch_the_queues(
         self,
@@ -447,6 +482,18 @@ class Command(BaseCommand):
         away leaves an idle loop.
         """
         self._refuse_contradictory_flags(options)
+        # `.get`, because the flags are read from a dict a caller builds as well as from
+        # argparse: the shutdown suite drives `_roles` with the two flags its case is about
+        if options.get('serve') and mode != UpdateMode.WEBHOOK:
+            msg = (
+                '--serve has nothing to serve while this deployment polls: updates arrive '
+                "through getUpdates, not over HTTP. Set MODE to 'webhook' (or pass "
+                '--mode webhook) if the bot should receive them here.'
+            )
+            raise CommandError(msg)
+        if options.get('serve') and options['no_updates']:
+            msg = '--serve and --no-updates together ask this process to receive updates and to receive none.'
+            raise CommandError(msg)
         receives = not options['no_updates']
         consumes = not options['updates_only']
         if not consumes and mode == UpdateMode.WEBHOOK:

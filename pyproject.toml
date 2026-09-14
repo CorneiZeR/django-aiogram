@@ -89,6 +89,14 @@ kafka = [
 # is imported by a project rather than by this package -- so the absence is an ImportError
 # where somebody asked for it, not a broken install
 prometheus = ["prometheus-client>=0.20"]
+# the server `start_tgbot --serve` runs, for a deployment that receives updates in the bot
+# container rather than in its web tier. An extra for the same reason a driver is one: a web
+# tier serving the view from its own ASGI server already has everything it needs, and a
+# project that never serves the webhook at all should not be given a second HTTP server. What
+# it holds is checked as a whole -- `webhook_requirements()` reads this list back out of the
+# installed metadata -- so a package added here is required from the next release without
+# anything else being edited
+webhook = ["uvicorn>=0.30"]
 # the encrypting `TOKEN_STORAGE`, and nothing else in the package touches it: a deployment
 # whose database is already the trust boundary keeps its tokens as they are, and one that
 # needs them encrypted at rest installs this. A base dependency would charge every project

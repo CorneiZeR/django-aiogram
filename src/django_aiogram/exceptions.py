@@ -106,3 +106,27 @@ class UnknownApiMethodError(DjangoRedisAiogramError, ValueError):
             f'name one of the {method_count} methods aiogram exposes for the '
             f'Bot API; see the Serialization page.',
         )
+
+
+class WebhookServerDependencyError(DjangoRedisAiogramError, RuntimeError):
+    """`start_tgbot --serve` was asked for without the packages that serve it.
+
+    Carries the install line rather than the import error, for the same reason
+    :class:`~django_aiogram.broker.exceptions.BrokerDependencyError` does: an import error
+    names a module and the reader needs the extra.
+
+    The names are not a list written twice. They come from the installed metadata of the
+    `webhook` extra, so a package added to it is required from the next release without
+    anything here being edited -- which is the whole point of asking about the group rather
+    than about `uvicorn`.
+    """
+
+    def __init__(self, missing: tuple[str, ...], extra: str) -> None:
+        """Name every package of the group that is absent, and the command that installs them."""
+        self.missing = missing
+        self.extra = extra
+        named = ', '.join(repr(name) for name in missing)
+        super().__init__(
+            f'serving the webhook needs {named}, which is not installed. '
+            f'Install it with: pip install "django-aiogram[{extra}]"'
+        )

@@ -33,6 +33,7 @@ import django_aiogram
 #: this module fail for a reason that is not the one it is about
 ARGUMENTS = {
     'BrokerDependencyError': {'broker': 'pkg.mod.Broker', 'module': 'pika', 'extra': 'rabbitmq'},
+    'WebhookServerDependencyError': {'missing': ('uvicorn',), 'extra': 'webhook'},
     'WorkerDepthUnavailableError': {'broker': 'KafkaBroker', 'worker': 'bot-7'},
     'QueueMultiplexingUnavailableError': {
         'broker': 'RedisListBroker',

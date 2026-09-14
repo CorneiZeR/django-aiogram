@@ -2,6 +2,27 @@
 
 ## 5.1.0 - unreleased
 
+### Added
+
+- **A webhook server of the bot container's own: `start_tgbot --serve`.** Serving the view
+  from the project's web tier still works and needs nothing new; what it costs is that an
+  update is handled beside the requests people are waiting on, competing for that process's
+  threads and its database connections. `--serve` runs a server whose only routes are the
+  webhook's, in the container that already has the bot's loop -- on that same loop, so the
+  container still turns exactly one.
+
+  The path is not configured twice: it is read from `WEBHOOK_URL`, which is the URL
+  `manage.py tgbot_webhook set` gave Telegram, and both routes are declared -- the identity
+  one and the process's own -- so serving a second bot stays a row rather than a redeploy.
+
+  It needs the new `webhook` extra: `pip install "django-aiogram[webhook]"`. The refusal
+  names every package of that group that is absent *or older than the floor the extra
+  declares*, read from the installed metadata rather than from a list in the source, so a
+  package added to the extra is required from the next release with nothing else edited.
+  Where that metadata cannot be read at all -- a source tree nobody installed -- it falls
+  back to the one package the server imports, rather than letting the check pass. `--serve` is also refused where it would bind a port
+  nothing posts to: a polling deployment, or a run that also passed `--no-updates`.
+
 ### Fixed
 
 - **The webhook awaits its handlers instead of blocking on them.** Under ASGI a
@@ -43,18 +64,18 @@
   Reachable only from `afeed_update`: a thread blocked in `feed_update` has
   nobody to cancel it.
 
+  The set those updates are tracked in has a guard of its own now, held for an
+  `add`, a `discard` or the shutdown's snapshot and never while an update is being
+  handed over. It was `loop_lock`, which a submission holds for the whole
+  hand-over -- and the awaiting half forgets its update from the event loop, so
+  waiting for that lock there would have stalled every other request behind one
+  submission.
+
   A caller that leaves *during* the hand-over leaves nothing behind either. The
   hand-over runs on a thread and cannot be stopped, so it still produces an
   update nobody is waiting on; that one is forgotten rather than left in the set
   `close()` drains, where every shutdown would have waited the whole drain for it
   and then cancelled it.
-
-  The set those updates are tracked in has a guard of its own, held for an `add`,
-  a `discard` or the shutdown's snapshot and never while an update is being
-  handed over. It was `loop_lock`, which a submission holds for the whole
-  hand-over -- and the awaiting half forgets its update from the event loop, so
-  waiting for that lock there would have stalled every other request behind one
-  submission.
 
 ## 5.0.0 - 2026-09-13
 

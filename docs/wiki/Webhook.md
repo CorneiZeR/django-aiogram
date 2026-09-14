@@ -122,6 +122,30 @@ connections. Measured on an affected deployment, the timeout fell at about a
 minute and the redelivery a minute after that; Telegram documents neither, so
 do not build anything on those numbers.
 
+### Serving it from the bot container instead
+
+The steps above put the webhook in the web tier, which is where most deployments want it:
+the route is already there, and the server is already running. What it costs is that an
+update is handled beside the requests people are waiting on, competing for that process's
+threads and its database connections.
+
+A deployment that would rather keep them apart serves the webhook where the bot already is:
+
+```shell
+pip install "django-aiogram[webhook]"
+python manage.py start_tgbot --serve --serve-port 8080
+```
+
+The container then answers the webhook itself, on a server whose only routes are the two the
+view needs — one bot's and the process's own. Nothing is registered in your `urls.py`, and
+the path is not configured twice: it is read from `WEBHOOK_URL`, the URL
+`manage.py tgbot_webhook set` gave Telegram. Point your proxy at the container on that port
+and the web tier serves no updates at all.
+
+`--serve` is refused where it would bind a port nothing posts to — a polling deployment, or
+one that also passed `--no-updates` — and it refuses to start without the `webhook` extra,
+naming every package of that group that is missing and the line that installs them.
+
 **3. Register it with Telegram.**
 
 ```shell
