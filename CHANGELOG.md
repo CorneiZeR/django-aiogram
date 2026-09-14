@@ -1,5 +1,30 @@
 # Changelog
 
+## 5.1.0 - unreleased
+
+### Fixed
+
+- **The webhook awaits its handlers instead of blocking on them.** Under ASGI a
+  synchronous view runs on the thread asgiref lends the request, and that thread
+  is also the thread-sensitive executor a handler is given when it reaches the
+  ORM -- through `afirst`, `aget` or `sync_to_async`. Waiting for the update on
+  that thread meant the handler waited for a thread that was waiting for the
+  handler: neither side ever moved, Telegram gave up after a minute and
+  redelivered, and every retry stranded one more request thread and the database
+  connection it had opened. A deployment taking a handful of updates an hour ran
+  out of `max_connections` overnight, and every request after that -- the
+  health probe included -- was refused by the database.
+
+  `telegram_webhook` is a coroutine now, and `TelegramBot.afeed_update` is the
+  awaiting half of `feed_update`. Nothing about the update's path changes: it
+  still goes to the loop the bot runs on, the response still says what the
+  handlers did, and a shutdown still answers `503` so Telegram redelivers. A
+  project that routes the view by name needs no edit; one that **calls**
+  `telegram_webhook` itself now awaits it, as does a test driving it directly.
+
+  `feed_update` keeps its synchronous shape for the callers that have one, and
+  says in its docstring what it costs an async caller.
+
 ## 5.0.0 - 2026-09-13
 
 A major, and the one thing it changes for every project is the name of the settings dict. What

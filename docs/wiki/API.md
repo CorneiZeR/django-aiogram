@@ -118,6 +118,7 @@ renames did — see **[Upgrading](Upgrading.md)** for each old name against what
 | `await bot.asend(...)` | as `send`, without the blocking socket write |
 | `await bot.aenqueue(...)` | as `enqueue` |
 | `await bot.asend_many(...)` | as `send_many` |
+| `await bot.afeed_update(...)` | as `feed_update`, without holding the thread it waits on |
 
 Same signatures, same rows, and the same correlation id — resolved on the caller's
 context before the first `await`, so a handler's replies still inherit the id of

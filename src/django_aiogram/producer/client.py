@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any
 
 from aiogram import Bot, Dispatcher, Router, exceptions
 from aiogram.types import Update
+from asgiref.sync import sync_to_async
 from django.core.exceptions import ImproperlyConfigured
 
 from django_aiogram.api import check_function, resolve_call
@@ -357,9 +358,64 @@ class TelegramBot(RouterShortcuts):
     def feed_update(self, update: Update) -> None:
         """Hand one update to the dispatcher and wait for the handlers.
 
-        Webhook mode calls this from a request thread. It waits rather than
-        scheduling: the response must not be sent before the handlers have run,
-        or a failure would go unreported and the request would look successful.
+        It waits rather than scheduling: the response must not be sent before the
+        handlers have run, or a failure would go unreported and the request would
+        look successful.
+
+        **Blocks the calling thread**, so an async caller wants
+        :meth:`afeed_update` instead — under ASGI this thread is one asgiref lends
+        to the loop, and a handler reaching the ORM asks for it back.
+        """
+        future = self._submit_update(update)
+        if future is None:
+            # driven inline: there was no loop running to hand it to
+            return
+        try:
+            # waiting outside the lock, so the next request is not held up by ours
+            future.result()
+        except (futures.CancelledError, asyncio.CancelledError) as cancelled:
+            # `_stop_runner` canceled this one: no handler finished, so it is the
+            # same refusal a request arriving mid-shutdown gets, and the view has
+            # to answer it the same way. Left as a cancellation it reads as a
+            # handler that failed — a 200 telling Telegram to forget an update
+            # nothing handled. Both classes: they are one object on some versions
+            # and, where they are not, only one of them is an `Exception`
+            raise ShuttingDownError from cancelled
+        finally:
+            self._forget_update(future)
+
+    async def afeed_update(self, update: Update) -> None:
+        """:meth:`feed_update`, awaited — what an async view calls.
+
+        Same guarantee and same refusals; what differs is who waits. The
+        synchronous form blocks its thread, and under ASGI that thread is the
+        thread-sensitive executor of the request's own context: a handler
+        reaching the ORM through Django's async API waits for that executor,
+        which is waiting for the handler. Neither side ever moves, Telegram gives
+        up after a minute and redelivers, and every retry strands one more thread
+        and the database connection it opened — a web process ran out of
+        ``max_connections`` overnight that way.
+
+        Awaiting leaves the executor free, so the handler runs on it as it would
+        in any other request. The submission itself goes to a thread of its own
+        (``thread_sensitive=False``): it takes the loop lock and may start the
+        loop thread, neither of which belongs on an event loop.
+        """
+        future = await sync_to_async(self._submit_update, thread_sensitive=False)(update)
+        if future is None:
+            return
+        try:
+            await asyncio.wrap_future(future)
+        except (futures.CancelledError, asyncio.CancelledError) as cancelled:
+            raise ShuttingDownError from cancelled
+        finally:
+            self._forget_update(future)
+
+    def _submit_update(self, update: Update) -> 'futures.Future[None] | None':
+        """Hand the update to the loop, or drive it here when nothing else can.
+
+        Answers the future to wait on, or ``None`` when the update has already
+        been handled inline — the case where no loop was running to take it.
         """
         # touching it is what attaches the shared router: the dispatcher includes it as it is
         # built, so every bot in the process gets the same handlers
@@ -391,27 +447,14 @@ class TelegramBot(RouterShortcuts):
                 # nothing could be started to run it, so drive it here — which is
                 # what every update did before, one at a time under this lock
                 loop.run_until_complete(coroutine)
-                return
+                return None
             # something runs this loop — polling, or the thread started above —
             # so hand the update over. Decided under the lock: a loop another
             # request is driving looks running until it stops, and the update
             # would then wait for ever
             future = asyncio.run_coroutine_threadsafe(coroutine, loop)
             self._updates.add(future)
-
-        try:
-            # waiting outside the lock, so the next request is not held up by ours
-            future.result()
-        except (futures.CancelledError, asyncio.CancelledError) as cancelled:
-            # `_stop_runner` canceled this one: no handler finished, so it is the
-            # same refusal a request arriving mid-shutdown gets, and the view has
-            # to answer it the same way. Left as a cancellation it reads as a
-            # handler that failed — a 200 telling Telegram to forget an update
-            # nothing handled. Both classes: they are one object on some versions
-            # and, where they are not, only one of them is an `Exception`
-            raise ShuttingDownError from cancelled
-        finally:
-            self._forget_update(future)
+        return future
 
     def _forget_update(self, future: 'futures.Future[None]') -> None:
         """Drop a finished update from the set the shutdown snapshot reads.

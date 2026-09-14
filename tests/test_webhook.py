@@ -14,6 +14,7 @@ from io import StringIO
 
 import pytest
 from aiogram import Dispatcher, F, types
+from asgiref.sync import ThreadSensitiveContext, async_to_sync, sync_to_async
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import CommandError, call_command
 from django.test import RequestFactory, override_settings
@@ -58,7 +59,8 @@ def an_update(text='/start', update_id=1):
 def post(payload, secret=SECRET, path='/tg/hook/'):
     headers = {SECRET_HEADER: secret} if secret is not None else {}
     request = RequestFactory().post(path, data=json.dumps(payload), content_type='application/json', **headers)
-    return telegram_webhook(request)
+    # the view is a coroutine function; a synchronous case drives it the way WSGI would
+    return async_to_sync(telegram_webhook)(request)
 
 
 @pytest.fixture
@@ -160,7 +162,7 @@ def test_serving_without_a_secret_answers_503_rather_than_raising(handled, caplo
 def test_get_is_not_allowed():
     request = RequestFactory().get('/tg/hook/')
 
-    response = telegram_webhook(request)
+    response = async_to_sync(telegram_webhook)(request)
 
     assert response.status_code == 405
 
@@ -187,7 +189,7 @@ def test_a_body_that_is_not_json_is_rejected(handled):
         '/tg/hook/', data=b'{oops', content_type='application/json', **{SECRET_HEADER: SECRET}
     )
 
-    assert telegram_webhook(request).status_code == 400
+    assert async_to_sync(telegram_webhook)(request).status_code == 400
 
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
@@ -1212,3 +1214,52 @@ def test_a_close_that_gave_up_still_cancels_what_arrived_after_it(monkeypatch):
         # and the loop itself: the close under test gave up while the thread still held
         # it, so nothing had closed it by the time that thread finally exited
         instance.close()
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'DRAIN_TIMEOUT': 0.2})
+def test_an_update_whose_handler_touches_the_orm_is_served_under_asgi(monkeypatch):
+    """A thread-sensitive handler must not be scheduled onto the thread waiting for it.
+
+    Under ASGI the view runs on a thread asgiref lends to the loop, and that thread
+    then blocks in `feed_update`. A handler reaching the ORM asks for the
+    thread-sensitive executor of the context it inherited — the blocked thread's —
+    so the update waits for a thread that is waiting for the update. Telegram gave
+    up after a minute, redelivered, and every retry stranded one more request
+    thread and the database connection it had opened.
+    """
+    instance = TelegramBot()
+    served = []
+
+    @instance.message(F.text)
+    async def touch_the_orm(message: types.Message) -> None:
+        await sync_to_async(served.append, thread_sensitive=True)(message.text)
+
+    monkeypatch.setattr('django_aiogram.consumer.webhook.bot', instance)
+
+    async def serve():
+        """What ASGIHandler does around a view: one thread-sensitive context per request."""
+        headers = {SECRET_HEADER: SECRET}
+        request = RequestFactory().post(
+            '/tg/hook/',
+            data=json.dumps(an_update('/start')),
+            content_type='application/json',
+            **headers,
+        )
+        async with ThreadSensitiveContext():
+            try:
+                return await asyncio.wait_for(telegram_webhook(request), timeout=5)
+            except TimeoutError:
+                # the failure this case is about parks a thread on the update for
+                # ever, and `asyncio.run` joins the executor's threads on its way
+                # out: without cancelling the update here, a red case would hang
+                # instead of reporting
+                await sync_to_async(instance.close, thread_sensitive=False)()
+                raise
+
+    try:
+        response = asyncio.run(serve())
+    finally:
+        instance.close()
+
+    assert response.status_code == 200
+    assert served == ['/start']

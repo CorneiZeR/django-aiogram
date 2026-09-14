@@ -15,10 +15,13 @@ identities come from the same watermark-cached read the supervisor uses, so an u
 costs a set lookup rather than a query: a webhook that queried per request would be a way for
 a stranger to load the database by posting nonsense at it.
 
-The view is deliberately synchronous. An async view would run on the server's
-own loop under ASGI but on a throwaway loop per request under WSGI, and the
-bot's HTTP session binds to the first loop that uses it. Driving the bot's own
-loop works the same under both.
+**The view awaits the handlers; it never drives the bot's loop.** The update is
+handed to the loop the bot already runs on -- the one its HTTP session is bound
+to -- and the view waits for the result, so the response still says what the
+handlers did. What it must not do is *block* while waiting: under ASGI the
+thread a synchronous view runs on is the thread-sensitive executor of that
+request, the very thing a handler reaching the ORM asks for, and the two then
+wait for each other for ever.
 """
 
 import hmac
@@ -30,6 +33,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from aiogram.types import Update
+from asgiref.sync import sync_to_async
 from django.core.exceptions import ImproperlyConfigured
 from django.core.signals import setting_changed
 from django.dispatch import receiver
@@ -46,6 +50,8 @@ from django_aiogram.exceptions import LoopUnavailableError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+    from django_aiogram.producer.client import TelegramBot
 
 logger = logging.getLogger('django_aiogram')
 
@@ -285,23 +291,15 @@ def webhook_secret(settings: 'Mapping[str, Any] | None' = None) -> str:
     return secret
 
 
-@csrf_exempt
-def telegram_webhook(  # noqa: PLR0911 - a guard-clause chain is the readable shape
+def _accepted_update(  # noqa: PLR0911 - a guard-clause chain is the readable shape
     request: HttpRequest,
     bot_id: int | None = None,
-) -> HttpResponse:
-    """Feed one update to the dispatcher, through the bot the path names.
+) -> 'tuple[TelegramBot, Update] | HttpResponse':
+    """Answer the bot and the update to feed it, or the response that refuses.
 
-    ``bot_id`` comes from the URL -- ``path('tg/<int:bot_id>/<secret>/', telegram_webhook)`` --
-    and is what a deployment serving several bots registers with `setWebhook`. Left out, the
-    view serves the process's own bot, which is every 4.x deployment and every project with
-    one bot.
-
-    Answers 200 for anything Telegram should not retry, including a handler that
-    raised — a non-2xx makes Telegram redeliver the same update, and a handler
-    that fails once will fail again. A *refusal* is the other case: when nothing
-    ran at all, because this process is shutting down, redelivery is exactly
-    what should happen, so that answers 503.
+    Every guard the view applies before anything is dispatched, in one
+    synchronous place: two of them read the configured bots, which is a database
+    read on a deployment whose bots live in the table.
     """
     if request.method != 'POST':
         return HttpResponseNotAllowed(['POST'])
@@ -340,8 +338,40 @@ def telegram_webhook(  # noqa: PLR0911 - a guard-clause chain is the readable sh
     if update is None:
         return HttpResponse(status=400)
 
+    return serving, update
+
+
+@csrf_exempt
+async def telegram_webhook(
+    request: HttpRequest,
+    bot_id: int | None = None,
+) -> HttpResponse:
+    """Feed one update to the dispatcher, through the bot the path names.
+
+    ``bot_id`` comes from the URL -- ``path('tg/<int:bot_id>/<secret>/', telegram_webhook)`` --
+    and is what a deployment serving several bots registers with `setWebhook`. Left out, the
+    view serves the process's own bot, which is every 4.x deployment and every project with
+    one bot.
+
+    Answers 200 for anything Telegram should not retry, including a handler that
+    raised — a non-2xx makes Telegram redeliver the same update, and a handler
+    that fails once will fail again. A *refusal* is the other case: when nothing
+    ran at all, because this process is shutting down, redelivery is exactly
+    what should happen, so that answers 503.
+
+    Awaits the handlers rather than blocking on them: see
+    :meth:`~django_aiogram.producer.client.TelegramBot.afeed_update` for what a
+    blocked request thread costs an ASGI deployment. The guards above it stay
+    synchronous and reach the loop through ``sync_to_async``, so the two that
+    read the configured bots are as free to query as they have always been.
+    """
+    accepted = await sync_to_async(_accepted_update)(request, bot_id)
+    if isinstance(accepted, HttpResponse):
+        return accepted
+    serving, update = accepted
+
     try:
-        serving.feed_update(update)
+        await serving.afeed_update(update)
     except LoopUnavailableError:
         # nothing ran, so this update is still Telegram's to redeliver — which a
         # 2xx would tell it not to. The shutdown window is not a handler that

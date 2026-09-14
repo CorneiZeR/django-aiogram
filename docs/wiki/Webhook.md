@@ -104,10 +104,20 @@ urlpatterns = [
 ]
 ```
 
-It is CSRF-exempt, accepts `POST` only, and is a plain synchronous view — which
-is deliberate. An async view runs on the server's loop under ASGI but on a
-throwaway loop per request under WSGI, and the bot's HTTP session binds to the
-first loop that uses it. Driving the bot's own loop behaves the same either way.
+It is CSRF-exempt and accepts `POST` only. The view is a coroutine: it hands the
+update to the loop the bot already runs on — the one its HTTP session is bound
+to, under ASGI and WSGI alike — and *awaits* the handlers, so the response still
+says what they did. Under WSGI Django drives it on a loop of its own per
+request, which costs nothing here because no aiogram object is built on that
+loop.
+
+Awaiting rather than blocking is what makes it safe under ASGI. A synchronous
+view runs on the thread asgiref lends the request, and that thread is also the
+thread-sensitive executor a handler gets when it reaches the ORM through
+`afirst`, `aget` or `sync_to_async`: blocking it means the update waits for a
+thread that is waiting for the update. Telegram gives up after a minute and
+redelivers, so every retry strands one more thread — and the database
+connection it opened — until the process runs out of connections.
 
 **3. Register it with Telegram.**
 

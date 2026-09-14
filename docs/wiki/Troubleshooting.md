@@ -228,6 +228,24 @@ other: a matching one passes, and a mismatched one gets this 403 rather than a t
 **400** means the body did not parse as an update. Something other than Telegram is
 posting to that URL.
 
+## The webhook stops answering, and the database runs out of connections
+
+`manage.py tgbot_webhook info` says `Read timeout expired` and the pending count
+climbs; the process is up and its probe is green, but every request eventually
+fails on the database refusing new connections.
+
+That is the deadlock 5.1 fixed, and the fix is the release: before it the view
+was synchronous, so under ASGI it waited for the update on the very thread a
+handler is given when it reaches the ORM. The update waited for the thread, the
+thread waited for the update, Telegram timed out after a minute and redelivered
+— and each retry left one more thread parked on an open connection.
+
+On 5.0 and below the symptom is worth recognising: threads in the web process
+grow one per update and never fall, and `pg_stat_activity` shows one idle
+connection per stranded thread whose last query is whatever the handler ran.
+Restarting the process frees them all, which is why it looks like a slow leak
+rather than a hang.
+
 ## Handlers never fire
 
 ```python
