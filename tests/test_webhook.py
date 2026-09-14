@@ -28,7 +28,6 @@ from django_aiogram.consumer.webhook import (
     webhook_settings,
 )
 from django_aiogram.exceptions import LoopThreadNotStartedError, ShuttingDownError
-from django_aiogram.producer.looping import loop_lock
 from django_aiogram.producer.outbound import Outbound
 
 SECRET = 'a-long-random-string'
@@ -924,17 +923,20 @@ def test_a_loop_thread_that_dies_is_replaced(monkeypatch):
 
 @override_settings(TELEGRAM_BOT_DEFAULTS=SETTINGS)
 def test_forgetting_an_update_waits_for_the_shutdown_snapshot():
-    """The set is added to and read under `loop_lock`; removal has to match.
+    """The set is snapshotted and mutated under one guard; removal has to take it.
 
-    `_stop_runner` takes `list()` over this set while holding that lock. A
-    `discard` from a request thread mid-iteration raises `RuntimeError: Set
-    changed size during iteration` **inside `close()`**, which aborts the
-    shutdown before anything is torn down — the loop, the session and the storage
-    all left open, from a request that merely finished at the wrong moment.
+    `_stop_runner` takes `list()` over this set while holding that guard. A `discard`
+    mid-iteration raises `RuntimeError: Set changed size during iteration` **inside
+    `close()`**, which aborts the shutdown before anything is torn down — the loop, the
+    session and the storage all left open, from a request that merely finished at the wrong
+    moment.
+
+    Its own guard rather than `loop_lock`, and that is the point of it: an awaited update
+    is forgotten from the event loop, and `loop_lock` is held for a whole hand-over, so
+    waiting for *that* on the loop would stall every other request behind a submission.
     """
     instance = TelegramBot()
     instance._ensure_loop_runs()
-    loop = instance.loop
     finished = object()
     instance._updates.add(finished)  # type: ignore[arg-type] - a stand-in for a future
     done = threading.Event()
@@ -950,7 +952,7 @@ def test_forgetting_an_update_waits_for_the_shutdown_snapshot():
             instance._forget_update(finished)  # type: ignore[arg-type] - the same stand-in as above
             done.set()
 
-        with loop_lock(loop):
+        with instance._updates_guard:
             threading.Thread(target=remove, daemon=True).start()
             assert entered.wait(5), 'the removal thread never ran, so nothing was held off'
             # it must not get in while the snapshot could be running
@@ -1308,4 +1310,58 @@ def test_a_request_cancelled_mid_handler_is_not_reported_as_a_shutdown():
             asyncio.run(serve())
     finally:
         release.set()
+        instance.close()
+
+
+@override_settings(TELEGRAM_BOT_DEFAULTS={**SETTINGS, 'DRAIN_TIMEOUT': 0.2})
+def test_a_caller_that_leaves_mid_handover_leaves_nothing_behind(monkeypatch):
+    """The set a shutdown drains holds the updates somebody is waiting on, and only those.
+
+    The hand-over runs on a thread and cannot be stopped, so a caller cancelled during it
+    still produces a future — one nobody will ever await. Left in the set, it is an update
+    `close()` waits the whole drain for and then cancels, every time, for the life of the
+    process.
+    """
+    instance = TelegramBot()
+    handed_over = threading.Event()
+
+    @instance.message(F.text)
+    async def record(message: types.Message) -> None:
+        """Nothing to do: the case is about the submission, not the handling."""
+
+    submitting = instance._submit_update
+
+    def slowly(update):
+        """Hand over, but not before the caller has had time to go away."""
+        handed_over.wait(5)
+        return submitting(update)
+
+    monkeypatch.setattr(instance, '_submit_update', slowly)
+    update = types.Update(
+        update_id=1,
+        message=types.Message(
+            message_id=1,
+            date=datetime.now(timezone.utc),
+            chat=types.Chat(id=42, type='private'),
+            text='/start',
+        ),
+    )
+
+    async def leave():
+        fed = asyncio.ensure_future(instance.afeed_update(update))
+        await asyncio.sleep(0)
+        fed.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await fed
+        handed_over.set()
+        # the submission is still on its thread; give it the loop until it has finished
+        for _ in range(100):
+            if not instance._updates:
+                break
+            await asyncio.sleep(0.05)
+
+    try:
+        asyncio.run(leave())
+        assert instance._updates == set(), 'an abandoned update was left for the shutdown to drain'
+    finally:
         instance.close()

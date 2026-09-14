@@ -43,6 +43,19 @@
   Reachable only from `afeed_update`: a thread blocked in `feed_update` has
   nobody to cancel it.
 
+  A caller that leaves *during* the hand-over leaves nothing behind either. The
+  hand-over runs on a thread and cannot be stopped, so it still produces an
+  update nobody is waiting on; that one is forgotten rather than left in the set
+  `close()` drains, where every shutdown would have waited the whole drain for it
+  and then cancelled it.
+
+  The set those updates are tracked in has a guard of its own, held for an `add`,
+  a `discard` or the shutdown's snapshot and never while an update is being
+  handed over. It was `loop_lock`, which a submission holds for the whole
+  hand-over -- and the awaiting half forgets its update from the event loop, so
+  waiting for that lock there would have stalled every other request behind one
+  submission.
+
 ## 5.0.0 - 2026-09-13
 
 A major, and the one thing it changes for every project is the name of the settings dict. What

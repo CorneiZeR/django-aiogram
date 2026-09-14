@@ -138,6 +138,11 @@ class TelegramBot(RouterShortcuts):
         #: updates a request thread is blocked on. Stopping the loop under one of
         #: these would leave that thread waiting on a future nothing will finish
         self._updates: set[futures.Future[None]] = set()
+        #: held for the length of a `add`, a `discard` or the snapshot a shutdown takes,
+        #: and never while anything is handed over: the loop reaches these sets from a
+        #: response's `finally`, and `loop_lock` -- which a submission holds while it hands
+        #: an update to the loop -- would stall it there
+        self._updates_guard = threading.Lock()
         #: the updates the shutdown cancelled, out of those. A cancellation from
         #: outside looks the same on the future -- `asyncio.wrap_future` passes one
         #: on to it -- and the two mean opposite things to the caller, so which of
@@ -412,7 +417,15 @@ class TelegramBot(RouterShortcuts):
         it may start the loop's thread.
         """
         loop = asyncio.get_running_loop()
-        future = await loop.run_in_executor(None, self._submit_update, update)
+        # shielded, because the hand-over runs on a thread and cannot be stopped: a caller
+        # that goes away mid-submission would otherwise leave the future it produced in the
+        # set `close()` drains, where nothing would ever forget it
+        submission = asyncio.ensure_future(loop.run_in_executor(None, self._submit_update, update))
+        try:
+            future = await asyncio.shield(submission)
+        except asyncio.CancelledError:
+            submission.add_done_callback(self._forget_abandoned)
+            raise
         if future is None:
             return
         try:
@@ -479,23 +492,34 @@ class TelegramBot(RouterShortcuts):
             # request is driving looks running until it stops, and the update
             # would then wait for ever
             future = asyncio.run_coroutine_threadsafe(coroutine, loop)
-            self._updates.add(future)
+            with self._updates_guard:
+                self._updates.add(future)
         return future
+
+    def _forget_abandoned(self, submission: 'asyncio.Future[futures.Future[None] | None]') -> None:
+        """Forget an update whose caller was gone before it was handed back.
+
+        The handlers still run -- the loop has the update and nothing cancelled it -- and
+        this is only about the bookkeeping: the set exists so a shutdown can wait for the
+        updates somebody is waiting on, and nobody is waiting on this one.
+        """
+        if submission.cancelled() or submission.exception() is not None:
+            return
+        future = submission.result()
+        if future is not None:
+            self._forget_update(future)
 
     def _forget_update(self, future: 'futures.Future[None]') -> None:
         """Drop a finished update from the set the shutdown snapshot reads.
 
-        Under the same lock it was added under. `_stop_runner` takes `list()` over
-        this set while holding that lock, and a `discard` from a request thread
-        mid-iteration raises `RuntimeError: Set changed size during iteration`
-        inside `close()` — aborting the shutdown before anything is torn down.
+        Under the guard the shutdown snapshots them under, and *not* under `loop_lock`:
+        `_stop_runner` takes `list()` over this set, and a `discard` from another thread
+        mid-iteration raises `RuntimeError: Set changed size during iteration` inside
+        `close()` — aborting the shutdown before anything is torn down. The loop itself
+        reaches this from a response's `finally`, so the lock it waits on has to be one
+        nothing holds for longer than a discard; `loop_lock` is held for a whole hand-over.
         """
-        loop = self._loop
-        if loop is None:
-            self._updates.discard(future)
-            self._refused.discard(future)
-            return
-        with loop_lock(loop):
+        with self._updates_guard:
             self._updates.discard(future)
             self._refused.discard(future)
 
@@ -612,10 +636,11 @@ class TelegramBot(RouterShortcuts):
             # slip in between this snapshot and the loop stopping. The waiting
             # stays outside it: holding it would block nothing useful and delay
             # the refusal above
-            with loop_lock(loop):
+            with loop_lock(loop), self._updates_guard:
                 pending = list(self._updates)
         else:
-            pending = list(self._updates)
+            with self._updates_guard:
+                pending = list(self._updates)
         if pending:
             logger.info(
                 'waiting for updates in flight',
@@ -631,7 +656,8 @@ class TelegramBot(RouterShortcuts):
                 for future in unfinished:
                     # marked before it is cancelled: the waiter wakes on the cancel,
                     # and a mark written after it would arrive too late to be read
-                    self._refused.add(future)
+                    with self._updates_guard:
+                        self._refused.add(future)
                     future.cancel()
         if loop is not None and not loop.is_closed() and runner.is_alive():
             # only while the thread is there to consume it: queued at a loop nobody is
