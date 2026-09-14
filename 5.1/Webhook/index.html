@@ -970,6 +970,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#serving-it-from-the-bot-container-instead" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Serving it from the bot container instead
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#several-bots" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1490,6 +1501,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#serving-it-from-the-bot-container-instead" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Serving it from the bot container instead
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#several-bots" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1693,9 +1715,26 @@ and the database connection it opened — until the process runs out of
 connections. Measured on an affected deployment, the timeout fell at about a
 minute and the redelivery a minute after that; Telegram documents neither, so
 do not build anything on those numbers.</p>
+<h3 id="serving-it-from-the-bot-container-instead">Serving it from the bot container instead<a class="headerlink" href="#serving-it-from-the-bot-container-instead" title="Link to this section">&para;</a></h3>
+<p>The steps above put the webhook in the web tier, which is where most deployments want it:
+the route is already there, and the server is already running. What it costs is that an
+update is handled beside the requests people are waiting on, competing for that process's
+threads and its database connections.</p>
+<p>A deployment that would rather keep them apart serves the webhook where the bot already is:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"django-aiogram[webhook]"</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>start_tgbot<span class="w"> </span>--serve<span class="w"> </span>--serve-port<span class="w"> </span><span class="m">8080</span>
+</span></code></pre></div>
+<p>The container then answers the webhook itself, on a server whose only routes are the two the
+view needs — one bot's and the process's own. Nothing is registered in your <code>urls.py</code>, and
+the path is not configured twice: it is read from <code>WEBHOOK_URL</code>, the URL
+<code>manage.py tgbot_webhook set</code> gave Telegram. Point your proxy at the container on that port
+and the web tier serves no updates at all.</p>
+<p><code>--serve</code> is refused where it would bind a port nothing posts to — a polling deployment, or
+one that also passed <code>--no-updates</code> — and it refuses to start without the <code>webhook</code> extra,
+naming every package of that group that is missing and the line that installs them.</p>
 <p><strong>3. Register it with Telegram.</strong></p>
-<div class="highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_webhook<span class="w"> </span><span class="nb">set</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_webhook<span class="w"> </span>info
+<div class="highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_webhook<span class="w"> </span><span class="nb">set</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_webhook<span class="w"> </span>info
 </span></code></pre></div>
 <p>Telegram remembers the URL, not your settings file. <code>info</code> prints the pending
 count and the last delivery error, which is the first thing to look at when
@@ -1707,26 +1746,26 @@ So the path carries the identity and each bot has its own secret — the identit
 number in its token, which <strong><a href="../Multiple-bots/">Multiple bots</a></strong> explains. A token that carries
 none has no path to be reached at: <code>E052</code> reports it, the providers leave it out, and such a
 bot can only queue sends:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># urls.py</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">urlpatterns</span> <span class="o">=</span> <span class="p">[</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    <span class="c1"># the unguessable segment first, the identity last: `WEBHOOK_URL` is the prefix and</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="c1"># `tgbot_webhook` appends the identity to it, so the order here is the order it registers</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="n">path</span><span class="p">(</span><span class="s1">'tg/9c1f2b7a/&lt;int:bot_id&gt;/'</span><span class="p">,</span> <span class="n">telegram_webhook</span><span class="p">),</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="n">path</span><span class="p">(</span><span class="s1">'tg/9c1f2b7a/'</span><span class="p">,</span> <span class="n">telegram_webhook</span><span class="p">),</span>  <span class="c1"># the process's own bot, if it has one</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="p">]</span>
+<div class="highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># urls.py</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">urlpatterns</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>    <span class="c1"># the unguessable segment first, the identity last: `WEBHOOK_URL` is the prefix and</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="c1"># `tgbot_webhook` appends the identity to it, so the order here is the order it registers</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>    <span class="n">path</span><span class="p">(</span><span class="s1">'tg/9c1f2b7a/&lt;int:bot_id&gt;/'</span><span class="p">,</span> <span class="n">telegram_webhook</span><span class="p">),</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>    <span class="n">path</span><span class="p">(</span><span class="s1">'tg/9c1f2b7a/'</span><span class="p">,</span> <span class="n">telegram_webhook</span><span class="p">),</span>  <span class="c1"># the process's own bot, if it has one</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="p">]</span>
 </span></code></pre></div>
-<div class="highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">TELEGRAM_BOT_DEFAULTS</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>    <span class="s1">'WEBHOOK_URL'</span><span class="p">:</span> <span class="s1">'https://example.test/tg/9c1f2b7a'</span><span class="p">,</span>  <span class="c1"># no identity: the command adds it</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">TELEGRAM_BOT_DEFAULTS</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>    <span class="s1">'WEBHOOK_URL'</span><span class="p">:</span> <span class="s1">'https://example.test/tg/9c1f2b7a'</span><span class="p">,</span>  <span class="c1"># no identity: the command adds it</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="p">}</span>
 </span></code></pre></div>
 <p><code>manage.py tgbot_webhook reconcile</code> then registers <code>https://example.test/tg/9c1f2b7a/123456/</code>
 for the bot whose identity is <code>123456</code>, which is the route above. Put the identity anywhere
 else in the path and Telegram will be posting somewhere Django does not route.</p>
 <p>The secret goes in that bot's own settings — a section under <code>TELEGRAM_BOTS</code>, or the
 <code>overrides</code> on its <code>TelegramBot</code> row:</p>
-<div class="highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">TELEGRAM_BOTS</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>    <span class="s1">'support'</span><span class="p">:</span> <span class="p">{</span><span class="s1">'TOKEN'</span><span class="p">:</span> <span class="s1">'...'</span><span class="p">,</span> <span class="s1">'WEBHOOK_SECRET'</span><span class="p">:</span> <span class="s1">'...'</span><span class="p">},</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">TELEGRAM_BOTS</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="s1">'support'</span><span class="p">:</span> <span class="p">{</span><span class="s1">'TOKEN'</span><span class="p">:</span> <span class="s1">'...'</span><span class="p">,</span> <span class="s1">'WEBHOOK_SECRET'</span><span class="p">:</span> <span class="s1">'...'</span><span class="p">},</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>Generate them; do not type them. <code>django_aiogram.consumer.webhook.new_secret()</code> is what the
 package uses. A bot with <strong>no</strong> secret of its own is refused rather than served under the
@@ -1737,9 +1776,9 @@ stranger to load it by posting nonsense. The cache is held for <code>BOT_REFRESH
 identity missing from it is re-read at most once a second — so a bot registered a moment ago
 is served, and a flood of unknown identities is not a query each.</p>
 <h3 id="registering-a-thousand-of-them">Registering a thousand of them<a class="headerlink" href="#registering-a-thousand-of-them" title="Link to this section">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_webhook<span class="w"> </span>reconcile
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_webhook<span class="w"> </span>reconcile<span class="w"> </span>--bot<span class="w"> </span><span class="m">123456</span><span class="w"> </span>--force
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_webhook<span class="w"> </span>delete<span class="w"> </span>--bot<span class="w"> </span><span class="m">123456</span>
+<div class="highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_webhook<span class="w"> </span>reconcile
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_webhook<span class="w"> </span>reconcile<span class="w"> </span>--bot<span class="w"> </span><span class="m">123456</span><span class="w"> </span>--force
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_webhook<span class="w"> </span>delete<span class="w"> </span>--bot<span class="w"> </span><span class="m">123456</span>
 </span></code></pre></div>
 <p><code>reconcile</code> asks Telegram what it has — <code>getWebhookInfo</code> — compares it with what each bot
 should have, and repairs the difference in <strong>both directions, as far as the tokens reach</strong>: a
@@ -1763,7 +1802,7 @@ once the row is gone this deployment has none — so Telegram goes on posting to
 answers 404 for ever. <code>reconcile</code> cannot repair that either: there is nothing left to ask
 with.</p>
 <p><strong>4. Run a worker for the queue.</strong></p>
-<div class="highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>start_tgbot
+<div class="highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>start_tgbot
 </span></code></pre></div>
 <p>In webhook mode the same command consumes the queue and never calls
 <code>getUpdates</code>. Skipping it means <code>bot.send()</code> from your app queues messages
@@ -1776,8 +1815,8 @@ polling gets no updates, because the view refuses them, and polling while a
 webhook is registered fails at <code>getUpdates</code>. For a real switch, change <code>MODE</code> (or
 <code>DJANGO_AIOGRAM_MODE</code>) everywhere.</p>
 <h2 id="going-back-to-polling">Going back to polling<a class="headerlink" href="#going-back-to-polling" title="Link to this section">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_webhook<span class="w"> </span>delete
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>start_tgbot<span class="w"> </span>--mode<span class="w"> </span>polling
+<div class="highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>tgbot_webhook<span class="w"> </span>delete
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>start_tgbot<span class="w"> </span>--mode<span class="w"> </span>polling
 </span></code></pre></div>
 <p><code>getUpdates</code> refuses to run while a webhook is registered, so polling will not
 start until the webhook is deleted. Set <code>MODE</code> back to <code>'polling'</code> once you have
@@ -1844,7 +1883,7 @@ read unhealthy for ever. See <strong><a href="../Deployment/">Deployment</a></st
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 14, 2026 12:13:12 UTC">September 14, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 14, 2026 13:56:39 UTC">September 14, 2026</span>
   </span>
 
     
