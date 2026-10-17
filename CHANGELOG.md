@@ -1,5 +1,22 @@
 # Changelog
 
+## 5.2.0 - 2026-10-18
+
+Nothing changes for a project using the package: this release is maintenance.
+
+**`django-redis-aiogram` 3.1.1 is the last of that line.** Importing it raises a `FutureWarning`
+pointing at [Upgrading](https://corneizer.github.io/django-aiogram/latest/Upgrading/#from-31-to-40),
+so a project still on it hears about this package from its own logs, and `SECURITY.md` lists
+3.x as unsupported.
+
+### Infrastructure
+
+- The release workflow's `upload-artifact` and `download-artifact` are at 7.0.2 and 8.0.2, and the
+  release pins are refreshed (hatchling 1.32.4 and the build set beneath build 1.6.1).
+- ruff is pinned to 0.17.0 in the dev group, and `datetime` is imported as `dt` as 0.17 asks.
+  With `select = ["ALL"]` a floor let each ruff release fail CI on code nobody touched; a new
+  version now arrives as its own pull request.
+
 ## 5.1.0 - 2026-09-14
 
 ### Added
