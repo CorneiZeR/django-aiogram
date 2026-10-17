@@ -12,7 +12,7 @@ No aiogram import: unknown values are rendered by class name through duck typing
 which keeps this usable from the delivery thread as well.
 """
 
-import datetime
+import datetime as dt
 import json
 import logging
 import re
@@ -91,7 +91,7 @@ def _scalar(value: object, *, bodies: bool) -> Any:  # noqa: ANN401 - see `summa
         return _text(value, bodies=bodies)
     if isinstance(value, bool) or value is None or isinstance(value, (int, float)):
         return value
-    if isinstance(value, (datetime.datetime, datetime.date, Decimal)):
+    if isinstance(value, (dt.datetime, dt.date, Decimal)):
         # rendered *and* said so, with the value kept for a reader. `serialise` preserves these
         # types on the wire and this does not -- a `Decimal('9.99')` reaches a row as `'9.99'`
         # and a `datetime` as `'2026-09-04 12:00:00+00:00'` -- so a replay built from the row

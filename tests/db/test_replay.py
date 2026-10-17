@@ -6,7 +6,7 @@ a row whose arguments were summarized, redacted or capped, and a failure whose q
 gone -- and the two that replay assert the new id and the row that joins it to the old one.
 """
 
-import datetime
+import datetime as dt
 import logging
 import uuid
 from io import StringIO
@@ -53,7 +53,7 @@ def a_failure(function='send_message', chat_id=42, arguments=None, minutes_old=1
     the chat, and the arguments are on the row the producer wrote before a worker ever saw it.
     """
     identifier = new_correlation_id()
-    when = timezone.now() - datetime.timedelta(minutes=minutes_old)
+    when = timezone.now() - dt.timedelta(minutes=minutes_old)
     for row_kind, detail in (
         (EventKind.OUTBOUND_QUEUED.value, arguments if arguments is not None else {'chat_id': chat_id, 'text': 'lost'}),
         (kind or EventKind.OUTBOUND_FAILED.value, {'stage': 'sending'}),
@@ -76,7 +76,7 @@ def replay(**options):
 
 
 def since(minutes=60):
-    return (timezone.now() - datetime.timedelta(minutes=minutes)).isoformat()
+    return (timezone.now() - dt.timedelta(minutes=minutes)).isoformat()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -298,7 +298,7 @@ def test_an_eta_send_replays_from_its_scheduled_row_without_the_due_time(queued)
         chat_id=7,
         detail={'chat_id': 7, 'text': 'later', 'due_at': timezone.now().isoformat()},
     )
-    TelegramEvent.objects.filter(pk=row.pk).update(created_at=timezone.now() - datetime.timedelta(minutes=2))
+    TelegramEvent.objects.filter(pk=row.pk).update(created_at=timezone.now() - dt.timedelta(minutes=2))
     TelegramEvent.objects.create(
         kind=EventKind.OUTBOUND_FAILED.value,
         correlation_id=identifier,
@@ -833,7 +833,7 @@ def test_a_claim_that_finished_while_being_read_is_not_taken_over(queued, monkey
     """
     identifier = a_failure()
     stale = TelegramReplayClaim.objects.create(correlation_id=identifier, claimed_by='the-other-run')
-    TelegramReplayClaim.objects.filter(pk=stale.pk).update(claimed_at=timezone.now() - datetime.timedelta(hours=2))
+    TelegramReplayClaim.objects.filter(pk=stale.pk).update(claimed_at=timezone.now() - dt.timedelta(hours=2))
 
     def finish_it_first(self, claim):
         """The other run's queue write lands while this one is deciding the claim is stale."""
@@ -930,7 +930,7 @@ def test_a_claim_whose_run_died_is_taken_over_after_its_lease(queued):
     """
     identifier = a_failure()
     stale = TelegramReplayClaim.objects.create(correlation_id=identifier, claimed_by='a-run-that-died')
-    TelegramReplayClaim.objects.filter(pk=stale.pk).update(claimed_at=timezone.now() - datetime.timedelta(seconds=7200))
+    TelegramReplayClaim.objects.filter(pk=stale.pk).update(claimed_at=timezone.now() - dt.timedelta(seconds=7200))
 
     replay(since=since(), claim_lease=3600)
 
@@ -982,7 +982,7 @@ def test_a_queue_write_that_raised_keeps_its_claim(queued, monkeypatch):
     assert 'another run holds it' in replay(since=since()), 'the next run offered the same failure again'
     assert list(queued) == [], 'and would have sent a second copy of a message that may have landed'
 
-    TelegramReplayClaim.objects.filter(pk=claim.pk).update(claimed_at=timezone.now() - datetime.timedelta(seconds=5))
+    TelegramReplayClaim.objects.filter(pk=claim.pk).update(claimed_at=timezone.now() - dt.timedelta(seconds=5))
     assert 'replayed 1' in replay(since=since(), claim_lease=1), 'the lease is how an operator says it did not land'
     assert len(queued) == 1
 
@@ -1011,7 +1011,7 @@ def test_a_dry_run_does_not_release_a_stale_claim_either(queued):
     """
     identifier = a_failure()
     stale = TelegramReplayClaim.objects.create(correlation_id=identifier, claimed_by='a-run-that-died')
-    TelegramReplayClaim.objects.filter(pk=stale.pk).update(claimed_at=timezone.now() - datetime.timedelta(seconds=7200))
+    TelegramReplayClaim.objects.filter(pk=stale.pk).update(claimed_at=timezone.now() - dt.timedelta(seconds=7200))
 
     output = replay(since=since(), dry_run=True, claim_lease=3600)
 
@@ -1032,7 +1032,7 @@ def test_a_claim_is_reported_on_a_project_that_stores_naive_datetimes(queued):
     # naive, which is the whole case, and *now* rather than a written-down moment: the claim has
     # to be younger than `--claim-lease` or the run takes it over instead of reporting it, and a
     # fixed hour makes that true for an hour on the day it was written and false afterwards
-    held_since = datetime.datetime.now().replace(microsecond=0)  # noqa: DTZ005
+    held_since = dt.datetime.now().replace(microsecond=0)  # noqa: DTZ005
     TelegramReplayClaim.objects.create(
         correlation_id=identifier,
         claimed_by='a-run-still-working',
@@ -1151,8 +1151,8 @@ def test_a_naive_moment_is_read_in_the_project_s_timezone(queued):
     a_failure(chat_id=1, minutes_old=5)
     a_failure(chat_id=2, minutes_old=5)
     local = timezone.localtime()
-    before = (local - datetime.timedelta(minutes=30)).replace(tzinfo=None).isoformat()
-    after = (local - datetime.timedelta(minutes=1)).replace(tzinfo=None).isoformat()
+    before = (local - dt.timedelta(minutes=30)).replace(tzinfo=None).isoformat()
+    after = (local - dt.timedelta(minutes=1)).replace(tzinfo=None).isoformat()
 
     replay(since=before, limit=1)
     assert len(queued) == 1, 'a naive moment before the failure did not select it'
@@ -1181,7 +1181,7 @@ def test_the_newest_description_wins(queued):
             chat_id=9,
             detail={'chat_id': 9, 'text': text},
         )
-        TelegramEvent.objects.filter(pk=row.pk).update(created_at=timezone.now() - datetime.timedelta(minutes=minutes))
+        TelegramEvent.objects.filter(pk=row.pk).update(created_at=timezone.now() - dt.timedelta(minutes=minutes))
     TelegramEvent.objects.create(
         kind=EventKind.OUTBOUND_FAILED.value,
         correlation_id=identifier,
