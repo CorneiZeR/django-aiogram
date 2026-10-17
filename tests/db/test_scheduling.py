@@ -7,7 +7,7 @@ exactly once, at the right moment, with the bytes the caller meant.
 """
 
 import asyncio
-import datetime
+import datetime as dt
 import logging
 import uuid
 
@@ -67,7 +67,7 @@ class CancellingBroker(RecordingBroker):
     """
 
     def publish(self, payloads):
-        TelegramScheduledSend.objects.update(claimed_until=timezone.now() - datetime.timedelta(seconds=1))
+        TelegramScheduledSend.objects.update(claimed_until=timezone.now() - dt.timedelta(seconds=1))
         RecordingBroker.cancelled.append(TelegramBot().cancel_scheduled(RecordingBroker.identifier))
         RecordingBroker.published.extend(payloads)
 
@@ -111,12 +111,12 @@ def schedule_and_then_fail():
 
 def in_a_while(seconds=60):
     """A due time that has not arrived."""
-    return timezone.now() + datetime.timedelta(seconds=seconds)
+    return timezone.now() + dt.timedelta(seconds=seconds)
 
 
 def a_while_ago(seconds=60):
     """A due time that has."""
-    return timezone.now() - datetime.timedelta(seconds=seconds)
+    return timezone.now() - dt.timedelta(seconds=seconds)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -297,7 +297,7 @@ def test_a_dry_run_reports_a_lapsed_claim_as_work_it_would_take(published, capsy
     """The dry run has to ask what a real pass asks, or it understates what one takes."""
     TelegramBot().send(chat_id=7, text='now', eta=a_while_ago())
     claim(10)
-    TelegramScheduledSend.objects.update(claimed_until=timezone.now() - datetime.timedelta(seconds=1))
+    TelegramScheduledSend.objects.update(claimed_until=timezone.now() - dt.timedelta(seconds=1))
 
     call_command('tgbot_dispatch_scheduled', '--dry-run')
 
@@ -320,7 +320,7 @@ def test_a_dry_run_claims_nothing(published):
 def test_a_naive_eta_is_refused_rather_than_read_in_the_projects_timezone(published):
     """An hour early is not a value worth guessing at."""
     with pytest.raises(ImproperlyConfigured, match='aware datetime'):
-        TelegramBot().send(chat_id=7, text='when?', eta=datetime.datetime(2030, 1, 1, 9, 0))  # noqa: DTZ001
+        TelegramBot().send(chat_id=7, text='when?', eta=dt.datetime(2030, 1, 1, 9, 0))  # noqa: DTZ001
 
     assert not TelegramScheduledSend.objects.exists()
 
@@ -357,7 +357,7 @@ def test_a_disabled_fan_out_does_not_judge_an_eta_it_will_not_use(published):
     Two producers judging one argument differently is the defect, whichever of them is
     right -- a disabled process is meant to do nothing and answer with the ids.
     """
-    naive = datetime.datetime(2030, 1, 1, 9, 0)  # noqa: DTZ001 - the shape `due_moment` refuses
+    naive = dt.datetime(2030, 1, 1, 9, 0)  # noqa: DTZ001 - the shape `due_moment` refuses
 
     assert TelegramBot().send(chat_id=7, text='x', eta=naive) is not None
     identifiers = TelegramBot().send_many([1, 2], text='x', eta=naive)
@@ -447,7 +447,7 @@ def test_a_row_the_broker_keeps_refusing_is_given_up_on(published):
 
     for _ in range(3):
         call_command('tgbot_dispatch_scheduled', '--max-attempts', '3')
-        TelegramScheduledSend.objects.update(claimed_until=timezone.now() - datetime.timedelta(seconds=1))
+        TelegramScheduledSend.objects.update(claimed_until=timezone.now() - dt.timedelta(seconds=1))
 
     assert not TelegramScheduledSend.objects.exists(), 'the row is still being retried'
     given_up = TelegramEvent.objects.get(error_code='TooManyAttempts')
@@ -496,7 +496,7 @@ def test_max_attempts_of_zero_retries_without_end(published):
 
     for _ in range(4):
         call_command('tgbot_dispatch_scheduled', '--max-attempts', '0')
-        TelegramScheduledSend.objects.update(claimed_until=timezone.now() - datetime.timedelta(seconds=1))
+        TelegramScheduledSend.objects.update(claimed_until=timezone.now() - dt.timedelta(seconds=1))
 
     assert TelegramScheduledSend.objects.get().attempts == 4
     assert not TelegramEvent.objects.filter(error_code='TooManyAttempts').exists()
@@ -549,7 +549,7 @@ def test_an_aware_eta_is_refused_where_the_database_would_refuse_it(published):
     """Measured: SQLite answers *does not support timezone-aware datetimes when USE_TZ is
     False*, from inside `bulk_create` -- a long way from the `eta` that caused it."""
     with pytest.raises(ImproperlyConfigured, match='naive datetime while USE_TZ is False'):
-        TelegramBot().send(chat_id=7, text='when?', eta=datetime.datetime.now(datetime.timezone.utc))
+        TelegramBot().send(chat_id=7, text='when?', eta=dt.datetime.now(dt.timezone.utc))
 
     assert not TelegramScheduledSend.objects.exists()
 
@@ -571,7 +571,7 @@ def test_a_stranded_claim_is_taken_back_after_its_lease(published):
     assert claim(10) == [], 'a fresh claim was taken back before its lease expired'
 
     # the row carries its own expiry, so this is the mechanism rather than a stand-in for it
-    TelegramScheduledSend.objects.update(claimed_until=timezone.now() - datetime.timedelta(seconds=1))
+    TelegramScheduledSend.objects.update(claimed_until=timezone.now() - dt.timedelta(seconds=1))
 
     assert len(claim(10)) == 1, 'a claim past the expiry on its own row was never taken back'
 
@@ -585,7 +585,7 @@ def test_a_lease_of_zero_claims_with_no_expiry_at_all(published):
     assert len(claim(10, lease=0)) == 1
     assert TelegramScheduledSend.objects.get().claimed_until is None, 'lease 0 still wrote an expiry'
 
-    TelegramScheduledSend.objects.update(claimed_at=timezone.now() - datetime.timedelta(days=7))
+    TelegramScheduledSend.objects.update(claimed_at=timezone.now() - dt.timedelta(days=7))
 
     assert claim(10) == [], 'a claim taken with no expiry was taken back anyway'
 
@@ -604,7 +604,7 @@ def test_a_lapsed_claim_can_be_called_off_again(published):
 
     assert TelegramBot().cancel_scheduled(identifier) == 0, 'a live claim was cancelled'
 
-    TelegramScheduledSend.objects.update(claimed_until=timezone.now() - datetime.timedelta(seconds=1))
+    TelegramScheduledSend.objects.update(claimed_until=timezone.now() - dt.timedelta(seconds=1))
 
     assert TelegramBot().cancel_scheduled(identifier) == 1, 'a row nobody holds was not cancellable'
     assert not TelegramScheduledSend.objects.exists()

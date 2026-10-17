@@ -17,7 +17,7 @@ send, and :class:`Outcome` says which of the two it is rather than leaving a cal
 guess from ``None``.
 """
 
-import datetime
+import datetime as dt
 import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -73,7 +73,7 @@ class SentMessage:
 
     chat_id: int | None
     message_id: int | None
-    at: datetime.datetime | None
+    at: dt.datetime | None
 
 
 @dataclass(frozen=True)
@@ -110,7 +110,7 @@ class Outcome:
         return self.sent[0].chat_id if self.sent else None
 
     @property
-    def at(self) -> datetime.datetime | None:
+    def at(self) -> dt.datetime | None:
         """When the newest message was recorded as sent, or ``None`` where none was."""
         return self.sent[0].at if self.sent else None
 

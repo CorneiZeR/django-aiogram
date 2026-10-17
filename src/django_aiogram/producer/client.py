@@ -29,7 +29,7 @@ in it:
 
 import asyncio
 import contextlib
-import datetime
+import datetime as dt
 import logging
 import threading
 import time
@@ -689,7 +689,7 @@ class TelegramBot(RouterShortcuts):
         function: 'TelegramMethod[Any] | str' = 'send_message',
         *,
         correlation_id: uuid.UUID | str | None = None,
-        eta: datetime.datetime | None = None,
+        eta: dt.datetime | None = None,
         **kwargs: Any,
     ) -> uuid.UUID:
         """Deliver a message the way this process can.
@@ -744,7 +744,7 @@ class TelegramBot(RouterShortcuts):
         function: 'TelegramMethod[Any] | str' = 'send_message',
         *,
         correlation_id: uuid.UUID | str | None = None,
-        eta: datetime.datetime | None = None,
+        eta: dt.datetime | None = None,
         **kwargs: Any,
     ) -> uuid.UUID:
         """Deliver a message from code that is already on an event loop.
@@ -1365,7 +1365,7 @@ class TelegramBot(RouterShortcuts):
         function: 'TelegramMethod[Any] | str' = 'send_message',
         *,
         correlation_id: uuid.UUID | str | None = None,
-        eta: datetime.datetime | None = None,
+        eta: dt.datetime | None = None,
         **kwargs: Any,
     ) -> uuid.UUID:
         """Queue a message for the bot worker to deliver, whichever transport carries it.
@@ -1415,7 +1415,7 @@ class TelegramBot(RouterShortcuts):
         function: 'TelegramMethod[Any] | str' = 'send_message',
         *,
         correlation_id: uuid.UUID | str | None = None,
-        eta: datetime.datetime | None = None,
+        eta: dt.datetime | None = None,
         **kwargs: Any,
     ) -> uuid.UUID:
         """Queue a message without blocking the loop this coroutine runs on.
@@ -1471,7 +1471,7 @@ class TelegramBot(RouterShortcuts):
         function: str = 'send_message',
         *,
         chunk_size: int = 100,
-        eta: datetime.datetime | None = None,
+        eta: dt.datetime | None = None,
         **kwargs: Any,
     ) -> list[uuid.UUID]:
         """Queue one message per chat, a chunk of them per round trip.
@@ -1533,7 +1533,7 @@ class TelegramBot(RouterShortcuts):
         function: str = 'send_message',
         *,
         chunk_size: int = 100,
-        eta: datetime.datetime | None = None,
+        eta: dt.datetime | None = None,
         **kwargs: Any,
     ) -> list[uuid.UUID]:
         """Queue one message per chat without blocking the loop.

@@ -6,7 +6,7 @@ be had and saying so beats a permanent `unknown`.
 """
 
 import asyncio
-import datetime
+import datetime as dt
 import uuid
 
 import pytest
@@ -411,4 +411,4 @@ def test_the_recorded_instant_comes_back_as_a_datetime():
     identifier = uuid.uuid4()
     record(identifier, EventKind.OUTBOUND_SENT, chat_id=7, message_id=11)
 
-    assert isinstance(outcome(identifier).at, datetime.datetime)
+    assert isinstance(outcome(identifier).at, dt.datetime)
