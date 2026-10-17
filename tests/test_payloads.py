@@ -5,7 +5,7 @@ so both halves matter: what it keeps has to be readable, and what it drops has
 to stay dropped.
 """
 
-import datetime
+import datetime as dt
 import json
 from decimal import Decimal
 from enum import Enum
@@ -89,7 +89,7 @@ def test_dates_and_decimals_are_readable_and_say_they_were_rendered():
     differently or refused in the worker. The value stays beside the marker, so nothing a
     reader wanted is gone.
     """
-    assert summarize(datetime.date(2026, 8, 9), bodies=True) == {'__omitted__': 'date', 'value': '2026-08-09'}
+    assert summarize(dt.date(2026, 8, 9), bodies=True) == {'__omitted__': 'date', 'value': '2026-08-09'}
     assert summarize(Decimal('1.50'), bodies=True) == {'__omitted__': 'Decimal', 'value': '1.50'}
 
 
