@@ -4,6 +4,11 @@ What each major release changed, newest first — so an upgrade is read from the
 the lowest section that applies to the version you are on and work **up** the page, one release
 at a time: each covers a single hop and assumes the ones below it are done.
 
+# From 5.1 to 5.2
+
+**Nothing to do.** 5.2 is maintenance: the release workflow, its pins and the linter moved, and
+nothing a project imports, configures or runs did. Install the release.
+
 # From 5.0 to 5.1
 
 **Nothing to run, and nothing to rename.** A project that routes
