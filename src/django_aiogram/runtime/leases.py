@@ -17,7 +17,7 @@ one :func:`django_aiogram.producer.scheduling.claim` and ``TelegramReplayClaim``
 exclusive there, and competing consumers on a queue are something every transport supports.
 """
 
-import datetime
+import datetime as dt
 import logging
 from typing import TYPE_CHECKING
 
@@ -90,7 +90,7 @@ def claim(bot_ids: 'Iterable[int]') -> tuple[int, ...]:
         # moment captured at the top of it would write leases already in the past and would
         # fail to match a lease that lapsed while the pass was running
         moment = timezone.now()
-        if _take(TelegramBotLease, bot_id, me=me, moment=moment, until=moment + datetime.timedelta(seconds=lease)):
+        if _take(TelegramBotLease, bot_id, me=me, moment=moment, until=moment + dt.timedelta(seconds=lease)):
             held.append(bot_id)
     return tuple(held)
 
@@ -100,8 +100,8 @@ def _take(
     bot_id: int,
     *,
     me: str,
-    moment: 'datetime.datetime',
-    until: 'datetime.datetime',
+    moment: 'dt.datetime',
+    until: 'dt.datetime',
 ) -> bool:
     """Hold one bot's lease, whether this process had it or not.
 

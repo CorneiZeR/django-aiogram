@@ -7,7 +7,7 @@ under.
 """
 
 import contextlib
-import datetime
+import datetime as dt
 
 import pytest
 from django.test import override_settings
@@ -89,7 +89,7 @@ def test_a_container_that_stopped_renewing_loses_its_bots_to_the_other():
 
     with container('one'):
         first.reconcile()
-    TelegramBotLease.objects.filter(bot_id=123456).update(expires_at=timezone.now() - datetime.timedelta(seconds=1))
+    TelegramBotLease.objects.filter(bot_id=123456).update(expires_at=timezone.now() - dt.timedelta(seconds=1))
     with container('two'):
         second.reconcile()
 
@@ -106,7 +106,7 @@ def test_a_bot_whose_lease_was_taken_is_stopped_by_the_process_that_lost_it():
         first.reconcile()
     TelegramBotLease.objects.filter(bot_id=123456).update(
         holder='two',
-        expires_at=timezone.now() + datetime.timedelta(seconds=90),
+        expires_at=timezone.now() + dt.timedelta(seconds=90),
     )
     with container('one'):
         first.reconcile()
@@ -216,7 +216,7 @@ def test_a_lease_is_dated_from_when_it_was_taken_rather_than_from_the_start_of_t
     whether a lapsed lease may be taken would be made against a moment that had passed.
     """
     rows(TOKENS[0], TOKENS[1])
-    ticking = iter(timezone.now() + datetime.timedelta(minutes=step) for step in range(20))
+    ticking = iter(timezone.now() + dt.timedelta(minutes=step) for step in range(20))
     monkeypatch.setattr('django_aiogram.runtime.leases.timezone', _Clock(ticking))
 
     with container('one', BOT_LEASE_SECONDS=30):
@@ -243,9 +243,9 @@ def test_a_lease_that_lapses_during_the_pass_is_taken_by_it(monkeypatch):
         bot_id=654321,
         holder='two',
         claimed_at=start,
-        expires_at=start + datetime.timedelta(seconds=30),
+        expires_at=start + dt.timedelta(seconds=30),
     )
-    ticking = iter(start + datetime.timedelta(minutes=step) for step in range(20))
+    ticking = iter(start + dt.timedelta(minutes=step) for step in range(20))
     monkeypatch.setattr('django_aiogram.runtime.leases.timezone', _Clock(ticking))
 
     with container('one'):

@@ -11,7 +11,7 @@ What is here is the three operations that table needs and nothing about the loop
 them: :mod:`django_aiogram.management.commands.tgbot_dispatch_scheduled` is the loop.
 """
 
-import datetime
+import datetime as dt
 import logging
 import uuid
 from typing import TYPE_CHECKING
@@ -50,7 +50,7 @@ DEFAULT_LEASE = 300
 DUE_AT_DETAIL = 'due_at'
 
 
-def due_moment(eta: datetime.datetime) -> datetime.datetime:
+def due_moment(eta: dt.datetime) -> dt.datetime:
     """Read a caller's ``eta``, refusing the one shape that silently means another time.
 
     Both mismatches are refused, and each for its own reason.
@@ -68,7 +68,7 @@ def due_moment(eta: datetime.datetime) -> datetime.datetime:
     skew between a web tier and a database a caller's problem, and "as soon as possible" is a
     reasonable thing to schedule.
     """
-    if not isinstance(eta, datetime.datetime):
+    if not isinstance(eta, dt.datetime):
         msg = f'eta must be a datetime, got {type(eta).__name__}.'
         raise ImproperlyConfigured(msg)
     if timezone.is_naive(eta) and django_settings.USE_TZ:
@@ -86,7 +86,7 @@ def due_moment(eta: datetime.datetime) -> datetime.datetime:
     return eta
 
 
-def schedule(function: str, write: 'Queueing', due_at: datetime.datetime) -> None:
+def schedule(function: str, write: 'Queueing', due_at: dt.datetime) -> None:
     """Write one row per message, and record that each was scheduled.
 
     The payload goes in as :func:`~django_aiogram.producer.queueing.serialise` produced it,
@@ -114,7 +114,7 @@ def schedule(function: str, write: 'Queueing', due_at: datetime.datetime) -> Non
         _record(function, write, due_at)
 
 
-async def aschedule(function: str, write: 'Queueing', due_at: datetime.datetime) -> None:
+async def aschedule(function: str, write: 'Queueing', due_at: dt.datetime) -> None:
     """Write the same rows, awaited, because the synchronous ones cannot come from a loop.
 
     Measured: the synchronous ``bulk_create`` from a coroutine raises
@@ -133,7 +133,7 @@ async def aschedule(function: str, write: 'Queueing', due_at: datetime.datetime)
     _record(function, write, due_at)
 
 
-def _rows(function: str, write: 'Queueing', due_at: datetime.datetime) -> list['TelegramScheduledSend']:
+def _rows(function: str, write: 'Queueing', due_at: dt.datetime) -> list['TelegramScheduledSend']:
     """One row per message, ready for either bulk create."""
     from django_aiogram.models import TelegramScheduledSend  # noqa: PLC0415 - as above
 
@@ -149,7 +149,7 @@ def _rows(function: str, write: 'Queueing', due_at: datetime.datetime) -> list['
     ]
 
 
-def _record(function: str, write: 'Queueing', due_at: datetime.datetime) -> None:
+def _record(function: str, write: 'Queueing', due_at: dt.datetime) -> None:
     """Record the scheduling, once the transaction that wrote the rows has committed.
 
     After the commit and not before, because the rows are the caller's own write: a block
@@ -191,7 +191,7 @@ def claim(
     limit: int,
     *,
     lease: int = DEFAULT_LEASE,
-    now: datetime.datetime | None = None,
+    now: dt.datetime | None = None,
     bots: 'Collection[int] | None' = None,
 ) -> list['TelegramScheduledSend']:
     """Take ownership of up to ``limit`` due rows, and return the ones this call won.
@@ -221,7 +221,7 @@ def claim(
     moment = timezone.now() if now is None else now
     worker = worker_identity()
     free = unheld(moment)
-    lapses = None if lease <= 0 else moment + datetime.timedelta(seconds=lease)
+    lapses = None if lease <= 0 else moment + dt.timedelta(seconds=lease)
     available = TelegramScheduledSend.objects.filter(free, due_at__lte=moment).order_by('due_at', 'id')
     if bots:
         # a mover told which bots to move for takes *only* those: a pass that claimed another
@@ -262,7 +262,7 @@ def still_held_by(row: 'TelegramScheduledSend') -> Q:
     return Q(pk=row.pk, claimed_at=row.claimed_at, claimed_by=row.claimed_by)
 
 
-def unheld(moment: datetime.datetime | None = None) -> Q:
+def unheld(moment: dt.datetime | None = None) -> Q:
     """Rows nobody effectively holds: never claimed, or holding a claim that has lapsed.
 
     One predicate for both readers, and that is the point. `claim` and `cancel` were asking

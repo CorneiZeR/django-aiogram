@@ -26,7 +26,7 @@ string case is caught by its length as well, because rows written before 4.1 are
 table and a replay reads history.
 """
 
-import datetime
+import datetime as dt
 import logging
 import uuid
 from argparse import ArgumentParser
@@ -271,7 +271,7 @@ class Command(BaseCommand):
     _taken_over = 0
 
     #: the moment the run began, which is the upper end of the window when `--until` is absent
-    _started: datetime.datetime
+    _started: dt.datetime
 
     #: what a dry run has already said it would send, since it takes no claim to read back
     _simulated: set[uuid.UUID]
@@ -588,7 +588,7 @@ class Command(BaseCommand):
         """Whether a claim is old enough that the run holding it must be gone."""
         if not self._claim_lease:
             return False
-        return claim.claimed_at < self._started - datetime.timedelta(seconds=self._claim_lease)
+        return claim.claimed_at < self._started - dt.timedelta(seconds=self._claim_lease)
 
     def _say_claimed(self, row: TelegramEvent, held: 'TelegramReplayClaim | None') -> Verdict:
         """Report a failure somebody else owns, and answer with the reason it was skipped.
@@ -744,7 +744,7 @@ class Command(BaseCommand):
         )
 
 
-def _local(moment: datetime.datetime) -> datetime.datetime:
+def _local(moment: dt.datetime) -> dt.datetime:
     """Render a stored moment in the project's timezone, whichever kind it stores.
 
     ``timezone.localtime`` raises ``ValueError`` on a naive datetime, and a project with
@@ -782,7 +782,7 @@ def _as_uuid(value: str) -> uuid.UUID:
         raise CommandError(msg) from error
 
 
-def _moment(value: str, flag: str) -> datetime.datetime:
+def _moment(value: str, flag: str) -> dt.datetime:
     """Read an ISO 8601 moment in whichever flavour of datetime this project stores.
 
     A naive string is read in the project's ``TIME_ZONE`` rather than refused, which is the
