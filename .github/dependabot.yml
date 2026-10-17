@@ -9,6 +9,8 @@ updates:
     # only drops support for versions that still work — and `test-floors`
     # installs the lowest supported combination, so such a pull request cannot
     # pass. Only propose a change when the new version genuinely requires one.
+    # ruff is the exception, pinned exactly in the dev group: with
+    # `select = ["ALL"]` every release adds rules, so each one is its own PR.
     versioning-strategy: increase-if-necessary
     groups:
       dev-dependencies:
