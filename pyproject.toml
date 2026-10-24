@@ -123,7 +123,7 @@ dev = [
     "cryptography>=42",
     # pinned: `select = ["ALL"]` takes every rule a release adds, so a floor let 0.17's
     # ICN001 fail CI on code nobody touched. A new version arrives as its own PR
-    "ruff==0.17.0",
+    "ruff==0.17.1",
     "mypy>=1.14",
     # <6.1: 6.1.0 resolves every Self-returning QuerySet method to Any, so a plain
     # queryset.filter() trips no-any-return under strict. Manager methods are unaffected,
